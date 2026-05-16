@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 
 import { trace, info } from "../log.ts";
 import { loadConfig } from "../fs/config.ts";
-import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, THRUM_VERSION, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
+import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, THRUM_VERSION, isValidChi, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
 import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../drone/index.ts";
 import { graft, createSession as createClaudeSession, sessionDir as getSessionDir, sessionPath as getSessionPath, lastUuid, sanitizeJsonl, pruneJsonl, type GraftResult } from "../fs/session.ts";
 import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../penny/index.ts";
@@ -459,7 +459,18 @@ function thrumPulse(kind: PulseKind, sid: string, extra?: Partial<Pulse>): void 
 }
 
 function thrumHear(clientId: string, msg: Record<string, unknown>): void {
+  // Boundary validation — reject anything missing the envelope's chi
+  // before downstream code dereferences fields it expects to exist.
+  if (!msg || typeof msg !== "object" || typeof msg.chi !== "string") {
+    trace("thrum.tone.rejected", { reason: "no-chi", clientId: clientId.slice(0, 8) });
+    return;
+  }
   const chi = msg.chi as string;
+  if (!isValidChi(chi)) {
+    trace("thrum.tone.unknown-chi", { chi, clientId: clientId.slice(0, 8) });
+    // Don't return — daemon still tolerates unknown chi (forward-compat),
+    // just flags them so unknown traffic stands out in logs.
+  }
   if (chi !== "log") trace("thrum.tone.received", { chi, clientId: clientId.slice(0, 8), rid: msg.rid as string });
 
   // Drone observes incoming tones
