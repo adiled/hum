@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 
 import { trace, info } from "../log.ts";
 import { loadConfig } from "../fs/config.ts";
-import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
+import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, THRUM_VERSION, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
 import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../drone/index.ts";
 import { graft, createSession as createClaudeSession, sessionDir as getSessionDir, sessionPath as getSessionPath, lastUuid, sanitizeJsonl, pruneJsonl, type GraftResult } from "../fs/session.ts";
 import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../penny/index.ts";
@@ -439,9 +439,12 @@ function thrumBreath(client: Reach): void {
       roostPid: nest.roost(sid)?.proc.pid,
     });
   }
-  const msg: Breath = { chi: "breath", from: "daemon", sessions: sessionList };
+  const msg: Breath & { protoVersion: string } = {
+    chi: "breath", from: "daemon", sessions: sessionList,
+    protoVersion: THRUM_VERSION,
+  };
   thrumTo(client, msg);
-  trace("thrum.breath.sent", { clientId: client.clientId.slice(0, 8), sessions: sessionList.length });
+  trace("thrum.breath.sent", { clientId: client.clientId.slice(0, 8), sessions: sessionList.length, protoVersion: THRUM_VERSION });
 }
 
 function thrumEcho(clientId: string, tone: Record<string, unknown>, ok = true, error?: string): void {

@@ -251,7 +251,8 @@ async function awakenHum(): Promise<void> {
           if (msg.chi === "echo") { trace("thrum.echo", { rid: msg.rid, ok: msg.ok }); continue; }
           if (msg.chi === "breath") {
             const hums = (msg.sessions ?? []) as Array<{ sid: string; sigil: string; wane: number }>;
-            trace("thrum.breath.received", { sessions: hums.length, synced: hums.length });
+            const daemonProto = msg.protoVersion as string | undefined;
+            trace("thrum.breath.received", { sessions: hums.length, synced: hums.length, daemonProto });
             continue;
           }
           if (msg.chi === "pulse") { trace("thrum.pulse", { kind: msg.kind, sid: msg.sid }); continue; }

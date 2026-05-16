@@ -27,6 +27,12 @@ export function sigil(ocSessionId: string, harness = "claude"): string {
 
 // ─── Tone ──────────────────────────────────────────────────────────────────
 // Every thrum message is a tone. The frame gives it accountability.
+//
+// `Tone` here is the loose, bag-of-fields shape used throughout the legacy
+// codebase. The discriminated-union shapes (PromptTone, ChunkTone, …)
+// live in `./chi.ts` along with the chi registry and THRUM_VERSION. New
+// code should prefer those typed shapes; this interface stays for backward
+// compatibility with hot-path code that walks tones generically.
 
 export interface Tone {
   chi: string;           // what — the message type (prompt, finish, cancel, ...)
@@ -34,11 +40,38 @@ export interface Tone {
   from: string;          // sender identity
   to?: string;           // recipient identity (omit = broadcast to session)
   sigil?: string;        // session pairing hash
-  sid?: string;          // OC session id (legacy compat, derived from sigil)
+  sid?: string;          // hum session id
   wane?: number;         // sender's wane for this sigil at send time
+  sentAt?: number;       // ms timestamp — drift attribution
   dusk?: number;         // absolute timestamp — tone expires after this
   [key: string]: unknown; // payload fields
 }
+
+// Re-export the canonical registry so consumers can `import { Chi, THRUM_VERSION } from "thrum"`
+// without having to know about chi.ts.
+export {
+  Chi,
+  ALL_CHI,
+  isValidChi,
+  PulseKind as PulseKindEnum,
+  THRUM_VERSION,
+  isEnvelope,
+  isKnownTone,
+} from "./chi.ts";
+export type {
+  ChiKind,
+  PulseKindT,
+  Envelope,
+  LooseTone,
+  Tone as TypedTone,
+  PromptTone, CancelTone, CleanupTone, CurateTone,
+  ReleasePermitTone, TendrilResultTone, ToolResultTone, PetalCellTone,
+  BreathTone, ChunkTone, FinishTone, ErrorTone,
+  SessionReadyTone, PulseTone, PermissionAskTone,
+  TendrilReachTone, ToolCallTone, ToolMetaTone,
+  EchoTone, PerfMarkTone, LogTone, DroneTone, DroneRetrofitTone,
+  BreathSessionView,
+} from "./chi.ts";
 
 let ridCounter = 0;
 export function rid(): string {
