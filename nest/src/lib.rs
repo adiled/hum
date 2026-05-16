@@ -16,8 +16,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 
+pub mod mock;
 pub mod pool;
 
+pub use mock::MockPerch;
 pub use pool::Nest;
 
 /// High-level spec the daemon hands to a perch. The perch is responsible

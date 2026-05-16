@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use ensemble::Ensemble;
 use mcp::{serve as mcp_serve, Registry as McpRegistry};
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
@@ -21,10 +22,31 @@ use tracing::{info, trace, warn};
 
 // ── Public config ──────────────────────────────────────────────────────────
 
+/// Pluggable nest backends. Default = the real claude-cli (pipe) and
+/// claude-repl (pty) perches; sim driver swaps in `nest::MockPerch` so
+/// nothing actually shells out.
+pub struct PerchSet {
+    pub pipe: Arc<dyn nest::Perch>,
+    pub pty: Arc<dyn nest::Perch>,
+}
+
+impl Default for PerchSet {
+    fn default() -> Self {
+        Self {
+            pipe: Arc::new(claude_cli::ClaudeCliPerch),
+            pty: Arc::new(claude_repl::ClaudeReplPerch),
+        }
+    }
+}
+
 /// Where the daemon listens, and how it should pace itself. Construct
 /// via [`DaemonConfig::from_env`] for production defaults or build one
 /// by hand for tests / simulators.
-#[derive(Debug, Clone)]
+///
+/// Three sim hooks layered on top of the production fields:
+/// `thrum_override` (caller-owned Thrum, skip the socket listener),
+/// `ensemble` (peer registry for `to:`-addressed tones), `bind_mcp`
+/// (skip the HTTP MCP listener), and `perches` (swap in mock perches).
 pub struct DaemonConfig {
     pub thrum_path: PathBuf,
     pub http_path: PathBuf,
@@ -33,6 +55,16 @@ pub struct DaemonConfig {
     pub hum_cfg: config::HumConfig,
     pub cli_path: String,
     pub penny_persist_interval: Duration,
+    /// When set, sim provides the Thrum and the daemon does NOT bind a
+    /// unix socket. When None, humd builds its own Thrum and binds.
+    pub thrum_override: Option<Thrum>,
+    /// When set, daemon installs this Ensemble for inter-humd routing.
+    /// When None, the daemon runs without a peer set (legacy single-host).
+    pub ensemble: Option<Arc<Ensemble>>,
+    /// Pluggable nest implementations (default = real claude-cli + claude-repl).
+    pub perches: PerchSet,
+    /// When false, skip mcp_serve too (sim doesn't need a live HTTP MCP).
+    pub bind_mcp: bool,
 }
 
 impl DaemonConfig {
@@ -55,6 +87,10 @@ impl DaemonConfig {
             hum_cfg: config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
+            thrum_override: None,
+            ensemble: None,
+            perches: PerchSet::default(),
+            bind_mcp: true,
         }
     }
 }
@@ -100,25 +136,29 @@ where
     let _drift = drift::Drift::new();
     let _drone = drone::Drone::new();
 
-    let pipe: Arc<dyn nest::Perch> = Arc::new(claude_cli::ClaudeCliPerch);
-    let pty: Arc<dyn nest::Perch> = Arc::new(claude_repl::ClaudeReplPerch);
     let nest_cfg = nest::pool::NestConfig {
         max_procs: cfg.hum_cfg.max_procs as usize,
         idle_timeout: Duration::from_millis(cfg.hum_cfg.idle_timeout),
     };
-    let nest_pool = Arc::new(nest::Nest::new(nest_cfg, pipe, pty));
+    let nest_pool = Arc::new(nest::Nest::new(nest_cfg, cfg.perches.pipe, cfg.perches.pty));
     let mcp_url = format!("http://{}", cfg.mcp_addr);
 
-    let thrum = Thrum::new();
+    // Caller-owned Thrum (sim) vs daemon-owned (production). When the
+    // caller owns it, we install our sink onto theirs and never bind.
+    let (thrum, bind_thrum) = match cfg.thrum_override {
+        Some(t) => (t, false),
+        None => (Thrum::new(), true),
+    };
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
         nest: nest_pool.clone(),
         mcp_url: mcp_url.clone(),
         cli_path: cfg.cli_path.clone(),
+        ensemble: cfg.ensemble.clone(),
     });
     thrum.set_sink(sink);
-    {
+    if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
         tokio::spawn(async move {
@@ -126,15 +166,21 @@ where
                 warn!(err = %e, "thrum.exit");
             }
         });
+    } else {
+        trace!("thrum.override.installed");
     }
 
-    let mcp_addr = cfg.mcp_addr;
-    let registry = McpRegistry::new();
-    tokio::spawn(async move {
-        if let Err(e) = mcp_serve(mcp_addr, registry).await {
-            warn!(err = %e, "mcp.exit");
-        }
-    });
+    if cfg.bind_mcp {
+        let mcp_addr = cfg.mcp_addr;
+        let registry = McpRegistry::new();
+        tokio::spawn(async move {
+            if let Err(e) = mcp_serve(mcp_addr, registry).await {
+                warn!(err = %e, "mcp.exit");
+            }
+        });
+    } else {
+        trace!("mcp.bind.skipped");
+    }
 
     info!("humd.ready");
     shutdown.await;
@@ -154,6 +200,9 @@ struct HumdSink {
     nest: Arc<nest::Nest>,
     mcp_url: String,
     cli_path: String,
+    /// When present, tones with a `to:` hex addressed to a *different*
+    /// humd are routed through here instead of being dispatched locally.
+    ensemble: Option<Arc<Ensemble>>,
 }
 
 struct NestListener {
@@ -221,6 +270,21 @@ impl ToneSink for HumdSink {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
 
+        // Cross-humd routing — if tone is addressed to a *different* humd
+        // and we have an Ensemble, hand it off and stop here. Without an
+        // Ensemble, `to:` is ignored (legacy single-host behaviour).
+        if let Some(ensemble) = &self.ensemble {
+            if let Some(to) = tone.get("to").and_then(Value::as_str) {
+                if !to.is_empty() && to != ensemble.me().to_hex() {
+                    trace!(client_id, %chi_str, to, "ensemble.route");
+                    if let Err(e) = ensemble.route(tone).await {
+                        warn!(client_id, err = %e, "ensemble.route.failed");
+                    }
+                    return;
+                }
+            }
+        }
+
         match chi {
             Some(Chi::Hello) => {
                 trace!(client_id, %chi_str, "thrum.recv.hello");
@@ -275,6 +339,26 @@ impl ToneSink for HumdSink {
             Some(Chi::Cleanup) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
                     self.nest.fell(sid).await;
+                }
+            }
+            Some(Chi::PeerAdd) => {
+                // Sim wires the connection into Ensemble directly; this
+                // arm just records intent so peer-add tones round-trip
+                // through the dispatcher for tests/logs.
+                let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
+                trace!(client_id, humd_id, "ensemble.peer.add");
+            }
+            Some(Chi::PeerRemove) => {
+                let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
+                trace!(client_id, humd_id, "ensemble.peer.remove");
+                if let Some(ensemble) = &self.ensemble {
+                    if let Ok(bytes) = hex::decode(humd_id) {
+                        if bytes.len() == 32 {
+                            let mut id = [0u8; 32];
+                            id.copy_from_slice(&bytes);
+                            ensemble.remove_peer(&ensemble::HumdId(id));
+                        }
+                    }
                 }
             }
             Some(Chi::Curate)

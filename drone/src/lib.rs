@@ -529,6 +529,8 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::Log => "log",
         Chi::Drone => "drone",
         Chi::DroneRetrofit => "drone-retrofit",
+        Chi::PeerAdd => "peer-add",
+        Chi::PeerRemove => "peer-remove",
     }
 }
 

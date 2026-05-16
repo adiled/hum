@@ -4,7 +4,7 @@
 // the file is regenerated on every cargo build of thrum-core (build.rs).
 // Manual regen: `cargo run -p codegen`.
 
-export const THRUM_VERSION = "0.2.0" as const;
+export const THRUM_VERSION = "0.3.0" as const;
 
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
@@ -57,6 +57,10 @@ export const Chi = {
   drone: "drone",
   /** drone swallow + retry signal */
   droneRetrofit: "drone-retrofit",
+  /** register a peer humd — `{ humd_id: hex, hints: [..] }` */
+  peerAdd: "peer-add",
+  /** drop a peer humd — `{ humd_id: hex }` */
+  peerRemove: "peer-remove",
 } as const;
 export type ChiKind = typeof Chi[keyof typeof Chi];
 

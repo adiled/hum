@@ -152,6 +152,36 @@ impl Thrum {
     pub fn client_count(&self) -> usize {
         self.inner.clients.read().len()
     }
+
+    /// Register a synthetic in-process client. The returned receiver
+    /// drains outbound tones bound for this client; `client_id` becomes
+    /// addressable via [`thrum_to`] and [`thrum_broadcast`]. Used by
+    /// sim to fake a connected nestler without a socket.
+    pub fn register_synthetic(&self, client_id: impl Into<String>) -> tokio::sync::mpsc::Receiver<Value> {
+        let cid: String = client_id.into();
+        let (reach, rx) = registry::Reach::new(cid);
+        let mut reg = self.inner.clients.write();
+        reg.insert(Arc::new(reach));
+        rx
+    }
+
+    /// Drop a previously-registered synthetic client.
+    pub fn drop_synthetic(&self, client_id: &str) {
+        self.inner.clients.write().remove(client_id);
+    }
+
+    /// Inject a tone as if it arrived from `client_id`. Bypasses the
+    /// NDJSON socket and goes straight to the installed sink. No
+    /// envelope validation, no auto-echo — sim drives the shape it
+    /// wants. The sink must be installed beforehand.
+    pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
+        let sink = self.inner.sink.read().clone();
+        if let Some(sink) = sink {
+            sink.hear(client_id, tone).await;
+        } else {
+            trace!(client_id = %short(client_id), "thrum.inject.no-sink");
+        }
+    }
 }
 
 impl Default for Thrum {

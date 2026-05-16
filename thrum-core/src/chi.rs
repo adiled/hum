@@ -68,6 +68,12 @@ pub enum Chi {
     Drone,
     /// drone swallow + retry signal
     DroneRetrofit,
+
+    // ── Ensemble / inter-humd plumbing ──────────────────────────────
+    /// register a peer humd — `{ humd_id: hex, hints: [..] }`
+    PeerAdd,
+    /// drop a peer humd — `{ humd_id: hex }`
+    PeerRemove,
 }
 
 /// `pulse.kind` — its own enum within `chi:"pulse"` tones.

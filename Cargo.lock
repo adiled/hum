@@ -541,7 +541,9 @@ dependencies = [
  "config",
  "drift",
  "drone",
+ "ensemble",
  "graft",
+ "hex",
  "hums",
  "ids",
  "mcp",
@@ -1194,6 +1196,25 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "sim"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "ensemble",
+ "humd",
+ "nest",
+ "parking_lot",
+ "serde_json",
+ "thrum-core",
+ "thrumd",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

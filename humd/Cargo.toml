@@ -32,8 +32,10 @@ claude-repl = { path = "../nests/claude-repl" }
 hums = { path = "../hums" }
 penny = { path = "../penny" }
 drone = { path = "../drone" }
+ensemble = { path = "../ensemble" }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
