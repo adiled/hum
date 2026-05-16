@@ -2,14 +2,13 @@
 //!
 //! One process, every wing. Boot order is fixed: tracing → config → sockets →
 //! state crates → trackers → thrum server → MCP server → nest pool → signals.
-//! mcpd is stubbed inline (TODO) until its registry/server modules compile;
-//! every other wing wires up against the real crate.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use mcpd::{serve as mcp_serve, Registry as McpRegistry};
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker, THRUM_VERSION};
@@ -46,27 +45,6 @@ fn penny_path() -> PathBuf {
     // Penny lives under XDG_STATE_HOME alongside hums; runtime_dir is
     // ephemeral but fine for v0 so the daemon stays self-contained.
     runtime_dir().join("penny.json")
-}
-
-// ── stub layer for mcpd (registry/server modules don't compile yet) ─────────
-
-// TODO: replace with `mcpd::{Registry, serve}` once mcpd compiles.
-mod mcpd_stub {
-    use std::net::SocketAddr;
-    use tracing::info;
-
-    pub struct Registry;
-    impl Registry {
-        pub fn new() -> Self {
-            Self
-        }
-    }
-
-    pub async fn serve(addr: SocketAddr, _registry: Registry) -> anyhow::Result<()> {
-        info!(%addr, "mcp.listening.stub");
-        std::future::pending::<()>().await;
-        Ok(())
-    }
 }
 
 // ── ToneSink — the big chi dispatch ─────────────────────────────────────────
@@ -196,9 +174,9 @@ async fn main() -> Result<()> {
     }
 
     // 8. MCP HTTP server.
-    let registry = mcpd_stub::Registry::new();
+    let registry = McpRegistry::new();
     tokio::spawn(async move {
-        if let Err(e) = mcpd_stub::serve(mcp_addr, registry).await {
+        if let Err(e) = mcp_serve(mcp_addr, registry).await {
             warn!(err = %e, "mcp.exit");
         }
     });

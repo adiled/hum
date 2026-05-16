@@ -15,10 +15,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
-# Path deps on every workspace crate. mcpd is stubbed inline (TODO)
-# until its registry/server modules compile.
+# Path deps on every workspace crate.
 thrum-core = { path = "../thrum-core" }
 thrumd = { path = "../thrumd" }
+mcpd = { path = "../mcpd" }
 config = { path = "../config" }
 ids = { path = "../ids" }
 graft = { path = "../graft" }
