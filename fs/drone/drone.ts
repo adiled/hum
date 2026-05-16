@@ -1,9 +1,9 @@
 // ─── Drone ─────────────────────────────────────────────────────────────────
 // The sentinel's awareness. Not called, not invoked — it observes every tone
-// that flows through the hum and acts on what it sees. The drone is never
+// that flows through the thrum and acts on what it sees. The drone is never
 // manual. If you have to call it, it's not a drone.
 //
-// The drone watches the hum. Every tone that passes through updates the
+// The drone watches the thrum. Every tone that passes through updates the
 // assessment. The rhythm adapts. Retries fire. Resyncs happen. The user
 // never sees a failure because the drone already handled it.
 
@@ -106,9 +106,9 @@ export type DroneAction =
 export type DroneEvaluator = (text: string, state: DroneState) => Promise<number>; // returns probability 0-1
 
 /**
- * Drone: self-governing observer of a hum channel.
+ * Drone: self-governing observer of a thrum channel.
  *
- * The drone wraps the hum's I/O. It sees every tone that flows in either
+ * The drone wraps the thrum's I/O. It sees every tone that flows in either
  * direction. Nobody calls the drone — it intercepts naturally.
  */
 export class Drone {
@@ -180,7 +180,7 @@ export class Drone {
 
   private static TRACKED_CHI = new Set(["prompt", "seeded", "cancel", "release-permit"]);
 
-  /** Wired into hum send path — observes outgoing tones */
+  /** Wired into thrum send path — observes outgoing tones */
   sent(tone: Record<string, unknown>): void {
     if (tone.chi === "drone" || tone.chi === "echo") return;
     const s = tone.sigil as string;
@@ -194,7 +194,7 @@ export class Drone {
     this.resetSilence(s);
   }
 
-  /** Wired into hum receive path — observes incoming tones */
+  /** Wired into thrum receive path — observes incoming tones */
   heard(tone: Record<string, unknown>): void {
     const chi = tone.chi as string;
 

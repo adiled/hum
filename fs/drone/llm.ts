@@ -3,7 +3,7 @@
 // Workspace-isolated: drone sessions don't pollute the user's session list.
 
 import { TRIAGE_PROMPT, buildTriagePrompt, buildTreatPrompt, type DroneContext, type TriageCategory } from "./prompts.ts";
-import type { Assessment } from "../hum.ts";
+import type { Assessment } from "../thrum.ts";
 import { loadConfig } from "../config.ts";
 
 export interface DroneJudgment {
@@ -57,7 +57,7 @@ async function ocMessage(base: string, sessionId: string, text: string, timeout 
 }
 
 // ─── Dedicated sessions ────────────────────────────────────────────────────
-// Each clwnd session gets its own drone session — persistent, not throwaway.
+// Each hum session gets its own drone session — persistent, not throwaway.
 // The drone accumulates context about the session's health over time.
 
 const droneSessions = new Map<string, { id: string; base: string }>();

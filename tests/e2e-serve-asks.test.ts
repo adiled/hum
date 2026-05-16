@@ -19,13 +19,13 @@ function unixFetch(socketPath: string, path: string, opts?: { method?: string; b
 
 const PORT = 14568;
 const BASE = `http://127.0.0.1:${PORT}`;
-const MODEL = { providerID: "opencode-clwnd", modelID: "claude-sonnet-4-5" };
+const MODEL = { providerID: "opencode-hum", modelID: "claude-sonnet-4-5" };
 const HOME = process.env.HOME ?? "/tmp";
-const SUITE_DIR = join(HOME, ".clwnd-e2e-serve-asks");
+const SUITE_DIR = join(HOME, ".hum-e2e-serve-asks");
 const PROJECT_DIR = join(SUITE_DIR, "project");
 const TIMEOUT = 180_000;
 const activeSessions: string[] = [];
-const DAEMON_SOCK = (process.env.CLWND_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/clwnd/clwnd.sock`) + ".http";
+const DAEMON_SOCK = (process.env.HUM_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/hum/hum.sock`) + ".http";
 
 async function api(path: string, opts?: RequestInit) {
   return (await fetch(`${BASE}${path}`, {
@@ -71,8 +71,8 @@ beforeAll(async () => {
   // via permission_prompt. read + bash are allowed.
   writeFileSync(join(PROJECT_DIR, ".claude", "settings.json"), JSON.stringify({
     permissions: { allow: [
-      "mcp__clwnd__read(*)",
-      "mcp__clwnd__bash(*)",
+      "mcp__hum__read(*)",
+      "mcp__hum__bash(*)",
     ] },
   }, null, 2));
 
@@ -108,9 +108,9 @@ function skipIfDead() {
 
 describe("e2e-serve-asks: permission pipeline", () => {
   // do_code/do_noncode are NOT in the .claude/settings.json allow list.
-  // Claude CLI asks via --permission-prompt-tool mcp__clwnd__permission_prompt.
+  // Claude CLI asks via --permission-prompt-tool mcp__hum__permission_prompt.
   // The daemon holds 5s then auto-allows. The tool executes after the hold.
-  // OC sees clwnd_permission as a tool part in the stream.
+  // OC sees hum_permission as a tool part in the stream.
 
   test("do_code creates file through permission hold", async () => {
     skipIfDead();

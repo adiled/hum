@@ -4,7 +4,7 @@
 // The LLM evaluates the accumulated session state against these prompts and
 // returns an assessment + action.
 //
-// These prompts are derived from every horror in clwnd's commit history.
+// These prompts are derived from every horror in hum's commit history.
 // They encode what went wrong so the drone can prevent it from happening again.
 
 export interface DroneContext {
@@ -63,7 +63,7 @@ Respond with ONLY JSON: { "action": "respawn" | "alert" | "none", "reason": "one
   "drift": `Local and remote wane diverge. One side's state is stale. This means turnsSent, claudeSessionId, or needsRespawn are out of sync.
 Respond with ONLY JSON: { "action": "reseed" | "respawn" | "none", "reason": "one line" }`,
 
-  "duplicate": `The AI repeated the same text or tool call. Suggests double-emission from streaming + final message, or duplicate hum routing.
+  "duplicate": `The AI repeated the same text or tool call. Suggests double-emission from streaming + final message, or duplicate thrum routing.
 Respond with ONLY JSON: { "action": "alert" | "none", "reason": "one line" }`,
 };
 

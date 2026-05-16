@@ -10,7 +10,7 @@
  * determines the scope that anchor governs (how much text it "owns"),
  * and returns the byte range for splicing. The addressing is linguistic,
  * not geometric — no line numbers, no byte offsets in the API. You say
- * WHAT you're looking at, clwnd figures out WHERE it is and how far it
+ * WHAT you're looking at, hum figures out WHERE it is and how far it
  * extends.
  *
  * Scope hierarchy:
@@ -23,7 +23,7 @@
  *
  * The agent doesn't pick the scope level explicitly — the anchor text
  * itself implies the scope. `## Installation` is a paragraph anchor.
- * `DATABASE_URL` in an env file is a phrase anchor. clwnd infers.
+ * `DATABASE_URL` in an env file is a phrase anchor. hum infers.
  */
 
 import { extname } from "path";

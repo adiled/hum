@@ -203,7 +203,7 @@ function detectImportsSymbol(rootNode: any, ext: string): Symbol | null {
 
 // ─── Sub-symbol linguistic addressing (experimental) ───────────────────────
 //
-// Gated by config `experimental.subpath` (clwnd.json). When enabled, path
+// Gated by config `experimental.subpath` (hum.json). When enabled, path
 // segments that don't match a named child are treated as linguistic
 // aliases that walk the AST inside the current symbol:
 //
@@ -449,11 +449,11 @@ function resolveAliasPath(filePath: string, rootSym: Symbol, aliasPath: string[]
 
 // Locate vendored query files at runtime. We try a few candidate paths
 // because the source layout (lib/queries/) doesn't match the bundled
-// layout (dist/daemon/queries/) and we want both dev mode (running .ts
+// layout (dist/humd/queries/) and we want both dev mode (running .ts
 // directly via tsx) and via rsync-deployed source.
 //
 // The dev script rsyncs these to the target.
-// dist/daemon/queries/, so the first candidate hits in production. The
+// dist/humd/queries/, so the first candidate hits in production. The
 // second candidate covers running .ts source directly. The third is a
 // safety net in case the daemon was bundled but onSuccess didn't run.
 import { existsSync } from "fs";
@@ -461,7 +461,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 function findVendoredQueryDir(): string {
   const candidates = [
     join(HERE, "queries"),               // lib/queries (dev)
-    join(HERE, "..", "lib", "queries"),  // dist/daemon → ../lib/queries (fallback)
+    join(HERE, "..", "lib", "queries"),  // dist/daemon → ../fs/queries (fallback)
     join(HERE, "..", "..", "lib", "queries"),
   ];
   for (const c of candidates) {
@@ -476,7 +476,7 @@ const VENDORED_QUERY_DIR = findVendoredQueryDir();
 function findVendoredWasmDir(): string {
   const candidates = [
     join(HERE, "wasm"),                  // lib/wasm (dev)
-    join(HERE, "..", "lib", "wasm"),     // dist/daemon → ../lib/wasm (fallback)
+    join(HERE, "..", "lib", "wasm"),     // dist/daemon → ../fs/wasm (fallback)
     join(HERE, "..", "..", "lib", "wasm"),
   ];
   for (const c of candidates) {
@@ -519,7 +519,7 @@ async function getWasmLanguage(ext: string): Promise<any | null> {
     languages.set(ext, lang);
     return lang;
   } catch (e) {
-    process.stderr.write?.(`[clwnd] failed to load WASM grammar for ${ext}: ${(e as Error).message}\n`);
+    process.stderr.write?.(`[hum] failed to load WASM grammar for ${ext}: ${(e as Error).message}\n`);
     return null;
   }
 }
@@ -580,7 +580,7 @@ function getQuery(ext: string): any | null {
     queries.set(ext, q);
     return q;
   } catch (e) {
-    process.stderr.write?.(`[clwnd] failed to compile query for ${ext}: ${(e as Error).message}\n`);
+    process.stderr.write?.(`[hum] failed to compile query for ${ext}: ${(e as Error).message}\n`);
     queries.set(ext, null);
     return null;
   }
@@ -602,7 +602,7 @@ async function getWasmQuery(ext: string): Promise<any | null> {
     queries.set(ext, q);
     return q;
   } catch (e) {
-    process.stderr.write?.(`[clwnd] failed to compile WASM query for ${ext}: ${(e as Error).message}\n`);
+    process.stderr.write?.(`[hum] failed to compile WASM query for ${ext}: ${(e as Error).message}\n`);
     queries.set(ext, null);
     return null;
   }
@@ -1057,7 +1057,7 @@ async function cachedParseAsync(filePath: string): Promise<AstCacheEntry | null>
     if (imp) symbols.unshift(imp);
     return cacheStore(filePath, stat.mtimeMs, symbols, source);
   } catch (e) {
-    process.stderr.write?.(`[clwnd] WASM parse failed for ${filePath}: ${(e as Error).message}\n`);
+    process.stderr.write?.(`[hum] WASM parse failed for ${filePath}: ${(e as Error).message}\n`);
     return null;
   }
 }

@@ -3,20 +3,21 @@ import { tool } from "@opencode-ai/plugin";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { createClwnd, setSharedClient, setSharedPluginInput, setLogClient, hum, trace, log, clearSessionState } from "./provider.ts";
-import { loadConfig, type ClwndConfig } from "../../lib/config.ts";
+import { createHum, setSharedClient, setSharedPluginInput, setLogClient, thrum, trace, log, clearSessionState } from "./provider.ts";
+import { detectOcVersion } from "./compat.ts";
+import { loadConfig, type HumConfig } from "../../fs/config.ts";
 
 // ─── Small Model Discovery ──────────────────────────────────────────────────
 // Provider config lives in opencode.json (managed by install script).
 // Plugin only discovers a free model for small tasks at runtime.
 
-async function syncSmallModel(client: any, cfg: ClwndConfig): Promise<void> {
+async function syncSmallModel(client: any, cfg: HumConfig): Promise<void> {
   try {
     const current = await client.config.get();
     const currentSmall = (current?.data as any)?.small_model;
     if (currentSmall) return; // user or prior run already set it
 
-    // Use clwnd.json configured model if set
+    // Use hum.json configured model if set
     if (cfg.smallModel) {
       await client.config.update({ body: { small_model: cfg.smallModel } });
       log("small.synced", { model: cfg.smallModel, source: "config" });
@@ -27,7 +28,7 @@ async function syncSmallModel(client: any, cfg: ClwndConfig): Promise<void> {
     const providers = await client.provider.list();
     const all = (providers?.data as any)?.all ?? [];
     for (const p of all) {
-      if (p.id === "opencode-clwnd") continue;
+      if (p.id === "opencode-hum") continue;
       for (const [mid, m] of Object.entries(p.models) as [string, any][]) {
         if (m.cost && m.cost.input === 0 && m.cost.output === 0 && m.tool_call) {
           const pick = `${p.id}/${mid}`;
@@ -44,25 +45,26 @@ async function syncSmallModel(client: any, cfg: ClwndConfig): Promise<void> {
 
 // ─── Plugin ────────────────────────────────────────────────────────────────
 
-export const clwndPlugin: Plugin = async (input) => {
+export const humPlugin: Plugin = async (input) => {
   setSharedClient(input.client);
   setSharedPluginInput(input);
   setLogClient(input.client);
-  const provider = createClwnd({ client: input.client, pluginInput: input });
+  const ocVer = detectOcVersion(input);
+  const provider = createHum({ client: input.client, pluginInput: input });
 
-  log("plugin.loaded", { directory: input.directory });
+  log("plugin.loaded", { directory: input.directory, ocVersion: ocVer ?? "unknown" });
 
   // Toast version update on first load after upgrade
   try {
     const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
     const version = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version ?? "unknown";
-    const stateDir = `${process.env.XDG_STATE_HOME || process.env.HOME + "/.local/state"}/clwnd`;
+    const stateDir = `${process.env.XDG_STATE_HOME || process.env.HOME + "/.local/state"}/hum`;
     const versionFile = join(stateDir, "last-plugin-version");
     let lastVersion = "";
     try { lastVersion = readFileSync(versionFile, "utf8").trim(); } catch {}
     if (lastVersion && lastVersion !== version) {
       input.client.tui.showToast({
-        body: { title: "clwnd updated", message: `v${lastVersion} → v${version} ~ clwnd`, variant: "success", duration: 5000 },
+        body: { title: "hum updated", message: `v${lastVersion} → v${version} ~ hum`, variant: "success", duration: 5000 },
       }).catch(() => {});
     }
     try { mkdirSync(stateDir, { recursive: true }); writeFileSync(versionFile, version); } catch {}
@@ -74,10 +76,10 @@ export const clwndPlugin: Plugin = async (input) => {
 
   return {
     models: {
-      clwnd: provider,
+      hum: provider,
     },
     event: async ({ event }) => {
-      // The sentinel's ears — hum every session event to the daemon
+      // The sentinel's ears — thrum every session event to the daemon
       const etype = event.type;
       const props = (event as any).properties ?? {};
 
@@ -91,7 +93,7 @@ export const clwndPlugin: Plugin = async (input) => {
         const parentId = props.info.parentID;
         const completed = props.info.metadata?.time?.completed;
         if (sid && role) {
-          hum({ chi: "petal-cell", sid, event: etype, role, model, provider, messageId, parentId, completed });
+          thrum({ chi: "petal-cell", sid, event: etype, role, model, provider, messageId, parentId, completed });
         }
       }
 
@@ -102,8 +104,8 @@ export const clwndPlugin: Plugin = async (input) => {
       // of SSE delivery — out of process, unmeasurable from the plugin.
       if ((etype === "message.part.delta" || etype === "message.part.updated") && props.sessionID) {
         const sid = props.sessionID;
-        hum({ chi: "perf-mark", sid, mark: "oc_bus_publish" });
-        hum({ chi: "perf-mark", sid, mark: "oc_sse_write" });
+        thrum({ chi: "perf-mark", sid, mark: "oc_bus_publish" });
+        thrum({ chi: "perf-mark", sid, mark: "oc_sse_write" });
       }
 
       // Session deleted — clean up plugin + daemon state
@@ -112,24 +114,24 @@ export const clwndPlugin: Plugin = async (input) => {
         if (sid) {
           trace("session.deleted", { sid });
           clearSessionState(sid);
-          hum({ chi: "cleanup", sid });
+          thrum({ chi: "cleanup", sid });
         }
       }
 
     },
     "chat.headers": async (ctx, output) => {
-      output.headers["x-clwnd-agent"] = typeof ctx.agent === "string"
+      output.headers["x-hum-agent"] = typeof ctx.agent === "string"
         ? ctx.agent
         : (ctx.agent as any)?.name ?? JSON.stringify(ctx.agent);
     },
     // Custom tools registered with OC's tool registry. Each one delegates
-    // to clwnd's daemon via the same MCP HTTP endpoint that Claude CLI uses
+    // to hum's daemon via the same MCP HTTP endpoint that Claude CLI uses
     // — JSON-RPC POST to http://127.0.0.1:29147/s/<sid> with method
     // tools/call. No new transport, no new vocabulary: plugin tools and
     // Claude CLI tools share the exact same executeTool() dispatch.
     tool: {
-      clwnd_permission: tool({
-        description: "Permission prompt for clwnd file system operations",
+      hum_permission: tool({
+        description: "Permission prompt for hum file system operations",
         args: {
           tool: tool.schema.string().describe("Tool name requesting permission"),
           path: tool.schema.string().optional().describe("File path"),
@@ -162,7 +164,7 @@ export const clwndPlugin: Plugin = async (input) => {
 - operation: 'replace', new_source: '<whole file>'  — full-file rewrite, re-parsed.
 - operation: 'insert_after' | 'insert_before', symbol: 'NAME', new_source: '<new code block>'  — add a new symbol adjacent to an anchor. Re-parsed.
 - operation: 'delete', symbol: 'NAME'  — remove a symbol. Re-parsed.
-Before calling do_code on an existing file, run read(file_path) or read(file_path, symbol: '...') first — clwnd's staleness guard rejects edits whose baseline is older than the current mtime. There is no old_string/new_string vocabulary here — this is NOT a string replace tool.`,
+Before calling do_code on an existing file, run read(file_path) or read(file_path, symbol: '...') first — hum's staleness guard rejects edits whose baseline is older than the current mtime. There is no old_string/new_string vocabulary here — this is NOT a string replace tool.`,
         args: {
           file_path: tool.schema.string().describe("Absolute path to the code file"),
           operation: tool.schema.enum(["create", "replace", "insert_before", "insert_after", "delete"]).optional().describe("Operation to perform (default: replace)"),
@@ -170,7 +172,7 @@ Before calling do_code on an existing file, run read(file_path) or read(file_pat
           new_source: tool.schema.string().optional().describe("New source code (required for create/replace/insert)"),
         },
         async execute(args, ctx) {
-          return callClwndTool("do_code", args, ctx.sessionID);
+          return callHumTool("do_code", args, ctx.sessionID);
         },
       }),
       do_noncode: tool({
@@ -178,31 +180,31 @@ Before calling do_code on an existing file, run read(file_path) or read(file_pat
 - mode: 'write' (default) — create or overwrite with content
 - mode: 'append' — add content to the end of an existing file
 - mode: 'prepend' — add content to the start of an existing file
-For existing files, read(file_path) first so clwnd's staleness guard knows your baseline.`,
+For existing files, read(file_path) first so hum's staleness guard knows your baseline.`,
         args: {
           file_path: tool.schema.string().describe("Absolute path to the non-code file"),
           content: tool.schema.string().describe("Content to write/append/prepend"),
           mode: tool.schema.enum(["write", "append", "prepend"]).optional().describe("Write mode (default: write)"),
         },
         async execute(args, ctx) {
-          return callClwndTool("do_noncode", args, ctx.sessionID);
+          return callHumTool("do_noncode", args, ctx.sessionID);
         },
       }),
     },
   };
 };
 
-// Dispatch a tool call to clwnd's daemon MCP endpoint. Same transport and
-// JSON-RPC shape Claude CLI uses when it calls mcp__clwnd__<tool>. The port
+// Dispatch a tool call to hum's daemon MCP endpoint. Same transport and
+// JSON-RPC shape Claude CLI uses when it calls mcp__hum__<tool>. The port
 // is pinned (29147) so there's no discovery ceremony — if you change the
 // port in daemon.ts, change it here too. No `|| 29147` fallback — if you
-// explicitly set CLWND_MCP_PORT, we respect it or fail loudly, not silently
+// explicitly set HUM_MCP_PORT, we respect it or fail loudly, not silently
 // revert to the default.
-const CLWND_MCP_PORT = parseInt(process.env.CLWND_MCP_PORT ?? "29147");
-const CLWND_MCP_HOST = process.env.CLWND_MCP_HOST ?? "127.0.0.1";
+const HUM_MCP_PORT = parseInt(process.env.HUM_MCP_PORT ?? "29147");
+const HUM_MCP_HOST = process.env.HUM_MCP_HOST ?? "127.0.0.1";
 
-async function callClwndTool(name: string, args: Record<string, unknown>, sessionID: string): Promise<string> {
-  const url = `http://${CLWND_MCP_HOST}:${CLWND_MCP_PORT}/s/${sessionID}`;
+async function callHumTool(name: string, args: Record<string, unknown>, sessionID: string): Promise<string> {
+  const url = `http://${HUM_MCP_HOST}:${HUM_MCP_PORT}/s/${sessionID}`;
   const body = {
     jsonrpc: "2.0",
     id: 1,
@@ -215,7 +217,7 @@ async function callClwndTool(name: string, args: Record<string, unknown>, sessio
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!response.ok) return `Error: clwnd MCP endpoint returned HTTP ${response.status}`;
+    if (!response.ok) return `Error: hum MCP endpoint returned HTTP ${response.status}`;
     const data = await response.json() as {
       result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean };
       error?: { message: string };
@@ -224,8 +226,8 @@ async function callClwndTool(name: string, args: Record<string, unknown>, sessio
     const content = data.result?.content ?? [];
     return content.filter(c => c.type === "text").map(c => c.text ?? "").join("\n") || "(no output)";
   } catch (e) {
-    return `Error: failed to reach clwnd daemon at ${url} — ${e instanceof Error ? e.message : String(e)}`;
+    return `Error: failed to reach hum daemon at ${url} — ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
-export { createClwnd } from "./provider.ts";
+export { createHum } from "./provider.ts";

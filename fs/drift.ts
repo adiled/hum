@@ -1,6 +1,6 @@
 // drift — the felt passing of time. Records each bloom's milestones, tools
 // the daemon dispatched, and exposes a ring of recent blooms for the
-// `clwnd drift` CLI and HTTP endpoints to query.
+// `hum drift` CLI and HTTP endpoints to query.
 //
 // Naming follows the rest of the codebase: a bloom is one assistant turn
 // (prompt → wilt). Each milestone within is a mark, each tool roundtrip
@@ -21,7 +21,7 @@ export interface TendrilDrift {
   at: number; // ms since turn start
 }
 
-export interface HumSample {
+export interface ThrumSample {
   to: "nest" | "oc"; // destination endpoint (anchored on receiver, not perspective)
   ms: number;
   at: number;        // ms since bloom start
@@ -31,14 +31,14 @@ export interface BloomDrift {
   sid: string;
   bloomId: string;
   modelId?: string;
-  version?: string;                  // clwnd build that recorded this turn
+  version?: string;                  // hum build that recorded this turn
   startedAt: number;
   endedAt?: number;
   marks: Record<string, number>;     // phase name → ms since startedAt (first-only)
   spans: Record<string, number>;     // named duration accumulator (cumulative)
   flags: Record<string, boolean | number | string>; // arbitrary tags (warm, withered, …)
   tendrils: TendrilDrift[];
-  hums: HumSample[];                 // per-hum transit samples — aggregated as p50/p95
+  hums: ThrumSample[];                 // per-thrum transit samples — aggregated as p50/p95
 }
 
 const RING_SIZE = 200;
@@ -135,12 +135,12 @@ export function tendril(sid: string, name: string, ms: number): void {
 }
 
 /**
- * Record one hum sample — a single tone's transit across the hum socket.
+ * Record one thrum sample — a single tone's transit across the thrum socket.
  * `to` names the destination endpoint (nest = daemon, oc = plugin), so
  * direction is unambiguous regardless of who's reading. Aggregates as
  * p50/p95 across all sampled hums per bloom.
  */
-export function hum(sid: string, to: "nest" | "oc", ms: number): void {
+export function thrum(sid: string, to: "nest" | "oc", ms: number): void {
   const t = active.get(sid);
   if (!t) return;
   if (ms < 0) ms = 0; // clock-skew clamp
@@ -187,7 +187,7 @@ export function wilt(sid: string): void {
 
 /**
  * Read blooms from disk for the given window. Used when the in-memory ring
- * is colder than the requested range (typical for `clwnd drift --days N`).
+ * is colder than the requested range (typical for `hum drift --days N`).
  * Returns blooms sorted oldest → newest. Caller may .reverse() if desired.
  */
 export function readSince(sinceMs: number, sid?: string): BloomDrift[] {

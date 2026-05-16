@@ -1,8 +1,8 @@
 // Penny-pincher counters. Lifetime tally of every cost-saving and
-// value-adding path in clwnd. Exposed via /savings, rendered by
-// `clwnd savings`. Persisted to disk across daemon restarts.
+// value-adding path in hum. Exposed via /savings, rendered by
+// `hum savings`. Persisted to disk across daemon restarts.
 //
-// Plugin-side counters piggyback on the prompt hum via `pennyDelta`.
+// Plugin-side counters piggyback on the prompt thrum via `pennyDelta`.
 
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
@@ -35,12 +35,12 @@ export interface Penny {
   droneWithers: number;        // context corruption caught by cupping
 
   // ── Plugin-side (via pennyDelta) ──────────────────────────────────
-  humDedup: number;
+  thrumDedup: number;
   reminderStripped: number;
   priorPetalsElided: number;
 
   // ── Cost tracking ─────────────────────────────────────────────────
-  totalCost: number;           // USD routed through clwnd (from usage)
+  totalCost: number;           // USD routed through hum (from usage)
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens: number;
@@ -66,7 +66,7 @@ export const penny: Penny = {
   titleSkipped: 0,
   contextOverThreshold: 0,
   droneWithers: 0,
-  humDedup: 0,
+  thrumDedup: 0,
   reminderStripped: 0,
   priorPetalsElided: 0,
   totalCost: 0,

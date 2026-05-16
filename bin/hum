@@ -2,11 +2,11 @@
 set -e
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-CLWND_SRC="$XDG_DATA_HOME/clwnd/src"
+HUM_SRC="$XDG_DATA_HOME/hum/src"
 
-if [ ! -d "$CLWND_SRC" ]; then
-  echo "clwnd not installed. Run:"
-  echo "  curl -fsSL https://raw.githubusercontent.com/adiled/clwnd/main/install | bash"
+if [ ! -d "$HUM_SRC" ]; then
+  echo "hum not installed. Run:"
+  echo "  curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash"
   exit 1
 fi
 
@@ -15,13 +15,13 @@ shift 2>/dev/null || true
 
 case "$CMD" in
   update)
-    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/clwnd/main/install?t=$(date +%s)")" -- update
+    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/hum/main/install?t=$(date +%s)")" -- update
     ;;
   force)
-    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/clwnd/main/install?t=$(date +%s)")" -- install
+    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/hum/main/install?t=$(date +%s)")" -- install
     ;;
   uninstall)
-    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/clwnd/main/install?t=$(date +%s)")" -- uninstall
+    exec bash -c "$(curl -fsSL "https://raw.githubusercontent.com/adiled/hum/main/install?t=$(date +%s)")" -- uninstall
     ;;
   status)
     IS_ROOT=$([ "$(id -u)" = "0" ] && echo true || echo false)
@@ -33,15 +33,15 @@ case "$CMD" in
       # Capture launchctl output first — piping directly to head swallows
       # the failure exit code so the `|| echo "daemon not running"` branch
       # would never fire. Do it in two steps so we can tell them apart.
-      OUT=$(launchctl print "gui/$(id -u)/com.clwnd.daemon" 2>&1)
+      OUT=$(launchctl print "gui/$(id -u)/com.hum.daemon" 2>&1)
       if [ $? -eq 0 ]; then
         echo "$OUT" | head -5
       else
         echo "daemon not running (launchctl: $OUT)"
       fi
     else
-      if $SC is-active --quiet clwnd; then
-        $SC status clwnd 2>/dev/null | head -5
+      if $SC is-active --quiet hum; then
+        $SC status hum 2>/dev/null | head -5
       else
         echo "daemon not running"
       fi
@@ -50,10 +50,10 @@ case "$CMD" in
   doctor)
     OS="$(uname -s)"
     XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-    echo "clwnd doctor"
+    echo "hum doctor"
     echo "  os:         $OS"
-    echo "  version:    $(cat "$CLWND_SRC/package.json" | grep '"version"' | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')"
-    echo "  src:        $CLWND_SRC ($(cd "$CLWND_SRC" && git describe --tags --exact-match 2>/dev/null || echo 'not a tag'))"
+    echo "  version:    $(cat "$HUM_SRC/package.json" | grep '"version"' | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')"
+    echo "  src:        $HUM_SRC ($(cd "$HUM_SRC" && git describe --tags --exact-match 2>/dev/null || echo 'not a tag'))"
     echo
     echo "── process ──"
     PIDS=$(pgrep -f "dist/daemon/index.js" 2>/dev/null || true)
@@ -74,19 +74,19 @@ case "$CMD" in
     echo
     echo "── service ──"
     if [ "$OS" = "Darwin" ]; then
-      PLIST="$HOME/Library/LaunchAgents/com.clwnd.daemon.plist"
+      PLIST="$HOME/Library/LaunchAgents/com.hum.daemon.plist"
       if [ -f "$PLIST" ]; then
         echo "  plist:      $PLIST (exists)"
       else
-        echo "  plist:      $PLIST (MISSING — run: clwnd update)"
+        echo "  plist:      $PLIST (MISSING — run: hum update)"
       fi
-      if launchctl print "gui/$(id -u)/com.clwnd.daemon" >/dev/null 2>&1; then
+      if launchctl print "gui/$(id -u)/com.hum.daemon" >/dev/null 2>&1; then
         echo "  launchctl:  loaded"
       else
-        echo "  launchctl:  NOT loaded (run: clwnd restart)"
+        echo "  launchctl:  NOT loaded (run: hum restart)"
       fi
-      STDOUT_LOG="$XDG_STATE_HOME/clwnd/daemon.stdout.log"
-      STDERR_LOG="$XDG_STATE_HOME/clwnd/daemon.stderr.log"
+      STDOUT_LOG="$XDG_STATE_HOME/hum/daemon.stdout.log"
+      STDERR_LOG="$XDG_STATE_HOME/hum/daemon.stderr.log"
       for f in "$STDOUT_LOG" "$STDERR_LOG"; do
         if [ -f "$f" ]; then
           SIZE=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
@@ -100,14 +100,14 @@ case "$CMD" in
       IS_ROOT=$([ "$(id -u)" = "0" ] && echo true || echo false)
       SC="systemctl"
       $IS_ROOT || SC="systemctl --user"
-      UNIT_FILE="$HOME/.config/systemd/user/clwnd.service"
-      $IS_ROOT && UNIT_FILE="/etc/systemd/system/clwnd.service"
+      UNIT_FILE="$HOME/.config/systemd/user/hum.service"
+      $IS_ROOT && UNIT_FILE="/etc/systemd/system/hum.service"
       if [ -f "$UNIT_FILE" ]; then
         echo "  unit:       $UNIT_FILE (exists)"
       else
         echo "  unit:       $UNIT_FILE (MISSING)"
       fi
-      if $SC is-active --quiet clwnd 2>/dev/null; then
+      if $SC is-active --quiet hum 2>/dev/null; then
         echo "  systemd:    active"
       else
         echo "  systemd:    not active"
@@ -115,12 +115,12 @@ case "$CMD" in
     fi
     echo
     echo "── socket ──"
-    if [ -n "$CLWND_SOCKET" ]; then
-      SOCK="$CLWND_SOCKET"
+    if [ -n "$HUM_SOCKET" ]; then
+      SOCK="$HUM_SOCKET"
     elif [ -n "$XDG_RUNTIME_DIR" ]; then
-      SOCK="$XDG_RUNTIME_DIR/clwnd/clwnd.sock"
+      SOCK="$XDG_RUNTIME_DIR/hum/hum.sock"
     else
-      SOCK="/tmp/clwnd-$(id -u)/clwnd.sock"
+      SOCK="/tmp/hum-$(id -u)/hum.sock"
     fi
     for ext in "" ".hum" ".http"; do
       if [ -S "${SOCK}${ext}" ]; then
@@ -136,15 +136,15 @@ case "$CMD" in
 
     if [ "$OS" = "Darwin" ]; then
       XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-      STDOUT_LOG="$XDG_STATE_HOME/clwnd/daemon.stdout.log"
-      STDERR_LOG="$XDG_STATE_HOME/clwnd/daemon.stderr.log"
+      STDOUT_LOG="$XDG_STATE_HOME/hum/daemon.stdout.log"
+      STDERR_LOG="$XDG_STATE_HOME/hum/daemon.stderr.log"
       # Tell the user up-front what we're going to tail and warn if the
       # files are absent or empty — BSD `tail -f` on a missing file dies
       # fast with a terse error, and on an empty file it just sits there
       # forever showing nothing, neither of which tells you *why*.
       for f in "$STDOUT_LOG" "$STDERR_LOG"; do
         if [ ! -f "$f" ]; then
-          echo "  $f: missing (daemon has never written here — run 'clwnd doctor')"
+          echo "  $f: missing (daemon has never written here — run 'hum doctor')"
         elif [ ! -s "$f" ]; then
           echo "  $f: empty"
         else
@@ -156,9 +156,9 @@ case "$CMD" in
       tail -F "$STDOUT_LOG" "$STDERR_LOG"
     else
       if $IS_ROOT; then
-        journalctl -u clwnd -f
+        journalctl -u hum -f
       else
-        journalctl --user -u clwnd -f
+        journalctl --user -u hum -f
       fi
     fi
     ;;
@@ -169,22 +169,22 @@ case "$CMD" in
     OS="$(uname -s)"
 
     if [ "$OS" = "Darwin" ]; then
-      LABEL="com.clwnd.daemon"
+      LABEL="com.hum.daemon"
       PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
       launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$PLIST"
       echo "restarted"
     else
-      $SC restart clwnd
+      $SC restart hum
       echo "restarted"
     fi
     ;;
   version)
-    cat "$CLWND_SRC/package.json" | grep '"version"' | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/'
+    cat "$HUM_SRC/package.json" | grep '"version"' | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/'
     ;;
   sessions)
     XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-    FILE="$XDG_STATE_HOME/clwnd/sessions.json"
+    FILE="$XDG_STATE_HOME/hum/sessions.json"
     if [ ! -f "$FILE" ]; then echo "no sessions"; exit 0; fi
     cat "$FILE" | python3 -c "
 import sys, json
@@ -200,12 +200,12 @@ except: print('error reading sessions')
 " 2>/dev/null || cat "$FILE"
     ;;
   savings)
-    if [ -n "$CLWND_SOCKET" ]; then
-      SOCK="$CLWND_SOCKET.http"
+    if [ -n "$HUM_SOCKET" ]; then
+      SOCK="$HUM_SOCKET.http"
     elif [ -n "$XDG_RUNTIME_DIR" ]; then
-      SOCK="$XDG_RUNTIME_DIR/clwnd/clwnd.sock.http"
+      SOCK="$XDG_RUNTIME_DIR/hum/hum.sock.http"
     else
-      SOCK="/tmp/clwnd-$(id -u)/clwnd.sock.http"
+      SOCK="/tmp/hum-$(id -u)/hum.sock.http"
     fi
     if [ ! -S "$SOCK" ]; then
       echo "daemon not running (socket $SOCK not found)"
@@ -229,7 +229,7 @@ try:
         if b < 1024: return f'{b}B'
         if b < 1024*1024: return f'{b/1024:.1f}K'
         return f'{b/1024/1024:.2f}M'
-    print(f'clwnd savings  (since {h}h {m}m {s}s ago)')
+    print(f'hum savings  (since {h}h {m}m {s}s ago)')
     print()
     print('Daemon-side:')
     print(f'  Read dedup:        {c.get(\"readDedupHits\", 0):>7}  hits   ({kb(c.get(\"readDedupBytes\", 0))} not re-sent)')
@@ -247,7 +247,7 @@ try:
         for t in top[:5]:
             print(f'  {t[\"sid\"][:30]:32s}  {t[\"maxContextTokens\"]:,} tokens')
     print()
-    print('counters persist across daemon restarts — \\'clwnd savings reset\\' to zero')
+    print('counters persist across daemon restarts — \\'hum savings reset\\' to zero')
 except Exception as e:
     print(f'error: {e}')
 "
@@ -256,14 +256,14 @@ except Exception as e:
     SUB="${1:-}"
     if [ "$SUB" = "help" ] || [ "$SUB" = "--help" ] || [ "$SUB" = "-h" ]; then
       cat <<'DRIFTHELP'
-clwnd drift — per-bloom latency report (one bloom = one assistant turn)
+hum drift — per-bloom latency report (one bloom = one assistant turn)
 
 Usage:
-  clwnd drift              Recent blooms + aggregate p50/p95
-  clwnd drift <sid>        Filter to one session
-  clwnd drift --days N     Read back N days of persisted blooms
-  clwnd drift --limit N    Cap rows (default 20)
-  clwnd drift help         This help
+  hum drift              Recent blooms + aggregate p50/p95
+  hum drift <sid>        Filter to one session
+  hum drift --days N     Read back N days of persisted blooms
+  hum drift --limit N    Cap rows (default 20)
+  hum drift help         This help
 
 Phase order (canonical):
   plugin_doStream_enter    plugin's doStream begins (Stage 2)
@@ -307,17 +307,17 @@ Flags:
 Tendrils: per-MCP tools/call roundtrip (non-permission_prompt only).
   Decompositions live in spans (brokered:*, external_*, task_subagent).
 
-The TUI render gap (SSE → terminal pixels) is OUT of clwnd's process and
+The TUI render gap (SSE → terminal pixels) is OUT of hum's process and
 unmeasurable from here. The chain ends at oc_sse_write.
 DRIFTHELP
       exit 0
     fi
-    if [ -n "$CLWND_SOCKET" ]; then
-      SOCK="$CLWND_SOCKET.http"
+    if [ -n "$HUM_SOCKET" ]; then
+      SOCK="$HUM_SOCKET.http"
     elif [ -n "$XDG_RUNTIME_DIR" ]; then
-      SOCK="$XDG_RUNTIME_DIR/clwnd/clwnd.sock.http"
+      SOCK="$XDG_RUNTIME_DIR/hum/hum.sock.http"
     else
-      SOCK="/tmp/clwnd-$(id -u)/clwnd.sock.http"
+      SOCK="/tmp/hum-$(id -u)/hum.sock.http"
     fi
     if [ ! -S "$SOCK" ]; then
       echo "daemon not running (socket $SOCK not found)"
@@ -342,20 +342,20 @@ DRIFTHELP
     RESP="$(curl -s -w $'\n__STATUS__%{http_code}' --unix-socket "$SOCK" "http://localhost/drift$QUERY" 2>&1)" || CURL_FAIL=$?
     if [ -n "${CURL_FAIL:-}" ]; then
       echo "curl failed (exit $CURL_FAIL) on $SOCK"
-      echo "  hint: socket may be stale. Try: clwnd restart"
+      echo "  hint: socket may be stale. Try: hum restart"
       exit 1
     fi
     STATUS="$(printf '%s' "$RESP" | tail -n1 | sed 's/^__STATUS__//')"
     BODY="$(printf '%s' "$RESP" | sed '$d')"
     if [ -z "$STATUS" ] || [ "$STATUS" = "000" ]; then
       echo "no response from daemon at $SOCK"
-      echo "  hint: daemon may not be running. Try: clwnd restart"
+      echo "  hint: daemon may not be running. Try: hum restart"
       exit 1
     fi
     if [ "$STATUS" != "200" ]; then
       echo "daemon returned HTTP $STATUS for /drift"
       if [ "$STATUS" = "404" ]; then
-        echo "this build of the daemon does not expose /drift. Try: clwnd restart"
+        echo "this build of the daemon does not expose /drift. Try: hum restart"
       fi
       [ -n "$BODY" ] && [ ${#BODY} -lt 400 ] && echo "$BODY"
       exit 1
@@ -431,9 +431,9 @@ except Exception as e:
 "
     ;;
   help|--help|-h|"")
-    echo "clwnd - take back what is yours"
+    echo "hum - take back what is yours"
     echo ""
-    echo "Usage: clwnd <command>"
+    echo "Usage: hum <command>"
     echo ""
     echo "Commands:"
     echo "  update     Pull latest, rebuild, restart daemon"
@@ -446,11 +446,11 @@ except Exception as e:
     echo "  savings    Show penny-pincher counters (read dedup, bash cap, context warning, plugin-side dedup)"
     echo "  drift      Per-bloom latency report — phase breakdowns and tendril roundtrips"
     echo "  version    Show installed version"
-    echo "  uninstall  Remove clwnd"
+    echo "  uninstall  Remove hum"
     ;;
   *)
     echo "Unknown command: $CMD"
-    echo "Run 'clwnd help' for usage."
+    echo "Run 'hum help' for usage."
     exit 1
     ;;
 esac

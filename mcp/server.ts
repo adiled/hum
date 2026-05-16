@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * clwnd MCP server — stdio transport (fallback).
+ * hum MCP server — stdio transport (fallback).
  * The daemon normally serves MCP via HTTP. This is used only if
  * stdio transport is needed.
  */

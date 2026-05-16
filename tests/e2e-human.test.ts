@@ -6,7 +6,7 @@ import { describe, test } from "vitest";
 
 describe("e2e-human: working features (manual verification)", () => {
   test.skip("streaming shows progressive text rendering", () => {
-    // 1. Open OpenCode TUI with a clwnd model
+    // 1. Open OpenCode TUI with a hum model
     // 2. Ask: "Write a detailed paragraph about the history of computing"
     // 3. Verify: Text appears progressively (word by word), not all at once
   });

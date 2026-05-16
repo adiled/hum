@@ -8,14 +8,14 @@ import { execSync, spawn as spawnProc } from "child_process";
 import { resolve, dirname, relative, extname, join as pathJoin } from "path";
 
 import { trace } from "../log.ts";
-import { penny } from "../lib/penny.ts";
-import * as drift from "../lib/drift.ts";
-import { fileSymbols, formatSymbols, readSymbol, isSupported as astSupported, isWasmLanguage, astGrep, searchSymbols, validateSyntax, symbolByteRange, type Symbol } from "../lib/ast.ts";
-import { loadConfig } from "../lib/config.ts";
-import { resolveWord, resolvePhrase, resolveSentence, resolveParagraph, discoverAnchors, formatAnchors } from "../lib/linguistic.ts";
-import { resolveJsonEntryAst } from "../lib/config-ast.ts";
+import { penny } from "../fs/penny.ts";
+import * as drift from "../fs/drift.ts";
+import { fileSymbols, formatSymbols, readSymbol, isSupported as astSupported, isWasmLanguage, astGrep, searchSymbols, validateSyntax, symbolByteRange, type Symbol } from "../fs/ast.ts";
+import { loadConfig } from "../fs/config.ts";
+import { resolveWord, resolvePhrase, resolveSentence, resolveParagraph, discoverAnchors, formatAnchors } from "../fs/linguistic.ts";
+import { resolveJsonEntryAst } from "../fs/config-ast.ts";
 
-let CWD = process.env.CLWND_CWD ?? process.cwd();
+let CWD = process.env.HUM_CWD ?? process.cwd();
 
 export function setCwd(cwd: string): void { CWD = cwd; }
 export function getCwd(): string { return CWD; }
@@ -33,7 +33,7 @@ export function setAllowedTools(tools?: string[]): void {
 }
 
 export function loadPermissionsFromFile(): void {
-  const permFile = process.env.CLWND_PERMISSIONS_FILE;
+  const permFile = process.env.HUM_PERMISSIONS_FILE;
   if (!permFile) return;
   try { permissions = JSON.parse(readFileSync(permFile, "utf-8")); } catch {}
 }
@@ -200,9 +200,9 @@ WORKFLOW: read(file) first → see symbol outline (includes 'imports' if present
   },
   {
     name: "do_noncode",
-    description: `Edit non-code files using linguistic scope. The ONLY way to author non-code in clwnd.
+    description: `Edit non-code files using linguistic scope. The ONLY way to author non-code in hum.
 
-Text has four units: word, phrase, sentence, paragraph. Each parameter names a scope level. Pass exactly ONE scope parameter to tell clwnd what you're editing and how to find it.
+Text has four units: word, phrase, sentence, paragraph. Each parameter names a scope level. Pass exactly ONE scope parameter to tell hum what you're editing and how to find it.
 
 WORD — find a token and swap it. Format-agnostic. Any single token bounded by spaces/punctuation.
   do_noncode(file, word: 'localhost', replace: '0.0.0.0')
@@ -368,7 +368,7 @@ export interface ToolResult {
 //
 // Targets the single biggest penny burn from the JSONL dissection: daemon.ts
 // was Read 558 times in one session, ~39MB of redundant content. Claude Code
-// natively has `readFileState` dedup for full reads — clwnd's MCP routing
+// natively has `readFileState` dedup for full reads — hum's MCP routing
 // disabled that, so this re-implements parity plus partial-read coverage that
 // native doesn't have.
 const readCache = new Map<string, Map<string, number>>();
@@ -762,7 +762,7 @@ function studyRichMedia(p: string, stat: Stats): ToolResult | null {
   const ext = extname(p).toLowerCase();
   if (IMAGE_EXTS.has(ext)) {
     return {
-      output: `[clwnd: ${relPath} is an image (${(stat.size / 1024).toFixed(1)} KB, ${ext.slice(1).toUpperCase()}). Image rendering is not served by clwnd's Read tool. Use \`bash file "${p}"\` or \`bash identify "${p}"\` for metadata, or let the user attach the image directly.]`,
+      output: `[hum: ${relPath} is an image (${(stat.size / 1024).toFixed(1)} KB, ${ext.slice(1).toUpperCase()}). Image rendering is not served by hum's Read tool. Use \`bash file "${p}"\` or \`bash identify "${p}"\` for metadata, or let the user attach the image directly.]`,
       title: relPath,
       metadata: { filetype: "image", size: stat.size },
     };
@@ -770,7 +770,7 @@ function studyRichMedia(p: string, stat: Stats): ToolResult | null {
   if (ext === PDF_EXT) {
     try {
       const text = execSync(`pdftotext -layout -q "${p}" - 2>/dev/null`, { encoding: "utf-8", timeout: 30000 });
-      const prefix = `[clwnd: ${relPath} (${(stat.size / 1024).toFixed(1)} KB PDF, extracted via pdftotext)]\n`;
+      const prefix = `[hum: ${relPath} (${(stat.size / 1024).toFixed(1)} KB PDF, extracted via pdftotext)]\n`;
       if (prefix.length + text.length <= MAX_READ_OUTPUT) {
         return { output: prefix + text, title: relPath, metadata: { filetype: "pdf", size: stat.size } };
       }
@@ -784,7 +784,7 @@ function studyRichMedia(p: string, stat: Stats): ToolResult | null {
       };
     } catch {
       return {
-        output: `[clwnd: ${relPath} is a PDF but pdftotext is not available. Install with \`apt install poppler-utils\` / \`brew install poppler\`.]`,
+        output: `[hum: ${relPath} is a PDF but pdftotext is not available. Install with \`apt install poppler-utils\` / \`brew install poppler\`.]`,
         title: relPath,
         metadata: { filetype: "pdf", size: stat.size },
       };
@@ -794,7 +794,7 @@ function studyRichMedia(p: string, stat: Stats): ToolResult | null {
     try {
       const raw = JSON.parse(readFileSync(p, "utf-8")) as { cells?: Array<{ cell_type?: string; source?: string[] | string }> };
       const cells = raw.cells ?? [];
-      const sections: string[] = [`[clwnd: ${relPath} — ${cells.length} cells, outputs omitted]`];
+      const sections: string[] = [`[hum: ${relPath} — ${cells.length} cells, outputs omitted]`];
       cells.forEach((c, i) => {
         const src = Array.isArray(c.source) ? c.source.join("") : (c.source ?? "");
         const kind = (c.cell_type ?? "unknown").toUpperCase();
@@ -805,7 +805,7 @@ function studyRichMedia(p: string, stat: Stats): ToolResult | null {
         return { output: body, title: relPath, metadata: { filetype: "notebook", cells: cells.length } };
       }
       // Oversized notebook — summarize cell structure, do not dump.
-      const headers = [`[clwnd: ${relPath} — ${cells.length} cells, total ${(body.length / 1024).toFixed(1)} KB. Too large for one response. Summarizing cell structure.]`];
+      const headers = [`[hum: ${relPath} — ${cells.length} cells, total ${(body.length / 1024).toFixed(1)} KB. Too large for one response. Summarizing cell structure.]`];
       cells.forEach((c, i) => {
         const src = Array.isArray(c.source) ? c.source.join("") : (c.source ?? "");
         const firstLine = src.split("\n")[0]?.slice(0, 80) ?? "";
@@ -1348,7 +1348,7 @@ function lineStartIfIndentedAlone(source: string, index: number): number {
   return i;
 }
 
-// do_code — the ONLY way to write code in clwnd. AST-grounded where a
+// do_code — the ONLY way to write code in hum. AST-grounded where a
 // grammar exists; every edit is re-parsed and the write is rejected if
 // the result has syntax errors. Rejects any file whose extension is NOT
 // in CODE_EXTENSIONS so the agent cannot accidentally reach for
@@ -1715,7 +1715,7 @@ function checkBashBan(command: string): ToolResult | null {
     if (tok && BASH_BANNED_COMMANDS.has(tok)) {
       return {
         output:
-          `[clwnd: bash command '${tok}' is banned — file inspection must go through \`read\`.\n` +
+          `[hum: bash command '${tok}' is banned — file inspection must go through \`read\`.\n` +
           `  ls / tree / du / file          → read(<directory>)\n` +
           `  find                           → read('<dir>') for a tree, or read('<dir>/**/*.ext') as a glob\n` +
           `  cat / head / tail / more / less → read(<file>)\n` +
@@ -1778,7 +1778,7 @@ function checkBashWrite(command: string): ToolResult | null {
     if (pattern.test(command)) {
       return {
         output:
-          `[clwnd: file writes go through do_code (code files) or do_noncode (non-code files), not bash.\n` +
+          `[hum: file writes go through do_code (code files) or do_noncode (non-code files), not bash.\n` +
           `Bash is for: git, builds (npm/make/tsc), tests (pytest/jest), package managers, and runtime commands.\n` +
           `Rewrite using do_code or do_noncode.]`,
         title: "bash write blocked",
@@ -1859,7 +1859,7 @@ async function execBash(args: { command: string; description?: string; timeout?:
     body = outCap.kept;
   }
   if (interrupted) {
-    body = `[clwnd: command interrupted after ${timeout}ms timeout — partial output follows]\n` + body;
+    body = `[hum: command interrupted after ${timeout}ms timeout — partial output follows]\n` + body;
   }
 
   return {
@@ -1916,20 +1916,20 @@ export function getExternalToolNames(sessionId: string): string[] {
 
 // ─── Session-scoped visible tools ─────────────────────────────────────────
 //
-// Clwnd's native tools (read, do_code, do_noncode, bash, permission_prompt)
-// are ALWAYS advertised to Claude — they're clwnd's authoritative surface
+// Hum's native tools (read, do_code, do_noncode, bash, permission_prompt)
+// are ALWAYS advertised to Claude — they're hum's authoritative surface
 // and do not get filtered by what OC happens to know about. OC's tool
-// vocabulary (edit, write, glob, grep, etc.) is the legacy set clwnd has
+// vocabulary (edit, write, glob, grep, etc.) is the legacy set hum has
 // replaced; the mapping layer that used to translate them is gone.
 //
 // This map tracks EXTERNAL MCP tool names only — the context7s and the
-// like. tools/list passes clwnd's natives through unconditionally and
+// like. tools/list passes hum's natives through unconditionally and
 // filters externals by this set (set by the plugin from opts.tools).
 const sessionVisibleExternals = new Map<string, Set<string>>();
 
 /** Record the external MCP tool names for a session. Called by the daemon
  *  when the plugin hums a prompt — the list is the subset of opts.tools
- *  that don't match any of clwnd's native tool names. */
+ *  that don't match any of hum's native tool names. */
 export function setVisibleTools(sessionId: string, externalToolNames: string[]): void {
   sessionVisibleExternals.set(sessionId, new Set(externalToolNames));
 }
@@ -1966,7 +1966,7 @@ async function getMcpClient(config: McpServerConfig): Promise<McpClient> {
   if (existing) return existing;
 
   trace("mcp.client.connecting", { server: config.name, kind: config.type });
-  const sdk = new MCPSDKClient({ name: "clwnd", version: "0.23.6" }, { capabilities: {} });
+  const sdk = new MCPSDKClient({ name: "hum", version: "0.23.6" }, { capabilities: {} });
 
   if (config.type === "local") {
     // Daemon's PATH (set by systemd) is minimal — node + system. User's
@@ -1978,7 +1978,7 @@ async function getMcpClient(config: McpServerConfig): Promise<McpClient> {
       `${home}/.bun/bin`,
       `${home}/.local/bin`,
       `${home}/.npm-global/bin`,
-      `${home}/.local/share/clwnd/node/v20.20.2/bin`,
+      `${home}/.local/share/hum/node/v20.20.2/bin`,
       `${home}/.local/share/fnm/node-versions/v20.20.2/installation/bin`,
       "/opt/homebrew/bin",
       "/usr/local/bin",
@@ -2035,7 +2035,7 @@ export function shutdownMcpClients(): void {
   mcpClients.clear();
 }
 
-// Server configs per session — set by daemon from plugin hum
+// Server configs per session — set by daemon from plugin thrum
 const mcpServerConfigs = new Map<string, McpServerConfig[]>();
 
 export function setMcpServerConfigs(sessionId: string, configs: McpServerConfig[]): void {
@@ -2153,14 +2153,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, _
     case "edit":
     case "write":
       return {
-        output: `[clwnd: tool '${name}' no longer exists. Use do_code for code files (AST-grounded symbol replacement, insertion, deletion) or do_noncode for config/docs/text (linguistic scope editing).]`,
+        output: `[hum: tool '${name}' no longer exists. Use do_code for code files (AST-grounded symbol replacement, insertion, deletion) or do_noncode for config/docs/text (linguistic scope editing).]`,
         title: `replaced: ${name}`,
         metadata: { replaced: name },
       };
     case "glob":
     case "grep":
       return {
-        output: `[clwnd: tool '${name}' no longer exists. Use read — it absorbs glob and grep via its file_path/pattern modifiers. read('/path/**/*.ts') for glob; read('/path', pattern: 'regex') for AST-aware grep with enclosing-symbol context.]`,
+        output: `[hum: tool '${name}' no longer exists. Use read — it absorbs glob and grep via its file_path/pattern modifiers. read('/path/**/*.ts') for glob; read('/path', pattern: 'regex') for AST-aware grep with enclosing-symbol context.]`,
         title: `replaced: ${name}`,
         metadata: { replaced: name },
       };
@@ -2178,7 +2178,7 @@ export async function handleMcpRequest(body: { jsonrpc: string; id?: number | st
         result: {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "clwnd", version: "0.3.2" },
+          serverInfo: { name: "hum", version: "0.3.2" },
         },
       };
 
@@ -2186,7 +2186,7 @@ export async function handleMcpRequest(body: { jsonrpc: string; id?: number | st
       return null; // no response for notifications
 
     case "tools/list": {
-      // Clwnd's native TOOLS are always advertised — they're the
+      // Hum's native TOOLS are always advertised — they're the
       // authoritative filesystem surface. The permission layer
       // (allowedToolSet / checkPermission) handles per-session gating.
       // External MCP tools (context7 etc.) get filtered by whatever OC
@@ -2194,7 +2194,7 @@ export async function handleMcpRequest(body: { jsonrpc: string; id?: number | st
       //
       // permission_prompt is ALWAYS advertised regardless of allowedTools
       // — Claude CLI is spawned with --permission-prompt-tool pointing at
-      // mcp__clwnd__permission_prompt, and the process exits immediately
+      // mcp__hum__permission_prompt, and the process exits immediately
       // if the tool isn't in the MCP tools/list response.
       const advertised = materializeTools();
       const nativeAllowed = allowedToolSet
@@ -2225,7 +2225,7 @@ export async function handleMcpRequest(body: { jsonrpc: string; id?: number | st
       const callId = `mcp-${body.id ?? Date.now()}`;
       try {
         const result = await executeTool(name, args, callId, sessionId);
-        // Metadata goes out-of-band via hum — Claude CLI never sees it
+        // Metadata goes out-of-band via thrum — Claude CLI never sees it
         if (metaCallback && (result.metadata || result.title)) {
           metaCallback(name, callId, result.title, result.metadata);
         }

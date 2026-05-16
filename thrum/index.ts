@@ -1,6 +1,6 @@
 // ─── Hum Protocol ──────────────────────────────────────────────────────────
 //
-// The hum is the bidirectional NDJSON socket between daemon and plugin.
+// The thrum is the bidirectional NDJSON socket between daemon and plugin.
 // It carries tones — structured messages with protocol semantics.
 //
 // Primitives:
@@ -26,7 +26,7 @@ export function sigil(ocSessionId: string, harness = "claude"): string {
 }
 
 // ─── Tone ──────────────────────────────────────────────────────────────────
-// Every hum message is a tone. The frame gives it accountability.
+// Every thrum message is a tone. The frame gives it accountability.
 
 export interface Tone {
   chi: string;           // what — the message type (prompt, finish, cancel, ...)
@@ -67,7 +67,7 @@ export interface BreathSession {
   sid: string;
   claudeSessionId: string | null;
   claudeSessionPath: string | null;
-  // uuid of the last JSONL entry clwnd considers "in sync" with OC's petals.
+  // uuid of the last JSONL entry hum considers "in sync" with OC's petals.
   // graft() returns a plain uuid string; the wire type used to be a tuple of
   // [uuid, role] but the role half was never populated. Kept as string to
   // match reality — change both ends if role information is ever needed.
@@ -161,10 +161,10 @@ export interface Reach {
   socket: any;            // the underlying socket
 }
 
-// Drone-related code lives in lib/drone/. hum.ts is a wire-protocol module.
+// Drone-related code lives in lib/drone/. thrum.ts is a wire-protocol module.
 
 // Re-export legacy paths for any external consumer that still imports from
-// hum.ts. The canonical home is lib/drone/index.ts. Direct hum imports
+// thrum.ts. The canonical home is lib/drone/index.ts. Direct thrum imports
 // inside this codebase have all moved.
 export {
   Drone,
@@ -176,10 +176,10 @@ export {
   type DroneBeat,
   type DroneAction,
   type DroneEvaluator,
-} from "./drone/drone.ts";
+} from "../fs/drone/drone.ts";
 
 export {
   classifySuspicion,
   heuristicSuspicion,
   type SuspicionLevel,
-} from "./drone/classify.ts";
+} from "../fs/drone/classify.ts";

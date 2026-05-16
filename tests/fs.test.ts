@@ -14,8 +14,8 @@ import { join } from "path";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-const SUITE_DIR = "/tmp/clwnd-fs-mcp-test";
-const MCP_PORT = parseInt(process.env.CLWND_MCP_PORT ?? "29147");
+const SUITE_DIR = "/tmp/hum-fs-mcp-test";
+const MCP_PORT = parseInt(process.env.HUM_MCP_PORT ?? "29147");
 const MCP = `http://127.0.0.1:${MCP_PORT}/s/fs-mcp-${process.pid}`;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -434,7 +434,7 @@ describe("do_noncode: target", () => {
     const p = seed("nested.json", JSON.stringify({
       provider: {
         ollama: { npm: "pkg", models: { a: 1 } },
-        clwnd: { npm: "other" }
+        hum: { npm: "other" }
       }
     }, null, 2) + "\n");
     await post("read", { file_path: p });
@@ -448,7 +448,7 @@ describe("do_noncode: target", () => {
     expect(after).toContain('"new-pkg"');
     expect(after).not.toContain('"pkg"');
     // Sibling preserved
-    expect(after).toContain('"clwnd"');
+    expect(after).toContain('"hum"');
     expect(() => JSON.parse(after)).not.toThrow();
   });
 

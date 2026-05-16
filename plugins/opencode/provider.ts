@@ -1,16 +1,17 @@
 /**
- * clwnd provider — LanguageModelV3 for OpenCode.
+ * hum provider — LanguageModelV3 for OpenCode.
  *
- * Receives Claude CLI stream events from the daemon via hum,
+ * Receives Claude CLI stream events from the daemon via thrum,
  * emits v3 stream parts to OC's processor. Clean pipe — daemon
  * owns seeding, cupping, and drone evaluation.
  */
 
 import { appendFileSync, mkdirSync } from "fs";
 import { connect as netConnect, type Socket as NetSocket } from "net";
-import { loadConfig, type ClwndConfig as CfgShape } from "../../lib/config.ts";
-import { sigil as makeSigil, duskIn } from "../../lib/hum.ts";
-import { Drone, stubDrone, type DroneAction } from "../../lib/drone/index.ts";
+import { loadConfig, type HumConfig as CfgShape } from "../../fs/config.ts";
+import { sigil as makeSigil, duskIn } from "../../thrum/index.ts";
+import { Drone, stubDrone, type DroneAction } from "../../fs/drone/index.ts";
+import { sessionPathParam, setCompatTrace } from "./compat.ts";
 
 import type {
   LanguageModelV3,
@@ -25,7 +26,7 @@ import type {
 
 // ─── Config ──────────────────────────────────────────────────────────────
 
-export interface ClwndConfig {
+export interface HumConfig {
   cwd?: string;
   client?: any;
   pluginInput?: any;
@@ -33,7 +34,7 @@ export interface ClwndConfig {
 
 // ─── Logging ─────────────────────────────────────────────────────────────
 
-const LOG_DIR = `${process.env.XDG_STATE_HOME || process.env.HOME + "/.local/state"}/clwnd`;
+const LOG_DIR = `${process.env.XDG_STATE_HOME || process.env.HOME + "/.local/state"}/hum`;
 const LOG_FILE = `${LOG_DIR}/plugin.log`;
 try { mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 
@@ -50,25 +51,29 @@ export function trace(event: string, data?: Record<string, unknown>): void {
   writeLog("trace", event, data);
   if (logClient?.app?.log) {
     logClient.app.log({
-      body: { service: "clwnd", level: "debug" as const, message: event, extra: data },
+      body: { service: "hum", level: "debug" as const, message: event, extra: data },
     }).catch(() => {});
   }
-  hum({ chi: "log", level: "trace", event, data });
+  thrum({ chi: "log", level: "trace", event, data });
 }
 
 export function log(event: string, data?: Record<string, unknown>): void {
   writeLog("info", event, data);
   if (logClient?.app?.log) {
     logClient.app.log({
-      body: { service: "clwnd", level: "info" as const, message: event, extra: data },
+      body: { service: "hum", level: "info" as const, message: event, extra: data },
     }).catch(() => {});
   }
-  hum({ chi: "log", level: "info", event, data });
+  thrum({ chi: "log", level: "info", event, data });
 }
 
 // ─── Tool Mapping (Claude CLI MCP → OpenCode native) ────────────────────
 
-const MCP_PREFIX = "mcp__clwnd__";
+const MCP_PREFIX = "mcp__hum__";
+
+// Wire the compat module to use our trace sink for its detection events.
+// See compat.ts — sessionPathParam / detectOcVersion live there.
+setCompatTrace((event, data) => trace(event, data));
 
 const TOOL_NAME_MAP: Record<string, string> = {
   WebFetch: "webfetch", WebSearch: "websearch",
@@ -83,7 +88,7 @@ function mapToolName(name: string): string {
 
 const BROKERED_TOOLS = new Set(["todowrite"]);
 
-// Tools handled natively by clwnd — anything NOT in this set from opts.tools
+// Tools handled natively by hum — anything NOT in this set from opts.tools
 // is treated as an external MCP tool and forwarded to Claude CLI for dispatch.
 // do_code/do_noncode replace edit+write; read absorbs glob+grep via modifiers.
 //
@@ -91,17 +96,17 @@ const BROKERED_TOOLS = new Set(["todowrite"]);
 // from opts.tools by the external-tool filter — Claude CLI never even learns
 // they exist. Without this, OC's built-in edit/write/glob/grep tool defs get
 // forwarded as "external" MCP tools, Claude sees them, calls them, and
-// clwnd's dispatcher bounces them as unknown. The agent wastes round-trips
+// hum's dispatcher bounces them as unknown. The agent wastes round-trips
 // discovering what's gone.
 const KNOWN_TOOLS = new Set([
-  // clwnd native surface
+  // hum native surface
   "read", "do_code", "do_noncode", "bash",
   // Brokered through provider (OC executes, result relayed)
   "webfetch", "websearch", "todowrite",
   // OC's own tools
   "task", "skill", "todoread", "taskoutput", "taskstop", "question",
-  // clwnd internal
-  "clwnd_permission", "permission_prompt",
+  // hum internal
+  "hum_permission", "permission_prompt",
   // ALL Claude CLI built-in tools — blocked via --disallowedTools in the
   // daemon spawn. Listed here so OC doesn't forward them as "external
   // MCP tools" when it sees them in its own registry.
@@ -154,12 +159,12 @@ function mapToolInput(toolName: string, input: string): string {
 }
 
 function parseToolResult(resultText: string): { output: string; title: string; metadata: Record<string, unknown> } {
-  const metaMatch = resultText.match(/<!--clwnd-meta:(.*?)-->/s);
+  const metaMatch = resultText.match(/<!--hum-meta:(.*?)-->/s);
   let title = "";
   let metadata: Record<string, unknown> = {};
   let output = resultText;
   if (metaMatch) {
-    output = resultText.replace(/\n?<!--clwnd-meta:.*?-->/s, "").trim();
+    output = resultText.replace(/\n?<!--hum-meta:.*?-->/s, "").trim();
     try {
       const parsed = JSON.parse(metaMatch[1]);
       title = parsed.title ?? "";
@@ -173,49 +178,49 @@ function parseToolResult(resultText: string): { output: string; title: string; m
 
 function defaultSocketPath(): string {
   const runtime = process.env.XDG_RUNTIME_DIR;
-  if (runtime) return `${runtime}/clwnd/clwnd.sock`;
+  if (runtime) return `${runtime}/hum/hum.sock`;
   // macOS / linux without XDG_RUNTIME_DIR — UID-namespaced /tmp dir
   // matching the daemon's default so plugin and daemon agree without
-  // requiring CLWND_SOCKET to be set in env.
+  // requiring HUM_SOCKET to be set in env.
   const uid = process.getuid?.() ?? 0;
-  return `/tmp/clwnd-${uid}/clwnd.sock`;
+  return `/tmp/hum-${uid}/hum.sock`;
 }
 
-const HUM_PATH = (process.env.CLWND_SOCKET ?? defaultSocketPath()) + ".hum";
+const THRUM_PATH = (process.env.HUM_SOCKET ?? defaultSocketPath()) + ".thrum";
 
-type HumListener = (msg: Record<string, unknown>) => void;
+type ThrumListener = (msg: Record<string, unknown>) => void;
 
-let humSocket: NetSocket | null = null;
-let humEcho = "";
+let thrumSocket: NetSocket | null = null;
+let thrumEcho = "";
 // Per-session listeners. Keyed by sid so concurrent doStream calls (build +
 // compaction + title + summarize, often from different sessions) don't clobber
-// each other's finish handlers. Earlier versions had a single global humHearer
+// each other's finish handlers. Earlier versions had a single global thrumHearer
 // which was overwritten by every new doStream, causing finishes to be
 // delivered to the wrong stream — manifesting as hung turns and scrambled
 // session state. See the compaction hang incident.
-const humHearers = new Map<string, HumListener>();
+const thrumHearers = new Map<string, ThrumListener>();
 // Pending task holds: when the daemon holds a task MCP call (tendril),
 // the first stream stores the hold info here. The next doStream for the
 // same session detects it, resolves the tendril, and streams continuation.
 const sessionTaskHolds = new Map<string, { callId: string; toolUseId?: string }>();
-let humAlive = false;
-let humReady: { resolve: () => void } | null = null;
-let humAwaken: Promise<void> = awakenHum();
-const HUM_TIMEOUT = 5000;
+let thrumAlive = false;
+let thrumReady: { resolve: () => void } | null = null;
+let thrumAwaken: Promise<void> = awakenHum();
+const THRUM_TIMEOUT = 5000;
 
 async function awaitHum(): Promise<void> {
-  if (humAlive) return;
+  if (thrumAlive) return;
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("hum not connected within 5s")), HUM_TIMEOUT));
-  await Promise.race([humAwaken, timeout]);
+    setTimeout(() => reject(new Error("thrum not connected within 5s")), THRUM_TIMEOUT));
+  await Promise.race([thrumAwaken, timeout]);
 }
 
 const DRONED = loadConfig().droned;
 const pluginDrone = DRONED ? new Drone("plugin", (action: DroneAction) => {
   switch (action.type) {
     case "beat":
-      if (humSocket && humAlive) {
-        try { humSocket.write(JSON.stringify(action.beat) + "\n"); } catch {}
+      if (thrumSocket && thrumAlive) {
+        try { thrumSocket.write(JSON.stringify(action.beat) + "\n"); } catch {}
       }
       break;
     case "retry": trace("drone.retry", { rid: action.rid, chi: action.chi }); break;
@@ -228,28 +233,28 @@ const pluginDrone = DRONED ? new Drone("plugin", (action: DroneAction) => {
 
 async function awakenHum(): Promise<void> {
   try {
-    humSocket = netConnect({ path: HUM_PATH });
-    humSocket.on("connect", () => {
-      humAlive = true;
-      if (humReady) { humReady.resolve(); humReady = null; }
-      trace("hum.connected");
+    thrumSocket = netConnect({ path: THRUM_PATH });
+    thrumSocket.on("connect", () => {
+      thrumAlive = true;
+      if (thrumReady) { thrumReady.resolve(); thrumReady = null; }
+      trace("thrum.connected");
     });
-    humSocket.on("data", (data) => {
-      humEcho += data.toString();
-      const lines = humEcho.split("\n");
-      humEcho = lines.pop() ?? "";
+    thrumSocket.on("data", (data) => {
+      thrumEcho += data.toString();
+      const lines = thrumEcho.split("\n");
+      thrumEcho = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line) as Record<string, unknown>;
           pluginDrone.heard(msg);
-          if (msg.chi === "echo") { trace("hum.echo", { rid: msg.rid, ok: msg.ok }); continue; }
+          if (msg.chi === "echo") { trace("thrum.echo", { rid: msg.rid, ok: msg.ok }); continue; }
           if (msg.chi === "breath") {
             const sessions = (msg.sessions ?? []) as Array<{ sid: string; sigil: string; wane: number }>;
-            trace("hum.breath.received", { sessions: sessions.length, synced: sessions.length });
+            trace("thrum.breath.received", { sessions: sessions.length, synced: sessions.length });
             continue;
           }
-          if (msg.chi === "pulse") { trace("hum.pulse", { kind: msg.kind, sid: msg.sid }); continue; }
+          if (msg.chi === "pulse") { trace("thrum.pulse", { kind: msg.kind, sid: msg.sid }); continue; }
           if (msg.chi === "tendril-reach") {
             // Task tendrils route to the active stream — the stream emits
             // providerExecuted=false + finish so OC handles via handleSubtask.
@@ -257,37 +262,37 @@ async function awakenHum(): Promise<void> {
             if (msg.tool === "task") {
               const trSid = typeof msg.sid === "string" ? msg.sid : undefined;
               if (trSid) {
-                const h = humHearers.get(trSid);
+                const h = thrumHearers.get(trSid);
                 if (h) { h(msg); continue; }
               }
             }
             handleTendrilReach(msg);
             continue;
           }
-          // Dispatch stream events to the per-session listener. Every clwnd
-          // hum event that belongs to a stream carries sid — pulses, breaths
+          // Dispatch stream events to the per-session listener. Every hum
+          // thrum event that belongs to a stream carries sid — pulses, breaths
           // and echoes (handled above) do not, and they reach all sessions by
           // design. Missing sid means the message is not stream-bound; drop.
           const msgSid = typeof msg.sid === "string" ? msg.sid : undefined;
           if (msgSid) {
-            const h = humHearers.get(msgSid);
+            const h = thrumHearers.get(msgSid);
             if (h) h(msg);
           }
         } catch {}
       }
     });
-    humSocket.on("close", () => {
-      humAlive = false;
-      humSocket = null;
-      trace("hum.disconnected");
-      humAwaken = new Promise<void>(r => { humReady = { resolve: r }; });
+    thrumSocket.on("close", () => {
+      thrumAlive = false;
+      thrumSocket = null;
+      trace("thrum.disconnected");
+      thrumAwaken = new Promise<void>(r => { thrumReady = { resolve: r }; });
       setTimeout(awakenHum, 2000);
     });
-    humSocket.on("error", (err) => {
-      trace("hum.error", { err: String(err) });
+    thrumSocket.on("error", (err) => {
+      trace("thrum.error", { err: String(err) });
     });
   } catch (e) {
-    trace("hum.connect.failed", { err: String(e) });
+    trace("thrum.connect.failed", { err: String(e) });
     setTimeout(awakenHum, 2000);
   }
 }
@@ -297,9 +302,9 @@ function makeRid(): string {
   return `p-${Date.now().toString(36)}-${(ridCounter++).toString(36)}`;
 }
 
-export function hum(msg: Record<string, unknown>): void {
-  if (!humSocket || !humAlive) {
-    writeLog("trace", "hum.send.skipped", { chi: msg.chi as string, alive: humAlive, socket: !!humSocket });
+export function thrum(msg: Record<string, unknown>): void {
+  if (!thrumSocket || !thrumAlive) {
+    writeLog("trace", "thrum.send.skipped", { chi: msg.chi as string, alive: thrumAlive, socket: !!thrumSocket });
     return;
   }
   if (msg.chi !== "log" && !msg.rid) msg.rid = makeRid();
@@ -308,20 +313,20 @@ export function hum(msg: Record<string, unknown>): void {
   if (typeof msg.sentAt !== "number") msg.sentAt = Date.now();
   try {
     const data = JSON.stringify(msg) + "\n";
-    writeLog("trace", "hum.send", { chi: msg.chi as string, rid: msg.rid as string, len: data.length });
-    humSocket.write(data);
+    writeLog("trace", "thrum.send", { chi: msg.chi as string, rid: msg.rid as string, len: data.length });
+    thrumSocket.write(data);
     pluginDrone.sent(msg);
   } catch (e) {
-    writeLog("trace", "hum.send.failed", { err: String(e) });
+    writeLog("trace", "thrum.send.failed", { err: String(e) });
   }
 }
 
-function humHear(sid: string, onMessage: HumListener): Promise<void> {
+function thrumHear(sid: string, onMessage: ThrumListener): Promise<void> {
   return new Promise<void>((resolve) => {
-    humHearers.set(sid, (incoming) => {
+    thrumHearers.set(sid, (incoming) => {
       onMessage(incoming);
       if (incoming.chi === "finish" || incoming.chi === "error") {
-        humHearers.delete(sid);
+        thrumHearers.delete(sid);
         resolve();
       }
     });
@@ -535,7 +540,7 @@ function sanitizePrompt(text: string, word: string): string {
 //
 // There is no longer a unified "auxiliary call" concept. OC has two
 // distinct agent types we handle specially: `title` (skipped entirely —
-// clwnd doesn't title-gen) and `compaction` (passes through to Claude CLI
+// hum doesn't title-gen) and `compaction` (passes through to Claude CLI
 // but tells the daemon to truncate the JSONL in place so the next turn
 // starts from the summary). Everything else is a normal build/chat turn.
 // An earlier revision swapped the model on empty-tools calls ("aux model
@@ -550,7 +555,7 @@ function isBrokeredToolReturn(prompt: LanguageModelV3Prompt): boolean {
   for (const part of last.content) {
     if (part.type === "tool-result" && (
       (part.toolName && BROKERED_TOOLS.has(part.toolName)) ||
-      part.toolName === "clwnd_permission" ||
+      part.toolName === "hum_permission" ||
       part.toolName === "task" ||
       part.toolCallId?.startsWith("perm-")
     )) {
@@ -571,7 +576,7 @@ const sessionPetalCounts = new Map<string, number>();
 const sessionJustCompacted = new Map<string, boolean>();
 
 function detectAgent(sid: string, headers?: Record<string, string | undefined>): string | null {
-  const raw = headers?.["x-clwnd-agent"] ?? null;
+  const raw = headers?.["x-hum-agent"] ?? null;
   if (!raw) return null;
   let agent = raw;
   try { const parsed = JSON.parse(raw); if (typeof parsed === "object" && parsed.name) agent = parsed.name; } catch {}
@@ -585,7 +590,7 @@ function detectAgent(sid: string, headers?: Record<string, string | undefined>):
 async function getSessionDirectory(client: unknown, sessionId: string): Promise<string | null> {
   if (!client) return null;
   try {
-    const resp = await (client as any).session.get({ path: { sessionID: sessionId } });
+    const resp = await (client as any).session.get({ path: sessionPathParam(sessionId) });
     return resp.data?.directory ?? null;
   } catch { return null; }
 }
@@ -700,12 +705,12 @@ const lastAllowedTools = new Map<string, string>();
 const lastPermissionsHash = new Map<string, string>();
 const lastAllowedToolsHash = new Map<string, string>();
 
-// Local plugin-side penny counters. Accumulate between hum sends, flush as
-// `pennyDelta` piggyback on every prompt hum. Daemon merges into its global
+// Local plugin-side penny counters. Accumulate between thrum sends, flush as
+// `pennyDelta` piggyback on every prompt thrum. Daemon merges into its global
 // counters. Keeps the wire traffic to one field per turn instead of a separate
-// hum tone per event.
+// thrum tone per event.
 const pendingPenny: Record<string, number> = {
-  humDedup: 0,
+  thrumDedup: 0,
   reminderStripped: 0,
   priorPetalsElided: 0,
   titleSkipped: 0,
@@ -744,7 +749,7 @@ const AGENT_DENY: Record<string, Set<string>> = {
 };
 
 function deriveAllowedTools(sid: string, opts: LanguageModelV3CallOptions): string[] {
-  const agent = opts.headers?.["x-clwnd-agent"] ?? "";
+  const agent = opts.headers?.["x-hum-agent"] ?? "";
   let agentName = agent;
   try { const p = JSON.parse(agent); if (p?.name) agentName = p.name; } catch {}
   const denied = AGENT_DENY[agentName] ?? new Set();
@@ -784,27 +789,27 @@ function zeroUsage(): LanguageModelV3Usage {
   };
 }
 
-// ─── ClwndModel ──────────────────────────────────────────────────────────
+// ─── HumModel ──────────────────────────────────────────────────────────
 
-export class ClwndModel implements LanguageModelV3 {
+export class HumModel implements LanguageModelV3 {
   readonly specificationVersion = "v3" as const;
   readonly modelId: string;
-  readonly provider = "clwnd";
+  readonly provider = "hum";
   readonly supportedUrls: Record<string, RegExp[]> = { "image/*": [] };
 
   constructor(
     modelId: string,
-    private config: ClwndConfig = {},
+    private config: HumConfig = {},
   ) {
     this.modelId = modelId;
   }
 
   async doGenerate(opts: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
-    // Title agent is the only OC call we short-circuit — clwnd doesn't waste
+    // Title agent is the only OC call we short-circuit — hum doesn't waste
     // tokens generating session titles. Every other call (including OC's
     // compaction agent) delegates to doStream and runs with the user's
     // selected model.
-    const rawAgent = opts.headers?.["x-clwnd-agent"] ?? "";
+    const rawAgent = opts.headers?.["x-hum-agent"] ?? "";
     let agentName = rawAgent;
     try { const p = JSON.parse(rawAgent); if (p?.name) agentName = p.name; } catch {}
     if (agentName === "title") {
@@ -843,7 +848,7 @@ export class ClwndModel implements LanguageModelV3 {
     const lastRole = opts.prompt.length > 0 ? opts.prompt[opts.prompt.length - 1].role : "none";
     trace("doStream.enter", { sid, promptLen: opts.prompt.length, lastRole });
     const _doStreamEnteredAt = Date.now();
-    hum({ chi: "perf-mark", sid, mark: "plugin_doStream_enter" });
+    thrum({ chi: "perf-mark", sid, mark: "plugin_doStream_enter" });
     const content = extractContent(opts.prompt, sid);
     const text = content.filter((p): p is { type: "text"; text: string } => p.type === "text").map(p => p.text).join("\n\n");
     const systemPrompt = stripSentencesMatching(
@@ -863,7 +868,7 @@ export class ClwndModel implements LanguageModelV3 {
     // the nest pool cached the wrong model. OC defines agents explicitly;
     // treat each one explicitly.
     //
-    //   title       — skipped entirely. clwnd does not generate titles.
+    //   title       — skipped entirely. hum does not generate titles.
     //   compaction  — passes through to Claude CLI with the user's selected
     //                 model (NO model swap). We just skip graft because OC
     //                 already owns the compacted history state and there is
@@ -872,7 +877,7 @@ export class ClwndModel implements LanguageModelV3 {
     //
     // If OC adds more built-in agents in the future, add a new branch.
     // Do not introduce a generic fallback that treats them alike.
-    const rawAgent = opts.headers?.["x-clwnd-agent"] ?? "";
+    const rawAgent = opts.headers?.["x-hum-agent"] ?? "";
     let agentName = rawAgent;
     try { const p = JSON.parse(rawAgent); if (p?.name) agentName = p.name; } catch {}
     const isTitleGen = agentName === "title";
@@ -896,12 +901,12 @@ export class ClwndModel implements LanguageModelV3 {
     // Compaction intercept. Default ('off'): stub-return with no model
     // call and no JSONL prune — OC's compaction agent becomes a no-op,
     // Claude CLI's native microcompaction handles real overflow. Opt-in
-    // ('curate'): hum the daemon to surgically prune the JSONL.
+    // ('curate'): thrum the daemon to surgically prune the JSONL.
     if (isCompaction) {
       const mode = loadConfig().compaction;
       trace("compaction.intercepted", { sid, mode });
       if (mode === "curate") {
-        hum({ chi: "curate", sid, dusk: duskIn(10_000) });
+        thrum({ chi: "curate", sid, dusk: duskIn(10_000) });
         sessionJustCompacted.set(sid, "curated" as any);
       }
       const cId = `curate-${Date.now()}`;
@@ -927,8 +932,8 @@ export class ClwndModel implements LanguageModelV3 {
     const sendAllowedTools = lastAllowedToolsHash.get(sid) !== allowedToolsHash;
     if (sendPermissions) lastPermissionsHash.set(sid, permissionsHash);
     if (sendAllowedTools) lastAllowedToolsHash.set(sid, allowedToolsHash);
-    if (!sendPermissions || !sendAllowedTools) pendingPenny.humDedup++;
-    trace("hum.dedup", { sid, sp: sendSystemPrompt, perm: sendPermissions, tools: sendAllowedTools });
+    if (!sendPermissions || !sendAllowedTools) pendingPenny.thrumDedup++;
+    trace("thrum.dedup", { sid, sp: sendSystemPrompt, perm: sendPermissions, tools: sendAllowedTools });
 
     // Brokered tool return — permission returns must listen for Claude's remaining output
     let permAskId: string | null = null;
@@ -1018,10 +1023,10 @@ export class ClwndModel implements LanguageModelV3 {
     //       real case (where post-compaction petals stay around 60% of the
     //       pre-compaction count, so a ratio threshold missed it).
     //
-    // Also decide whether to elide priorPetals from the hum payload: if the
+    // Also decide whether to elide priorPetals from the thrum payload: if the
     // petal count hasn't changed since the last send, graft() would be a
     // no-op anyway (graft is count-idempotent), and we can save
-    // re-serializing the whole history over the hum socket.
+    // re-serializing the whole history over the thrum socket.
     let prevPetalCount = 0;
     let elidePriorPetals = false;
     if (skipGraft) {
@@ -1037,7 +1042,7 @@ export class ClwndModel implements LanguageModelV3 {
       const justCompacted = sessionJustCompacted.get(sid) === true;
       if (justCompacted || (prevPetalCount > 0 && dropped >= 2)) {
         trace("compaction.detected", { sid, prev: prevPetalCount, now: priorPetals.length, dropped, reason: justCompacted ? "agent" : "petal-drop" });
-        hum({ chi: "cancel", sid, reason: "compaction" });
+        thrum({ chi: "cancel", sid, reason: "compaction" });
         sessionJustCompacted.delete(sid);
       } else if (prevPetalCount === priorPetals.length && prevPetalCount > 0) {
         elidePriorPetals = true;
@@ -1047,7 +1052,7 @@ export class ClwndModel implements LanguageModelV3 {
     }
 
     // Extract external MCP tools from opts.tools — anything OC has that
-    // clwnd doesn't handle natively (e.g. context7). KNOWN_TOOLS includes
+    // hum doesn't handle natively (e.g. context7). KNOWN_TOOLS includes
     // both our native surface (read/do_code/do_noncode/bash/…) AND the
     // legacy-replaced tools (edit/write/glob/grep) so neither gets
     // forwarded to Claude CLI as a pseudo-MCP tool.
@@ -1065,7 +1070,7 @@ export class ClwndModel implements LanguageModelV3 {
     const ocToolNames = opts.tools ? opts.tools.filter(t => t.type === "function").map(t => t.name) : [];
     trace("tools.available", { sid, count: ocToolNames.length, names: ocToolNames.join(",") });
     if (externalTools.length > 0) trace("external.tools.detected", { sid, names: [...externalToolNames].join(",") });
-    // visibleTools in the hum is ONLY external names — clwnd's native tools
+    // visibleTools in the thrum is ONLY external names — hum's native tools
     // are always advertised by the MCP server regardless. Sending OC's whole
     // tool list used to pollute this channel with legacy names that got
     // looked up in a mapping table and either missed or created ghost tools.
@@ -1073,22 +1078,22 @@ export class ClwndModel implements LanguageModelV3 {
 
     // Send prompt before creating stream — survives OC plugin reload
     let promptSent = false;
-    if (listenOnly && humAlive) {
+    if (listenOnly && thrumAlive) {
       // Listen-only: register listener FIRST, then release the hold.
       // Order matters — Claude's post-hold events must have a listener.
       const pd = flushPenny();
-      hum({
+      thrum({
         chi: "prompt", sid, cwd,
         modelId: self.modelId,
         listenOnly: true,
         ...(pd ? { pennyDelta: pd } : {}),
         dusk: duskIn(30_000),
       });
-      hum({ chi: "perf-mark", sid, span: { name: "plugin_prep", ms: Date.now() - _doStreamEnteredAt }, mark: "plugin_prompt_sent" });
+      thrum({ chi: "perf-mark", sid, span: { name: "plugin_prep", ms: Date.now() - _doStreamEnteredAt }, mark: "plugin_prompt_sent" });
       promptSent = true;
       if (permAskId) {
         trace("permission.hold.releasing", { sid, askId: permAskId });
-        hum({ chi: "release-permit", askId: permAskId, decision: "allow" });
+        thrum({ chi: "release-permit", askId: permAskId, decision: "allow" });
       }
       if (isTaskReturn && pendingTask) {
         // Extract the task result from OC's prompt (last tool message)
@@ -1113,11 +1118,11 @@ export class ClwndModel implements LanguageModelV3 {
         }
         trace("task.hold.resolving", { sid, callId: pendingTask.callId, resultLen: taskResultText.length });
         sessionTaskHolds.delete(sid);
-        hum({ chi: "tendril-result", callId: pendingTask.callId, result: taskResultText });
+        thrum({ chi: "tendril-result", callId: pendingTask.callId, result: taskResultText });
       }
-    } else if (!listenOnly && humAlive) {
+    } else if (!listenOnly && thrumAlive) {
       const pd = flushPenny();
-      hum({
+      thrum({
         chi: "prompt", sid, cwd,
         modelId: self.modelId,
         content, text,
@@ -1135,7 +1140,7 @@ export class ClwndModel implements LanguageModelV3 {
         ...(pd ? { pennyDelta: pd } : {}),
         dusk: duskIn(30_000),
       });
-      hum({ chi: "perf-mark", sid, span: { name: "plugin_prep", ms: Date.now() - _doStreamEnteredAt }, mark: "plugin_prompt_sent" });
+      thrum({ chi: "perf-mark", sid, span: { name: "plugin_prep", ms: Date.now() - _doStreamEnteredAt }, mark: "plugin_prompt_sent" });
       promptSent = true;
     }
 
@@ -1176,7 +1181,7 @@ export class ClwndModel implements LanguageModelV3 {
           // abort/error (not by chi=finish). Leaving a stale entry in the map
           // would leak memory and, worse, trap any same-sid follow-up events
           // intended for the next doStream.
-          humHearers.delete(sid);
+          thrumHearers.delete(sid);
           try { controller.close(); } catch {}
         }
 
@@ -1186,22 +1191,22 @@ export class ClwndModel implements LanguageModelV3 {
         }
 
         opts.abortSignal?.addEventListener("abort", () => {
-          if (!done) hum({ chi: "cancel", sid, dusk: duskIn(5_000) });
+          if (!done) thrum({ chi: "cancel", sid, dusk: duskIn(5_000) });
           wilt();
         });
 
         await awaitHum();
-        if (!humAlive) {
-          petal({ type: "error", error: new Error("clwndHum not connected") });
+        if (!thrumAlive) {
+          petal({ type: "error", error: new Error("humHum not connected") });
           wilt();
           return;
         }
 
         petal({ type: "stream-start", warnings: [] });
 
-        const humFade = humHear(sid, onHummin);
+        const thrumFade = thrumHear(sid, onThrummin);
         if (!promptSent) {
-          hum({
+          thrum({
             chi: "prompt", sid, cwd,
             modelId: self.modelId,
             content, text, systemPrompt,
@@ -1215,7 +1220,7 @@ export class ClwndModel implements LanguageModelV3 {
         }
 
         let _firstEnqueueDone = false;
-        function onHummin(raw: Record<string, unknown>): void {
+        function onThrummin(raw: Record<string, unknown>): void {
           if (raw.chi === "tool-meta") {
             metaQueue.push({
               tool: raw.tool as string,
@@ -1232,11 +1237,11 @@ export class ClwndModel implements LanguageModelV3 {
             const ct = raw.chunkType as string;
 
             // Drift: every chunk carries `sentAt` from the daemon. Sample
-            // each one as one hum (destination = oc) so the daemon can
-            // aggregate true per-hum p50/p95 instead of a cumulative sum.
+            // each one as one thrum (destination = oc) so the daemon can
+            // aggregate true per-thrum p50/p95 instead of a cumulative sum.
             if (typeof raw.sentAt === "number") {
               const transit = Math.max(0, Date.now() - (raw.sentAt as number));
-              hum({ chi: "perf-mark", sid, hum: { to: "oc", ms: transit } });
+              thrum({ chi: "perf-mark", sid, thrum: { to: "oc", ms: transit } });
             }
 
             // Text
@@ -1251,10 +1256,10 @@ export class ClwndModel implements LanguageModelV3 {
               petal({ type: "text-delta", id: textId, delta: raw.delta as string });
               if (!_firstEnqueueDone) {
                 _firstEnqueueDone = true;
-                hum({ chi: "perf-mark", sid, mark: "plugin_first_enqueue" });
+                thrum({ chi: "perf-mark", sid, mark: "plugin_first_enqueue" });
                 // first_visible: in absence of an OC-side hook (Stage 3),
                 // use the same instant. Refined later via bus subscription.
-                hum({ chi: "perf-mark", sid, mark: "plugin_first_visible" });
+                thrum({ chi: "perf-mark", sid, mark: "plugin_first_visible" });
               }
             }
 
@@ -1278,7 +1283,7 @@ export class ClwndModel implements LanguageModelV3 {
             // providerExecuted MUST be set on tool-input-start (not tool-call) per
             // the v3 AI SDK contract — OC's processor reads the flag there and
             // ignores it on tool-call. Without this, OC treats every non-brokered
-            // clwnd tool as a pending external call, hasToolCalls stays true,
+            // hum tool as a pending external call, hasToolCalls stays true,
             // the prompt loop never exits on a text-only end_turn, and OC auto-
             // re-enters doStream with the same user message. Claude sees the same
             // user prompt 2-4 times per turn and complains.
@@ -1377,12 +1382,12 @@ export class ClwndModel implements LanguageModelV3 {
             buds.length = 0;
             const permCallId = `perm-${raw.askId}`;
             const permInput = JSON.stringify({ tool: raw.tool, path: raw.path ?? "", askId: raw.askId });
-            petal({ type: "tool-input-start", id: permCallId, toolName: "clwnd_permission" });
+            petal({ type: "tool-input-start", id: permCallId, toolName: "hum_permission" });
             tendrils.add(permCallId);
             petal({
               type: "tool-call",
               toolCallId: permCallId,
-              toolName: "clwnd_permission",
+              toolName: "hum_permission",
               input: permInput,
               providerExecuted: false,
             });
@@ -1448,7 +1453,7 @@ export class ClwndModel implements LanguageModelV3 {
         }
 
         try {
-          await humFade;
+          await thrumFade;
         } catch (e) {
           petal({ type: "error", error: e instanceof Error ? e : new Error(String(e)) });
           wilt();
@@ -1465,18 +1470,18 @@ export class ClwndModel implements LanguageModelV3 {
 // Cross-module global. OC imports this package twice — once via the
 // plugin loader (which calls our entry function with PluginInput.client)
 // and again via resolveSDK's `import(installedPath)` to get
-// createClwnd. On macOS the two imports can resolve to different
+// createHum. On macOS the two imports can resolve to different
 // module-record URLs (file:// vs symlinked path), so a module-scoped
 // `let sharedClient` set by the plugin import is invisible to the SDK
 // import. Stashing on globalThis bridges both.
 const G: any = globalThis as any;
-function getSharedClient(): unknown { return G.__clwndSharedClient ?? null; }
-function setSharedClientGlobal(v: unknown): void { G.__clwndSharedClient = v; }
-function getSharedPluginInput(): ClwndConfig["pluginInput"] { return G.__clwndSharedPluginInput; }
-function setSharedPluginInputGlobal(v: ClwndConfig["pluginInput"]): void { G.__clwndSharedPluginInput = v; }
+function getSharedClient(): unknown { return G.__humSharedClient ?? null; }
+function setSharedClientGlobal(v: unknown): void { G.__humSharedClient = v; }
+function getSharedPluginInput(): HumConfig["pluginInput"] { return G.__humSharedPluginInput; }
+function setSharedPluginInputGlobal(v: HumConfig["pluginInput"]): void { G.__humSharedPluginInput = v; }
 export function setSharedClient(client: unknown): void { setSharedClientGlobal(client); }
 let sharedClient: unknown = null;
-let sharedPluginInput: ClwndConfig["pluginInput"] = undefined;
+let sharedPluginInput: HumConfig["pluginInput"] = undefined;
 
 async function handleTendrilReach(msg: Record<string, unknown>): Promise<void> {
   const tool = msg.tool as string;
@@ -1512,10 +1517,10 @@ async function handleTendrilReach(msg: Record<string, unknown>): Promise<void> {
 
       // Run the subtask on the CHILD session (not the parent — parent is locked mid-turn)
       const resp = await client.session.prompt({
-        path: { id: childSid },
+        path: sessionPathParam(childSid),
         body: {
           parts: [{ type: "text", text: prompt }],
-          model: { providerID: "opencode-clwnd", modelID: "claude-sonnet-4-5" },
+          model: { providerID: "opencode-hum", modelID: "claude-sonnet-4-5" },
           agent: agentType,
         },
       });
@@ -1532,24 +1537,24 @@ async function handleTendrilReach(msg: Record<string, unknown>): Promise<void> {
       ].join("\n");
 
       trace("tendril.task.resolved", { callId, childSid, len: result.length });
-      hum({ chi: "tendril-result", callId, result });
+      thrum({ chi: "tendril-result", callId, result });
     } else {
-      hum({ chi: "tendril-result", callId, result: `Error: unknown tendril tool '${tool}'` });
+      thrum({ chi: "tendril-result", callId, result: `Error: unknown tendril tool '${tool}'` });
     }
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     trace("tendril.failed", { tool, callId, err: errMsg, stack: e instanceof Error ? e.stack?.split("\n").slice(0, 3).join(" | ") : undefined });
-    hum({ chi: "tendril-result", callId, result: `Error: ${errMsg}` });
+    thrum({ chi: "tendril-result", callId, result: `Error: ${errMsg}` });
   }
 }
-export function setSharedPluginInput(input: ClwndConfig["pluginInput"]): void { setSharedPluginInputGlobal(input); }
+export function setSharedPluginInput(input: HumConfig["pluginInput"]): void { setSharedPluginInputGlobal(input); }
 
-export function createClwnd(config: ClwndConfig = {}) {
+export function createHum(config: HumConfig = {}) {
   const sc = getSharedClient();
   const spi = getSharedPluginInput();
   if (!config.client && sc) config = { ...config, client: sc };
   if (!config.pluginInput && spi) config = { ...config, pluginInput: spi };
-  const fn = (modelId: string): LanguageModelV3 => new ClwndModel(modelId, config);
-  fn.languageModel = (modelId: string) => new ClwndModel(modelId, config);
+  const fn = (modelId: string): LanguageModelV3 => new HumModel(modelId, config);
+  fn.languageModel = (modelId: string) => new HumModel(modelId, config);
   return fn;
 }

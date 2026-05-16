@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "hum config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "maxProcs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum concurrent Claude CLI processes in the nest pool."
+    },
+    "idleTimeout": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Milliseconds an idle roost stays alive before eviction."
+    },
+    "smallModel": {
+      "type": "string",
+      "description": "Provider/model id used for small tasks (title generation, etc). Empty = auto-discover a free model at plugin startup."
+    },
+    "nest": {
+      "type": "string",
+      "enum": ["claude-repl", "claude-cli"],
+      "default": "claude-repl",
+      "description": "Default nest implementation for sessions without a per-project override. 'claude-repl' drives the interactive Ink REPL through a PTY; usage bills against Pro/Max subscription. 'claude-cli' falls back to legacy `-p` headless mode that bills against API credits — use this if you have things covered another way, or you want more suffering."
+    },
+    "projects": {
+      "type": "array",
+      "description": "Per-project overrides. When a session's cwd matches an entry's 'primaryPath', that entry's 'nest' wins over the top-level 'nest'. 'id' is the hum-native canonical reference.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "primaryPath"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{52}$",
+            "description": "hum-native 256-bit identifier (52-char Crockford base32)."
+          },
+          "primaryPath": {
+            "type": "string",
+            "description": "Absolute project directory (no trailing slash)."
+          },
+          "nest": {
+            "type": "string",
+            "enum": ["claude-repl", "claude-cli"],
+            "description": "Override nest implementation for this project."
+          }
+        }
+      }
+    },
+    "permissionDusk": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Milliseconds a pending permission ask waits before auto-denying."
+    },
+    "droned": {
+      "type": "boolean",
+      "description": "Opt-in drone observer. When off, the thrum is a raw passthrough."
+    },
+    "droneModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerID", "modelID"],
+      "properties": {
+        "providerID": { "type": "string" },
+        "modelID": { "type": "string" }
+      },
+      "description": "Model the drone uses for its sentinel turns."
+    },
+    "experimental": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subpath": {
+          "type": "boolean",
+          "description": "Linguistic sub-symbol addressing in read / do_code (foo.when.body, foo.try.otherwise, foo.loop.body, foo.return, etc). Off by default."
+        }
+      },
+      "description": "Experimental feature toggles. Off by default."
+    },
+    "ccFlags": {
+      "type": "object",
+      "description": "Claude CLI environment overrides. Each key/value is spread into the nest spawn env AFTER hum's defaults, so user entries override hum's. Use to re-enable CLAUDE_CODE_DISABLE_* flags hum turns off, or set arbitrary CC-facing env vars.",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean"]
+      }
+    },
+    "compaction": {
+      "type": "string",
+      "enum": ["off", "curate"],
+      "description": "Compaction behavior for manually-triggered compaction (the 'compact' button in OC TUI). Auto-compaction is permanently off for hum models because their limit.context is set to 0 in opencode.json by install — OC's overflow check skips, no 'compacting…' hiccup, Claude CLI's native microcompaction handles overflow. 'off' (default) — manual compact stub-returns, no JSONL prune. 'curate' — manual compact triggers hum's surgical JSONL prune (strips thinking blocks, trims old tool_results). Other providers' compaction is untouched."
+    }
+  }
+}

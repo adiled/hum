@@ -1,4 +1,4 @@
-const LOG_LEVEL = process.env.CLWND_LOG_LEVEL ?? "info";
+const LOG_LEVEL = process.env.HUM_LOG_LEVEL ?? "info";
 const TRACE = LOG_LEVEL === "trace" || LOG_LEVEL === "debug";
 
 function ts(): string {

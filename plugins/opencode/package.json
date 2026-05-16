@@ -1,7 +1,7 @@
 {
-  "name": "@clwnd/opencode",
+  "name": "@hum/opencode",
   "version": "0.24.19",
-  "description": "clwnd for opencode",
+  "description": "hum for opencode",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -22,14 +22,14 @@
   "keywords": [
     "opencode",
     "claude",
-    "clwnd",
+    "hum",
     "plugin",
     "ai"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/adiled/clwnd.git",
+    "url": "git+https://github.com/adiled/hum.git",
     "directory": "plugins/opencode"
   },
   "dependencies": {

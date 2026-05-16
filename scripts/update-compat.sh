@@ -2,33 +2,33 @@
 set -e
 cd "$(dirname "$0")/.."
 
-CLWND_USER="${CLWND_DEV_USER:-clwnd}"
-CLWND_SRC="$(eval echo ~$CLWND_USER)/.local/share/clwnd/src"
+HUM_USER="${HUM_DEV_USER:-hum}"
+HUM_SRC="$(eval echo ~$HUM_USER)/.local/share/hum/src"
 
-# ─── Sync test files to clwnd user ──────────────────────────────────────────
+# ─── Sync test files to hum user ──────────────────────────────────────────
 
-echo "Syncing test files to $CLWND_USER..."
+echo "Syncing test files to $HUM_USER..."
 for f in tests/e2e-serve.test.ts tests/e2e-human.test.ts; do
-  cp "$f" "$CLWND_SRC/$f"
-  chown "$CLWND_USER:$CLWND_USER" "$CLWND_SRC/$f"
+  cp "$f" "$HUM_SRC/$f"
+  chown "$HUM_USER:$HUM_USER" "$HUM_SRC/$f"
 done
-mkdir -p "$CLWND_SRC/tests/fixtures"
-cp tests/fixtures/* "$CLWND_SRC/tests/fixtures/" 2>/dev/null
-chown -R "$CLWND_USER:$CLWND_USER" "$CLWND_SRC/tests/fixtures" 2>/dev/null
+mkdir -p "$HUM_SRC/tests/fixtures"
+cp tests/fixtures/* "$HUM_SRC/tests/fixtures/" 2>/dev/null
+chown -R "$HUM_USER:$HUM_USER" "$HUM_SRC/tests/fixtures" 2>/dev/null
 
-# ─── Run all test suites as clwnd user ───────────────────────────────────────
+# ─── Run all test suites as hum user ───────────────────────────────────────
 
-run_as_clwnd() {
-  su -l "$CLWND_USER" -c "cd $CLWND_SRC && $1" 2>&1 || true
+run_as_hum() {
+  su -l "$HUM_USER" -c "cd $HUM_SRC && $1" 2>&1 || true
 }
 
 # ─── Capture CLI references and config schema ────────────────────────────────
 
-CLAUDE_HELP=$(run_as_clwnd "claude --help 2>&1")
-OPENCODE_HELP=$(run_as_clwnd "opencode --help 2>&1 | cat")
+CLAUDE_HELP=$(run_as_hum "claude --help 2>&1")
+OPENCODE_HELP=$(run_as_hum "opencode --help 2>&1 | cat")
 
 # Extract built-in TUI commands from the SDK types
-OC_SDK_TYPES=$(find /home/$CLWND_USER/.config/opencode /home/$CLWND_USER/.opencode -path "*/sdk/dist/gen/types.gen.d.ts" 2>/dev/null | head -1)
+OC_SDK_TYPES=$(find /home/$HUM_USER/.config/opencode /home/$HUM_USER/.opencode -path "*/sdk/dist/gen/types.gen.d.ts" 2>/dev/null | head -1)
 OC_TUI_COMMANDS=""
 if [ -n "$OC_SDK_TYPES" ]; then
   OC_TUI_COMMANDS=$(grep 'session\.list.*session\.new' "$OC_SDK_TYPES" | grep -oP '"[a-z]+\.[a-z._]+"' | tr -d '"' | sort -u | paste -sd, -)
@@ -36,22 +36,22 @@ fi
 
 # ─── Capture versions ────────────────────────────────────────────────────────
 
-CLWND_COMMIT=$(git -C "$(dirname "$0")/.." rev-parse --short HEAD)
-CLWND_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
-CLAUDE_VERSION=$(run_as_clwnd "claude --version 2>/dev/null | head -1" | tr -d '\n')
-OPENCODE_VERSION=$(run_as_clwnd "opencode --version 2>/dev/null | head -1" | tr -d '\n')
-NODE_VERSION=$(run_as_clwnd "node --version 2>/dev/null" | tr -d '\n')
+HUM_COMMIT=$(git -C "$(dirname "$0")/.." rev-parse --short HEAD)
+HUM_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+CLAUDE_VERSION=$(run_as_hum "claude --version 2>/dev/null | head -1" | tr -d '\n')
+OPENCODE_VERSION=$(run_as_hum "opencode --version 2>/dev/null | head -1" | tr -d '\n')
+NODE_VERSION=$(run_as_hum "node --version 2>/dev/null" | tr -d '\n')
 
-echo "clwnd: v${CLWND_VERSION} (${CLWND_COMMIT})"
+echo "hum: v${HUM_VERSION} (${HUM_COMMIT})"
 echo "claude: ${CLAUDE_VERSION}"
 echo "opencode: ${OPENCODE_VERSION}"
 echo "node: ${NODE_VERSION}"
 
 echo "Running e2e-serve tests..."
-E2E_SERVE=$(run_as_clwnd "vitest run ./tests/e2e-serve.test.ts")
+E2E_SERVE=$(run_as_hum "vitest run ./tests/e2e-serve.test.ts")
 
 echo "Running e2e-human tests..."
-E2E_HUMAN=$(run_as_clwnd "vitest run ./tests/e2e-human.test.ts")
+E2E_HUMAN=$(run_as_hum "vitest run ./tests/e2e-human.test.ts")
 
 # ─── Build the prompt ────────────────────────────────────────────────────────
 
@@ -61,18 +61,18 @@ PROMPT_DIR=$(mktemp -d)
 trap "rm -rf $PROMPT_DIR" EXIT
 
 cat > "$PROMPT_DIR/system.txt" <<SYSEOF
-You generate a GitHub issue body for the clwnd compatibility index.
+You generate a GitHub issue body for the hum compatibility index.
 
-## What is clwnd
+## What is hum
 
-clwnd is a daemon + OpenCode plugin that bridges Claude Code CLI subscriptions into OpenCode. Users interact with OpenCode (the IDE/TUI), and clwnd routes their messages through a persistent Claude CLI process. clwnd owns an MCP server that handles file system tools (read, edit, write, bash, glob, grep) and brokers certain tools (webfetch, todowrite, websearch) where both Claude CLI and OpenCode execute them.
+hum is a daemon + OpenCode plugin that bridges Claude Code CLI subscriptions into OpenCode. Users interact with OpenCode (the IDE/TUI), and hum routes their messages through a persistent Claude CLI process. hum owns an MCP server that handles file system tools (read, edit, write, bash, glob, grep) and brokers certain tools (webfetch, todowrite, websearch) where both Claude CLI and OpenCode execute them.
 
 ## Architecture
 
-- **Claude CLI tools (Read, Edit, Write, Bash, Glob, Grep)**: Disallowed on Claude CLI side, replaced by MCP equivalents (\`mcp__clwnd__read\`, etc.). Tool names are mapped to OpenCode native names for UI rendering (e.g., Read → \`read\`, file_path → \`filePath\`).
+- **Claude CLI tools (Read, Edit, Write, Bash, Glob, Grep)**: Disallowed on Claude CLI side, replaced by MCP equivalents (\`mcp__hum__read\`, etc.). Tool names are mapped to OpenCode native names for UI rendering (e.g., Read → \`read\`, file_path → \`filePath\`).
 - **Brokered tools (WebFetch, TodoWrite, WebSearch)**: Claude CLI executes them via MCP AND OpenCode re-executes them for UI state sync. Plugin emits \`providerExecuted: false\`.
 - **Pass-through tools (Task, Skill, TodoRead, TaskOutput, CronCreate, etc.)**: Claude CLI built-ins that pass through without special handling. Some are mapped for display.
-- **Agent switching**: Detected via \`chat.headers\` hook injecting \`x-clwnd-agent\` header. Agent name controls tool allowlisting (plan mode denies edit/write).
+- **Agent switching**: Detected via \`chat.headers\` hook injecting \`x-hum-agent\` header. Agent name controls tool allowlisting (plan mode denies edit/write).
 - **Session continuity**: Persistent claude process per OpenCode session. No respawn between turns.
 - **Auxiliary calls**: Title gen, compaction, summarization routed to \`small_model\` (free opencode/* model). Safety net via \`isAuxiliaryCall()\` if they reach us.
 
@@ -97,12 +97,12 @@ ${OC_TUI_COMMANDS}
 Given the test suite output below, generate the issue body with these exact sections:
 
 ### Section 1: "## Tool Calls"
-Table with EXACTLY these columns in this order: Tool | CC | clwnd | Brokered | OC | Cov | Status
+Table with EXACTLY these columns in this order: Tool | CC | hum | Brokered | OC | Cov | Status
 
 Column rules:
 - **Tool**: tool name
 - **CC**: Claude CLI side — "Disallowed" for MCP tools, "Built-in" for pass-through/brokered tools
-- **clwnd**: ✓ if handled by clwnd MCP, — if not
+- **hum**: ✓ if handled by hum MCP, — if not
 - **Brokered**: ✓ if brokered (both sides execute), — if not
 - **OC**: ✓ if renders natively in OpenCode UI, — if not
 - **Cov**: comma-separated suite names, or — if none
@@ -145,7 +145,7 @@ cat > "$PROMPT_DIR/user.txt" <<USREOF
 Here are the test suite results. Generate the compatibility index issue body.
 
 === VERSIONS ===
-clwnd: v${CLWND_VERSION} (${CLWND_COMMIT})
+hum: v${HUM_VERSION} (${HUM_COMMIT})
 claude: ${CLAUDE_VERSION}
 opencode: ${OPENCODE_VERSION}
 node: ${NODE_VERSION}
@@ -165,11 +165,11 @@ SYSTEM_PROMPT=$(cat "$PROMPT_DIR/system.txt")
 USER_PROMPT=$(cat "$PROMPT_DIR/user.txt")
 BODY=$(claude -p --model claude-sonnet-4-5 --output-format text --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT")
 
-REPORT_FILE="$(dirname "$0")/../reports/compat-v${CLWND_VERSION}.md"
+REPORT_FILE="$(dirname "$0")/../reports/compat-v${HUM_VERSION}.md"
 echo "$BODY" > "$REPORT_FILE"
 echo "Saved report to $REPORT_FILE"
 
 echo "Updating issue #8..."
-gh issue edit 8 --repo adiled/clwnd --body "$BODY"
+gh issue edit 8 --repo adiled/hum --body "$BODY"
 
-echo "Done. View at: https://github.com/adiled/clwnd/issues/8"
+echo "Done. View at: https://github.com/adiled/hum/issues/8"

@@ -31,14 +31,19 @@ function unixFetch(socketPath: string, path: string, opts?: { method?: string; b
 
 const PORT = 14567;
 const BASE = `http://127.0.0.1:${PORT}`;
-const MODEL = { providerID: "opencode-clwnd", modelID: "claude-sonnet-4-5" };
+const MODEL = { providerID: "opencode-hum", modelID: "claude-sonnet-4-5" };
 const HOME = process.env.HOME ?? "/tmp";
-const SUITE_DIR = join(HOME, ".clwnd-e2e-serve");
+const SUITE_DIR = join(HOME, ".hum-e2e-serve");
 const PROJECT_DIR = join(SUITE_DIR, "project");
 const TIMEOUT = 180_000;
 const SEED_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "seed-session.json");
 const DUMMY_MODEL = { providerID: "piano", modelID: "pianoV2" };
 const FREE_MODEL = { providerID: "opencode", modelID: "big-pickle" };
+
+// Which nest to exercise. Set via env: HUM_E2E_NEST=claude-cli vitest …
+// Default claude-repl (the subscription-billed PTY path).
+const NEST = (process.env.HUM_E2E_NEST === "claude-cli" ? "claude-cli" : "claude-repl") as "claude-repl" | "claude-cli";
+const HUM_CONFIG_PATH = join(HOME, ".config", "hum", "hum.json");
 
 // Track sessions created during each test for cleanup
 const activeSessions: string[] = [];
@@ -76,7 +81,7 @@ async function forkSeedSession(): Promise<string> {
   return sid;
 }
 
-const DAEMON_SOCK = (process.env.CLWND_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/clwnd/clwnd.sock`) + ".http";
+const DAEMON_SOCK = (process.env.HUM_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/hum/hum.sock`) + ".http";
 
 async function deleteSession(sid: string): Promise<void> {
   // 1. Tell daemon to kill the claude subprocess and drop session state
@@ -161,7 +166,7 @@ function assertCleanPetals(resp: { info: any; parts: any[] }): void {
   // No seed context leaking into response
   for (const p of textParts) {
     expect(p.text).not.toContain("Previous conversation context:");
-    expect(p.text).not.toContain("<!--clwnd-meta:");
+    expect(p.text).not.toContain("<!--hum-meta:");
   }
 
   // No consecutive duplicate text parts
@@ -236,6 +241,39 @@ async function sh(cmd: string): Promise<void> {
   await new Promise<void>(r => p.on("exit", () => r()));
 }
 
+// Patch the daemon's hum.json to pin the e2e nest, then restart so
+// the change takes effect (cfg is loaded once at daemon startup). Returns
+// the original file bytes (or null if it didn't exist) so afterAll can
+// restore. Idempotent in the sense that re-running with the same value
+// is a no-op + a restart.
+async function patchDaemonNest(nest: "claude-repl" | "claude-cli"): Promise<string | null> {
+  let original: string | null = null;
+  try { original = readFileSync(HUM_CONFIG_PATH, "utf8"); } catch {}
+  let cfg: Record<string, unknown> = {};
+  if (original) {
+    try { cfg = JSON.parse(original); } catch {}
+  }
+  cfg.nest = nest;
+  mkdirSync(dirname(HUM_CONFIG_PATH), { recursive: true });
+  writeFileSync(HUM_CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  // SIGKILL the daemon — graceful shutdown takes 30s+ because node-pty
+  // children block process exit. Restart=on-failure in the unit brings
+  // it back automatically.
+  await sh(`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user kill -s KILL hum`);
+  await new Promise(r => setTimeout(r, 3000));
+  return original;
+}
+
+async function restoreDaemonConfig(original: string | null): Promise<void> {
+  if (original === null) {
+    try { rmSync(HUM_CONFIG_PATH); } catch {}
+  } else {
+    writeFileSync(HUM_CONFIG_PATH, original);
+  }
+  await sh(`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user kill -s KILL hum`);
+  await new Promise(r => setTimeout(r, 3000));
+}
+
 async function nuke(pid?: number): Promise<void> {
   // 1. Kill children first, then parent (by PID)
   if (pid) {
@@ -266,13 +304,19 @@ async function nuke(pid?: number): Promise<void> {
 // ─── Suite Lifecycle ────────────────────────────────────────────────────────
 
 let server: ChildProcess;
+let originalDaemonConfig: string | null = null;
 
 beforeAll(async () => {
-  // Sweep any orphaned daemon sessions from prior runs
+  const stamp = (label: string) => console.log(`[e2e-setup ${Date.now()}] ${label}`);
+  stamp("begin");
+  originalDaemonConfig = await patchDaemonNest(NEST);
+  stamp("patchDaemonNest done");
   await sweepDaemonSessions();
+  stamp("sweep done");
 
   // Obliterate anything from a prior run
   await nuke();
+  stamp("nuke done");
 
   // Verify port is actually free (nuke can't kill processes owned by other users)
   const portCheck = spawn("sh", ["-c", `lsof -ti :${PORT}`].filter(Boolean), { stdio: ["pipe", "pipe", "pipe"] });
@@ -294,7 +338,7 @@ beforeAll(async () => {
   const dummyJs = `file://${join(dirname(fileURLToPath(import.meta.url)), "fixtures", "dummy-provider.js")}`;
   writeFileSync(join(PROJECT_DIR, "opencode.json"), JSON.stringify({
     "$schema": "https://opencode.ai/config.json",
-    plugin: [dummyJs, `file://${join(HOME, ".local", "share", "clwnd", "src", "plugins", "opencode")}`],
+    plugin: [dummyJs, `file://${join(HOME, ".local", "share", "hum", "src", "plugins", "opencode")}`],
     provider: {
       "piano": {
         npm: dummyJs,
@@ -320,9 +364,9 @@ beforeAll(async () => {
   mkdirSync(join(PROJECT_DIR, ".claude"), { recursive: true });
   writeFileSync(join(PROJECT_DIR, ".claude", "settings.json"), JSON.stringify({
     permissions: { allow: [
-      "mcp__clwnd__read(*)", "mcp__clwnd__edit(*)", "mcp__clwnd__write(*)",
-      "mcp__clwnd__bash(*)", "mcp__clwnd__glob(*)", "mcp__clwnd__grep(*)",
-      "mcp__clwnd__resolve_library_id(*)", "mcp__clwnd__get_library_docs(*)",
+      "mcp__hum__read(*)", "mcp__hum__edit(*)", "mcp__hum__write(*)",
+      "mcp__hum__bash(*)", "mcp__hum__glob(*)", "mcp__hum__grep(*)",
+      "mcp__hum__resolve_library_id(*)", "mcp__hum__get_library_docs(*)",
     ] },
   }, null, 2));
 
@@ -332,8 +376,9 @@ beforeAll(async () => {
   const gitCommit = spawn("git", ["commit", "-m", "init"], { cwd: PROJECT_DIR, env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" }, stdio: ["pipe", "pipe", "pipe"] });
   await new Promise<void>(r => gitCommit.on("exit", () => r()));
 
+  stamp("project setup done");
   // Start opencode serve — ONCE for the entire suite
-  server = spawn("opencode", ["serve", "--port", String(PORT), "--hostname", "127.0.0.1"], { cwd: PROJECT_DIR, env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"] });
+  server = spawn("opencode", ["serve", "--port", String(PORT), "--hostname", "127.0.0.1"], { cwd: PROJECT_DIR, env: { ...process.env }, stdio: ["pipe", "ignore", "ignore"] });
 
   // Wait for server readiness
   const deadline = Date.now() + 20_000;
@@ -342,9 +387,10 @@ beforeAll(async () => {
     if (await serverIsAlive()) { ready = true; break; }
     await new Promise(r => setTimeout(r, 500));
   }
+  stamp(`server ready=${ready}`);
   if (!ready) throw new Error("opencode serve failed to start within 20s");
 
-  // Import seed session fixture (6-turn clwnd conversation with free model)
+  // Import seed session fixture (6-turn hum conversation with free model)
   if (existsSync(SEED_FIXTURE)) {
     const importProc = spawn("opencode", ["import", SEED_FIXTURE], { cwd: PROJECT_DIR, env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"] });
     const importOut = await collectStdout(importProc);
@@ -356,7 +402,7 @@ beforeAll(async () => {
       if (!(check as any)?.id) seedSessionId = "";
     }
   }
-}, 45_000);
+}, 120_000);
 
 afterAll(async () => {
   // Sweep any sessions that leaked during tests
@@ -369,7 +415,10 @@ afterAll(async () => {
   await new Promise(r => setTimeout(r, 1000));
   // Cleanup suite directory
   await sh(`rm -rf ${SUITE_DIR}`);
-}, 15_000);
+  // Restore the daemon's pre-test config so other suites / users see
+  // the original nest preference.
+  await restoreDaemonConfig(originalDaemonConfig);
+}, 60_000);
 
 // ─── Per-Test Cleanup ───────────────────────────────────────────────────────
 
@@ -420,23 +469,23 @@ describe("e2e-serve: session basics", () => {
     expect(text).toContain("4");
   }, TIMEOUT);
 
-  test("agent sees all clwnd MCP tools", async () => {
+  test("agent sees all hum MCP tools", async () => {
     skipIfDead();
     const sid = await createSession();
 
     const resp = await sendMessage(sid, "List all your tools. Just the tool names, one per line.");
     const text = extractResponseText(resp).toLowerCase();
 
-    // Every clwnd MCP tool must appear with its full mcp__clwnd__ prefix.
+    // Every hum MCP tool must appear with its full mcp__hum__ prefix.
     // Claude CLI exposes MCP tools as mcp__<server>__<name>. If the agent
-    // says "do_code" but not "mcp__clwnd__do_code", the tool is either
+    // says "do_code" but not "mcp__hum__do_code", the tool is either
     // not registered via MCP or the agent is hallucinating its name.
     const required = [
-      "mcp__clwnd__do_code",
-      "mcp__clwnd__do_noncode",
-      "mcp__clwnd__read",
-      "mcp__clwnd__bash",
-      "mcp__clwnd__task",
+      "mcp__hum__do_code",
+      "mcp__hum__do_noncode",
+      "mcp__hum__read",
+      "mcp__hum__bash",
+      "mcp__hum__task",
     ];
     for (const tool of required) {
       expect(text).toContain(tool);
@@ -469,7 +518,7 @@ describe("e2e-serve: session basics", () => {
 
   // REPL parity: when the user sends a second message while the assistant is
   // mid-turn, OC's runLoop re-iterates after the current turn's `finish`
-  // because lastUser.id > lastAssistant.id. clwnd does not need to inject
+  // because lastUser.id > lastAssistant.id. hum does not need to inject
   // mid-stream; the queued user message is delivered to a fresh assistant
   // turn at the boundary, exactly like Claude REPL's <queued_commands>.
   test("drift coverage: turn records the canonical phase marks", async () => {
@@ -509,7 +558,7 @@ describe("e2e-serve: session basics", () => {
       "Recite the first eight prime numbers, one per line, with a one-sentence note about each. Number them.",
     );
     // Let OC start the first turn before sending the second.
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 4000));
     const p2 = sendMessage(sid, "What is the capital of France? Just the city name in one word.");
 
     const [r1, r2] = await Promise.all([p1, p2]);
@@ -629,7 +678,7 @@ describe("e2e-serve: prompt forwarding", () => {
     // Plan mode denies do_code/do_noncode but allows bash. OC's plan
     // agent has edit: "*": "deny" at the permission level, not tool
     // removal. Claude may write via bash — that's by design in both
-    // OC and clwnd. We just verify the model responded.
+    // OC and hum. We just verify the model responded.
     const msgs = await getMessages(sid);
     const assistantParts = msgs.filter((m: any) => m.role === "assistant").flatMap((m: any) => m.parts ?? []);
     const toolNames = assistantParts.filter((p: any) => p.type === "tool").map((p: any) => p.tool);
@@ -703,8 +752,8 @@ describe("e2e-serve: directory enforcement", () => {
     skipIfDead();
     const sid = await createSession();
 
-    await sendMessage(sid, "Write a file at /var/clwnd-evil-test.txt with content: pwned");
-    expect(existsSync("/var/clwnd-evil-test.txt")).toBe(false);
+    await sendMessage(sid, "Write a file at /var/hum-evil-test.txt with content: pwned");
+    expect(existsSync("/var/hum-evil-test.txt")).toBe(false);
   }, TIMEOUT);
 });
 
@@ -834,10 +883,10 @@ describe("e2e-serve: provider migration (#7)", () => {
     skipIfDead();
     if (!seedSessionId) throw new Error("seed session not imported");
 
-    // Fork the seed session (6 turns about clwnd with free model)
+    // Fork the seed session (6 turns about hum with free model)
     const sid = await forkSeedSession();
 
-    // Switch to clwnd — cold start with 6 seeded turns
+    // Switch to hum — cold start with 6 seeded turns
     const r1 = await sendMessage(sid, "What is the poetic name for sending a prompt to Claude CLI? Just the one word.");
     const t1 = extractResponseText(r1).toLowerCase();
     expect(t1).toContain("murmur");
@@ -868,7 +917,7 @@ describe("e2e-serve: provider migration (#7)", () => {
     skipIfDead();
     const sid = await createSession();
     const freeModel = FREE_MODEL;
-    const opusModel = { providerID: "opencode-clwnd", modelID: "claude-opus-4-6" };
+    const opusModel = { providerID: "opencode-hum", modelID: "claude-opus-4-6" };
 
     await sendMessage(sid, "My code is TIGER. Remember this.", undefined, TIMEOUT, freeModel);
 
@@ -902,7 +951,7 @@ describe("e2e-serve: provider migration (#7)", () => {
     await sendMessage(sid, "My dog's name is BISCUIT. Acknowledge.", undefined, TIMEOUT, freeModel);
     await sendMessage(sid, "My cat's name is MARBLE. Acknowledge.", undefined, TIMEOUT, freeModel);
 
-    // Switch to clwnd — should know both names
+    // Switch to hum — should know both names
     const resp = await sendMessage(sid, "What are my pets' names?");
     const text = extractResponseText(resp).toLowerCase();
     expect(text).toContain("biscuit");
@@ -933,11 +982,11 @@ describe("e2e-serve: provider migration (#7)", () => {
     // Establish context with free model
     await sendMessage(sid, "Remember: ALPHA BETA GAMMA.", undefined, TIMEOUT, freeModel);
 
-    // Turn 1 on clwnd — seeds history
+    // Turn 1 on hum — seeds history
     const r1 = await sendMessage(sid, "Say ok.");
     const t1 = r1.info?.tokens?.input ?? 0;
 
-    // Turn 2 on clwnd — should NOT re-seed
+    // Turn 2 on hum — should NOT re-seed
     const r2 = await sendMessage(sid, "Say bye.");
     const t2 = r2.info?.tokens?.input ?? 0;
 
@@ -953,18 +1002,18 @@ describe("e2e-serve: provider migration (#7)", () => {
 });
 
 describe("e2e-serve: model switch history (#7)", () => {
-  test("gap fill: clwnd → free → clwnd retains context from free model turn", async () => {
+  test("gap fill: hum → free → hum retains context from free model turn", async () => {
     skipIfDead();
     const sid = await createSession();
     const freeModel = FREE_MODEL;
 
-    // Turn 1: clwnd establishes context
+    // Turn 1: hum establishes context
     await sendMessage(sid, "My awesome pet is PENGUIN. Acknowledge.");
 
     // Turn 2: free model establishes different context
     await sendMessage(sid, "My lucky number is 7777. Acknowledge.", undefined, TIMEOUT, freeModel);
 
-    // Turn 3: back to clwnd — should know the free model's context (gap fill)
+    // Turn 3: back to hum — should know the free model's context (gap fill)
     const resp = await sendMessage(sid, "What is my lucky number?");
     const text = extractResponseText(resp).toLowerCase();
     expect(text).toContain("7777");
@@ -975,13 +1024,13 @@ describe("e2e-serve: model switch history (#7)", () => {
     const sid = await createSession();
     const freeModel = FREE_MODEL;
 
-    // clwnd → free → clwnd (gap fill happens here)
+    // hum → free → hum (gap fill happens here)
     await sendMessage(sid, "Remember DELTA.", undefined, TIMEOUT);
     await sendMessage(sid, "Remember EPSILON.", undefined, TIMEOUT, freeModel);
     const r1 = await sendMessage(sid, "Say ok.");
     const t1 = r1.info?.tokens?.input ?? 0;
 
-    // Continue on clwnd — no new gap, no re-injection
+    // Continue on hum — no new gap, no re-injection
     const r2 = await sendMessage(sid, "Say bye.");
     const t2 = r2.info?.tokens?.input ?? 0;
 
@@ -1031,10 +1080,10 @@ describe("e2e-serve: token efficiency", () => {
     const sid = await createSession();
 
     const resp = await sendMessage(sid, "Read the file /etc/hostname");
-    // Tool parts in the response should not contain <!--clwnd-meta:-->
+    // Tool parts in the response should not contain <!--hum-meta:-->
     for (const part of resp.parts ?? []) {
       if (part.type === "tool" && part.state?.output) {
-        expect(part.state.output).not.toContain("<!--clwnd-meta:");
+        expect(part.state.output).not.toContain("<!--hum-meta:");
       }
     }
     expect(resp).toBeDefined();
@@ -1153,10 +1202,10 @@ describe("e2e-serve: compaction", () => {
     skipIfDead();
     if (!seedSessionId) throw new Error("seed session not imported");
 
-    // Fork the seed session (6 turns about clwnd architecture)
+    // Fork the seed session (6 turns about hum architecture)
     const sid = await forkSeedSession();
 
-    // Send one message via clwnd to establish a Claude CLI process + JSONL
+    // Send one message via hum to establish a Claude CLI process + JSONL
     await sendMessage(sid, "Quick recap: what is the naming convention we discussed? Just list the key terms.");
     const stateBefore = await getSessionState(sid);
     const claudeIdBefore = stateBefore?.claudeSessionId;
@@ -1213,12 +1262,12 @@ describe("e2e-serve: compaction", () => {
 });
 
 describe("e2e-serve: snapshots and revert", () => {
-  test("file written via clwnd MCP exists on disk", async () => {
+  test("file written via hum MCP exists on disk", async () => {
     skipIfDead();
     const sid = await createSession();
     const filePath = join(PROJECT_DIR, "snapshot-test.txt");
 
-    // Claude writes a file through clwnd MCP → fs.writeFileSync
+    // Claude writes a file through hum MCP → fs.writeFileSync
     await sendMessage(sid, `Write exactly the text "SNAPSHOT_CONTENT" to ${filePath}`);
 
     // File should exist on disk
@@ -1236,7 +1285,7 @@ describe("e2e-serve: snapshots and revert", () => {
     const before = readFileSync(filePath, "utf-8");
     expect(before).toContain("hello world");
 
-    // Claude edits the file through clwnd MCP
+    // Claude edits the file through hum MCP
     const editResp = await sendMessage(sid, `Change the contents of ${filePath} to exactly "EDITED BY CLAUDE"`);
 
     // File should be changed on disk
@@ -1278,14 +1327,14 @@ describe("e2e-serve: session forking", () => {
     skipIfDead();
     if (!seedSessionId) throw new Error("seed session not imported");
 
-    // Fork the seed session (6 turns about clwnd)
+    // Fork the seed session (6 turns about hum)
     const forkedSid = await forkSeedSession();
     expect(forkedSid).toBeTruthy();
 
-    // Send clwnd message on fork — should seed from parent history
+    // Send hum message on fork — should seed from parent history
     const resp = await sendMessage(forkedSid, "What is the poetic name for the bidirectional socket? One word.");
     const text = extractResponseText(resp).toLowerCase();
-    expect(text).toContain("hum");
+    expect(text).toContain("thrum");
 
     // Verify JSONL was created (cold-start seed happened)
     const state = await getSessionState(forkedSid);
@@ -1343,7 +1392,7 @@ describe("e2e-serve: vision", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: { providerID: "opencode-clwnd", modelID: "claude-opus-4-6" },
+        model: { providerID: "opencode-hum", modelID: "claude-opus-4-6" },
         parts: [
           { type: "file", mime: "image/png", url: dataUrl },
           { type: "text", text: "What solid color is this image? Just say the single color word." },
@@ -1438,10 +1487,10 @@ describe("e2e-serve: drone swallow + retrofit", () => {
     skipIfDead();
     if (!seedSessionId) throw new Error("seed session not imported");
 
-    // Fork the seed session (6 turns about clwnd)
+    // Fork the seed session (6 turns about hum)
     const sid = await forkSeedSession();
 
-    // Send one clwnd message to establish a Claude CLI process + JSONL
+    // Send one hum message to establish a Claude CLI process + JSONL
     await sendMessage(sid, "What is the poetic name for the socket? One word.");
 
     // Get the JSONL path and corrupt it — delete the file so --resume fails
@@ -1459,7 +1508,7 @@ describe("e2e-serve: drone swallow + retrofit", () => {
 
     // Send a DIFFERENT message — tests context retention after JSONL loss.
     // Must differ from the first message to avoid false duplicate in assertCleanHistory.
-    const resp = await sendMessage(sid, "In clwnd, what is the word for sending a prompt to Claude CLI? One word.", undefined, 60_000);
+    const resp = await sendMessage(sid, "In hum, what is the word for sending a prompt to Claude CLI? One word.", undefined, 60_000);
     const text = extractResponseText(resp).toLowerCase();
 
     // Graft rebuilds JSONL from priorPetals — response should have context
@@ -1470,7 +1519,7 @@ describe("e2e-serve: drone swallow + retrofit", () => {
 // ─── External MCP Tools ─────────────────────────────────────────────────────
 
 describe("e2e-serve: external MCP tools", () => {
-  test("context7 tool is brokered through clwnd to OC", async () => {
+  test("context7 tool is brokered through hum to OC", async () => {
     skipIfDead();
     const sid = await createSession();
 

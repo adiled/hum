@@ -5,29 +5,29 @@ set -e
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-CLWND_CONFIG="$XDG_CONFIG_HOME/clwnd"
-CLWND_DATA="$XDG_DATA_HOME/clwnd"
-CLWND_STATE="$XDG_STATE_HOME/clwnd"
+HUM_CONFIG="$XDG_CONFIG_HOME/hum"
+HUM_DATA="$XDG_DATA_HOME/hum"
+HUM_STATE="$XDG_STATE_HOME/hum"
 # Runtime socket dir. With XDG_RUNTIME_DIR set (linux): standard path.
 # Without it (macOS default): UID-namespaced /tmp dir matching the
 # plugin's and daemon's defaultSocketPath fallback so they agree even
-# when CLWND_SOCKET isn't propagated to OC's shell env.
+# when HUM_SOCKET isn't propagated to OC's shell env.
 if [ -n "$XDG_RUNTIME_DIR" ]; then
-  CLWND_RUNTIME="$XDG_RUNTIME_DIR/clwnd"
+  HUM_RUNTIME="$XDG_RUNTIME_DIR/hum"
 else
-  CLWND_RUNTIME="/tmp/clwnd-$(id -u)"
+  HUM_RUNTIME="/tmp/hum-$(id -u)"
 fi
 
 OPENCODE_CONFIG="$XDG_CONFIG_HOME/opencode/opencode.json"
 
-CLWND_REPO="https://github.com/adiled/clwnd.git"
-CLWND_SRC="$CLWND_DATA/src"
+HUM_REPO="https://github.com/adiled/hum.git"
+HUM_SRC="$HUM_DATA/src"
 
 OS="$(uname -s)"
 CMD="${1:-install}"
 IS_ROOT=$([ "$(id -u)" = "0" ] && echo true || echo false)
 
-SOCK_PATH="$CLWND_RUNTIME/clwnd.sock"
+SOCK_PATH="$HUM_RUNTIME/hum.sock"
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ read_version() {
 # updater for the given binary, then re-checks the version. Exits the
 # install script if the binary is still below the minimum after the update
 # attempt — the auto-update path NEEDS this to self-heal, otherwise the
-# 6-hour daemon timer keeps invoking clwnd update silently and failing
+# 6-hour daemon timer keeps invoking hum update silently and failing
 # silently and the user never knows they're stuck.
 ensure_min_version() {
   local NAME=$1   # human label, e.g. "Claude CLI"
@@ -75,7 +75,7 @@ ensure_min_version() {
   if [ -z "$CUR" ] || ! version_gte "$CUR" "$MIN"; then
     echo ""
     echo "  ${NAME} is still ${CUR:-unknown} after \`${BIN} update\` (need ${MIN})."
-    echo "  clwnd cannot proceed. Update ${NAME} manually and re-run \`clwnd update\`."
+    echo "  hum cannot proceed. Update ${NAME} manually and re-run \`hum update\`."
     echo ""
     exit 1
   fi
@@ -84,8 +84,8 @@ ensure_min_version() {
 
 check_prereqs() {
   # Node + pnpm are NOT hard requirements anymore — `ensure_node_version`
-  # and `ensure_pnpm` provision them under $CLWND_DATA/node if missing or
-  # if the system version doesn't match `.node-version`. clwnd ships its
+  # and `ensure_pnpm` provision them under $HUM_DATA/node if missing or
+  # if the system version doesn't match `.node-version`. hum ships its
   # own node toolchain rustup-style so the daemon never breaks when the
   # user changes their system node.
   [ -x "$(command -v claude)" ] || { echo "error: claude CLI required"; exit 1; }
@@ -123,12 +123,12 @@ check_prereqs() {
   fi
 }
 
-# clwnd ships its own node + pnpm under $CLWND_DATA/node/v$PINNED so the
-# daemon's ExecStart points at a binary clwnd owns. The user's system
+# hum ships its own node + pnpm under $HUM_DATA/node/v$PINNED so the
+# daemon's ExecStart points at a binary hum owns. The user's system
 # node can vanish (version manager GC, distro upgrade) — ours can't.
 
 ensure_node_version() {
-  local PINNED_FILE="$CLWND_SRC/.node-version"
+  local PINNED_FILE="$HUM_SRC/.node-version"
   [ -f "$PINNED_FILE" ] || { echo "error: $PINNED_FILE missing — clone is incomplete"; exit 1; }
 
   local PINNED
@@ -146,21 +146,21 @@ ensure_node_version() {
     *) echo "error: unsupported arch for node auto-install: $(uname -m)"; exit 1 ;;
   esac
 
-  local NODE_DIR="$CLWND_DATA/node/v${PINNED}"
+  local NODE_DIR="$HUM_DATA/node/v${PINNED}"
   local NODE_BIN="$NODE_DIR/bin/node"
 
   if [ -x "$NODE_BIN" ]; then
-    CLWND_NODE_BIN="$NODE_BIN"
+    HUM_NODE_BIN="$NODE_BIN"
     echo "[node] using cached pinned node at $NODE_BIN ✓"
-    export PATH="$(dirname "$CLWND_NODE_BIN"):$PATH"
+    export PATH="$(dirname "$HUM_NODE_BIN"):$PATH"
     return 0
   fi
 
   local TARBALL="node-v${PINNED}-${OS_NAME}-${ARCH_NAME}.tar.xz"
   local URL="https://nodejs.org/dist/v${PINNED}/${TARBALL}"
-  local CACHE_DIR="$CLWND_DATA/node-cache"
+  local CACHE_DIR="$HUM_DATA/node-cache"
   local TARPATH="$CACHE_DIR/$TARBALL"
-  mkdir -p "$CACHE_DIR" "$CLWND_DATA/node"
+  mkdir -p "$CACHE_DIR" "$HUM_DATA/node"
 
   if [ ! -f "$TARPATH" ]; then
     echo "[node] downloading $URL..."
@@ -181,9 +181,9 @@ ensure_node_version() {
   }
 
   [ -x "$NODE_BIN" ] || { echo "error: node binary missing after extract"; exit 1; }
-  CLWND_NODE_BIN="$NODE_BIN"
+  HUM_NODE_BIN="$NODE_BIN"
   echo "[node] installed pinned ${PINNED} at $NODE_BIN ✓"
-  export PATH="$(dirname "$CLWND_NODE_BIN"):$PATH"
+  export PATH="$(dirname "$HUM_NODE_BIN"):$PATH"
 }
 
 # pnpm version comes from package.json's `packageManager` field, provisioned
@@ -191,16 +191,16 @@ ensure_node_version() {
 
 ensure_pnpm() {
   local NODE_DIR
-  NODE_DIR=$(dirname "$CLWND_NODE_BIN")
+  NODE_DIR=$(dirname "$HUM_NODE_BIN")
 
   if [ -x "$NODE_DIR/corepack" ]; then
     echo "[pnpm] enabling corepack..."
     "$NODE_DIR/corepack" enable --install-directory "$NODE_DIR" 2>/dev/null || true
 
     local PINNED_PNPM
-    PINNED_PNPM=$("$CLWND_NODE_BIN" -e "
+    PINNED_PNPM=$("$HUM_NODE_BIN" -e "
       try {
-        const pm = require('$CLWND_SRC/package.json').packageManager || '';
+        const pm = require('$HUM_SRC/package.json').packageManager || '';
         const m = pm.match(/^pnpm@([0-9.]+)/);
         process.stdout.write(m ? m[1] : '');
       } catch { process.stdout.write(''); }
@@ -215,27 +215,82 @@ ensure_pnpm() {
     echo "error: corepack did not provision pnpm at $NODE_DIR/pnpm"
     exit 1
   fi
-  CLWND_PNPM_BIN="$NODE_DIR/pnpm"
+  HUM_PNPM_BIN="$NODE_DIR/pnpm"
 
   local PNPM_VER
-  PNPM_VER=$("$CLWND_PNPM_BIN" --version 2>/dev/null || echo "?")
-  echo "[pnpm] using ${CLWND_PNPM_BIN} (${PNPM_VER}) ✓"
+  PNPM_VER=$("$HUM_PNPM_BIN" --version 2>/dev/null || echo "?")
+  echo "[pnpm] using ${HUM_PNPM_BIN} (${PNPM_VER}) ✓"
 }
 
 ensure_dirs() {
-  mkdir -p "$CLWND_CONFIG" "$CLWND_DATA" "$CLWND_STATE" "$CLWND_RUNTIME"
+  mkdir -p "$HUM_CONFIG" "$HUM_DATA" "$HUM_STATE" "$HUM_RUNTIME"
+}
+
+# One-time rebrand migration: clwnd (≤0.24.x) → hum (≥0.25.x). The user
+# account stays `clwnd` — only the project name + its install paths
+# change. No-op if there's no old install to migrate.
+migrate_from_clwnd() {
+  local OLD_DATA="$HOME/.local/share/clwnd"
+  local OLD_CONFIG="$HOME/.config/clwnd"
+  local OLD_UNIT_USER="$HOME/.config/systemd/user/clwnd.service"
+  local OLD_UNIT_SYS="/etc/systemd/system/clwnd.service"
+  local OLD_OC_PROVIDER="opencode-clwnd"
+  local OC_CFG="$HOME/.config/opencode/opencode.json"
+
+  local DID=0
+
+  if systemctl --user list-unit-files 2>/dev/null | grep -q '^clwnd\.service'; then
+    echo "[migrate] stopping clwnd.service..."
+    systemctl --user kill -s KILL clwnd 2>/dev/null || true
+    systemctl --user disable clwnd 2>/dev/null || true
+    DID=1
+  fi
+  if [ -f "$OLD_UNIT_USER" ]; then rm -f "$OLD_UNIT_USER"; DID=1; fi
+  if [ -f "$OLD_UNIT_SYS" ]; then sudo rm -f "$OLD_UNIT_SYS" 2>/dev/null || rm -f "$OLD_UNIT_SYS" 2>/dev/null || true; DID=1; fi
+  if [ "$DID" = "1" ]; then systemctl --user daemon-reload 2>/dev/null || true; fi
+
+  if [ -d "$OLD_DATA" ] && [ ! -d "$HUM_DATA" ]; then
+    echo "[migrate] $OLD_DATA → $HUM_DATA"
+    mv "$OLD_DATA" "$HUM_DATA"
+    DID=1
+  elif [ -d "$OLD_DATA" ]; then
+    echo "[migrate] both $OLD_DATA and $HUM_DATA exist; leaving old in place — investigate manually"
+  fi
+
+  if [ -d "$OLD_CONFIG" ] && [ ! -d "$HUM_CONFIG" ]; then
+    echo "[migrate] $OLD_CONFIG → $HUM_CONFIG"
+    mv "$OLD_CONFIG" "$HUM_CONFIG"
+    DID=1
+  fi
+  if [ -f "$HUM_CONFIG/clwnd.json" ] && [ ! -f "$HUM_CONFIG/hum.json" ]; then
+    mv "$HUM_CONFIG/clwnd.json" "$HUM_CONFIG/hum.json"
+    DID=1
+  fi
+
+  if [ -f "$OC_CFG" ] && grep -q "$OLD_OC_PROVIDER\|/.local/share/clwnd/" "$OC_CFG"; then
+    echo "[migrate] patching $OC_CFG (opencode-clwnd → opencode-hum)"
+    sed -i.bak \
+      -e 's,/.local/share/clwnd/,/.local/share/hum/,g' \
+      -e "s/$OLD_OC_PROVIDER/opencode-hum/g" \
+      "$OC_CFG"
+    DID=1
+  fi
+
+  if [ "$DID" = "1" ]; then
+    echo "[migrate] clwnd → hum migration complete."
+  fi
 }
 
 latest_tag() {
-  git -C "$CLWND_SRC" ls-remote --tags --sort=-v:refname origin "v*" 2>/dev/null | head -1 | sed 's|.*refs/tags/||; s|\^{}||'
+  git -C "$HUM_SRC" ls-remote --tags --sort=-v:refname origin "v*" 2>/dev/null | head -1 | sed 's|.*refs/tags/||; s|\^{}||'
 }
 
 current_tag() {
-  git -C "$CLWND_SRC" describe --tags --exact-match 2>/dev/null || echo "none"
+  git -C "$HUM_SRC" describe --tags --exact-match 2>/dev/null || echo "none"
 }
 
 ensure_source() {
-  if [ -d "$CLWND_SRC/.git" ]; then
+  if [ -d "$HUM_SRC/.git" ]; then
     local LATEST
     LATEST=$(latest_tag)
     local CURRENT
@@ -251,13 +306,13 @@ ensure_source() {
       return 0
     fi
 
-    echo "[source] updating $CLWND_SRC to $LATEST..."
-    git -C "$CLWND_SRC" fetch --depth=1 origin tag "$LATEST"
-    git -C "$CLWND_SRC" checkout "$LATEST" 2>/dev/null || git -C "$CLWND_SRC" reset --hard "$LATEST"
+    echo "[source] updating $HUM_SRC to $LATEST..."
+    git -C "$HUM_SRC" fetch --depth=1 origin tag "$LATEST"
+    git -C "$HUM_SRC" checkout "$LATEST" 2>/dev/null || git -C "$HUM_SRC" reset --hard "$LATEST"
   else
-    echo "[source] cloning to $CLWND_SRC..."
-    git clone --depth=1 "$CLWND_REPO" "$CLWND_SRC"
-    cd "$CLWND_SRC"
+    echo "[source] cloning to $HUM_SRC..."
+    git clone --depth=1 "$HUM_REPO" "$HUM_SRC"
+    cd "$HUM_SRC"
     local LATEST
     LATEST=$(latest_tag)
     if [ -n "$LATEST" ]; then
@@ -268,7 +323,7 @@ ensure_source() {
 }
 
 do_build() {
-  cd "$CLWND_SRC"
+  cd "$HUM_SRC"
 
   # Wipe non-pnpm artifacts before pnpm install — flat node_modules and
   # other lockfiles confuse pnpm's symlink tree.
@@ -279,17 +334,17 @@ do_build() {
   fi
 
   echo "[build] pnpm install..."
-  "$CLWND_PNPM_BIN" install
+  "$HUM_PNPM_BIN" install
 
   echo "[build] compiling..."
-  "$CLWND_PNPM_BIN" run build
+  "$HUM_PNPM_BIN" run build
 
   # ExecStart uses `--import file://...tsx/dist/loader.mjs`; that file must exist.
-  [ -f "$CLWND_SRC/node_modules/tsx/dist/loader.mjs" ] || {
-    echo "error: tsx loader missing at $CLWND_SRC/node_modules/tsx/dist/loader.mjs"
+  [ -f "$HUM_SRC/node_modules/tsx/dist/loader.mjs" ] || {
+    echo "error: tsx loader missing at $HUM_SRC/node_modules/tsx/dist/loader.mjs"
     exit 1
   }
-  [ -f "$CLWND_SRC/plugins/opencode/dist/index.js" ] || {
+  [ -f "$HUM_SRC/plugins/opencode/dist/index.js" ] || {
     echo "error: plugin build missing at plugins/opencode/dist/index.js"
     exit 1
   }
@@ -299,10 +354,10 @@ plugin_ref() {
   # npm package by default; file:// package directory in dev mode.
   # Must be the DIRECTORY (not a single .js file) so OC can resolve
   # both exports["."] (server) and exports["./tui"] (TUI).
-  if [ -n "$CLWND_DEV" ]; then
-    echo "file://$CLWND_SRC/plugins/opencode"
+  if [ -n "$HUM_DEV" ]; then
+    echo "file://$HUM_SRC/plugins/opencode"
   else
-    echo "@clwnd/opencode"
+    echo "@hum/opencode"
   fi
 }
 
@@ -336,7 +391,7 @@ if (raw !== null) {
 }
 
 if (!config.plugin) config.plugin = [];
-config.plugin = config.plugin.filter(p => typeof p !== 'string' || (!p.includes('clwnd') && !p.includes('@clwnd')));
+config.plugin = config.plugin.filter(p => typeof p !== 'string' || (!p.includes('hum') && !p.includes('@hum')));
 config.plugin.push(pluginRef);
 console.log('  set tui plugin: ' + pluginRef);
 
@@ -353,7 +408,7 @@ configure_opencode() {
 const fs = require('fs');
 const configPath = '${OPENCODE_CONFIG}';
 const pluginRef = '${PLUGIN_REF}';
-const registry = JSON.parse(fs.readFileSync('${CLWND_SRC}/models.json', 'utf8'));
+const registry = JSON.parse(fs.readFileSync('${HUM_SRC}/models.json', 'utf8'));
 
 let config = {};
 let raw = null;
@@ -372,8 +427,8 @@ if (raw !== null) {
 
 // Plugin cleanup: remove both known refs, then add the correct one
 if (!config.plugin) config.plugin = [];
-const fileRef = 'file://${CLWND_SRC}/plugins/opencode/dist/index.js';
-const npmRef = '@clwnd/opencode';
+const fileRef = 'file://${HUM_SRC}/plugins/opencode/dist/index.js';
+const npmRef = '@hum/opencode';
 config.plugin = config.plugin.filter(p => p !== fileRef && p !== npmRef);
 if (pluginRef === npmRef) {
   config.plugin.push(npmRef);
@@ -384,7 +439,7 @@ if (pluginRef === npmRef) {
 
 // Provider + models — always sync to match registry. limit.context is
 // forced to 0 so OC's overflow check (overflow.ts:21) returns false for
-// clwnd models; OC's compaction agent + TUI 'compacting...' indicator
+// hum models; OC's compaction agent + TUI 'compacting...' indicator
 // stay quiet, Claude CLI's native microcompaction handles real overflow.
 // Other providers are untouched. Manual user-triggered compaction in OC
 // still fires our provider's stub.
@@ -394,8 +449,8 @@ for (const [id, entry] of Object.entries(registry)) {
   const limit = entry.limit ? { ...entry.limit, context: 0 } : { context: 0 };
   models[id] = { ...entry, limit, provider: { npm: pluginRef } };
 }
-config.provider['opencode-clwnd'] = { npm: pluginRef, models };
-console.log('  synced clwnd provider with ' + Object.keys(models).length + ' models (context=0 → OC compaction off for clwnd)');
+config.provider['opencode-hum'] = { npm: pluginRef, models };
+console.log('  synced hum provider with ' + Object.keys(models).length + ' models (context=0 → OC compaction off for hum)');
 
 // Clean legacy small_model — plugin manages at runtime
 if (config.small_model) {
@@ -411,12 +466,12 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 
 register_service() {
   local NODE CLAUDE
-  # Use the clwnd-owned node so the unit survives system node changes.
-  NODE="$CLWND_NODE_BIN"
+  # Use the hum-owned node so the unit survives system node changes.
+  NODE="$HUM_NODE_BIN"
   CLAUDE=$(which claude)
 
   if [ "$OS" = "Darwin" ]; then
-    local PLIST_LABEL="com.clwnd.daemon"
+    local PLIST_LABEL="com.hum.daemon"
     local PLIST_FILE="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
     cat > "$PLIST_FILE" << EOF
@@ -430,16 +485,16 @@ register_service() {
   <array>
     <string>${NODE}</string>
     <string>--import</string>
-    <string>file://${CLWND_SRC}/node_modules/tsx/dist/loader.mjs</string>
-    <string>${CLWND_SRC}/daemon/daemon.ts</string>
+    <string>file://${HUM_SRC}/node_modules/tsx/dist/loader.mjs</string>
+    <string>${HUM_SRC}/humd/humd.ts</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>${CLWND_SRC}</string>
+  <string>${HUM_SRC}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>CLWND_SOCKET</key>
+    <key>HUM_SOCKET</key>
     <string>${SOCK_PATH}</string>
-    <key>CLWND_CWD</key>
+    <key>HUM_CWD</key>
     <string>${HOME}</string>
     <key>CLAUDE_CLI_PATH</key>
     <string>${CLAUDE}</string>
@@ -462,9 +517,9 @@ register_service() {
     <false/>
   </dict>
   <key>StandardOutPath</key>
-  <string>${CLWND_STATE}/daemon.stdout.log</string>
+  <string>${HUM_STATE}/daemon.stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>${CLWND_STATE}/daemon.stderr.log</string>
+  <string>${HUM_STATE}/daemon.stderr.log</string>
 </dict>
 </plist>
 EOF
@@ -479,44 +534,44 @@ EOF
       SC="systemctl --user"
     fi
     mkdir -p "$SERVICE_DIR"
-    SERVICE_FILE="$SERVICE_DIR/clwnd.service"
+    SERVICE_FILE="$SERVICE_DIR/hum.service"
     cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=clwnd daemon
+Description=hum daemon
 After=network.target
 
 [Service]
 Type=simple
 $($IS_ROOT && echo "User=$USER")
-WorkingDirectory=$CLWND_SRC
-Environment=CLWND_SOCKET=$SOCK_PATH
-Environment=CLWND_CWD=$HOME
+WorkingDirectory=$HUM_SRC
+Environment=HUM_SOCKET=$SOCK_PATH
+Environment=HUM_CWD=$HOME
 Environment=CLAUDE_CLI_PATH=$CLAUDE
 Environment=XDG_CONFIG_HOME=$XDG_CONFIG_HOME
 Environment=XDG_DATA_HOME=$XDG_DATA_HOME
 Environment=XDG_STATE_HOME=$XDG_STATE_HOME
 Environment=XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR
 Environment=PATH=$(dirname $CLAUDE):$(dirname $NODE):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-$($IS_ROOT || echo "Environment=CLWND_PERMISSION_MODE=bypassPermissions")
-ExecStart=$NODE --import file://$CLWND_SRC/node_modules/tsx/dist/loader.mjs $CLWND_SRC/daemon/daemon.ts
+$($IS_ROOT || echo "Environment=HUM_PERMISSION_MODE=bypassPermissions")
+ExecStart=$NODE --import file://$HUM_SRC/node_modules/tsx/dist/loader.mjs $HUM_SRC/humd/humd.ts
 Restart=on-failure
 RestartSec=2s
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=clwnd
+SyslogIdentifier=hum
 
 [Install]
 $($IS_ROOT && echo "WantedBy=multi-user.target" || echo "WantedBy=default.target")
 EOF
     $SC daemon-reload
-    $SC enable clwnd
+    $SC enable hum
     echo "  wrote $SERVICE_FILE"
   fi
 }
 
 start_daemon() {
   if [ "$OS" = "Darwin" ]; then
-    local PLIST_LABEL="com.clwnd.daemon"
+    local PLIST_LABEL="com.hum.daemon"
     local PLIST_FILE="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
     launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$PLIST_FILE"
@@ -524,18 +579,18 @@ start_daemon() {
     if launchctl print "gui/$(id -u)/${PLIST_LABEL}" &>/dev/null; then
       echo "  running"
     else
-      echo "  FAILED — check: cat $CLWND_STATE/daemon.stderr.log"
+      echo "  FAILED — check: cat $HUM_STATE/daemon.stderr.log"
       exit 1
     fi
   else
     local SC="systemctl"
     $IS_ROOT || SC="systemctl --user"
-    $SC restart clwnd
+    $SC restart hum
     sleep 1
-    if $SC is-active --quiet clwnd; then
-      echo "  running, pid: $($SC show --property MainPID --value clwnd)"
+    if $SC is-active --quiet hum; then
+      echo "  running, pid: $($SC show --property MainPID --value hum)"
     else
-      echo "  FAILED — check: journalctl $($IS_ROOT || echo "--user") -u clwnd -n 20"
+      echo "  FAILED — check: journalctl $($IS_ROOT || echo "--user") -u hum -n 20"
       exit 1
     fi
   fi
@@ -543,12 +598,12 @@ start_daemon() {
 
 stop_daemon() {
   if [ "$OS" = "Darwin" ]; then
-    local PLIST_LABEL="com.clwnd.daemon"
+    local PLIST_LABEL="com.hum.daemon"
     launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
   else
     local SC="systemctl"
     $IS_ROOT || SC="systemctl --user"
-    $SC stop clwnd 2>/dev/null || true
+    $SC stop hum 2>/dev/null || true
   fi
 }
 
@@ -556,20 +611,20 @@ print_status() {
   echo ""
   echo "done."
   echo "  socket: $SOCK_PATH"
-  echo "  config: $CLWND_CONFIG/"
-  echo "  data:   $CLWND_DATA/"
-  echo "  state:  $CLWND_STATE/"
-  [ -n "$CLWND_NODE_BIN" ] && echo "  node:   $CLWND_NODE_BIN"
+  echo "  config: $HUM_CONFIG/"
+  echo "  data:   $HUM_DATA/"
+  echo "  state:  $HUM_STATE/"
+  [ -n "$HUM_NODE_BIN" ] && echo "  node:   $HUM_NODE_BIN"
   if [ "$OS" = "Darwin" ]; then
-    echo "  logs:   tail -f $CLWND_STATE/daemon.stderr.log"
-    echo "  stop:   launchctl bootout gui/$(id -u)/com.clwnd.daemon"
+    echo "  logs:   tail -f $HUM_STATE/daemon.stderr.log"
+    echo "  stop:   launchctl bootout gui/$(id -u)/com.hum.daemon"
   else
     if $IS_ROOT; then
-      echo "  logs:   journalctl -u clwnd -f"
-      echo "  stop:   systemctl stop clwnd"
+      echo "  logs:   journalctl -u hum -f"
+      echo "  stop:   systemctl stop hum"
     else
-      echo "  logs:   journalctl --user -u clwnd -f"
-      echo "  stop:   systemctl --user stop clwnd"
+      echo "  logs:   journalctl --user -u hum -f"
+      echo "  stop:   systemctl --user stop hum"
     fi
   fi
 }
@@ -577,11 +632,11 @@ print_status() {
 install_cli() {
   local BIN_DIR="$HOME/.local/bin"
   mkdir -p "$BIN_DIR"
-  ln -sf "$CLWND_SRC/bin/clwnd" "$BIN_DIR/clwnd"
-  echo "  linked $BIN_DIR/clwnd"
+  ln -sf "$HUM_SRC/bin/hum" "$BIN_DIR/hum"
+  echo "  linked $BIN_DIR/hum"
 }
 
-# OC caches installed plugins under its XDG cache. Once `@clwnd/opencode@latest`
+# OC caches installed plugins under its XDG cache. Once `@hum/opencode@latest`
 # resolves once, Npm.add() (packages/opencode/src/npm/index.ts) short-circuits
 # on loadVirtual() and never re-resolves `latest`, so the cached version is
 # pinned forever — a v0.15.x plugin keeps running even after the daemon is
@@ -596,14 +651,14 @@ wipe_oc_plugin_cache() {
   # OC resolves cache via xdg-basedir which differs by OS:
   #   linux: $XDG_CACHE_HOME or ~/.cache
   #   macOS: $XDG_CACHE_HOME or ~/Library/Caches
-  # Hit every plausible location — stale @clwnd pin in any of them
+  # Hit every plausible location — stale @hum pin in any of them
   # makes OC skip loading the new plugin (manifests as no plugin.loaded
   # log, externalTools never forwarded, every MCP call returns
   # 'no MCP server found').
   local CANDIDATES=()
-  [ -n "$XDG_CACHE_HOME" ] && CANDIDATES+=("$XDG_CACHE_HOME/opencode/packages/@clwnd")
-  CANDIDATES+=("$HOME/.cache/opencode/packages/@clwnd")
-  CANDIDATES+=("$HOME/Library/Caches/opencode/packages/@clwnd")
+  [ -n "$XDG_CACHE_HOME" ] && CANDIDATES+=("$XDG_CACHE_HOME/opencode/packages/@hum")
+  CANDIDATES+=("$HOME/.cache/opencode/packages/@hum")
+  CANDIDATES+=("$HOME/Library/Caches/opencode/packages/@hum")
   for OC_CACHE in "${CANDIDATES[@]}"; do
     if [ -d "$OC_CACHE" ]; then
       rm -rf "$OC_CACHE"
@@ -615,9 +670,10 @@ wipe_oc_plugin_cache() {
 # ─── commands ────────────────────────────────────────────────────────────────
 
 cmd_install() {
-  echo "=== clwnd install ==="
+  echo "=== hum install ==="
   check_prereqs
   ensure_dirs
+  migrate_from_clwnd
   ensure_source
   ensure_node_version
   ensure_pnpm
@@ -629,7 +685,7 @@ cmd_install() {
   configure_opencode
   configure_tui
 
-  echo "[cli] installing clwnd command..."
+  echo "[cli] installing hum command..."
   install_cli
 
   echo "[cache] clearing stale OC plugin cache..."
@@ -652,31 +708,32 @@ print_oc_reload_hint() {
 
 print_greeting() {
   local VERSION
-  VERSION=$(grep '"version"' "$CLWND_SRC/package.json" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+  VERSION=$(grep '"version"' "$HUM_SRC/package.json" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
   local BORN="2026-03-21"
   local DAYS=$(( ( $(date +%s) - $(date -d "$BORN" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$BORN" +%s 2>/dev/null) ) / 86400 ))
 
   echo ""
   echo "  ┌──────────────────────────────────────────┐"
   echo "  │                                          │"
-  echo "  │   clwnd /klwʊnd/                         │"
+  echo "  │   hum /hʌm/                              │"
   echo "  │   take back what is yours.               │"
   echo "  │                                          │"
   local AGE_STR="born $BORN · $DAYS day(s) old"
   printf "  │   %-39s│\n" "$AGE_STR"
   printf "  │   adopted: v%-29s│\n" "$VERSION"
   echo "  │                                          │"
-  echo "  │   clwnd is young and moving fast.        │"
-  echo "  │   run clwnd update often.                │"
+  echo "  │   hum is young and moving fast.        │"
+  echo "  │   run hum update often.                │"
   echo "  │                                          │"
   echo "  └──────────────────────────────────────────┘"
   echo ""
 }
 
 cmd_update() {
-  echo "=== clwnd update ==="
+  echo "=== hum update ==="
   check_prereqs
   ensure_dirs
+  migrate_from_clwnd
   SOURCE_UNCHANGED=0
   ensure_source
   # Run AFTER ensure_source so .node-version is available; the pinned
@@ -715,20 +772,20 @@ cmd_update() {
 }
 
 cmd_uninstall() {
-  echo "=== clwnd uninstall ==="
+  echo "=== hum uninstall ==="
 
   echo "[daemon] stopping..."
   stop_daemon
 
   if [ "$OS" = "Darwin" ]; then
-    rm -f "$HOME/Library/LaunchAgents/com.clwnd.daemon.plist"
+    rm -f "$HOME/Library/LaunchAgents/com.hum.daemon.plist"
     echo "  removed plist"
   else
     if $IS_ROOT; then
-      rm -f /etc/systemd/system/clwnd.service
+      rm -f /etc/systemd/system/hum.service
       systemctl daemon-reload 2>/dev/null || true
     else
-      rm -f "$HOME/.config/systemd/user/clwnd.service"
+      rm -f "$HOME/.config/systemd/user/hum.service"
       systemctl --user daemon-reload 2>/dev/null || true
     fi
     echo "  removed systemd unit"
@@ -746,17 +803,17 @@ try {
   // remove from plugin array
   if (Array.isArray(c.plugin)) {
     const before = c.plugin.length;
-    c.plugin = c.plugin.filter(s => !s.includes('clwnd'));
+    c.plugin = c.plugin.filter(s => !s.includes('hum'));
     if (c.plugin.length === 0) delete c.plugin;
     if (c.plugin?.length !== before) { changed = true; console.log('  removed plugin entry'); }
   }
 
   // remove provider
-  if (c.provider?.['opencode-clwnd']) {
-    delete c.provider['opencode-clwnd'];
+  if (c.provider?.['opencode-hum']) {
+    delete c.provider['opencode-hum'];
     if (Object.keys(c.provider).length === 0) delete c.provider;
     changed = true;
-    console.log('  removed clwnd provider');
+    console.log('  removed hum provider');
   }
 
   if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
@@ -766,7 +823,7 @@ try {
 
   echo ""
   echo "uninstalled. XDG dirs left in place:"
-  echo "  $CLWND_CONFIG  $CLWND_DATA  $CLWND_STATE"
+  echo "  $HUM_CONFIG  $HUM_DATA  $HUM_STATE"
 }
 
 # ─── dispatch ────────────────────────────────────────────────────────────────

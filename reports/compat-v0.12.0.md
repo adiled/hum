@@ -1,6 +1,6 @@
 ## Tool Calls
 
-| Tool | CC | clwnd | Brokered | OC | Cov | Status |
+| Tool | CC | hum | Brokered | OC | Cov | Status |
 |------|----|----|----------|----|----|--------|
 | Read | Disallowed | ✓ | — | ✓ | e2e-serve | ❌ Failing |
 | Edit | Disallowed | ✓ | — | ✓ | e2e-serve | ❌ Failing |
@@ -47,7 +47,7 @@
 
 | Component | Version |
 |-----------|---------|
-| clwnd | v0.12.0 (95e4227) |
+| hum | v0.12.0 (95e4227) |
 | claude | 2.1.86 (Claude Code) |
 | opencode | 1.3.7 |
 | bun | 1.3.11 |

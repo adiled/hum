@@ -28,7 +28,7 @@ export interface CupCallbacks {
   onBloom: (chunks: string[]) => void;
   /** Drone confirmed a wither — caller should kill the process and respawn. */
   onWither: (level: SuspicionLevel) => void;
-  /** "API Error:" prefix detected mid-stream. Caller should hum an error and interrupt. */
+  /** "API Error:" prefix detected mid-stream. Caller should thrum an error and interrupt. */
   onApiError: (text: string) => void;
   /** Diagnostic trace hook (drone.cup.* / nest.uncup events). */
   onTrace?: (event: string, data: Record<string, unknown>) => void;

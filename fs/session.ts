@@ -187,7 +187,7 @@ export function createSession(cwd: string, id: string): string {
   try { mkdirSync(dir, { recursive: true }); } catch {}
   const summary: ClaudeSummaryEntry = {
     type: "summary",
-    summary: "clwnd session",
+    summary: "hum session",
     leafUuid: null,
     sessionId: id,
     timestamp: new Date().toISOString(),
@@ -218,10 +218,19 @@ export function lastUuid(path: string): string | null {
 
 export function readEntries(path: string): ClaudeEntry[] {
   try {
-    return readFileSync(path, "utf-8").trim().split("\n")
+    const entries = readFileSync(path, "utf-8").trim().split("\n")
       .filter(Boolean)
       .map((l: string) => { try { return JSON.parse(l); } catch { return null; } })
       .filter(Boolean) as ClaudeEntry[];
+    // PTY user msgs land as string content; coerce to array shape so
+    // downstream .some/.filter/.map don't crash.
+    for (const e of entries) {
+      const msg = (e as unknown as { message?: { content?: unknown } }).message;
+      if (msg && typeof msg.content === "string") {
+        msg.content = [{ type: "text", text: msg.content }] as unknown as never;
+      }
+    }
+    return entries;
   } catch {
     return [];
   }
@@ -232,7 +241,7 @@ export function readEntries(path: string): ClaudeEntry[] {
 
 const metaCache = new Map<string, { userType: string; entrypoint: string; version: string; gitBranch: string }>();
 
-function clwndMeta(path?: string): { userType: string; entrypoint: string; version: string; gitBranch: string } {
+function humMeta(path?: string): { userType: string; entrypoint: string; version: string; gitBranch: string } {
   if (!path) return { userType: "external", entrypoint: "sdk-cli", version: "2.1.86", gitBranch: "main" };
   const cached = metaCache.get(path);
   if (cached) return cached;
@@ -276,7 +285,7 @@ function writeUserEntry(path: string, opts: {
     promptId: randomUUID(),
     message: { role: "user", content: opts.content },
     permissionMode: opts.permissionMode ?? "default",
-    ...clwndMeta(path),
+    ...humMeta(path),
     cwd: opts.cwd,
   });
 }
@@ -307,7 +316,7 @@ function writeAssistantEntry(path: string, opts: {
       stop_sequence: null,
       usage: ZERO_USAGE,
     },
-    ...clwndMeta(path),
+    ...humMeta(path),
     cwd: opts.cwd,
   });
 }

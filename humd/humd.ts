@@ -1,570 +1,45 @@
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess } from "node:child_process";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, unlinkSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, unlinkSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync } from "fs";
 import { randomUUID } from "crypto";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
 import { trace, info } from "../log.ts";
-import { loadConfig } from "../lib/config.ts";
-import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../lib/hum.ts";
-import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../lib/drone/index.ts";
-import { graft, createSession as createClaudeSession, sessionDir as getSessionDir, sessionPath as getSessionPath, lastUuid, sanitizeJsonl, pruneJsonl, type GraftResult } from "../lib/session.ts";
-import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../lib/penny.ts";
-import * as drift from "../lib/drift.ts";
+import { loadConfig } from "../fs/config.ts";
+import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
+import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../fs/drone/index.ts";
+import { graft, createSession as createClaudeSession, sessionDir as getSessionDir, sessionPath as getSessionPath, lastUuid, sanitizeJsonl, pruneJsonl, type GraftResult } from "../fs/session.ts";
+import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../fs/penny.ts";
+import * as drift from "../fs/drift.ts";
+import { pickPerch, type RoostProc } from "../nest/index.ts";
+import { Nest, type NestDeps } from "../nest/nest.ts";
+import type { Roost, BloomListener, PermitHoldEntry } from "../nest/types.ts";
+import { mintId } from "../fs/id.ts";
 
 
-// ─── Shapes ─────────────────────────────────────────────────────────────────
+// BloomListener, Roost, encodePrompt/encodeToolResult, parseLine, and the
+// Nest class itself now live under /nest. Daemon imports them and wires
+// up its own dispatch + permission state as NestDeps below.
 
-interface BloomListener {
-  sessionId: string;
-  onRoost(claudeId: string, model: string, tools: string[]): void;
-  onPetal(type: string, payload: Record<string, unknown>): void;
-  onWilt(harvest: { finishReason: string; usage: Record<string, number> | undefined; providerMetadata: Record<string, unknown> }): void;
-  onThorn(wound: string): void;
-}
-
-// ─── Protocol ────────────────────────────────────────────────────────────────
-
-function encodePrompt(content: Array<Record<string, unknown>> | string): string {
-  const parts = typeof content === "string"
-    ? [{ type: "text", text: content }]
-    : content;
-  return JSON.stringify({
-    type: "user",
-    message: { role: "user", content: parts },
-  });
-}
-
-function encodeToolResult(toolUseId: string, result: string): string {
-  return JSON.stringify({
-    type: "user",
-    message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: result }] },
-  });
-}
-
-function parseLine(line: string): unknown {
-  try { return JSON.parse(line); } catch { return null; }
-}
-
-// ─── ClaudeNest ──────────────────────────────────────────────────────────
-
-interface RoostProc {
-  pid: number | undefined;
-  stdin: { write(data: string): boolean };
-  stdout: import("node:stream").Readable;
-  stderr: import("node:stream").Readable;
-  kill(signal?: number | string): void;
-  exited: Promise<number>;
-}
-
-interface Roost {
-  proc: RoostProc;
-  listeners: Map<string, BloomListener>;
-  activeSid: string | null;
+function resolveNestName(cwd: string): "claude-repl" | "claude-cli" {
+  if (cwd && Array.isArray(cfg.projects)) {
+    for (const entry of cfg.projects) {
+      if (entry.primaryPath === cwd && entry.nest) return entry.nest;
+    }
+  }
+  return cfg.nest;
 }
 
 const cfg = loadConfig();
 const MAX_PROCS = cfg.maxProcs;
 const IDLE_TIMEOUT = cfg.idleTimeout;
 
-class ClaudeNest {
-  private roosts = new Map<string, Roost>();
-  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  constructor(private cliPath = "claude") {}
-
-  awaken(poolKey: string, modelId: string, listener: BloomListener, claudeSessionId?: string, permissions?: unknown[], systemPrompt?: string, allowedTools?: string[], sessionCwd?: string, planMode?: boolean): void {
-    let roost = this.roosts.get(poolKey);
-
-    // Respawn if session was seeded with new history
-    const session = sessions.get(poolKey);
-    if (session?.needsRespawn) {
-      if (roost) {
-        trace("nest.respawn", { poolKey, reason: "seed" });
-        // Synchronously emit roost-died so the drone's pulse handler resets
-        // per-process counters. The proc.exited async handler skips its
-        // own emission on the stale branch (current !== roost after the map
-        // mutates below), so without this the drone's inflightTools leaks.
-        humPulse("roost-died", poolKey, { pid: roost.proc.pid, reason: "respawn" });
-        try { roost.proc.kill(); } catch {}
-        this.roosts.delete(poolKey);
-        roost = undefined;
-      }
-      session.needsRespawn = false;
-      saveSessions(poolKey);
-    }
-
-    // Cancel idle timer — session is active again
-    const idleTimer = this.idleTimers.get(poolKey);
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      this.idleTimers.delete(poolKey);
-    }
-
-    if (!roost) {
-      // Evict oldest idle roost if at maxProcs limit
-      if (this.roosts.size >= MAX_PROCS) {
-        let evictKey: string | null = null;
-        for (const [key, r] of this.roosts) {
-          if (r.listeners.size === 0 && r.activeSid === null) { evictKey = key; break; }
-        }
-        if (evictKey) {
-          trace("nest.evicted", { poolKey: evictKey, reason: "maxProcs" });
-          humPulse("roost-evicted", evictKey, { reason: "maxProcs" });
-          try { this.roosts.get(evictKey)!.proc.kill(); } catch {}
-          this.roosts.delete(evictKey);
-          this.idleTimers.delete(evictKey);
-        } else {
-          trace("nest.rejected", { poolKey, reason: "maxProcs", active: this.roosts.size });
-        }
-      }
-      roost = this.spawnProc(poolKey, modelId, claudeSessionId ?? session?.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, sessionCwd, planMode);
-    } else {
-      mcpSetPerms((permissions ?? []) as any);
-      mcpSetAllowed(allowedTools);
-    }
-    listener.onPetal("stream_start", {});
-    roost.listeners.set(listener.sessionId, listener);
-  }
-
-  interrupt(poolKey: string): void {
-    const roost = this.roosts.get(poolKey);
-    if (!roost) return;
-    const requestId = randomUUID();
-    roost.proc.stdin.write(JSON.stringify({
-      type: "control_cancel_request",
-      request_id: requestId,
-    }) + "\n");
-    trace("nest.interrupted", { poolKey, requestId });
-  }
-
-  murmur(sessionId: string, poolKey: string, content: Array<Record<string, unknown>> | string): void {
-    const roost = this.roosts.get(poolKey);
-    if (!roost?.proc.stdin) return;
-    roost.activeSid = sessionId;
-    const len = typeof content === "string" ? content.length : content.reduce((s, p) => s + ((p.text as string)?.length ?? 0), 0);
-    trace("nest.murmured", { sid: sessionId, poolKey, len, parts: typeof content === "string" ? 1 : content.length });
-    roost.proc.stdin.write(encodePrompt(content) + "\n");
-  }
-
-  reply(sessionId: string, poolKey: string, toolUseId: string, result: string): void {
-    const roost = this.roosts.get(poolKey);
-    if (!roost?.proc.stdin) return;
-    roost.activeSid = sessionId;
-    trace("nest.replied", { sid: sessionId, toolUseId, len: result.length });
-    roost.proc.stdin.write(encodeToolResult(toolUseId, result) + "\n");
-  }
-
-  hush(sessionId: string, poolKey: string): void {
-    const roost = this.roosts.get(poolKey);
-    if (roost) {
-      roost.listeners.delete(sessionId);
-      if (roost.activeSid === sessionId) roost.activeSid = null;
-      trace("nest.hushed", { sid: sessionId, poolKey });
-
-      // Start idle timer — kill process if no new messages within timeout
-      if (IDLE_TIMEOUT > 0 && roost.listeners.size === 0) {
-        this.idleTimers.set(poolKey, setTimeout(() => {
-          const r = this.roosts.get(poolKey);
-          if (r && r.listeners.size === 0) {
-            trace("nest.idle", { poolKey, pid: r.proc.pid, timeout: IDLE_TIMEOUT });
-            humPulse("roost-idle", poolKey, { pid: r.proc.pid });
-            try { r.proc.kill(); } catch {}
-            this.roosts.delete(poolKey);
-          }
-          this.idleTimers.delete(poolKey);
-        }, IDLE_TIMEOUT));
-      }
-    }
-  }
-
-  fell(sessionId: string, poolKey: string): void {
-    const roost = this.roosts.get(poolKey);
-    if (roost) {
-      roost.listeners.delete(sessionId);
-      if (roost.activeSid === sessionId) roost.activeSid = null;
-      if (roost.listeners.size === 0) {
-        trace("nest.felled", { poolKey, pid: roost.proc.pid });
-        // Emit roost-died BEFORE the kill + map delete. The async
-        // proc.exited handler checks `current === roost` and skips its own
-        // emission once the map no longer holds this entry (stale branch),
-        // so the drone would never hear this process die. Synchronous pulse
-        // here gives the drone's pulse handler a chance to reset counters.
-        humPulse("roost-died", poolKey, { pid: roost.proc.pid, reason: "felled" });
-        try { roost.proc.kill(); } catch {}
-        this.roosts.delete(poolKey);
-        const timer = this.idleTimers.get(poolKey);
-        if (timer) { clearTimeout(timer); this.idleTimers.delete(poolKey); }
-      }
-    }
-  }
-
-  roost(poolKey: string): Roost | undefined {
-    return this.roosts.get(poolKey);
-  }
-
-  survey(): Array<{ model: string; pid?: number; sessions: string[] }> {
-    const out: Array<{ model: string; pid?: number; sessions: string[] }> = [];
-    for (const [id, roost] of this.roosts) {
-      out.push({ model: id, pid: roost.proc.pid, sessions: Array.from(roost.listeners.keys()) });
-    }
-    return out;
-  }
-
-  silence(): void {
-    for (const [, roost] of this.roosts) { try { roost.proc.kill(); } catch {} }
-    this.roosts.clear();
-    for (const timer of this.idleTimers.values()) clearTimeout(timer);
-    this.idleTimers.clear();
-  }
-
-  private spawnProc(poolKey: string, modelId: string, claudeSessionId?: string, permissions?: unknown[], systemPrompt?: string, allowedTools?: string[], sessionCwd?: string, planMode?: boolean): Roost {
-    // Update MCP server state for this request
-    mcpSetPerms((permissions ?? []) as any);
-    mcpSetAllowed(allowedTools);
-    if (sessionCwd) mcpSetCwd(sessionCwd);
-
-    // MCP config — session-scoped URL so tools/list returns correct external tools
-    const mcpConfig = JSON.stringify({
-      mcpServers: {
-        clwnd: { type: "http", url: `${MCP_URL}/s/${poolKey}` },
-      },
-    });
-
-    const cmd = [
-      this.cliPath, "-p",
-      "--verbose",
-      "--input-format", "stream-json",
-      "--output-format", "stream-json",
-      "--model", modelId,
-      "--include-partial-messages",
-      // Default permission mode — Claude CLI calls our permission_prompt MCP
-      // tool for every permission decision instead of auto-approving
-      "--permission-mode", "default",
-      "--permission-prompt-tool", "mcp__clwnd__permission_prompt",
-      // Disable ALL Claude CLI built-in tools. clwnd's MCP server provides
-      // the filesystem surface (read, do_code, do_noncode, bash); OC
-      // provides session tools (task, skill, todowrite) via brokered
-      // pass-through; and webfetch/websearch are brokered too. Everything
-      // else is either replaced, irrelevant in -p mode, or actively
-      // confusing (the agent sees CronCreate/Monitor/Explore and tries
-      // to use them, but they don't work in a piped subprocess).
-      "--disallowedTools", [
-        // Filesystem — replaced by mcp__clwnd__read/do_code/do_noncode/bash
-        "Read", "Edit", "Write", "MultiEdit", "ApplyPatch", "Bash", "Glob", "Grep",
-        // Navigation — replaced by mcp__clwnd__read (symbol/query/pattern)
-        "ToolSearch", "NotebookEdit", "CodeSearch",
-        // Agent/subagent — doesn't work in -p piped mode
-        "Agent", "Explore", "SendMessage",
-        // Plan/worktree — OC owns these concepts
-        "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ExitWorktree",
-        // Interactive — would hang waiting for user input in -p mode
-        "AskUserQuestion",
-        // Background tasks — Claude CLI's task system, not OC's
-        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "TaskStop",
-        // Scheduling — Claude CLI cron/monitor/loop, not relevant in subprocess
-        "CronCreate", "CronDelete", "CronList", "Monitor", "RemoteTrigger", "ScheduleWakeup",
-      ].join(","),
-      // Register our MCP server — strict mode prevents ambient .mcp.json discovery
-      "--mcp-config", mcpConfig,
-      "--strict-mcp-config",
-      // Kill skills — OC controls the session, Claude CLI skills not needed
-      "--disable-slash-commands",
-    ];
-    // System prompt set once at spawn — persistent process keeps it
-    if (systemPrompt) {
-      cmd.push("--system-prompt", systemPrompt);
-    }
-    // Resume from seeded JSONL session (cold-start history export)
-    if (claudeSessionId) {
-      // Sanitize JSONL before resume — fix structural violations that cause 400 errors
-      const spawnCwd2 = sessionCwd ?? process.env.CLWND_CWD ?? process.env.HOME ?? "/";
-      const jsonlPath = getSessionPath(spawnCwd2, claudeSessionId);
-      try {
-        if (existsSync(jsonlPath)) {
-          const result = sanitizeJsonl(jsonlPath);
-          if (result.fixed > 0) {
-            trace("sanitize.applied", { poolKey, removed: result.removed, fixed: result.fixed, rules: result.rules });
-          }
-        }
-      } catch (e) {
-        trace("sanitize.error", { poolKey, err: String(e) });
-      }
-      cmd.push("--resume", claudeSessionId);
-    }
-    const spawnCwd = sessionCwd ?? process.env.CLWND_CWD ?? process.env.HOME ?? "/";
-    const proc = nodeSpawn(cmd[0], cmd.slice(1), {
-      cwd: spawnCwd,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        DIRENV_DISABLE: "1",
-        ENABLE_TOOL_SEARCH: "false",            // prevents cache invalidation from dynamic tool schema injection
-        CLAUDE_CODE_DISABLE_FAST_MODE: "1",     // fast mode costs 6x — we control the model
-        DISABLE_INTERLEAVED_THINKING: "1",      // reduces context overhead from interleaved thinking blocks
-        CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",    // OC already loads AGENTS.md/CLAUDE.md into --system-prompt; block CLI re-read
-        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",   // same reason — suppress CLI-side memory injection
-        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", // CronCreate/TaskCreate disallowed; also kill the persistence dir (.claude/scheduled_tasks*)
-        // Adaptive thinking: on only for OC's plan-mode agent where
-        // deeper reasoning pays off; disabled otherwise to keep
-        // token spend predictable on routine build turns.
-        ...(planMode ? {} : { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1" }),
-        // User escape hatch: ccFlags from clwnd.json spread last so
-        // they override any of clwnd's defaults above.
-        ...cfg.ccFlags,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const roostProc: RoostProc = {
-      pid: proc.pid,
-      stdin: proc.stdin!,
-      stdout: proc.stdout!,
-      stderr: proc.stderr!,
-      kill: (signal?) => proc.kill(signal as any),
-      exited: new Promise<number>(resolve => proc.on("exit", (code) => resolve(code ?? 1))),
-    };
-
-    const roost: Roost = { proc: roostProc, listeners: new Map(), activeSid: null };
-    this.roosts.set(poolKey, roost);
-    info("nest.awakened", { poolKey, model: modelId, pid: roostProc.pid, resume: claudeSessionId ?? "none" });
-    humPulse("roost-spawned", poolKey, { pid: roostProc.pid });
-
-    this.readStderr(roostProc, poolKey);
-
-    roostProc.exited.then(code => {
-      trace("nest.exited", { poolKey, code, pid: roostProc.pid });
-      // Only clean up if this roost is still the current one — a new spawn may have replaced it
-      const current = this.roosts.get(poolKey);
-      if (current === roost) {
-        humPulse("roost-died", poolKey, { pid: roostProc.pid, reason: `exit:${code}` });
-        for (const listener of roost.listeners.values()) {
-          try { listener.onThorn(`subprocess exited: code=${code}`); } catch {}
-        }
-        roost.listeners.clear();
-        roost.activeSid = null;
-        this.roosts.delete(poolKey);
-      } else {
-        trace("nest.exited.stale", { poolKey, pid: roostProc.pid, reason: "replaced by newer roost" });
-      }
-    });
-
-    this.readLoop(roostProc, poolKey, roost);
-    return roost;
-  }
-
-  private readStderr(proc: RoostProc, modelId: string): void {
-    proc.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) trace("nest.stderr", { poolKey: modelId, text });
-    });
-  }
-
-  private readLoop(proc: RoostProc, poolKey: string, roost: Roost): void {
-    let nectar = "";
-    proc.stdout.on("data", (chunk: Buffer) => {
-      nectar += chunk.toString();
-      const lines = nectar.split("\n");
-      nectar = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.trim()) this.dispatchLine(poolKey, roost, parseLine(line));
-      }
-    });
-    proc.stdout.on("error", (err) => {
-      trace("nest.readloop.failed", { err: String(err) });
-      for (const listener of roost.listeners.values()) {
-        try { listener.onThorn(`readLoop error: ${err}`); } catch {}
-      }
-      roost.listeners.clear();
-    });
-  }
-
-  // Track whether we've seen streaming content blocks for this turn
-  // to avoid duplicating text from the final assistant message
-  private streamedTurn = false;
-  private reasoningBlockIdx: number | null = null;
-
-  private dispatchLine(poolKey: string, roost: Roost, raw: unknown): void {
-    if (!raw || typeof raw !== "object") return;
-    let msg = raw as Record<string, unknown>;
-
-    // Unwrap stream_event wrapper from --include-partial-messages
-    if (msg.type === "stream_event" && msg.event && typeof msg.event === "object") {
-      msg = msg.event as Record<string, unknown>;
-    }
-
-    if (msg.type === "system" && msg.subtype === "init") {
-      const sid = (msg.session_id as string) ?? "";
-      const model = (msg.model as string) ?? poolKey;
-      const tools = ((msg.tools as unknown[]) ?? []).map(String);
-      for (const listener of roost.listeners.values()) listener.onRoost(sid, model, tools);
-      return;
-    }
-
-    let listener: BloomListener | undefined;
-    if (roost.activeSid) {
-      listener = roost.listeners.get(roost.activeSid);
-    }
-    if (!listener) {
-      listener = roost.listeners.values().next().value;
-    }
-    if (!listener) return;
-
-    const petal = (type: string, payload: Record<string, unknown>) => listener!.onPetal(type, payload);
-
-    trace("stream.msg.received", { type: msg.type as string, subtype: (msg.subtype as string) ?? "" });
-
-    // Permission requests from Claude CLI's native protocol
-    if (msg.type === "permission_request") {
-      const requestId = msg.request_id as string;
-      const toolName = ((msg.tool_name ?? "") as string).replace("mcp__clwnd__", "");
-      const path = ((msg.input as Record<string, unknown>)?.file_path ?? (msg.input as Record<string, unknown>)?.path) as string | undefined;
-      const action = getPermissionAction(toolName, path);
-      trace("permission.request.received", { requestId, tool: toolName, path, action });
-
-      if (action === "deny") {
-        trace("permission.denied", { requestId, tool: toolName, path });
-        roost.proc.stdin?.write(JSON.stringify({
-          type: "permission_response",
-          request_id: requestId,
-          subtype: "error",
-          error: "Denied by session permission rules",
-        }) + "\n");
-      } else if (action === "ask") {
-        const askId = requestId;
-        trace("permission.hold.created", { id: askId, tool: toolName, path });
-        drone.observed(sigil(poolKey), { type: "permission_ask" });
-
-        hum(roost.activeSid ?? "", { chi: "permission-ask", askId, tool: toolName, path, input: msg.input ?? {}, dusk: Date.now() + cfg.permissionDusk });
-
-        CLWND_PERMIT_HOLD.set(askId, {
-          resolve: (decision) => {
-            if (decision === "allow") {
-              roost.proc.stdin?.write(JSON.stringify({
-                type: "permission_response",
-                request_id: requestId,
-                subtype: "success",
-                response: { updated_input: {}, permission_updates: [] },
-              }) + "\n");
-            } else {
-              roost.proc.stdin?.write(JSON.stringify({
-                type: "permission_response",
-                request_id: requestId,
-                subtype: "error",
-                error: "Denied by user",
-              }) + "\n");
-            }
-          },
-          tool: toolName,
-          path,
-          sessionId: roost.activeSid ?? "",
-          createdAt: Date.now(),
-        });
-
-        setTimeout(() => {
-          if (CLWND_PERMIT_HOLD.has(askId)) {
-            recordPermitHoldSpan(askId);
-            const hold = CLWND_PERMIT_HOLD.get(askId)!;
-            CLWND_PERMIT_HOLD.delete(askId);
-            hold.resolve("deny");
-            trace("permission.hold.timeout", { id: askId });
-          }
-        }, cfg.permissionDusk);
-      } else {
-        trace("permission.allowed", { requestId, tool: toolName, path });
-        roost.proc.stdin?.write(JSON.stringify({
-          type: "permission_response",
-          request_id: requestId,
-          subtype: "success",
-          response: { updated_input: {}, permission_updates: [] },
-        }) + "\n");
-      }
-      return;
-    }
-
-    if (msg.type === "content_block_start") {
-      const block = (msg.content_block ?? {}) as Record<string, unknown>;
-      if (block.type === "thinking") {
-        this.reasoningBlockIdx = msg.index as number;
-        petal("reasoning_start", { id: msg.index });
-      }
-      if (block.type === "text") petal("text_start", { id: msg.index });
-      if (block.type === "tool_use") {
-        petal("tool_input_start", { toolCallId: block.id as string, toolName: block.name as string });
-        drone.observed(sigil(poolKey), { type: "tool_start", toolName: block.name as string });
-      }
-      return;
-    }
-
-    if (msg.type === "content_block_delta") {
-      this.streamedTurn = true;
-      const delta = (msg.delta ?? {}) as Record<string, unknown>;
-      if (delta.type === "thinking_delta") petal("reasoning_delta", { delta: delta.thinking as string });
-      if (delta.type === "text_delta") {
-        petal("text_delta", { delta: delta.text as string });
-        drone.observed(sigil(poolKey), { type: "text_delta", text: delta.text as string });
-      }
-      if (delta.type === "input_json_delta") petal("tool_input_delta", { partialJson: delta.partial_json as string });
-      return;
-    }
-
-    if (msg.type === "content_block_stop") {
-      if (this.reasoningBlockIdx === msg.index) {
-        petal("reasoning_end", { id: msg.index });
-        this.reasoningBlockIdx = null;
-      }
-      petal("content_block_stop", { blockIdx: msg.index });
-      return;
-    }
-
-    if (msg.type === "assistant" && msg.message) {
-      const content = ((msg.message as Record<string, unknown>).content ?? []) as Array<Record<string, unknown>>;
-      for (const block of content) {
-        if (block.type === "text" && typeof block.text === "string" && !this.streamedTurn) petal("text_delta", { delta: block.text });
-        if (block.type === "tool_use") petal("tool_call", { toolCallId: block.id as string, toolName: block.name as string, input: block.input });
-      }
-      return;
-    }
-
-    if (msg.type === "user" && msg.message) {
-      const content = ((msg.message as Record<string, unknown>).content ?? []) as Array<Record<string, unknown>>;
-      for (const block of content) {
-        if (block.type === "tool_result") {
-          const toolUseId = (block.tool_use_id as string) ?? "";
-          let resultText = "";
-          const body = block.content;
-          if (typeof body === "string") resultText = body;
-          else if (Array.isArray(body)) resultText = (body as Array<Record<string, unknown>>).filter(c => typeof c.text === "string").map(c => c.text as string).join("\n");
-          petal("tool_result", { toolUseId, result: resultText });
-          drone.observed(sigil(poolKey), { type: "tool_end" });
-        }
-      }
-      return;
-    }
-
-    if (msg.type === "result") {
-      this.streamedTurn = false;
-      drone.observed(sigil(poolKey), { type: "turn_end" });
-      if (msg.subtype === "error_during_execution" || msg.is_error) {
-        trace("stream.result.error", { raw: JSON.stringify(msg).slice(0, 500) });
-      }
-      listener.onWilt({
-        finishReason: (msg.stop_reason as string) ?? "stop",
-        usage: msg.usage as Record<string, number> | undefined,
-        providerMetadata: { sessionId: msg.session_id, cost: msg.total_cost_usd },
-      });
-      if (roost.activeSid) {
-        roost.listeners.delete(roost.activeSid);
-        roost.activeSid = null;
-      }
-    }
-  }
-}
 
 // ─── Permission State ───────────────────────────────────────────────────────
 
 // Pending permission asks — held PreToolUse hook responses waiting for user decision
-const CLWND_PERMIT_HOLD = new Map<string, {
+const HUM_PERMIT_HOLD = new Map<string, {
   resolve: (decision: "allow" | "deny") => void;
   tool: string;
   path?: string;
@@ -573,7 +48,7 @@ const CLWND_PERMIT_HOLD = new Map<string, {
 }>();
 
 function recordPermitHoldSpan(askId: string): void {
-  const hold = CLWND_PERMIT_HOLD.get(askId);
+  const hold = HUM_PERMIT_HOLD.get(askId);
   if (hold && hold.sessionId) {
     drift.span(hold.sessionId, "permission_hold", Date.now() - hold.createdAt);
   }
@@ -608,6 +83,9 @@ function getPermissionAction(tool: string, path?: string): "allow" | "deny" | "a
 // ─── Session State (persisted) ───────────────────────────────────────────────
 
 interface Session {
+  id: string;
+  nest: Array<{ nest: string; id: string }>;
+  plugin: Array<{ plugin: string; id: string }>;
   opencodeSessionId: string;
   claudeSessionId: string | null;
   claudeSessionPath: string | null;
@@ -620,7 +98,7 @@ interface Session {
   thorns?: number; // consecutive error count — circuit breaker
   externalToolNames?: string[]; // sorted names of external MCP tools — respawn on change
   planMode?: boolean; // true when current agent is 'plan' — governs CLI adaptive-thinking env, respawn on change
-  // Per-session cached hum fields. Plugin dedups these — when a hum
+  // Per-session cached thrum fields. Plugin dedups these — when a thrum
   // message omits them, we fall back to the cached value so a cold-spawn
   // still gets the right system prompt / permissions / allowedTools.
   lastSystemPrompt?: string;
@@ -628,9 +106,9 @@ interface Session {
   lastAllowedTools?: string[];
   // Largest per-turn input context (input + cache_create + cache_read) seen
   // so far, captured from each result event's usage block. Pure observation:
-  // surfaced via `clwnd savings` and used to emit a warning trace when a
+  // surfaced via `hum savings` and used to emit a warning trace when a
   // session climbs past CONTEXT_WARN_THRESHOLD. Context reduction is OC's
-  // job — clwnd does not mutate session state on this signal.
+  // job — hum does not mutate session state on this signal.
   maxContextTokens?: number;
   // Callable closure: forces cupped petals to be sent immediately.
   // Set by the onPetal IIFE in the prompt handler. The tendril callback
@@ -640,14 +118,14 @@ interface Session {
 }
 
 // Advisory threshold. When a session's peak per-turn input context crosses
-// this value, clwnd emits a `context.over.threshold.warning` trace on the
+// this value, hum emits a `context.over.threshold.warning` trace on the
 // next prompt and bumps `penny.contextOverThreshold`. Operator-facing signal
 // only — no state mutation.
-const CONTEXT_WARN_THRESHOLD = Number(process.env.CLWND_CONTEXT_WARN ?? "300000");
+const CONTEXT_WARN_THRESHOLD = Number(process.env.HUM_CONTEXT_WARN ?? "300000");
 
 const STATE_DIR = process.env.XDG_STATE_HOME
-  ? `${process.env.XDG_STATE_HOME}/clwnd`
-  : `${process.env.HOME}/.local/state/clwnd`;
+  ? `${process.env.XDG_STATE_HOME}/hum`
+  : `${process.env.HOME}/.local/state/hum`;
 const SESSIONS_FILE = `${STATE_DIR}/sessions.json`;
 const PENNY_FILE = `${STATE_DIR}/penny.json`;
 
@@ -661,7 +139,21 @@ process.on("SIGINT", () => { try { pennySave(PENNY_FILE); } catch {} });
 function loadSessions(): Map<string, Session> {
   try {
     const data = JSON.parse(readFileSync(SESSIONS_FILE, "utf-8"));
-    return new Map(Object.entries(data));
+    const map = new Map<string, Session>(Object.entries(data) as Array<[string, Session]>);
+    let idBack = 0, nestBack = 0, pluginBack = 0;
+    for (const [oid, s] of map) {
+      if (!s.id || typeof s.id !== "string") { s.id = mintId(); idBack++; }
+      if (!Array.isArray(s.nest)) {
+        s.nest = [{ nest: resolveNestName(s.cwd), id: s.claudeSessionId ?? "" }];
+        nestBack++;
+      }
+      if (!Array.isArray(s.plugin)) {
+        s.plugin = [{ plugin: "opencode", id: s.opencodeSessionId ?? oid }];
+        pluginBack++;
+      }
+    }
+    if (idBack || nestBack || pluginBack) trace("session.backfilled", { id: idBack, nest: nestBack, plugin: pluginBack });
+    return map;
   } catch {
     return new Map();
   }
@@ -688,29 +180,33 @@ const sessions = loadSessions();
 function defaultSocketPath(): string {
   const runtime = process.env.XDG_RUNTIME_DIR;
   if (runtime) {
-    const dir = `${runtime}/clwnd`;
+    const dir = `${runtime}/hum`;
     mkdirSync(dir, { recursive: true });
-    return `${dir}/clwnd.sock`;
+    return `${dir}/hum.sock`;
   }
   // macOS / linux without XDG_RUNTIME_DIR — UID-namespaced /tmp dir
   // (kept in sync with plugin's defaultSocketPath in provider.ts).
   const uid = process.getuid?.() ?? 0;
-  const dir = `/tmp/clwnd-${uid}`;
+  const dir = `/tmp/hum-${uid}`;
   mkdirSync(dir, { recursive: true });
-  return `${dir}/clwnd.sock`;
+  return `${dir}/hum.sock`;
 }
 
 
-const SOCK = process.env.CLWND_SOCKET ?? defaultSocketPath();
+const SOCK = process.env.HUM_SOCKET ?? defaultSocketPath();
 const HTTP = SOCK + ".http";
 
 
-const nest = new ClaudeNest(process.env.CLAUDE_CLI_PATH ?? "claude");
+// Nest is constructed at the bottom of the file once its deps (thrum,
+// drone, drift, permission helpers) are defined; declared up here so
+// the rest of daemon can reference `nest.<method>` without dep ordering
+// gymnastics.
+let nest!: Nest;
 const wane = new WaneTracker();
 const DEFAULT_OC_URL = "http://127.0.0.1:4096";
 
-// Drone: self-governing observer — opt-in via droned:true in clwnd.json
-// When off, the hum is a raw pipe. When on, the sentinel watches everything.
+// Drone: self-governing observer — opt-in via droned:true in hum.json
+// When off, the thrum is a raw pipe. When on, the sentinel watches everything.
 const DRONED = cfg.droned;
 
 function ocUrlForSigil(s: string): string {
@@ -766,9 +262,9 @@ const drone = DRONED ? new Drone("daemon", (action: DroneAction) => {
   switch (action.type) {
     case "beat":
       // Send drone beat to the sigil's client
-      for (const [, client] of humClients) {
+      for (const [, client] of thrumClients) {
         if (client.sigils.has(action.sigil) || client.sigils.size === 0) {
-          humTo(client, action.beat as unknown as Record<string, unknown>);
+          thrumTo(client, action.beat as unknown as Record<string, unknown>);
           break;
         }
       }
@@ -777,9 +273,9 @@ const drone = DRONED ? new Drone("daemon", (action: DroneAction) => {
       trace("drone.retry", { sigil: action.sigil, rid: action.rid, chi: action.chi });
       // Retry is handled by re-acking — the original tone was already processed,
       // the echo was lost. Re-send echo.
-      for (const [, client] of humClients) {
+      for (const [, client] of thrumClients) {
         if (client.sigils.has(action.sigil)) {
-          humTo(client, { chi: "echo", rid: action.rid, ok: true, retried: true });
+          thrumTo(client, { chi: "echo", rid: action.rid, ok: true, retried: true });
           break;
         }
       }
@@ -790,9 +286,9 @@ const drone = DRONED ? new Drone("daemon", (action: DroneAction) => {
     case "drift":
       trace("drone.drift", { sigil: action.sigil, local: action.local, remote: action.remote });
       // Trigger breath resync to the drifted client
-      for (const [, client] of humClients) {
+      for (const [, client] of thrumClients) {
         if (client.sigils.has(action.sigil)) {
-          humBreath(client);
+          thrumBreath(client);
           break;
         }
       }
@@ -800,7 +296,7 @@ const drone = DRONED ? new Drone("daemon", (action: DroneAction) => {
     case "dead":
       trace("drone.dead", { sigil: action.sigil, missedBeats: action.missedBeats });
       // Clean up stale sigil — but don't disconnect the client (it may own active sessions too)
-      for (const [, client] of humClients) {
+      for (const [, client] of thrumClients) {
         if (client.sigils.has(action.sigil)) {
           client.sigils.delete(action.sigil);
           break;
@@ -840,55 +336,55 @@ const drone = DRONED ? new Drone("daemon", (action: DroneAction) => {
   }).catch(e => trace("drone.llm.assess.failed", { sigil: s, err: String(e) }));
 }) : stubDrone();
 
-const HUM = SOCK + ".hum";
+const HUM = SOCK + ".thrum";
 
 for (const p of [SOCK, HTTP, HUM]) {
   mkdirSync(dirname(p), { recursive: true });
   if (existsSync(p)) { try { unlinkSync(p); } catch {} }
 }
 
-// ─── clwndHum: Bidirectional NDJSON socket ─────────────────────────────────
+// ─── humHum: Bidirectional NDJSON socket ─────────────────────────────────
 // One persistent connection per provider instance. Both sides push typed
 // JSON messages (chi = message type). Replaces HTTP request/response dance.
 
-const humClients = new Map<string, Reach>();
+const thrumClients = new Map<string, Reach>();
 
-function humTo(client: Reach, msg: Record<string, unknown> | Breath): void {
+function thrumTo(client: Reach, msg: Record<string, unknown> | Breath): void {
   try { client.socket.write(JSON.stringify(msg) + "\n"); } catch {}
 }
 
-function humAll(msg: Record<string, unknown>): void {
-  trace("hum.all", { chi: msg.chi as string, clients: humClients.size });
-  for (const [, client] of humClients) humTo(client, msg);
+function thrumAll(msg: Record<string, unknown>): void {
+  trace("thrum.all", { chi: msg.chi as string, clients: thrumClients.size });
+  for (const [, client] of thrumClients) thrumTo(client, msg);
 }
 
-function hum(sessionId: string, msg: Record<string, unknown>): void {
+function thrum(sessionId: string, msg: Record<string, unknown>): void {
   const s = sigil(sessionId);
   if (!msg.rid) msg.rid = makeRid();
   if (!msg.sigil) msg.sigil = s;
   if (!msg.sid) msg.sid = sessionId;
   msg.from = "daemon";
-  trace("hum.tone.sent", { chi: msg.chi as string, sid: sessionId, rid: msg.rid as string });
+  trace("thrum.tone.sent", { chi: msg.chi as string, sid: sessionId, rid: msg.rid as string });
   // Route to first client that owns this sigil — no duplicates
   let sent = false;
-  for (const [, client] of humClients) {
+  for (const [, client] of thrumClients) {
     if (client.sigils.has(s)) {
-      humTo(client, msg);
+      thrumTo(client, msg);
       sent = true;
       break;
     }
   }
   // Fallback: if no client claimed this sigil, broadcast to unregistered clients
   if (!sent) {
-    for (const [, client] of humClients) {
-      if (client.sigils.size === 0) humTo(client, msg);
+    for (const [, client] of thrumClients) {
+      if (client.sigils.size === 0) thrumTo(client, msg);
     }
   }
   // Drone observes outgoing tones
   drone.sent(msg);
 }
 
-function humBreath(client: Reach): void {
+function thrumBreath(client: Reach): void {
   const sessionList: BreathSession[] = [];
   for (const [sid, session] of sessions) {
     // Only sync sessions with meaningful state
@@ -908,47 +404,47 @@ function humBreath(client: Reach): void {
     });
   }
   const msg: Breath = { chi: "breath", from: "daemon", sessions: sessionList };
-  humTo(client, msg);
-  trace("hum.breath.sent", { clientId: client.clientId.slice(0, 8), sessions: sessionList.length });
+  thrumTo(client, msg);
+  trace("thrum.breath.sent", { clientId: client.clientId.slice(0, 8), sessions: sessionList.length });
 }
 
-function humEcho(clientId: string, tone: Record<string, unknown>, ok = true, error?: string): void {
-  const client = humClients.get(clientId);
+function thrumEcho(clientId: string, tone: Record<string, unknown>, ok = true, error?: string): void {
+  const client = thrumClients.get(clientId);
   if (!client) return;
-  humTo(client, { chi: "echo", rid: tone.rid, ok, error });
+  thrumTo(client, { chi: "echo", rid: tone.rid, ok, error });
 }
 
-function humPulse(kind: PulseKind, sid: string, extra?: Partial<Pulse>): void {
+function thrumPulse(kind: PulseKind, sid: string, extra?: Partial<Pulse>): void {
   const p = pulse(kind, sigil(sid), sid, extra);
-  hum(sid, p as unknown as Record<string, unknown>);
+  thrum(sid, p as unknown as Record<string, unknown>);
 }
 
-function humHear(clientId: string, msg: Record<string, unknown>): void {
+function thrumHear(clientId: string, msg: Record<string, unknown>): void {
   const chi = msg.chi as string;
-  if (chi !== "log") trace("hum.tone.received", { chi, clientId: clientId.slice(0, 8), rid: msg.rid as string });
+  if (chi !== "log") trace("thrum.tone.received", { chi, clientId: clientId.slice(0, 8), rid: msg.rid as string });
 
   // Drone observes incoming tones
   drone.heard(msg);
 
   // Dusk: discard tones past their expiry
   if (isDusk(msg)) {
-    trace("hum.tone.dusk", { chi, rid: msg.rid as string, dusk: msg.dusk });
-    humEcho(clientId, msg, false, "past dusk");
+    trace("thrum.tone.dusk", { chi, rid: msg.rid as string, dusk: msg.dusk });
+    thrumEcho(clientId, msg, false, "past dusk");
     return;
   }
 
   // Echo: acknowledge receipt
   if (chi !== "echo" && chi !== "log" && msg.rid) {
-    humEcho(clientId, msg);
+    thrumEcho(clientId, msg);
   }
 
-  // Per-hum transit timing — plugin stamps `sentAt` on outgoing tones,
-  // daemon records the time-to-receive as one hum sample. Direction is
+  // Per-thrum transit timing — plugin stamps `sentAt` on outgoing tones,
+  // daemon records the time-to-receive as one thrum sample. Direction is
   // anchored on the destination endpoint (`to: "nest"` = arriving at the
   // daemon's nest). Aggregates as p50/p95 across all sampled hums per
   // bloom; not cumulative.
   if (typeof msg.sentAt === "number" && typeof msg.sid === "string") {
-    drift.hum(msg.sid as string, "nest", Date.now() - (msg.sentAt as number));
+    drift.thrum(msg.sid as string, "nest", Date.now() - (msg.sentAt as number));
   }
 
   switch (chi) {
@@ -959,12 +455,12 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
       const mark = msg.mark as string | undefined;
       const span = msg.span as { name: string; ms: number } | undefined;
       const flag = msg.flag as { key: string; value: boolean | number | string } | undefined;
-      const humSample = msg.hum as { to: "nest" | "oc"; ms: number } | undefined;
+      const thrumSample = msg.thrum as { to: "nest" | "oc"; ms: number } | undefined;
       if (mark) drift.mark(sid, mark);
       if (span) drift.span(sid, span.name, span.ms);
       if (flag) drift.flag(sid, flag.key, flag.value);
-      if (humSample && (humSample.to === "nest" || humSample.to === "oc")) {
-        drift.hum(sid, humSample.to, humSample.ms);
+      if (thrumSample && (thrumSample.to === "nest" || thrumSample.to === "oc")) {
+        drift.thrum(sid, thrumSample.to, thrumSample.ms);
       }
       break;
     }
@@ -975,18 +471,22 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
 
       const sid = msg.sid as string;
       drift.open(sid, msg.modelId as string | undefined);
-      const client = humClients.get(clientId);
+      const client = thrumClients.get(clientId);
       (async () => {
       if (client) client.sigils.add(sigil(sid));
 
       // Get or create session
       let session = sessions.get(sid);
       if (!session) {
+        const cwd = (msg.cwd as string) ?? "/root";
         session = {
+          id: mintId(),
+          nest: [{ nest: resolveNestName(cwd), id: "" }],
+          plugin: [{ plugin: "opencode", id: sid }],
           opencodeSessionId: sid,
           claudeSessionId: null,
           claudeSessionPath: null,
-          cwd: (msg.cwd as string) ?? "/root",
+          cwd,
           modelId: (msg.modelId as string) ?? "sonnet",
         };
         sessions.set(sid, session);
@@ -1073,7 +573,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
       const MAX_THORNS = 3;
       if ((session.thorns ?? 0) >= MAX_THORNS) {
         trace("nest.thorns.breaker", { sid, thorns: session.thorns });
-        hum(sid, { chi: "error", sid, message: `circuit breaker: ${session.thorns} consecutive errors` });
+        thrum(sid, { chi: "error", sid, message: `circuit breaker: ${session.thorns} consecutive errors` });
         return;
       }
 
@@ -1114,6 +614,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
             const result = graft(priorPetals ?? [], peekPath, peekId, effectiveCwd);
             if (result.grafted > 0) {
               session.claudeSessionId = peekId;
+              if (session.nest[0]) session.nest[0].id = peekId;
               session.claudeSessionPath = peekPath;
               session.lastSyncedPetal = result.lastPetal;
               session.needsRespawn = true;
@@ -1143,6 +644,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
         sessionId: sid,
         onRoost(claudeSessionId, model, tools) {
           session.claudeSessionId = claudeSessionId;
+          if (session.nest[0]) session.nest[0].id = claudeSessionId;
           if (!session.claudeSessionPath) {
             // Use the cwd passed to awaken (= spawnCwd), not session.cwd,
             // because Claude CLI determines its project dir from spawnCwd
@@ -1152,8 +654,8 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
             session.claudeSessionPath = getSessionPath(effectiveCwd, claudeSessionId);
           }
           saveSessions(sid);
-          hum(sid, { chi: "session-ready", sid, claudeSessionId, model, tools });
-          humPulse("roost-ready", sid, { pid: nest.roost(poolKey)?.proc.pid });
+          thrum(sid, { chi: "session-ready", sid, claudeSessionId, model, tools });
+          thrumPulse("roost-ready", sid, { pid: nest.roost(poolKey)?.proc.pid });
         },
         onPetal: (() => {
           // Outbound socket batching: independent of the drone's cup. The cup
@@ -1172,7 +674,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
             const line = chunks.join("\n") + "\n";
             const s = sigil(sid);
             let sent = false;
-            for (const [, client] of humClients) {
+            for (const [, client] of thrumClients) {
               if (client.sigils.has(s)) {
                 try { client.socket.write(line); } catch {}
                 sent = true;
@@ -1180,7 +682,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
               }
             }
             if (!sent) {
-              for (const [, client] of humClients) {
+              for (const [, client] of thrumClients) {
                 if (client.sigils.size === 0) try { client.socket.write(line); } catch {}
               }
             }
@@ -1195,7 +697,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
               },
               onApiError: (text) => {
                 trace("nest.api.error", { sid, text: text.slice(0, 120) });
-                hum(sid, { chi: "error", sid, message: text });
+                thrum(sid, { chi: "error", sid, message: text });
                 nest.interrupt(poolKey);
               },
               onWither: () => {
@@ -1218,11 +720,11 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
                     (async () => {
                       try {
                         session.needsRespawn = true;
-                        nest.awaken(poolKey, session.modelId, listener, session.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, cwd, session.planMode);
+                        await nest.awaken(poolKey, session.modelId, listener, session.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, cwd, session.planMode);
                         nest.murmur(sid, poolKey, promptContent);
                       } catch (e) {
                         trace("drone.swallow.retry.failed", { sid, err: String(e) });
-                        hum(sid, { chi: "error", sid, message: `swallow retry failed: ${e}` });
+                        thrum(sid, { chi: "error", sid, message: `swallow retry failed: ${e}` });
                       }
                     })();
                   }
@@ -1299,8 +801,8 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
             if (tip) session.lastSyncedPetal = tip;
           }
           // Track peak per-turn input context for observability — surfaced
-          // by `clwnd savings` and used by the next-prompt warning trace.
-          // No destructive action attached: clwnd does not rotate sessions.
+          // by `hum savings` and used by the next-prompt warning trace.
+          // No destructive action attached: hum does not rotate sessions.
           penny.blooms++;
           if (harvest.usage) {
             const u = harvest.usage;
@@ -1319,7 +821,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
           }
           trace("nest.wilt", { sid, finishReason: harvest.finishReason, maxCtx: session.maxContextTokens });
           if (uncup) uncup(); // uncup any remaining petals before finish
-          hum(sid, {
+          thrum(sid, {
             chi: "finish", sid,
             finishReason: harvest.finishReason,
             usage: harvest.usage,
@@ -1331,14 +833,14 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
         onThorn(wound) {
           session.thorns = (session.thorns ?? 0) + 1;
           trace("nest.thorn", { sid, wound: wound.slice(0, 100), thorns: session.thorns });
-          hum(sid, { chi: "error", sid, message: wound });
+          thrum(sid, { chi: "error", sid, message: wound });
           nest.fell(sid, poolKey);
         },
       };
 
       const hadRoost = !!nest.roost(poolKey);
       const awakenStart = Date.now();
-      nest.awaken(poolKey, session.modelId, listener, session.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, cwd, session.planMode);
+      await nest.awaken(poolKey, session.modelId, listener, session.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, cwd, session.planMode);
       if (hadRoost) {
         drift.flag(sid, "warm", true);
       } else {
@@ -1357,7 +859,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
         } else {
           trace("nest.murmur.empty", { sid, poolKey });
           // Send finish so OC doesn't hang waiting for a response
-          hum(sid, { chi: "finish", sid, finishReason: "stop", usage: undefined, providerMetadata: {} });
+          thrum(sid, { chi: "finish", sid, finishReason: "stop", usage: undefined, providerMetadata: {} });
         }
       }
       })().catch(e => trace("prompt.failed", { sid, err: String(e) }));
@@ -1372,7 +874,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
         if (msg.reason === "compaction") {
           // Compaction: kill the running Claude CLI process and TRUNCATE the
           // existing JSONL in place. The claudeSessionId / claudeSessionPath
-          // STAY THE SAME — clwnd's invariant is one-OC-session-to-one-Claude-
+          // STAY THE SAME — hum's invariant is one-OC-session-to-one-Claude-
           // session, stable for the lifetime of the OC session. Next prompt
           // takes the warm-path graft, which sees an effectively-empty JSONL
           // (just the summary header) and writes the compacted history into
@@ -1395,7 +897,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
           session.needsRespawn = true;
           session.lastSyncedPetal = null;
           saveSessions(sid);
-          hum(sid, { chi: "drone-retrofit", sid, reason: msg.reason });
+          thrum(sid, { chi: "drone-retrofit", sid, reason: msg.reason });
         } else {
           // User interrupt: stop current generation immediately via
           // control_cancel_request, AND mark the session for respawn on the
@@ -1458,13 +960,13 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
     case "release-permit": {
       const askId = msg.askId as string;
       const decision = msg.decision as "allow" | "deny";
-      const hold = CLWND_PERMIT_HOLD.get(askId);
-      trace("hum.permit.releasing", { askId, decision, holdExists: !!hold, pendingHolds: CLWND_PERMIT_HOLD.size });
+      const hold = HUM_PERMIT_HOLD.get(askId);
+      trace("thrum.permit.releasing", { askId, decision, holdExists: !!hold, pendingHolds: HUM_PERMIT_HOLD.size });
       if (hold) {
         recordPermitHoldSpan(askId);
-        CLWND_PERMIT_HOLD.delete(askId);
+        HUM_PERMIT_HOLD.delete(askId);
         hold.resolve(decision);
-        trace("hum.permit.released", { askId, decision });
+        trace("thrum.permit.released", { askId, decision });
         // Drone observes permission resolution — find the session
         const permitSid = hold.sessionId;
         if (permitSid) drone.observed(sigil(permitSid), { type: "permission_resolved" });
@@ -1484,7 +986,7 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
         clearReadCache(sid);
         sessions.delete(sid);
         saveSessions(sid);
-        trace("hum.session.cleaned", { sid });
+        trace("thrum.session.cleaned", { sid });
       }
       break;
     }
@@ -1512,19 +1014,23 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
       trace("petal.cell", { sid, role, provider, messageId, completed: !!completed });
       let session = sessions.get(sid);
       if (!session) {
+        const cwd = process.env.HOME ?? "/";
         session = {
+          id: mintId(),
+          nest: [{ nest: resolveNestName(cwd), id: "" }],
+          plugin: [{ plugin: "opencode", id: sid }],
           opencodeSessionId: sid,
           claudeSessionId: null,
           claudeSessionPath: null,
-          cwd: process.env.HOME ?? "/",
+          cwd,
           modelId: model ?? "sonnet",
         };
         sessions.set(sid, session);
       }
       session.lastAccessed = Date.now();
-      // Advance anchor on completed clwnd assistant petals —
+      // Advance anchor on completed hum assistant petals —
       // completed means Claude finished writing to the JSONL, read the last uuid
-      if (role === "assistant" && completed && provider?.startsWith("opencode-clwnd") && session.claudeSessionPath) {
+      if (role === "assistant" && completed && provider?.startsWith("opencode-hum") && session.claudeSessionPath) {
         const tip = lastUuid(session.claudeSessionPath);
         if (tip) {
           session.lastSyncedPetal = tip;
@@ -1539,20 +1045,20 @@ function humHear(clientId: string, msg: Record<string, unknown>): void {
       break;
 
     default:
-      trace("hum.msg.unknown", { chi });
+      trace("thrum.msg.unknown", { chi });
   }
 }
 
 import { createServer, type Socket } from "net";
 
-const humServer = createServer((socket: Socket) => {
+const thrumServer = createServer((socket: Socket) => {
   const clientId = randomUUID();
   const client: Reach = { clientId, sigils: new Set(), socket };
-  humClients.set(clientId, client);
-  info("hum.connected", { clientId: clientId.slice(0, 8), total: humClients.size });
+  thrumClients.set(clientId, client);
+  info("thrum.connected", { clientId: clientId.slice(0, 8), total: thrumClients.size });
 
   // Breath: send full state on connect
-  humBreath(client);
+  thrumBreath(client);
 
   let buf = "";
   socket.on("data", (data) => {
@@ -1562,25 +1068,25 @@ const humServer = createServer((socket: Socket) => {
     for (const line of lines) {
       if (!line) continue;
       try {
-        humHear(clientId, JSON.parse(line));
+        thrumHear(clientId, JSON.parse(line));
       } catch (e) {
-        trace("hum.parse.failed", { err: String(e) });
+        trace("thrum.parse.failed", { err: String(e) });
       }
     }
   });
 
   socket.on("close", () => {
-    humClients.delete(clientId);
-    info("hum.disconnected", { clientId: clientId.slice(0, 8), total: humClients.size });
+    thrumClients.delete(clientId);
+    info("thrum.disconnected", { clientId: clientId.slice(0, 8), total: thrumClients.size });
   });
 
   socket.on("error", (err) => {
-    trace("hum.socket.failed", { err: String(err) });
+    trace("thrum.socket.failed", { err: String(err) });
   });
 });
 
-humServer.listen(HUM, () => {
-  info("hum.listening", { path: HUM });
+thrumServer.listen(HUM, () => {
+  info("thrum.listening", { path: HUM });
 });
 
 function jsonResponse(res: ServerResponse, data: unknown, status = 200): void {
@@ -1662,12 +1168,12 @@ const httpServer = createHttpServer(async (req, res) => {
     if (days > 0 || since > 0) {
       const fromMs = since > 0 ? since : Date.now() - days * 86_400_000;
       const fromDisk = drift.readSince(fromMs, sid);
-      // Merge: ring may overlap with disk for the current day. Dedupe by turnId.
+      // Merge: ring may overlap with disk for the current day. Dedupe by bloomId.
       const seen = new Set<string>();
       const merged: typeof recent = [];
       for (const t of [...fromDisk, ...recent]) {
-        if (seen.has(t.turnId)) continue;
-        seen.add(t.turnId);
+        if (seen.has(t.bloomId)) continue;
+        seen.add(t.bloomId);
         merged.push(t);
       }
       recent = merged.slice(-limit).reverse();
@@ -1702,13 +1208,13 @@ const httpServer = createHttpServer(async (req, res) => {
   }
 
   // Default fallback. Root path returns identity; everything else is 404
-  // so callers (e.g. `clwnd drift`) can detect a missing route instead of
+  // so callers (e.g. `hum drift`) can detect a missing route instead of
   // silently parsing the identity response as JSON.
   if (url.pathname === "/" || url.pathname === "") {
-    res.writeHead(200); res.end("clwnd");
+    res.writeHead(200); res.end("hum");
   } else {
     res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: `unknown route: ${url.pathname}`, hint: "daemon may be outdated; try `clwnd restart`" }));
+    res.end(JSON.stringify({ error: `unknown route: ${url.pathname}`, hint: "daemon may be outdated; try `hum restart`" }));
   }
 });
 httpServer.listen(HTTP, () => { info("http.listening", { path: HTTP }); });
@@ -1718,14 +1224,14 @@ httpServer.listen(HTTP, () => { info("http.listening", { path: HTTP }); });
 import { handleMcpRequest, setCwd as mcpSetCwd, setPermissions as mcpSetPerms, setAllowedTools as mcpSetAllowed, setPermissionCallback, setMetaCallback, setExternalTools, clearExternalTools, setMcpServerConfigs, clearMcpServerConfigs, setVisibleTools, clearVisibleTools, clearReadCache, setTendrilCallback, resolveTendril, type ExternalToolDef } from "../mcp/tools.ts";
 
 // Fixed port so the plugin (and anything else local) can reach the MCP
-// HTTP endpoint without discovery. Override with CLWND_MCP_PORT if the
+// HTTP endpoint without discovery. Override with HUM_MCP_PORT if the
 // default clashes with something on your machine. 29147 is in the IANA
 // user range, not commonly assigned. No `|| 29147` fallback — if you
 // explicitly set the env var, we respect it or fail loudly, not silently
 // revert to the default.
-const MCP_PORT = parseInt(process.env.CLWND_MCP_PORT ?? "29147");
+const MCP_PORT = parseInt(process.env.HUM_MCP_PORT ?? "29147");
 
-const MCP_HOST = process.env.CLWND_HOST ?? "127.0.0.1";
+const MCP_HOST = process.env.HUM_HOST ?? "127.0.0.1";
 
 const mcpServer = createHttpServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${MCP_HOST}:${MCP_PORT}`);
@@ -1733,7 +1239,7 @@ const mcpServer = createHttpServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/permission-check") {
     try {
       const body = JSON.parse(await readBody(req)) as { tool_name?: string; tool_input?: Record<string, unknown>; session_id?: string };
-      const toolName = ((body.tool_name ?? "") as string).replace("mcp__clwnd__", "");
+      const toolName = ((body.tool_name ?? "") as string).replace("mcp__hum__", "");
       const path = (body.tool_input?.file_path ?? body.tool_input?.path) as string | undefined;
       const sessionId = body.session_id as string;
 
@@ -1762,14 +1268,14 @@ const mcpServer = createHttpServer(async (req, res) => {
 
         const askId = randomUUID();
         trace("permission.hold.created", { id: askId, tool: toolName, path });
-        hum(ocSessionId ?? sessionId, { chi: "permission-ask", askId, tool: toolName, path, input: body.tool_input ?? {}, dusk: Date.now() + cfg.permissionDusk });
+        thrum(ocSessionId ?? sessionId, { chi: "permission-ask", askId, tool: toolName, path, input: body.tool_input ?? {}, dusk: Date.now() + cfg.permissionDusk });
 
         const decision = await new Promise<"allow" | "deny">((resolve) => {
-          CLWND_PERMIT_HOLD.set(askId, { resolve, tool: toolName, path, sessionId: ocSessionId ?? sessionId, createdAt: Date.now() });
+          HUM_PERMIT_HOLD.set(askId, { resolve, tool: toolName, path, sessionId: ocSessionId ?? sessionId, createdAt: Date.now() });
           setTimeout(() => {
-            if (CLWND_PERMIT_HOLD.has(askId)) {
+            if (HUM_PERMIT_HOLD.has(askId)) {
               recordPermitHoldSpan(askId);
-              CLWND_PERMIT_HOLD.delete(askId);
+              HUM_PERMIT_HOLD.delete(askId);
               trace("permission.hold.timeout", { id: askId });
               resolve("deny");
             }
@@ -1777,13 +1283,13 @@ const mcpServer = createHttpServer(async (req, res) => {
         });
 
         // Caller is in `await` over resolve() — the resolve path runs from
-        // /permission-respond which uses the release-permit hum case above
+        // /permission-respond which uses the release-permit thrum case above
         // and records the span there. For the timeout path we recorded
         // above; for the success path we record now since this lambda owns
         // the wait.
-        if (CLWND_PERMIT_HOLD.has(askId)) {
+        if (HUM_PERMIT_HOLD.has(askId)) {
           recordPermitHoldSpan(askId);
-          CLWND_PERMIT_HOLD.delete(askId);
+          HUM_PERMIT_HOLD.delete(askId);
         }
         trace("permission.hold.resolved", { id: askId, decision });
         return decision === "allow" ? hookAllow() : hookDeny("Denied by user");
@@ -1796,7 +1302,7 @@ const mcpServer = createHttpServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/permission-pending") {
-      const pending = Array.from(CLWND_PERMIT_HOLD.entries()).map(([id, p]) => ({
+      const pending = Array.from(HUM_PERMIT_HOLD.entries()).map(([id, p]) => ({
         id, tool: p.tool, path: p.path, sessionId: p.sessionId,
       }));
       return jsonResponse(res, pending);
@@ -1805,12 +1311,12 @@ const mcpServer = createHttpServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/permission-respond") {
       try {
         const body = JSON.parse(await readBody(req)) as { id?: string; decision: "allow" | "deny" };
-        const id = body.id ?? CLWND_PERMIT_HOLD.keys().next().value;
-        if (!id || !CLWND_PERMIT_HOLD.has(id as string)) {
+        const id = body.id ?? HUM_PERMIT_HOLD.keys().next().value;
+        if (!id || !HUM_PERMIT_HOLD.has(id as string)) {
           return jsonResponse(res, { error: "no active permit hold" }, 404);
         }
-        const hold = CLWND_PERMIT_HOLD.get(id as string)!;
-        CLWND_PERMIT_HOLD.delete(id as string);
+        const hold = HUM_PERMIT_HOLD.get(id as string)!;
+        HUM_PERMIT_HOLD.delete(id as string);
         hold.resolve(body.decision);
         trace("permission.responded", { id, decision: body.decision });
         return jsonResponse(res, { ok: true });
@@ -1819,7 +1325,7 @@ const mcpServer = createHttpServer(async (req, res) => {
       }
     }
 
-    if (req.method !== "POST") { res.writeHead(200); res.end("clwnd-mcp"); return; }
+    if (req.method !== "POST") { res.writeHead(200); res.end("hum-mcp"); return; }
     const mcpSessionId = url.pathname.match(/^\/s\/([^/]+)/)?.[1] ?? undefined;
     try {
       const body = JSON.parse(await readBody(req)) as { jsonrpc: string; id?: number | string; method: string; params?: unknown };
@@ -1843,11 +1349,11 @@ const mcpServer = createHttpServer(async (req, res) => {
   mcpServer.listen(MCP_PORT, MCP_HOST, () => { info("mcp.listening", { port: MCP_PORT, host: MCP_HOST }); });
 
 const MCP_URL = `http://${MCP_HOST}:${MCP_PORT}`;
-mcpSetCwd(process.env.CLWND_CWD ?? process.env.HOME ?? "/");
+mcpSetCwd(process.env.HUM_CWD ?? process.env.HOME ?? "/");
 
 // Wire permission prompt MCP tool to daemon's permission logic
 setPermissionCallback(async (toolName: string, input: Record<string, unknown>, sessionId?: string) => {
-  const tool = toolName.replace("mcp__clwnd__", "");
+  const tool = toolName.replace("mcp__hum__", "");
   const path = (input?.file_path ?? input?.path ?? input?.pattern) as string | undefined;
   const action = getPermissionAction(tool, path);
   trace("permission.mcp.checked", { tool, path, action, sessionId });
@@ -1855,30 +1361,30 @@ setPermissionCallback(async (toolName: string, input: Record<string, unknown>, s
   if (action === "allow") return { decision: "allow" as const };
   if (action === "deny") return { decision: "deny" as const };
 
-  // "ask" — hold MCP response, send permission_ask via the hum
-  // so the provider can emit a clwnd_permission tool call to trigger OC's ctx.ask() dialog
+  // "ask" — hold MCP response, send permission_ask via the thrum
+  // so the provider can emit a hum_permission tool call to trigger OC's ctx.ask() dialog
   const askId = randomUUID();
   trace("permission.ask.hold", { id: askId, tool, path, sessionId });
 
-  // Route to the session's hum client — sessionId comes from MCP URL path
-  hum(sessionId ?? "", { chi: "permission-ask", askId, tool, path, input, dusk: Date.now() + cfg.permissionDusk });
+  // Route to the session's thrum client — sessionId comes from MCP URL path
+  thrum(sessionId ?? "", { chi: "permission-ask", askId, tool, path, input, dusk: Date.now() + cfg.permissionDusk });
 
   return new Promise<{ decision: "allow" | "deny" }>((resolve) => {
-    CLWND_PERMIT_HOLD.set(askId, {
+    HUM_PERMIT_HOLD.set(askId, {
       resolve: (decision) => resolve({ decision }),
       tool, path, sessionId: sessionId ?? "",
       createdAt: Date.now(),
     });
 
     // Auto-allow after 5s. The MCP permission_prompt blocks Claude CLI's stream,
-    // creating a deadlock: provider can't emit clwnd_permission tool-call until
+    // creating a deadlock: provider can't emit hum_permission tool-call until
     // the stream flows, but the stream can't flow until MCP returns.
     // The timeout breaks the deadlock. 5s is enough for release-permit to arrive
     // if OC's ctx.ask() resolves quickly (which it does when agent auto-allows).
     setTimeout(() => {
-      if (CLWND_PERMIT_HOLD.has(askId)) {
+      if (HUM_PERMIT_HOLD.has(askId)) {
         recordPermitHoldSpan(askId);
-        CLWND_PERMIT_HOLD.delete(askId);
+        HUM_PERMIT_HOLD.delete(askId);
         trace("permission.hold.timeout.allow", { id: askId });
         resolve({ decision: "allow" });
       }
@@ -1886,7 +1392,7 @@ setPermissionCallback(async (toolName: string, input: Record<string, unknown>, s
   });
 });
 
-// Tendril: tool calls that reach across the hum back to OC for execution.
+// Tendril: tool calls that reach across the thrum back to OC for execution.
 // The daemon holds the MCP response, hums the call to the plugin, plugin
 // executes via OC's tool pipeline, hums the result back. Same shape as
 // the permission hold but for actual tool execution (task subtasks etc.).
@@ -1900,23 +1406,23 @@ setTendrilCallback((tool, args, callId, sessionId) => {
     if (session?.forceUncup) session.forceUncup();
   }
   trace("tendril.reach", { tool, callId, sid: sessionId });
-  hum(sessionId ?? "", { chi: "tendril-reach", tool, args, callId });
+  thrum(sessionId ?? "", { chi: "tendril-reach", tool, args, callId });
 });
 
-// Wire tool metadata to hum — OC gets it out-of-band, Claude CLI never sees it
+// Wire tool metadata to thrum — OC gets it out-of-band, Claude CLI never sees it
 setMetaCallback((toolName, callId, title, metadata) => {
-  // Find the active session to hum to
+  // Find the active session to thrum to
   for (const [sid, session] of sessions) {
     const roost = nest.roost(sid);
     if (roost && roost.activeSid === sid) {
-      hum(sid, { chi: "tool-meta", tool: toolName, callId, title, metadata });
+      thrum(sid, { chi: "tool-meta", tool: toolName, callId, title, metadata });
       trace("meta.hummed", { tool: toolName, sid });
       return;
     }
   }
-  // No active session — broadcast to all hum clients
-  for (const client of humClients.values()) {
-    humTo(client, { chi: "tool-meta", tool: toolName, callId, title, metadata });
+  // No active session — broadcast to all thrum clients
+  for (const client of thrumClients.values()) {
+    thrumTo(client, { chi: "tool-meta", tool: toolName, callId, title, metadata });
   }
   trace("meta.hummed.broadcast", { tool: toolName });
 });
@@ -1936,7 +1442,7 @@ async function checkForUpdate(): Promise<void> {
     const which = nodeSpawnSync("which", ["gh"], { stdio: ["pipe", "pipe", "pipe"] });
     if (which.status !== 0) return;
 
-    const result = nodeSpawnSync("gh", ["release", "view", "--repo", "adiled/clwnd", "--json", "tagName", "-q", ".tagName"], {
+    const result = nodeSpawnSync("gh", ["release", "view", "--repo", "adiled/hum", "--json", "tagName", "-q", ".tagName"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     if (result.status !== 0) return;
@@ -1946,8 +1452,8 @@ async function checkForUpdate(): Promise<void> {
 
     info("update-available", { current: CURRENT_VERSION, latest });
 
-    const clwndBin = join(process.env.HOME ?? "/", ".local", "bin", "clwnd");
-    const update = nodeSpawn(clwndBin, ["update"], { stdio: "inherit" });
+    const humBin = join(process.env.HOME ?? "/", ".local", "bin", "hum");
+    const update = nodeSpawn(humBin, ["update"], { stdio: "inherit" });
     await new Promise<void>(resolve => update.on("exit", () => resolve()));
   } catch {}
 }
@@ -1999,3 +1505,49 @@ setInterval(reapSessions, REAP_INTERVAL);
 // Reap on startup too — clean up sessions from before daemon restart
 reapSessions();
 
+// ─── Orphan Hook-Dir Sweeper ───────────────────────────────────────────────
+// harness.ts creates /tmp/hum-hook-<pid>-<rand>/ per PTY spawn and cleans
+// up on harness destroy. SIGKILL'd daemons leave orphans behind; over time
+// these accumulate (cf. bun .so cleanup memory). Sweep once at boot — any
+// dir older than an hour can't belong to an in-flight spawn from this boot.
+function sweepHookDirs(): void {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const now = Date.now();
+  let removed = 0;
+  try {
+    const entries = readdirSync("/tmp");
+    for (const name of entries) {
+      if (!name.startsWith("hum-hook-")) continue;
+      const path = `/tmp/${name}`;
+      try {
+        const st = statSync(path);
+        if (!st.isDirectory()) continue;
+        if (now - st.mtimeMs < ONE_HOUR) continue;
+        rmSync(path, { recursive: true, force: true });
+        removed++;
+      } catch {
+        // ignore — race with concurrent cleanup, perms, etc.
+      }
+    }
+    if (removed > 0) trace("tmp.hookdirs.swept", { removed });
+  } catch (e) {
+    trace("tmp.hookdirs.swept.failed", { err: String(e) });
+  }
+}
+sweepHookDirs();
+
+
+nest = new Nest({
+  cfg,
+  cliPath: process.env.CLAUDE_CLI_PATH ?? "claude",
+  mcpUrl: MCP_URL,
+  sessions: sessions as Map<string, { needsRespawn?: boolean; claudeSessionId?: string | null }>,
+  saveSessions,
+  drift: { mark: (s, e) => drift.mark(s, e), span: (s, n, ms) => drift.span(s, n, ms) },
+  drone: { observed: (s, e) => drone.observed(s, e as any) },
+  thrum,
+  thrumPulse,
+  getPermissionAction,
+  permitHold: HUM_PERMIT_HOLD,
+  recordPermitHoldSpan,
+});

@@ -1,4 +1,4 @@
-// drone — clwnd's context-loss watcher. Opt-in via `droned: true`.
+// drone — hum's context-loss watcher. Opt-in via `droned: true`.
 //
 // Architecture: when the cup catches text in the first ~80 bytes of a
 // turn, classify (heuristic) → if suspicious, llm (judge) → if confirmed,

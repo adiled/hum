@@ -1,6 +1,6 @@
 ## Tool Calls
 
-| Tool | CC | clwnd | Brokered | OC | Cov | Status |
+| Tool | CC | hum | Brokered | OC | Cov | Status |
 |------|-----|-------|----------|-----|-----|--------|
 | Read | Disallowed | ✓ | — | ✓ | e2e-serve | ✅ Working |
 | Edit | Disallowed | ✓ | — | ✓ | e2e-serve | ✅ Working |
@@ -47,7 +47,7 @@
 
 | Component | Version |
 |-----------|---------|
-| clwnd | v0.11.0 (6bb3b71) |
+| hum | v0.11.0 (6bb3b71) |
 | claude | 2.1.86 |
 | opencode | 1.3.7 |
 | bun | 1.3.11 |
