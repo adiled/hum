@@ -1,212 +1,40 @@
-// ─── Hum Protocol ──────────────────────────────────────────────────────────
+// Thrum — TS surface of the hum protocol.
 //
-// The thrum is the bidirectional NDJSON socket between daemon and plugin.
-// It carries tones — structured messages with protocol semantics.
+// Both files in this directory are generated from thrum-core (the Rust
+// source of truth):
+//   - chi.ts       — Chi enum, PulseKind, Envelope, validators
+//   - helpers.ts   — sigil, rid, duskIn, isDusk, WaneTracker
 //
-// Primitives:
-//   sigil  — deterministic hash binding an OC session to a backend session
-//   tone   — the message frame: chi, rid, from, to, sigil
-//   echo   — acknowledgment: proof the tone landed
-//   breath — handshake on connect: full state sync
-//   pulse  — lifecycle events: spawned, ready, idle, gone
-//   reach  — addressing: who receives the tone
+// Hand-edit chi.rs (or extend codegen for new helpers). cargo build
+// regenerates both files via thrum-core/build.rs.
 //
+// This index.ts is a thin barrel — every export here flows through
+// from one of the two generated files. New protocol primitives should
+// be added in Rust first, then surfaced via codegen.
 
-import { createHash } from "crypto";
-
-// ─── Sigil ─────────────────────────────────────────────────────────────────
-// Deterministic identity for a session pairing.
-// Survives restarts, reconnects, forks. Derived, not assigned.
-
-export function sigil(ocSessionId: string, harness = "claude"): string {
-  return createHash("sha256")
-    .update(`${harness}:${ocSessionId}`)
-    .digest("hex")
-    .slice(0, 12);
-}
-
-// ─── Tone ──────────────────────────────────────────────────────────────────
-// Every thrum message is a tone. The frame gives it accountability.
-//
-// `Tone` here is the loose, bag-of-fields shape used throughout the legacy
-// codebase. The discriminated-union shapes (PromptTone, ChunkTone, …)
-// live in `./chi.ts` along with the chi registry and THRUM_VERSION. New
-// code should prefer those typed shapes; this interface stays for backward
-// compatibility with hot-path code that walks tones generically.
-
-export interface Tone {
-  chi: string;           // what — the message type (prompt, finish, cancel, ...)
-  rid: string;           // request id — correlation key for echo
-  from: string;          // sender identity
-  to?: string;           // recipient identity (omit = broadcast to session)
-  sigil?: string;        // session pairing hash
-  sid?: string;          // hum session id
-  wane?: number;         // sender's wane for this sigil at send time
-  sentAt?: number;       // ms timestamp — drift attribution
-  dusk?: number;         // absolute timestamp — tone expires after this
-  [key: string]: unknown; // payload fields
-}
-
-// Re-export the canonical registry so consumers can
-// `import { Chi, THRUM_VERSION } from "thrum"` without having to know
-// about chi.ts. chi.ts is *generated* from thrum-core/src/chi.rs by the
-// `codegen` crate — Rust is the source of truth.
 export {
+  // Registry + version
   Chi,
   ALL_CHI,
   isValidChi,
-  PulseKind as PulseKindEnum,
+  PulseKind,
   THRUM_VERSION,
+  // Validators
   isEnvelope,
   isKnownTone,
 } from "./chi.ts";
+
 export type {
   ChiKind,
   PulseKindT,
   Envelope,
-  Tone as TypedTone,
+  Tone,
 } from "./chi.ts";
 
-let ridCounter = 0;
-export function rid(): string {
-  return `${Date.now().toString(36)}-${(ridCounter++).toString(36)}`;
-}
-
-// ─── Echo ──────────────────────────────────────────────────────────────────
-// Acknowledgment. Sender waits for echo; retries or fails fast.
-
-export interface Echo {
-  chi: "echo";
-  rid: string;           // the rid being acknowledged
-  ok: boolean;           // delivery succeeded
-  error?: string;        // reason if not ok
-}
-
-export function echo(tone: Tone, ok = true, error?: string): Echo {
-  return { chi: "echo", rid: tone.rid, ok, error };
-}
-
-// ─── Breath ────────────────────────────────────────────────────────────────
-// Handshake on connect. Daemon sends full state for the client's sessions.
-
-export interface BreathSession {
-  sigil: string;
-  sid: string;
-  nestId: string | null;
-  nestPath: string | null;
-  // uuid of the last JSONL entry hum considers "in sync" with OC's petals.
-  // graft() returns a plain uuid string; the wire type used to be a tuple of
-  // [uuid, role] but the role half was never populated. Kept as string to
-  // match reality — change both ends if role information is ever needed.
-  lastSyncedPetal: string | null;
-  wane: number;
-  modelId: string;
-  cwd?: string;
-  roostAlive: boolean;
-  roostPid?: number;
-}
-
-export interface Breath {
-  chi: "breath";
-  from: string;          // daemon identity
-  sessions: BreathSession[];
-}
-
-// ─── Pulse ─────────────────────────────────────────────────────────────────
-// Lifecycle events. The sentinel's heartbeat.
-
-export type PulseKind =
-  | "roost-spawned"      // process created
-  | "roost-ready"        // system init received, accepting input
-  | "roost-idle"         // turn complete, no listeners
-  | "roost-died"         // process exited (idle timeout, crash, cancel)
-  | "roost-evicted";     // killed to make room (maxProcs)
-
-export interface Pulse {
-  chi: "pulse";
-  kind: PulseKind;
-  sigil: string;
-  sid: string;
-  rid: string;
-  pid?: number;
-  reason?: string;
-}
-
-export function pulse(kind: PulseKind, sigil: string, sid: string, extra?: Partial<Pulse>): Pulse {
-  return { chi: "pulse", kind, sigil, sid, rid: rid(), ...extra };
-}
-
-// ─── Wane ──────────────────────────────────────────────────────────────────
-// Drift detection. Monotonic counter per sigil. Incremented on every state
-// mutation. Both sides track their own wane. When wanes diverge, drift is
-// visible — the stale side resyncs.
-
-export class WaneTracker {
-  private counters = new Map<string, number>();
-
-  /** Get current wane for a sigil */
-  get(s: string): number {
-    return this.counters.get(s) ?? 0;
-  }
-
-  /** Increment wane — call on every state mutation */
-  tick(s: string): number {
-    const next = (this.counters.get(s) ?? 0) + 1;
-    this.counters.set(s, next);
-    return next;
-  }
-
-  /** Set wane to a known value (from breath or persistence) */
-  set(s: string, value: number): void {
-    this.counters.set(s, value);
-  }
-
-  /** Check if remote wane is ahead of local — drift detected */
-  behind(s: string, remote: number): boolean {
-    return remote > this.get(s);
-  }
-}
-
-// ─── Dusk ──────────────────────────────────────────────────────────────────
-// Temporal value. A tone's dusk is when its value expires. Past dusk,
-// the tone is dead on arrival — discard, don't process.
-
-export function duskIn(ms: number): number {
-  return Date.now() + ms;
-}
-
-export function isDusk(tone: { dusk?: number }): boolean {
-  return typeof tone.dusk === "number" && Date.now() > tone.dusk;
-}
-
-// ─── Reach ─────────────────────────────────────────────────────────────────
-// Addressing. Today: local unix socket. Tomorrow: network.
-
-export interface Reach {
-  clientId: string;       // unique per connection
-  sigils: Set<string>;    // session pairings this client cares about
-  socket: any;            // the underlying socket
-}
-
-// Drone-related code lives in lib/drone/. thrum.ts is a wire-protocol module.
-
-// Re-export legacy paths for any external consumer that still imports from
-// thrum.ts. The canonical home is lib/drone/index.ts. Direct thrum imports
-// inside this codebase have all moved.
 export {
-  Drone,
-  createDroneState,
-  assess,
-  rerhythm,
-  type Assessment,
-  type DroneState,
-  type DroneBeat,
-  type DroneAction,
-  type DroneEvaluator,
-} from "../drone/drone.ts";
-
-export {
-  classifySuspicion,
-  heuristicSuspicion,
-  type SuspicionLevel,
-} from "../drone/classify.ts";
+  sigil,
+  rid,
+  duskIn,
+  isDusk,
+  WaneTracker,
+} from "./helpers.ts";

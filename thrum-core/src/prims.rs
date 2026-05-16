@@ -9,13 +9,15 @@ use sha2::{Digest, Sha256};
 use crate::chi::Chi;
 use crate::envelope::{Envelope, Tone};
 
-/// Deterministic identity for a (harness, session) pair.
+/// Deterministic identity for a (nest, session) pair.
 ///
-/// Survives restarts, reconnects, forks. Derived, not assigned.
-/// Returns the lowercase hex of the first 6 sha256 bytes (12 chars).
-pub fn sigil(sid: &str, harness: &str) -> String {
+/// The `nest` slot is the nest-kind namespace — "claude-cli",
+/// "claude-repl", or any other future nest implementation. Survives
+/// restarts, reconnects, forks. Derived, not assigned. Returns the
+/// lowercase hex of the first 6 sha256 bytes (12 chars).
+pub fn sigil(sid: &str, nest: &str) -> String {
     let mut h = Sha256::new();
-    h.update(harness.as_bytes());
+    h.update(nest.as_bytes());
     h.update(b":");
     h.update(sid.as_bytes());
     let digest = h.finalize();

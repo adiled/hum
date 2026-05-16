@@ -29,4 +29,9 @@ fn main() {
     if let Err(e) = codegen::emit_ts(&spec, &ts_out) {
         println!("cargo:warning=thrum-core build.rs: emit_ts failed: {e}");
     }
+
+    let helpers_out = manifest.join("../thrum/helpers.ts");
+    if let Err(e) = codegen::emit_helpers(&helpers_out) {
+        println!("cargo:warning=thrum-core build.rs: emit_helpers failed: {e}");
+    }
 }

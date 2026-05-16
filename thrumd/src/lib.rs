@@ -95,10 +95,11 @@ impl Thrum {
 
     /// Send to every client claiming the given sid's sigil. Falls back to
     /// every unregistered client (no sigils claimed) if nobody owns it —
-    /// matches the TS daemon's routing behaviour. `harness` selects which
-    /// runtime's sigil namespace to compute (e.g. "claude", "codex").
-    pub fn thrum_broadcast(&self, sid: &str, harness: &str, mut tone: Tone) {
-        let sigil = thrum_core::sigil(sid, harness);
+    /// matches the TS daemon's routing behaviour. `nest` selects which
+    /// nest-kind namespace to compute the sigil under (e.g. "claude-cli",
+    /// "claude-repl", future nests).
+    pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
+        let sigil = thrum_core::sigil(sid, nest);
         if let Some(obj) = tone.as_object_mut() {
             obj.entry("sid").or_insert(json!(sid));
             obj.entry("sigil").or_insert(json!(sigil));

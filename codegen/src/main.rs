@@ -37,28 +37,39 @@ fn run() -> Result<()> {
 
     match target.as_str() {
         "ts" => {
-            let output = output_override.unwrap_or_else(codegen::default_ts_out);
+            let chi_out = output_override.clone().unwrap_or_else(codegen::default_ts_out);
+            let helpers_out = codegen::default_helpers_out();
             if check {
-                let mut buf = Vec::new();
-                let tmp = tempfile_path(&output);
-                codegen::emit_ts(&spec, &tmp)?;
-                let generated = std::fs::read(&tmp).context("read tmp")?;
-                let _ = std::fs::remove_file(&tmp);
-                buf.extend_from_slice(&generated);
-                let current = std::fs::read(&output).unwrap_or_default();
-                if current != buf {
-                    anyhow::bail!(
-                        "{} is out of date; run `cargo run -p codegen` to regenerate",
-                        output.display()
-                    );
-                }
-                eprintln!("codegen: {} up to date ({} chi, {} pulse)", output.display(), spec.chi.len(), spec.pulse.len());
+                check_against(&chi_out, &|p| codegen::emit_ts(&spec, p))?;
+                check_against(&helpers_out, &codegen::emit_helpers)?;
+                eprintln!("codegen: {} + {} up to date", chi_out.display(), helpers_out.display());
             } else {
-                codegen::emit_ts(&spec, &output)?;
-                eprintln!("codegen ts: {} ({} chi, {} pulse) -> {}", spec.version, spec.chi.len(), spec.pulse.len(), output.display());
+                codegen::emit_ts(&spec, &chi_out)?;
+                codegen::emit_helpers(&helpers_out)?;
+                eprintln!("codegen ts: {} ({} chi, {} pulse) -> {} + {}",
+                    spec.version, spec.chi.len(), spec.pulse.len(),
+                    chi_out.display(), helpers_out.display());
             }
         }
         other => anyhow::bail!("unknown target {other}; valid: ts"),
+    }
+    Ok(())
+}
+
+fn check_against<F>(output: &std::path::Path, emit: &F) -> Result<()>
+where
+    F: Fn(&std::path::Path) -> Result<()>,
+{
+    let tmp = tempfile_path(output);
+    emit(&tmp)?;
+    let generated = std::fs::read(&tmp).context("read tmp")?;
+    let _ = std::fs::remove_file(&tmp);
+    let current = std::fs::read(output).unwrap_or_default();
+    if current != generated {
+        anyhow::bail!(
+            "{} is out of date; run `cargo run -p codegen` to regenerate",
+            output.display()
+        );
     }
     Ok(())
 }
