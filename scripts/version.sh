@@ -24,7 +24,7 @@ NEXT="$MAJOR.$MINOR.$PATCH"
 echo "Bumping $CURRENT → $NEXT ($BUMP)"
 
 # Update all package.json files
-for pkg in "$ROOT/package.json" "$ROOT"/plugins/*/package.json; do
+for pkg in "$ROOT/package.json" "$ROOT"/nestlings/*/package.json; do
   [ -f "$pkg" ] || continue
   node -e "
 const fs = require('fs');

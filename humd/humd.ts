@@ -22,12 +22,7 @@ import { mintId } from "../id.ts";
 // Nest class itself now live under /nest. Daemon imports them and wires
 // up its own dispatch + permission state as NestDeps below.
 
-function resolveNestName(cwd: string): "claude-repl" | "claude-cli" {
-  if (cwd && Array.isArray(cfg.projects)) {
-    for (const entry of cfg.projects) {
-      if (entry.primaryPath === cwd && entry.nest) return entry.nest;
-    }
-  }
+function resolveNestName(_cwd?: string): "claude-repl" | "claude-cli" {
   return cfg.nest;
 }
 
@@ -84,10 +79,13 @@ function getPermissionAction(tool: string, path?: string): "allow" | "deny" | "a
 
 interface Hum {
   id: string;
-  nest: Array<{ nest: string; id: string }>;
-  plugin: Array<{ plugin: string; id: string }>;
-  cwd: string;
+  // Capped at 1. Array shape preserved for future multi-nest provision.
+  nest: [{ nest: string; id: string }] | [];
+  // One driver (hearOnly !== true), zero or more hear-only observers.
+  nestled: Array<{ nestling: string; id: string; hearOnly?: boolean }>;
+  cwd?: string;
   modelId: string;
+  tools?: ToolSpec[];
   needsRespawn?: boolean;
   lastAccessed?: number;
   lastSyncedPetal?: string | null; // uuid of last synced JSONL entry
@@ -128,16 +126,25 @@ const HUMS_FILE = `${STATE_DIR}/hums.json`;
 function nestId(h: Hum): string | null {
   return h.nest[0]?.id || null;
 }
-function setNestId(h: Hum, id: string): void {
+function setNestId(h: Hum, id: string, nest?: string): void {
   if (h.nest[0]) h.nest[0].id = id;
-  else h.nest = [{ nest: resolveNestName(h.cwd), id }];
+  else h.nest = [{ nest: nest ?? "claude-cli", id }];
 }
 function nestPath(h: Hum): string | null {
   const id = nestId(h);
-  return id ? getSessionPath(h.cwd, id) : null;
+  return id && h.cwd ? getSessionPath(h.cwd, id) : null;
 }
-function pluginId(h: Hum): string | null {
-  return h.plugin[0]?.id || null;
+function nestledId(h: Hum): string | null {
+  return h.nestled[0]?.id || null;
+}
+function nestlingName(h: Hum): string | null {
+  return h.nestled[0]?.nestling || null;
+}
+
+interface ToolSpec {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
 }
 const PENNY_FILE = `${STATE_DIR}/penny.json`;
 
@@ -152,23 +159,36 @@ function loadHums(): Map<string, Hum> {
   try {
     const data = JSON.parse(readFileSync(HUMS_FILE, "utf-8"));
     const map = new Map<string, Hum>(Object.entries(data) as Array<[string, Hum]>);
-    let idBack = 0, nestBack = 0, pluginBack = 0;
+    let idBack = 0, nestBack = 0, nestledBack = 0;
     for (const [oid, s] of map) {
       if (!s.id || typeof s.id !== "string") { s.id = mintId(); idBack++; }
-      const flat = s as unknown as { claudeSessionId?: string; opencodeSessionId?: string; claudeSessionPath?: string };
+      const flat = s as unknown as {
+        claudeSessionId?: string;
+        opencodeSessionId?: string;
+        claudeSessionPath?: string;
+        plugin?: Array<{ plugin?: string; id?: string }>;
+      };
       if (!Array.isArray(s.nest)) {
         s.nest = [{ nest: resolveNestName(s.cwd), id: flat.claudeSessionId ?? "" }];
         nestBack++;
+      } else if (s.nest.length > 1) {
+        s.nest = [s.nest[0]] as Hum["nest"];
+        nestBack++;
       }
-      if (!Array.isArray(s.plugin)) {
-        s.plugin = [{ plugin: "opencode", id: flat.opencodeSessionId ?? oid }];
-        pluginBack++;
+      if (!Array.isArray(s.nestled)) {
+        if (Array.isArray(flat.plugin)) {
+          s.nestled = flat.plugin.map((e) => ({ nestling: e.plugin ?? "opencode", id: e.id ?? oid }));
+        } else {
+          s.nestled = [{ nestling: "opencode", id: flat.opencodeSessionId ?? oid }];
+        }
+        nestledBack++;
       }
       delete flat.claudeSessionId;
       delete flat.opencodeSessionId;
       delete flat.claudeSessionPath;
+      delete flat.plugin;
     }
-    if (idBack || nestBack || pluginBack) trace("hum.backfilled", { id: idBack, nest: nestBack, plugin: pluginBack });
+    if (idBack || nestBack || nestledBack) trace("hum.backfilled", { id: idBack, nest: nestBack, nestled: nestledBack });
     return map;
   } catch {
     return new Map();
@@ -183,7 +203,7 @@ function saveHums(mutatedSid?: string): void {
   }
   try {
     mkdirSync(STATE_DIR, { recursive: true });
-    const obj: Record<string, Session> = {};
+    const obj: Record<string, Hum> = {};
     for (const [k, v] of hums) obj[k] = v;
     writeFileSync(HUMS_FILE, JSON.stringify(obj));
   } catch {}
@@ -494,17 +514,22 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       // Get or create session
       let session = hums.get(sid);
       if (!session) {
-        const cwd = (msg.cwd as string) ?? "/root";
+        const cwd = msg.cwd as string | undefined;
+        const requestedNest = (msg.nest as string) === "claude-cli" ? "claude-cli"
+                            : (msg.nest as string) === "claude-repl" ? "claude-repl"
+                            : (cwd ? resolveNestName(cwd) : cfg.nest);
+        const nestlingName = (msg.nestling as string) ?? "opencode";
         session = {
           id: mintId(),
-          nest: [{ nest: resolveNestName(cwd), id: "" }],
-          plugin: [{ plugin: "opencode", id: sid }],
-          cwd,
+          nest: [{ nest: requestedNest, id: "" }],
+          nestled: [{ nestling: nestlingName, id: sid }],
+          ...(cwd ? { cwd } : {}),
           modelId: (msg.modelId as string) ?? "sonnet",
+          ...(Array.isArray(msg.tools) ? { tools: msg.tools as ToolSpec[] } : {}),
         };
         hums.set(sid, session);
         saveHums(sid);
-        trace("session.created", { sid, model: session.modelId });
+        trace("hum.created", { sid, nestling: nestlingName, nest: requestedNest, cwd: cwd ?? null, tools: (msg.tools as unknown[])?.length ?? 0, model: session.modelId });
       }
       session.lastAccessed = Date.now();
 
@@ -539,8 +564,8 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       if (cwd) session.cwd = cwd;
       if (ocServerUrl !== DEFAULT_OC_URL) session.ocServerUrl = ocServerUrl;
 
-      // Skip tool registration on listenOnly (permission return) — avoid spurious respawn
-      if (!msg.listenOnly) {
+      // Skip tool registration on hearOnly (permission return) — avoid spurious respawn
+      if (!msg.hearOnly) {
         // Plan-mode toggle — respawn when it changes so the spawn env
         // picks up the right CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING value.
         const nextPlan = !!msg.planMode;
@@ -548,6 +573,22 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           session.planMode = nextPlan;
           session.needsRespawn = true;
           trace("plan.mode.changed", { sid, planMode: nextPlan });
+        }
+
+        // Nestler-declared tools — when the nestler ships a `tools` array on
+        // the prompt (or on handshake), register them as MCP tools whose
+        // dispatch loops back over thrum. Useful for clients on a different
+        // filesystem that own their own client SDKs.
+        const nestlerToolList = (msg.tools as Array<{ name: string; description?: string; parameters?: Record<string, unknown> }> | undefined) ?? [];
+        if (nestlerToolList.length > 0) {
+          setNestlerTools(sid, nestlerToolList.map(t => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.parameters ?? { type: "object", properties: {} },
+          })));
+          session.tools = nestlerToolList as any;
+        } else {
+          clearNestlerTools(sid);
         }
 
         // External MCP tools — register for this session, respawn if changed
@@ -594,7 +635,7 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       // threshold, emit a trace and bump the penny counter so an operator
       // sees a session climbing toward the cache-replay tax. No state
       // mutation; OC owns context reduction.
-      if (!msg.listenOnly && (session.maxContextTokens ?? 0) > CONTEXT_WARN_THRESHOLD) {
+      if (!msg.hearOnly && (session.maxContextTokens ?? 0) > CONTEXT_WARN_THRESHOLD) {
         penny.contextOverThreshold++;
         trace("context.over.threshold.warning", {
           sid,
@@ -605,14 +646,17 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
 
       // Graft: sync OC petals into Claude JSONL before spawning (skip for title gen / empty tools)
       const priorPetals = msg.priorPetals as Array<{ role: string; content: unknown }> | undefined;
-      if (!msg.listenOnly && !msg.skipGraft && priorPetals && priorPetals.length > 0) {
+      if (!msg.hearOnly && !msg.skipGraft && priorPetals && priorPetals.length > 0) {
         trace("graft.enter", { sid, petals: priorPetals.length });
         const graftStart = Date.now();
         try {
           const effectiveCwd = cwd ?? session.cwd;
-          if (nestId(session) && nestPath(session)) {
+          // No cwd → pure inference mode, no JSONL, no graft.
+          if (!effectiveCwd) {
+            trace("graft.skipped.nocwd", { sid });
+          } else if (nestId(session) && nestPath(session)) {
             // Existing JSONL — graft any new petals
-            const result = graft(priorPetals ?? [], nestPath(session), nestId(session), effectiveCwd, session.lastSyncedPetal);
+            const result = graft(priorPetals ?? [], nestPath(session)!, nestId(session)!, effectiveCwd, session.lastSyncedPetal);
             // Always update anchor — even grafted=0, the JSONL may have grown from Claude's native entries
             if (result.lastPetal) session.lastSyncedPetal = result.lastPetal;
             if (result.grafted > 0) {
@@ -646,7 +690,7 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
 
       // Capture prompt content for deferred murmur
       const promptContent: Array<Record<string, unknown>> | string | null =
-        !msg.listenOnly ? (msg.content as Array<Record<string, unknown>> | undefined) ?? (msg.text as string ?? "") : null;
+        !msg.hearOnly ? (msg.content as Array<Record<string, unknown>> | undefined) ?? (msg.text as string ?? "") : null;
       const isResume = !!(nestId(session) && session.needsRespawn);
       let cup: Cup | null = null; // owns the drone's cup buffer; assigned in onPetal closure
       let uncup: (() => void) | null = null; // closure-shim onto cup.forceFlush — called from onWilt
@@ -656,7 +700,9 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
         onRoost(id, model, tools) {
           setNestId(session, id);
           const effectiveCwd = cwd ?? session.cwd;
-          try { mkdirSync(getSessionDir(effectiveCwd), { recursive: true }); } catch {}
+          if (effectiveCwd) {
+            try { mkdirSync(getSessionDir(effectiveCwd), { recursive: true }); } catch {}
+          }
           saveHums(sid);
           thrum(sid, { chi: "session-ready", sid, nestId: id, model, tools });
           thrumPulse("roost-ready", sid, { pid: nest.roost(poolKey)?.proc.pid });
@@ -800,9 +846,12 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           if (cup?.withered) return; // withered petal — don't send finish for bad petals
           session.thorns = 0; // reset circuit breaker on success
           // Advance anchor to last JSONL entry — Claude finished writing
-          if (nestPath(session)) {
-            const tip = lastUuid(nestPath(session));
-            if (tip) session.lastSyncedPetal = tip;
+          {
+            const np = nestPath(session);
+            if (np) {
+              const tip = lastUuid(np);
+              if (tip) session.lastSyncedPetal = tip;
+            }
           }
           // Track peak per-turn input context for observability — surfaced
           // by `hum savings` and used by the next-prompt warning trace.
@@ -884,12 +933,16 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           // (just the summary header) and writes the compacted history into
           // it. Claude resumes from the same uuid with fresh content.
           nest.fell(sid, sid);
-          if (nestPath(session) && nestId(session)) {
-            try {
-              createClaudeSession(session.cwd, nestId(session));
-              trace("compaction.jsonl.truncated", { sid, path: nestPath(session) });
-            } catch (e) {
-              trace("compaction.truncate.failed", { sid, err: String(e) });
+          {
+            const np = nestPath(session);
+            const nid = nestId(session);
+            if (np && nid && session.cwd) {
+              try {
+                createClaudeSession(session.cwd, nid);
+                trace("compaction.jsonl.truncated", { sid, path: np });
+              } catch (e) {
+                trace("compaction.truncate.failed", { sid, err: String(e) });
+              }
             }
           }
           session.lastSyncedPetal = null;
@@ -926,24 +979,27 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       const session = hums.get(sid);
       if (session) {
         nest.fell(sid, sid);
-        if (nestPath(session)) {
-          const pruneStart = Date.now();
-          try {
-            const result = pruneJsonl(nestPath(session));
-            drift.span(sid, "compaction_curate", Date.now() - pruneStart);
-            penny.curateEvents++;
-            penny.curateBytesSaved += result.bytes.before - result.bytes.after;
-            penny.curateThinkingStripped += result.stripped;
-            trace("curate.pruned", {
-              sid,
-              trimmed: result.trimmed,
-              stripped: result.stripped,
-              before: result.bytes.before,
-              after: result.bytes.after,
-              saved: result.bytes.before - result.bytes.after,
-            });
-          } catch (e) {
-            trace("curate.failed", { sid, err: String(e) });
+        {
+          const np = nestPath(session);
+          if (np) {
+            const pruneStart = Date.now();
+            try {
+              const result = pruneJsonl(np);
+              drift.span(sid, "compaction_curate", Date.now() - pruneStart);
+              penny.curateEvents++;
+              penny.curateBytesSaved += result.bytes.before - result.bytes.after;
+              penny.curateThinkingStripped += result.stripped;
+              trace("curate.pruned", {
+                sid,
+                trimmed: result.trimmed,
+                stripped: result.stripped,
+                before: result.bytes.before,
+                after: result.bytes.after,
+                saved: result.bytes.before - result.bytes.after,
+              });
+            } catch (e) {
+              trace("curate.failed", { sid, err: String(e) });
+            }
           }
         }
         session.lastSyncedPetal = null;
@@ -958,6 +1014,15 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       const result = msg.result as string;
       trace("tendril.result", { callId, len: result?.length });
       resolveTendril(callId, result ?? "");
+      break;
+    }
+
+    case "tool-result": {
+      // Nestler returned a result for a tool call we forwarded.
+      const callId = msg.callId as string;
+      const result = msg.result as string;
+      trace("nestler.tool.result", { callId, len: result?.length ?? 0 });
+      resolveNestlerTool(callId, result ?? "");
       break;
     }
 
@@ -985,6 +1050,7 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
         nest.fell(sid, sid);
         releaseDroneSession(sigil(sid));
         clearExternalTools(sid);
+        clearNestlerTools(sid);
         clearMcpServerConfigs(sid);
         clearVisibleTools(sid);
         clearReadCache(sid);
@@ -1022,7 +1088,7 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
         session = {
           id: mintId(),
           nest: [{ nest: resolveNestName(cwd), id: "" }],
-          plugin: [{ plugin: "opencode", id: sid }],
+          nestled: [{ nestling: "opencode", id: sid }],
           cwd,
           modelId: model ?? "sonnet",
         };
@@ -1191,9 +1257,9 @@ const httpServer = createHttpServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname === "/") {
     try {
-      const body = JSON.parse(await readBody(req)) as { action: string; pluginId: string };
+      const body = JSON.parse(await readBody(req)) as { action: string; nestledId: string };
       if (body.action === "cleanup") {
-        const sid = body.pluginId;
+        const sid = body.nestledId;
         const session = hums.get(sid);
         if (session) {
           nest.fell(sid, sid);
@@ -1222,7 +1288,7 @@ httpServer.listen(HTTP, () => { info("http.listening", { path: HTTP }); });
 
 // ─── MCP HTTP Server (persistent, no cold start) ────────────────────────────
 
-import { handleMcpRequest, setCwd as mcpSetCwd, setPermissions as mcpSetPerms, setAllowedTools as mcpSetAllowed, setPermissionCallback, setMetaCallback, setExternalTools, clearExternalTools, setMcpServerConfigs, clearMcpServerConfigs, setVisibleTools, clearVisibleTools, clearReadCache, setTendrilCallback, resolveTendril, type ExternalToolDef } from "../mcp/tools.ts";
+import { handleMcpRequest, setCwd as mcpSetCwd, setPermissions as mcpSetPerms, setAllowedTools as mcpSetAllowed, setPermissionCallback, setMetaCallback, setExternalTools, clearExternalTools, setMcpServerConfigs, clearMcpServerConfigs, setVisibleTools, clearVisibleTools, clearReadCache, setTendrilCallback, resolveTendril, setNestlerTools, clearNestlerTools, setNestlerToolCallback, resolveNestlerTool, type ExternalToolDef } from "../mcp/tools.ts";
 
 // Fixed port so the plugin (and anything else local) can reach the MCP
 // HTTP endpoint without discovery. Override with HUM_MCP_PORT if the
@@ -1410,6 +1476,13 @@ setTendrilCallback((tool, args, callId, sessionId) => {
   thrum(sessionId ?? "", { chi: "tendril-reach", tool, args, callId });
 });
 
+// Nestler-tool dispatch: model called a tool declared by the nestler.
+// Forward over thrum; the nestler answers with chi:"tool-result".
+setNestlerToolCallback((sid, name, args, callId) => {
+  trace("nestler.tool.call", { tool: name, callId, sid });
+  thrum(sid, { chi: "tool-call", name, args, callId });
+});
+
 // Wire tool metadata to thrum — OC gets it out-of-band, Claude CLI never sees it
 setMetaCallback((toolName, callId, title, metadata) => {
   // Find the active session to thrum to
@@ -1503,8 +1576,6 @@ function reapSessions(): void {
 }
 
 setInterval(reapSessions, REAP_INTERVAL);
-// Reap on startup too — clean up sessions from before daemon restart
-reapSessions();
 
 // ─── Orphan Hook-Dir Sweeper ───────────────────────────────────────────────
 // harness.ts creates /tmp/hum-hook-<pid>-<rand>/ per PTY spawn and cleans
@@ -1546,8 +1617,12 @@ nest = new Nest({
   drift: { mark: (s, e) => drift.mark(s, e), span: (s, n, ms) => drift.span(s, n, ms) },
   drone: { observed: (s, e) => drone.observed(s, e as any) },
   thrum,
-  thrumPulse,
+  thrumPulse: (kind, sid, payload) => thrumPulse(kind as PulseKind, sid, payload as Partial<Pulse> | undefined),
   getPermissionAction,
   permitHold: HUM_PERMIT_HOLD,
   recordPermitHoldSpan,
 });
+
+// Reap stale sessions from before daemon restart — must run after `nest`
+// is constructed because reapSessions consults nest.roost().
+reapSessions();

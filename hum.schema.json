@@ -27,7 +27,7 @@
     },
     "projects": {
       "type": "array",
-      "description": "Per-project overrides. When a session's cwd matches an entry's 'primaryPath', that entry's 'nest' wins over the top-level 'nest'. 'id' is the hum-native canonical reference.",
+      "description": "Project registry. 'id' is the hum-native canonical reference for the project at 'primaryPath'.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -41,11 +41,6 @@
           "primaryPath": {
             "type": "string",
             "description": "Absolute project directory (no trailing slash)."
-          },
-          "nest": {
-            "type": "string",
-            "enum": ["claude-repl", "claude-cli"],
-            "description": "Override nest implementation for this project."
           }
         }
       }

@@ -94,7 +94,8 @@ export class Nest {
           trace("nest.rejected", { poolKey, reason: "maxProcs", active: this.roosts.size });
         }
       }
-      roost = this.spawnProc(poolKey, modelId, resumeId || session.nest?.[0]?.id || undefined, permissions, systemPrompt, allowedTools, sessionCwd, planMode);
+      const explicitNest = session?.nest?.[0]?.nest as "claude-repl" | "claude-cli" | undefined;
+      roost = this.spawnProc(poolKey, modelId, resumeId || session?.nest?.[0]?.id || undefined, permissions, systemPrompt, allowedTools, sessionCwd, planMode, explicitNest);
     } else {
       mcpSetPerms((permissions ?? []) as any);
       mcpSetAllowed(allowedTools);
@@ -201,18 +202,20 @@ export class Nest {
     allowedTools?: string[],
     sessionCwd?: string,
     planMode?: boolean,
+    explicitNest?: "claude-repl" | "claude-cli",
   ): Roost {
     mcpSetPerms((permissions ?? []) as any);
     mcpSetAllowed(allowedTools);
     if (sessionCwd) mcpSetCwd(sessionCwd);
 
-    const mcpConfig = JSON.stringify({
-      mcpServers: {
-        hum: { type: "http", url: `${this.d.mcpUrl}/s/${poolKey}` },
-      },
-    });
+    // No cwd → pure inference mode. Skip hum fs MCP entirely.
+    const mcpServers: Record<string, { type: string; url: string }> = {};
+    if (sessionCwd) {
+      mcpServers.hum = { type: "http", url: `${this.d.mcpUrl}/s/${poolKey}` };
+    }
+    const mcpConfig = JSON.stringify({ mcpServers });
 
-    const perch = pickPerch(this.d.cfg, sessionCwd);
+    const perch = pickPerch(this.d.cfg, sessionCwd, explicitNest);
     const usePty = perch.ephemeral;
 
     const sharedArgs = [

@@ -74,7 +74,7 @@ export interface BreathSession {
   lastSyncedPetal: string | null;
   wane: number;
   modelId: string;
-  cwd: string;
+  cwd?: string;
   roostAlive: boolean;
   roostPid?: number;
 }

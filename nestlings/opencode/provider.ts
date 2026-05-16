@@ -251,7 +251,7 @@ async function awakenHum(): Promise<void> {
           if (msg.chi === "echo") { trace("thrum.echo", { rid: msg.rid, ok: msg.ok }); continue; }
           if (msg.chi === "breath") {
             const hums = (msg.sessions ?? []) as Array<{ sid: string; sigil: string; wane: number }>;
-            trace("thrum.breath.received", { sessions: sessions.length, synced: sessions.length });
+            trace("thrum.breath.received", { sessions: hums.length, synced: hums.length });
             continue;
           }
           if (msg.chi === "pulse") { trace("thrum.pulse", { kind: msg.kind, sid: msg.sid }); continue; }
@@ -991,7 +991,7 @@ export class HumModel implements LanguageModelV3 {
     // Listen-only: permission return or task continuation — Claude CLI is
     // mid-turn, waiting for a hold to be resolved. We register a listener
     // and resolve the hold; Claude continues from where it paused.
-    const listenOnly = !!(isPermReturn || isTaskReturn);
+    const hearOnly = !!(isPermReturn || isTaskReturn);
 
     // Include prior petals — daemon compares with JSONL state and grafts only what's new
     const priorPetals = opts.prompt.filter(m => m.role === "user" || m.role === "assistant" || m.role === "tool");
@@ -1078,14 +1078,16 @@ export class HumModel implements LanguageModelV3 {
 
     // Send prompt before creating stream — survives OC plugin reload
     let promptSent = false;
-    if (listenOnly && thrumAlive) {
+    if (hearOnly && thrumAlive) {
       // Listen-only: register listener FIRST, then release the hold.
       // Order matters — Claude's post-hold events must have a listener.
       const pd = flushPenny();
       thrum({
         chi: "prompt", sid, cwd,
+        nestling: "opencode",
+        nest: "claude-repl",
         modelId: self.modelId,
-        listenOnly: true,
+        hearOnly: true,
         ...(pd ? { pennyDelta: pd } : {}),
         dusk: duskIn(30_000),
       });
@@ -1120,16 +1122,18 @@ export class HumModel implements LanguageModelV3 {
         sessionTaskHolds.delete(sid);
         thrum({ chi: "tendril-result", callId: pendingTask.callId, result: taskResultText });
       }
-    } else if (!listenOnly && thrumAlive) {
+    } else if (!hearOnly && thrumAlive) {
       const pd = flushPenny();
       thrum({
         chi: "prompt", sid, cwd,
+        nestling: "opencode",
+        nest: "claude-repl",
         modelId: self.modelId,
         content, text,
         ...(sendSystemPrompt ? { systemPrompt } : {}),
         ...(sendPermissions ? { permissions } : {}),
         ...(sendAllowedTools ? { allowedTools } : {}),
-        listenOnly,
+        hearOnly,
         skipGraft: skipGraft || undefined,
         ocServerUrl: self.config.pluginInput?.serverUrl?.toString(),
         ...(elidePriorPetals ? {} : { priorPetals }),
@@ -1208,9 +1212,11 @@ export class HumModel implements LanguageModelV3 {
         if (!promptSent) {
           thrum({
             chi: "prompt", sid, cwd,
+            nestling: "opencode",
+            nest: "claude-repl",
             modelId: self.modelId,
             content, text, systemPrompt,
-            permissions, allowedTools, listenOnly,
+            permissions, allowedTools, hearOnly,
             skipGraft: skipGraft || undefined,
             ocServerUrl: self.config.pluginInput?.serverUrl?.toString(),
             priorPetals,

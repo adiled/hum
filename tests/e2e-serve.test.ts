@@ -86,7 +86,7 @@ const DAEMON_SOCK = (process.env.HUM_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ??
 async function deleteSession(sid: string): Promise<void> {
   // 1. Tell daemon to kill the claude subprocess and drop session state
   try {
-    await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
+    await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", nestledId: sid }) });
   } catch {}
   // 2. Delete from opencode's side
   try {
@@ -338,7 +338,7 @@ beforeAll(async () => {
   const dummyJs = `file://${join(dirname(fileURLToPath(import.meta.url)), "fixtures", "dummy-provider.js")}`;
   writeFileSync(join(PROJECT_DIR, "opencode.json"), JSON.stringify({
     "$schema": "https://opencode.ai/config.json",
-    plugin: [dummyJs, `file://${join(HOME, ".local", "share", "hum", "src", "plugins", "opencode")}`],
+    plugin: [dummyJs, `file://${join(HOME, ".local", "share", "hum", "src", "nestlings", "opencode")}`],
     provider: {
       "piano": {
         npm: dummyJs,
@@ -1230,7 +1230,7 @@ describe("e2e-serve: compaction", () => {
 
     // Kill Claude CLI process first to free memory for compaction
     try {
-      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
+      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", nestledId: sid }) });
     } catch {}
     await new Promise(r => setTimeout(r, 1_000));
 
@@ -1502,7 +1502,7 @@ describe("e2e-serve: drone swallow + retrofit", () => {
 
     // Kill the process — next message will respawn with broken seed
     try {
-      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
+      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", nestledId: sid }) });
     } catch {}
     await new Promise(r => setTimeout(r, 2_000));
 

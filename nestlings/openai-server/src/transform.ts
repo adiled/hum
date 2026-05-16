@@ -8,17 +8,10 @@
 // reasoning_delta | reasoning_end | tool_input_start | tool_input_delta |
 // tool_call | tool_result | content_block_stop | stream_start.
 
-export interface ToolCallSlot {
-  index: number;
-  id: string;
-  name: string;
-}
-
 export class OpenAITranslator {
   private chunkId: string;
   private model: string;
   private created: number;
-  private toolByCallId = new Map<string, ToolCallSlot>();
   private nextToolIndex = 0;
   private sawToolCalls = false;
   private firstChunk = true;
@@ -50,6 +43,31 @@ export class OpenAITranslator {
   ingest(msg: Record<string, unknown>): string[] {
     const chi = msg.chi as string | undefined;
     const out: string[] = [];
+
+    if (chi === "tool-call") {
+      // Daemon forwarded a nestler-declared tool call — the model is parked
+      // awaiting a tool-result. Emit an OpenAI tool_calls frame, finish with
+      // "tool_calls", close the SSE. The client will execute and POST a
+      // continuation with role:tool messages.
+      this.sawToolCalls = true;
+      const callId = (msg.callId as string) ?? "";
+      const name = (msg.name as string) ?? "";
+      const args = msg.args !== undefined
+        ? (typeof msg.args === "string" ? msg.args : JSON.stringify(msg.args))
+        : "{}";
+      this.seedRole(out);
+      out.push(this.frame({
+        tool_calls: [{
+          index: this.nextToolIndex++,
+          id: callId,
+          type: "function",
+          function: { name, arguments: args },
+        }],
+      }));
+      out.push(this.frame({}, "tool_calls"));
+      out.push("data: [DONE]\n\n");
+      return out;
+    }
 
     if (chi === "error") {
       const message = (msg.message as string) ?? "unknown error";
@@ -108,67 +126,14 @@ export class OpenAITranslator {
       return out;
     }
 
-    if (type === "tool_input_start") {
-      this.sawToolCalls = true;
-      const toolCallId = (msg.toolCallId as string) ?? "";
-      const toolName = (msg.toolName as string) ?? "";
-      if (toolCallId && !this.toolByCallId.has(toolCallId)) {
-        const slot: ToolCallSlot = { index: this.nextToolIndex++, id: toolCallId, name: toolName };
-        this.toolByCallId.set(toolCallId, slot);
-        this.seedRole(out);
-        out.push(this.frame({
-          tool_calls: [{
-            index: slot.index,
-            id: slot.id,
-            type: "function",
-            function: { name: slot.name, arguments: "" },
-          }],
-        }));
-      }
-      return out;
-    }
-
-    if (type === "tool_input_delta") {
-      const partial = msg.partialJson as string | undefined;
-      const toolCallId = (msg.toolCallId as string) ?? "";
-      const slot = toolCallId ? this.toolByCallId.get(toolCallId) : undefined;
-      if (typeof partial === "string" && slot) {
-        out.push(this.frame({
-          tool_calls: [{ index: slot.index, function: { arguments: partial } }],
-        }));
-      }
-      return out;
-    }
-
-    if (type === "tool_call") {
-      // The consolidated tool_call after deltas. If we didn't see input_start
-      // (rare path) seed the tool here; otherwise emit the final arguments
-      // string in case the deltas didn't flush completely.
-      this.sawToolCalls = true;
-      const toolCallId = (msg.toolCallId as string) ?? "";
-      const toolName = (msg.toolName as string) ?? "";
-      let slot = this.toolByCallId.get(toolCallId);
-      if (!slot && toolCallId) {
-        slot = { index: this.nextToolIndex++, id: toolCallId, name: toolName };
-        this.toolByCallId.set(toolCallId, slot);
-        this.seedRole(out);
-        const inputStr = msg.input !== undefined
-          ? (typeof msg.input === "string" ? msg.input : JSON.stringify(msg.input))
-          : "";
-        out.push(this.frame({
-          tool_calls: [{
-            index: slot.index,
-            id: slot.id,
-            type: "function",
-            function: { name: slot.name, arguments: inputStr },
-          }],
-        }));
-      }
-      return out;
-    }
-
+    // tool_input_start / tool_input_delta / tool_call chunks come from
+    // Claude's stream as the model constructs a tool call. Tool dispatch
+    // for nestler-declared tools is signaled by the daemon's chi:"tool-call"
+    // tone (handled above) — that's the moment the OpenAI client needs to
+    // execute. Chunk-level tool events are internal; suppress them.
+    //
     // text_start / reasoning_start / reasoning_end / content_block_stop /
-    // tool_result / stream_start — no SSE frame needed.
+    // tool_result / stream_start — no SSE frame needed either.
     return out;
   }
 }

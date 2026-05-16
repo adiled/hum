@@ -1914,6 +1914,66 @@ export function getExternalToolNames(sessionId: string): string[] {
   return (externalTools.get(sessionId) ?? []).map(t => t.name);
 }
 
+// ─── Nestler-declared tools (session-scoped) ──────────────────────────────
+// A nestler can ship its own toolset over thrum at handshake — useful when
+// the client is on a different filesystem, has its own clients, or wants
+// to expose domain tools to the model. We advertise them via MCP just like
+// externals, but dispatch loops back over thrum: hum forwards a tool_call
+// tone to the nestler, awaits a tool_result tone, returns the body to
+// Claude as a normal MCP response.
+
+export interface NestlerToolDef {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+const nestlerTools = new Map<string, NestlerToolDef[]>();
+const NESTLER_TOOL_HOLDS = new Map<string, { resolve: (s: string) => void }>();
+let nestlerToolCallback: ((sid: string, name: string, args: Record<string, unknown>, callId: string) => void) | null = null;
+const NESTLER_TOOL_TIMEOUT_MS = 5 * 60_000;
+
+export function setNestlerTools(sessionId: string, tools: NestlerToolDef[]): void {
+  if (tools.length === 0) { nestlerTools.delete(sessionId); return; }
+  nestlerTools.set(sessionId, tools);
+}
+
+export function clearNestlerTools(sessionId: string): void {
+  nestlerTools.delete(sessionId);
+}
+
+export function getNestlerToolNames(sessionId: string): string[] {
+  return (nestlerTools.get(sessionId) ?? []).map(t => t.name);
+}
+
+export function setNestlerToolCallback(cb: typeof nestlerToolCallback): void {
+  nestlerToolCallback = cb;
+}
+
+export function resolveNestlerTool(callId: string, result: string): boolean {
+  const hold = NESTLER_TOOL_HOLDS.get(callId);
+  if (!hold) return false;
+  NESTLER_TOOL_HOLDS.delete(callId);
+  hold.resolve(result);
+  return true;
+}
+
+async function execNestlerTool(sessionId: string, name: string, args: Record<string, unknown>): Promise<string> {
+  const callId = `nestler-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  trace("nestler.tool.dispatch", { tool: name, callId, sid: sessionId });
+  if (nestlerToolCallback) nestlerToolCallback(sessionId, name, args, callId);
+  return new Promise<string>(resolve => {
+    NESTLER_TOOL_HOLDS.set(callId, { resolve });
+    setTimeout(() => {
+      if (NESTLER_TOOL_HOLDS.has(callId)) {
+        NESTLER_TOOL_HOLDS.delete(callId);
+        trace("nestler.tool.timeout", { tool: name, callId });
+        resolve(`Error: ${name} timed out after ${NESTLER_TOOL_TIMEOUT_MS / 1000}s`);
+      }
+    }, NESTLER_TOOL_TIMEOUT_MS);
+  });
+}
+
 // ─── Session-scoped visible tools ─────────────────────────────────────────
 //
 // Hum's native tools (read, do_code, do_noncode, bash, permission_prompt)
@@ -2203,12 +2263,25 @@ export async function handleMcpRequest(body: { jsonrpc: string; id?: number | st
       const ext = sessionId ? (externalTools.get(sessionId) ?? []) : [];
       const visibleExt = getVisibleExternalSet(sessionId);
       const externalAllowed = visibleExt ? ext.filter(t => visibleExt.has(t.name)) : ext;
-      return { jsonrpc: "2.0", id: body.id, result: { tools: [...nativeAllowed, ...externalAllowed] } };
+      const nestlerAdvertised = sessionId ? (nestlerTools.get(sessionId) ?? []) : [];
+      return { jsonrpc: "2.0", id: body.id, result: { tools: [...nativeAllowed, ...externalAllowed, ...nestlerAdvertised] } };
     }
 
     case "tools/call": {
       const name = body.params?.name as string;
       const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
+
+      // Nestler-declared tool — forward over thrum, await tool_result tone.
+      const nl = sessionId ? (nestlerTools.get(sessionId) ?? []) : [];
+      if (nl.some(t => t.name === name)) {
+        trace("mcp.tool.nestler", { tool: name, sessionId });
+        const result = await execNestlerTool(sessionId!, name, args);
+        trace("mcp.tool.nestler.done", { tool: name, sessionId, len: result.length });
+        return {
+          jsonrpc: "2.0", id: body.id,
+          result: { content: [{ type: "text", text: result || "(no output)" }] },
+        };
+      }
 
       // External tool — execute directly via MCP client connection
       const ext = sessionId ? (externalTools.get(sessionId) ?? []) : [];

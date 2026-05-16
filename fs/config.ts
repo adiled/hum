@@ -24,23 +24,11 @@ export interface HumConfig {
    */
   nest: "claude-repl" | "claude-cli";
   /**
-   * Per-project nest overrides. Each entry carries:
-   *   - `id`           — hum-native 256-bit identifier (52 chars).
-   *                      Stable across path moves and tool rebrands.
-   *   - `primaryPath`  — absolute project directory used to match the
-   *                      session's cwd. Daemon-side lookup is currently
-   *                      by path; `id` is the canonical reference for
-   *                      future plugin-sent project resolution.
-   *   - `nest`         — optional override for this project.
-   *
-   *   "projects": [
-   *     { "id": "04G7…52chars…", "primaryPath": "/home/me/repo-a", "nest": "claude-cli" },
-   *     { "id": "04G7…52chars…", "primaryPath": "/home/me/repo-b", "nest": "claude-repl" }
-   *   ]
-   *
-   * Unrecognized projects fall through to the top-level `nest`.
+   * Project registry. Stable hum-native id per primaryPath, kept for
+   * future plugin-sent project resolution. Nest is dictated by the
+   * nestler at handshake time — not configured per project.
    */
-  projects: Array<{ id: string; primaryPath: string; nest?: "claude-repl" | "claude-cli" }>;
+  projects: Array<{ id: string; primaryPath: string }>;
   /**
    * Experimental feature toggles. Off by default. Promoted into the
    * main config surface (or removed) once stable. Grouped here so new
@@ -101,18 +89,15 @@ const DEFAULTS: HumConfig = {
   driftRetentionDays: 30,
 };
 
-function parseProjects(raw: unknown): Array<{ id: string; primaryPath: string; nest?: "claude-repl" | "claude-cli" }> {
+function parseProjects(raw: unknown): Array<{ id: string; primaryPath: string }> {
   if (!Array.isArray(raw)) return [];
-  const out: Array<{ id: string; primaryPath: string; nest?: "claude-repl" | "claude-cli" }> = [];
+  const out: Array<{ id: string; primaryPath: string }> = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const e = entry as { id?: unknown; primaryPath?: unknown; nest?: unknown };
+    const e = entry as { id?: unknown; primaryPath?: unknown };
     if (typeof e.primaryPath !== "string" || e.primaryPath.length === 0) continue;
     if (typeof e.id !== "string" || e.id.length === 0) continue;
-    const nest = e.nest === "claude-cli" ? "claude-cli"
-              : e.nest === "claude-repl" ? "claude-repl"
-              : undefined;
-    out.push({ id: e.id, primaryPath: e.primaryPath, ...(nest ? { nest } : {}) });
+    out.push({ id: e.id, primaryPath: e.primaryPath });
   }
   return out;
 }

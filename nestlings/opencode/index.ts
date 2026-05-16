@@ -102,7 +102,7 @@ export const humPlugin: Plugin = async (input) => {
       // the delta. SSE writers consume the bus synchronously, so this also
       // approximates oc.sse_write (within sub-ms). TUI render is downstream
       // of SSE delivery — out of process, unmeasurable from the plugin.
-      if ((etype === "message.part.delta" || etype === "message.part.updated") && props.sessionID) {
+      if (((etype as string) === "message.part.delta" || etype === "message.part.updated") && props.sessionID) {
         const sid = props.sessionID;
         thrum({ chi: "perf-mark", sid, mark: "oc_bus_publish" });
         thrum({ chi: "perf-mark", sid, mark: "oc_sse_write" });

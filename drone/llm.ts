@@ -3,7 +3,7 @@
 // Workspace-isolated: drone sessions don't pollute the user's session list.
 
 import { TRIAGE_PROMPT, buildTriagePrompt, buildTreatPrompt, type DroneContext, type TriageCategory } from "./prompts.ts";
-import type { Assessment } from "../thrum.ts";
+import type { Assessment } from "../thrum/index.ts";
 import { loadConfig } from "../fs/config.ts";
 
 export interface DroneJudgment {
