@@ -8,17 +8,26 @@
 //! MCP → wait for shutdown. Tracing setup is the binary's job; the lib
 //! never touches the global subscriber.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ensemble::Ensemble;
+use ensemble::{Ensemble, HumdId};
 use mcp::{serve as mcp_serve, Registry as McpRegistry};
+use parking_lot::RwLock;
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
+
+/// Per-sid observer roster. Maps a hum's `sid` to a list of peer humds
+/// that have asked (via `chi:"attach"`) to receive a copy of every
+/// outbound reply tone. Shared between the HumdSink (writer on attach /
+/// detach) and every NestListener serving that sid (reader on each
+/// reply).
+type Observers = Arc<RwLock<HashMap<String, Vec<HumdId>>>>;
 
 // ── Public config ──────────────────────────────────────────────────────────
 
@@ -65,6 +74,15 @@ pub struct DaemonConfig {
     pub perches: PerchSet,
     /// When false, skip mcp_serve too (sim doesn't need a live HTTP MCP).
     pub bind_mcp: bool,
+    /// Cap on concurrent local hums. `Some(0)` means "always overflow to a
+    /// peer"; `None` means unbounded (legacy behaviour). Used by the
+    /// overflow-routing policy in the prompt arm of [`HumdSink::hear`].
+    pub capacity_override: Option<usize>,
+    /// Caller-owned WaneTracker. Sim supplies one so it can read/write
+    /// wane values from the test driver. Production leaves this None and
+    /// the daemon mints its own. Either way the sink uses the same
+    /// shared Arc.
+    pub waneman: Option<Arc<WaneTracker>>,
 }
 
 impl DaemonConfig {
@@ -91,6 +109,8 @@ impl DaemonConfig {
             ensemble: None,
             perches: PerchSet::default(),
             bind_mcp: true,
+            capacity_override: None,
+            waneman: None,
         }
     }
 }
@@ -132,7 +152,7 @@ where
     let penny = penny::Penny::load(&cfg.penny_path);
     penny.clone().spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
 
-    let waneman = Arc::new(WaneTracker::new());
+    let waneman = cfg.waneman.clone().unwrap_or_else(|| Arc::new(WaneTracker::new()));
     let _drift = drift::Drift::new();
     let _drone = drone::Drone::new();
 
@@ -149,6 +169,7 @@ where
         Some(t) => (t, false),
         None => (Thrum::new(), true),
     };
+    let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -156,6 +177,8 @@ where
         mcp_url: mcp_url.clone(),
         cli_path: cfg.cli_path.clone(),
         ensemble: cfg.ensemble.clone(),
+        observers: observers.clone(),
+        capacity_override: cfg.capacity_override,
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -226,6 +249,14 @@ struct HumdSink {
     /// When present, tones with a `to:` hex addressed to a *different*
     /// humd are routed through here instead of being dispatched locally.
     ensemble: Option<Arc<Ensemble>>,
+    /// Per-sid roster of peer humds tapping us in `hearOnly` mode. Read
+    /// by every NestListener on each reply; written here on `attach` /
+    /// `detach`.
+    observers: Observers,
+    /// Concurrent-hum cap. `Some(0)` triggers overflow routing in the
+    /// prompt arm — local prompts get forwarded to a peer with spare
+    /// capacity instead of awakening here. `None` = unbounded.
+    capacity_override: Option<usize>,
 }
 
 struct NestListener {
@@ -238,6 +269,9 @@ struct NestListener {
     /// thrum_broadcast suffices.
     origin: Option<ensemble::HumdId>,
     ensemble: Option<Arc<Ensemble>>,
+    /// Shared with HumdSink — every reply tone fans out to whichever
+    /// peer humds have registered themselves as observers of this sid.
+    observers: Observers,
 }
 
 impl NestListener {
@@ -248,7 +282,29 @@ impl NestListener {
     /// Both happen when the listener serves a hum that is being
     /// observed locally AND owned by a peer.
     async fn dispatch_reply(&self, tone: serde_json::Map<String, Value>) {
-        let mut value = Value::Object(tone);
+        let value = Value::Object(tone);
+
+        // Fan-out to observers (peer humds that sent `chi:"attach"` for
+        // this sid). Each observer gets its own copy with `to: <obs>`
+        // and `from: <me>`. This runs in addition to — not instead of —
+        // the origin route and the local broadcast, so a hum can be
+        // driven locally, owned remotely, and shadowed by N observers
+        // all at once.
+        if let Some(ens) = &self.ensemble {
+            let obs = self.observers.read().get(&self.sid).cloned().unwrap_or_default();
+            for peer in obs {
+                let mut copy = value.clone();
+                if let Some(obj) = copy.as_object_mut() {
+                    obj.insert("to".into(), Value::String(peer.to_hex()));
+                    obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                }
+                if let Err(e) = ens.route(copy).await {
+                    warn!(sid = %self.sid, peer = %peer.short(), err = %e, "reply.fanout.failed");
+                }
+            }
+        }
+
+        let mut value = value;
         if let (Some(origin), Some(ens)) = (&self.origin, &self.ensemble) {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("to".into(), Value::String(origin.to_hex()));
@@ -320,6 +376,23 @@ impl ToneSink for HumdSink {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
 
+        // Attach from a local nestler addressed at a peer humd needs a
+        // sigil claim here *before* the cross-humd router whisks the tone
+        // away — otherwise reply tones flowing back across the ensemble
+        // pump get broadcast on the sid and find no claimant, falling
+        // back to the unregistered-clients branch by luck. Claim first,
+        // then let the standard routing block forward.
+        if matches!(chi, Some(Chi::Attach)) && client_id != "ensemble" {
+            if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
+                if !sid.is_empty() {
+                    self.thrum.claim_sigil(client_id, thrum_core::sigil(sid, "claude"));
+                    self.thrum.claim_sigil(client_id, sid.to_string());
+                    let hear_only = tone.get("hearOnly").and_then(Value::as_bool).unwrap_or(false);
+                    trace!(client_id, sid, hear_only, "attach.local.claimed");
+                }
+            }
+        }
+
         // Cross-humd routing — if tone is addressed to a *different* humd
         // and we have an Ensemble, hand it off and stop here. Without an
         // Ensemble, `to:` is ignored (legacy single-host behaviour).
@@ -374,6 +447,41 @@ impl ToneSink for HumdSink {
                     warn!(client_id, "prompt.no-sid");
                     return;
                 }
+                // Overflow routing — if this prompt came from a local
+                // nestler AND we have no spare capacity, hand it to a
+                // peer that advertises the nest kind with free slots.
+                // Prompts arriving from a peer (`client_id == "ensemble"`)
+                // are work *we* accepted from somebody else; never bounce
+                // them again.
+                if client_id != "ensemble"
+                    && self.capacity_override.map(|c| c == 0).unwrap_or(false)
+                {
+                    if let Some(ensemble) = &self.ensemble {
+                        let target = pick_overflow_peer(ensemble, "claude-cli");
+                        if let Some(peer) = target {
+                            // Claim the sid so reply tones (chunks +
+                            // finish) routed back via the ensemble pump
+                            // reach this client's queue.
+                            self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
+                            self.thrum.claim_sigil(client_id, &sid);
+                            if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
+                                self.thrum.thrum_to(client_id, thrumd::echo_tone(rid, true, None));
+                            }
+                            let mut forward = tone.clone();
+                            if let Some(obj) = forward.as_object_mut() {
+                                obj.insert("to".into(), Value::String(peer.to_hex()));
+                                obj.insert("from".into(), Value::String(ensemble.me().to_hex()));
+                            }
+                            trace!(sid, peer = %peer.short(), "overflow.route");
+                            if let Err(e) = ensemble.route(forward).await {
+                                warn!(sid, err = %e, "overflow.route.failed");
+                            }
+                            return;
+                        } else {
+                            warn!(sid, "overflow.no-route");
+                        }
+                    }
+                }
                 let model = tone.get("modelId").and_then(Value::as_str).unwrap_or("sonnet").to_string();
                 let cwd = tone.get("cwd").and_then(Value::as_str)
                     .map(str::to_string)
@@ -411,6 +519,7 @@ impl ToneSink for HumdSink {
                     thrum: self.thrum.clone(),
                     origin,
                     ensemble: self.ensemble.clone(),
+                    observers: self.observers.clone(),
                 });
                 let mut spec = nest::SpawnSpec::new(sid.clone(), model.clone(), cwd.clone());
                 spec.system_prompt = system_prompt;
@@ -438,6 +547,83 @@ impl ToneSink for HumdSink {
                     self.nest.fell(sid).await;
                 }
             }
+            Some(Chi::Attach) => {
+                let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
+                if sid.is_empty() {
+                    warn!(client_id, "attach.no-sid");
+                    return;
+                }
+                let hear_only = tone.get("hearOnly").and_then(Value::as_bool).unwrap_or(false);
+                if client_id == "ensemble" {
+                    // A peer humd is registering itself as an observer of
+                    // a hum hosted here. Record so reply tones fan out.
+                    let peer = tone.get("from").and_then(Value::as_str).and_then(parse_humd_id);
+                    if let Some(peer) = peer {
+                        let mut obs = self.observers.write();
+                        let list = obs.entry(sid.clone()).or_default();
+                        if !list.contains(&peer) {
+                            list.push(peer);
+                        }
+                        trace!(client_id, sid, peer = %peer.short(), hear_only, "observer.registered");
+                    } else {
+                        warn!(client_id, sid, "attach.bad-from");
+                    }
+                } else {
+                    // A local nestler is announcing it wants to observe a
+                    // sid hosted on a peer. Claim the sigil so reply
+                    // tones (which arrive via the ensemble pump and get
+                    // broadcast on the sid) land in this client's queue,
+                    // then forward the attach to the host humd.
+                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
+                    self.thrum.claim_sigil(client_id, &sid);
+                    if let Some(ensemble) = &self.ensemble {
+                        if let Some(to) = tone.get("to").and_then(Value::as_str) {
+                            if !to.is_empty() && to != ensemble.me().to_hex() {
+                                trace!(client_id, sid, to, hear_only, "attach.forward");
+                                let mut forward = tone.clone();
+                                if let Some(obj) = forward.as_object_mut() {
+                                    obj.entry("from".to_string())
+                                        .or_insert_with(|| Value::String(ensemble.me().to_hex()));
+                                }
+                                if let Err(e) = ensemble.route(forward).await {
+                                    warn!(client_id, sid, err = %e, "attach.forward.failed");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(Chi::Detach) => {
+                let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
+                if sid.is_empty() {
+                    warn!(client_id, "detach.no-sid");
+                    return;
+                }
+                if client_id == "ensemble" {
+                    let peer = tone.get("from").and_then(Value::as_str).and_then(parse_humd_id);
+                    if let Some(peer) = peer {
+                        let mut obs = self.observers.write();
+                        if let Some(list) = obs.get_mut(&sid) {
+                            list.retain(|p| *p != peer);
+                            if list.is_empty() { obs.remove(&sid); }
+                        }
+                        trace!(client_id, sid, peer = %peer.short(), "observer.removed");
+                    }
+                } else if let Some(ensemble) = &self.ensemble {
+                    if let Some(to) = tone.get("to").and_then(Value::as_str) {
+                        if !to.is_empty() && to != ensemble.me().to_hex() {
+                            let mut forward = tone.clone();
+                            if let Some(obj) = forward.as_object_mut() {
+                                obj.entry("from".to_string())
+                                    .or_insert_with(|| Value::String(ensemble.me().to_hex()));
+                            }
+                            if let Err(e) = ensemble.route(forward).await {
+                                warn!(client_id, sid, err = %e, "detach.forward.failed");
+                            }
+                        }
+                    }
+                }
+            }
             Some(Chi::PeerAdd) => {
                 // Sim wires the connection into Ensemble directly; this
                 // arm just records intent so peer-add tones round-trip
@@ -457,6 +643,30 @@ impl ToneSink for HumdSink {
                         }
                     }
                 }
+            }
+            Some(Chi::WaneSync) => {
+                // Partition-heal reconciliation. Snapshot is a JSON object
+                // of sigil → u64. Merge by max — wane is a Lamport clock,
+                // max is the convergent join. We don't reply; both sides
+                // emit on heal so each is informed exactly once.
+                let snapshot = tone
+                    .get("snapshot")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut remote: HashMap<String, u64> = HashMap::new();
+                for (sigil, v) in snapshot {
+                    if let Some(n) = v.as_u64() {
+                        remote.insert(sigil, n);
+                    }
+                }
+                let advanced = self.waneman.merge(&remote);
+                trace!(
+                    client_id,
+                    entries = remote.len(),
+                    advanced,
+                    "thrum.recv.wane-sync"
+                );
             }
             Some(Chi::Curate)
             | Some(Chi::ReleasePermit)
@@ -478,6 +688,30 @@ impl ToneSink for HumdSink {
             }
         }
     }
+}
+
+/// Pick a peer to forward a prompt to when local capacity is exhausted.
+/// Prefers peers that advertise the requested nest kind AND claim a
+/// non-zero `free_slots`. Falls back to any peer with the nest kind.
+/// Returns `None` if no peer in the ensemble is eligible.
+fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<HumdId> {
+    let peers = ensemble.peers();
+    // First pass: peer with the right nest kind AND advertised slots.
+    let mut fallback: Option<HumdId> = None;
+    for id in peers {
+        let Some(caps) = ensemble.peer_caps(&id) else { continue };
+        let has_nest = caps.nests.iter().any(|n| n == nest_kind);
+        if !has_nest { continue; }
+        match caps.free_slots {
+            Some(n) if n > 0 => return Some(id),
+            None => return Some(id), // unbounded
+            Some(0) => { /* peer is full, skip but remember as fallback */
+                if fallback.is_none() { fallback = Some(id); }
+            }
+            _ => {}
+        }
+    }
+    fallback
 }
 
 /// Parse a hex HumdId string back into the typed [`ensemble::HumdId`].

@@ -531,6 +531,9 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::DroneRetrofit => "drone-retrofit",
         Chi::PeerAdd => "peer-add",
         Chi::PeerRemove => "peer-remove",
+        Chi::Attach => "attach",
+        Chi::Detach => "detach",
+        Chi::WaneSync => "wane-sync",
     }
 }
 

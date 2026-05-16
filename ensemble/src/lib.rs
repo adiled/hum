@@ -25,17 +25,25 @@
 //! libp2p impl with DHT discovery. Daemon code is identical across
 //! all of them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use parking_lot::RwLock;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc};
+
+/// Domain-separation tag binds a signature to the ensemble handshake.
+/// Bump the version suffix if the canonical message shape changes.
+const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
+
+/// Tolerance window for `signed_at` skew, both directions.
+const HANDSHAKE_SKEW_MS: i64 = 60_000;
 
 /// Tones flow through the ensemble as loose JSON — same shape thrumd
 /// uses on the wire. Strict typing lives in `thrum_core::Tone` for
@@ -84,6 +92,56 @@ impl fmt::Display for HumdId {
     }
 }
 
+/// Ed25519 signing key for a humd. The pubkey's SHA-256 is the
+/// [`HumdId`] — identity is content-addressable, no separate registry.
+///
+/// v0 sim: each humd mints one at spawn and signs every hello with it.
+/// Real key management (persistence, rotation, cert chains) lives at
+/// T2+ in the daemon — this type is the shared crypto seam.
+pub struct HumdKey(pub SigningKey);
+
+impl HumdKey {
+    /// Mint a fresh random keypair. Tests and v0 sim only — real humds
+    /// will load a persisted key from the install root.
+    pub fn generate() -> Self {
+        Self(SigningKey::generate(&mut rand::thread_rng()))
+    }
+
+    /// Public key bytes — the input to [`HumdId::from_pubkey`] and the
+    /// `pubkey` field carried in the hello.
+    pub fn pubkey_bytes(&self) -> [u8; 32] {
+        self.0.verifying_key().to_bytes()
+    }
+
+    /// Derive the humd's content-addressable id from its pubkey.
+    pub fn humd_id(&self) -> HumdId {
+        HumdId::from_pubkey(&self.pubkey_bytes())
+    }
+}
+
+impl fmt::Debug for HumdKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HumdKey")
+            .field("pubkey", &hex::encode(self.pubkey_bytes()))
+            .finish()
+    }
+}
+
+/// Canonical message a humd signs to prove it owns the pubkey claiming
+/// the named id at the named time. Domain-separated so a signature
+/// over arbitrary bytes can never be replayed as a handshake.
+fn handshake_message(humd_id: &HumdId, signed_at_ms: i64) -> Vec<u8> {
+    format!("{}:{}:{}", HANDSHAKE_DOMAIN, humd_id.to_hex(), signed_at_ms).into_bytes()
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// HumdId plus optional contact hints — a peer's "where" alongside its
 /// "who." Sketched like a slim multiaddr: a list of transport-specific
 /// strings the dialer can try. T1 might list `["tcp:host:port"]`; T4
@@ -122,6 +180,12 @@ pub struct PeerCapabilities {
     /// Willing to relay tones for other humds (acts as a hop).
     #[serde(default)]
     pub can_relay: bool,
+    /// Spare inference slots this peer claims to have free. `None` means
+    /// unbounded / unspecified; `Some(0)` means full. Drives overflow
+    /// peer selection — a humd at capacity routes new prompts to a peer
+    /// whose `free_slots` is `None` or `Some(n) where n > 0`.
+    #[serde(default)]
+    pub free_slots: Option<usize>,
 }
 
 /// First tone over a fresh connection — each side names itself and what
@@ -133,10 +197,25 @@ pub struct EnsembleHello {
     pub caps: PeerCapabilities,
 }
 
-/// Build the `chi:"hello"` tone a humd emits on connection install.
-/// Carries identity + capabilities so the peer can update its registry
-/// without trusting transport-layer claims alone.
-pub fn hello_tone(me: &HumdId, caps: &PeerCapabilities) -> Tone {
+/// Outcome of parsing a `chi:"hello"` tone.
+///
+/// `Verified` means the tone carried a pubkey + signature, the pubkey
+/// hashed to the claimed humd_id, and the signature verified. `Unsigned`
+/// means no pubkey was present — a T1-compat handshake that names an
+/// id but doesn't prove ownership. `Invalid` means a pubkey was present
+/// but verification failed (wrong hash, bad sig, stale timestamp, etc.)
+/// — the sender tried to authenticate and failed, which is hostile.
+#[derive(Debug, Clone)]
+pub enum HelloParse {
+    Verified(HumdId, PeerCapabilities),
+    Unsigned(HumdId, PeerCapabilities),
+    Invalid,
+}
+
+/// Build an unsigned `chi:"hello"` — the T1 back-compat shape. The peer
+/// names itself and lists caps but provides no proof of ownership.
+/// Strict-auth ensembles reject this; lax ones learn caps and proceed.
+pub fn hello_tone_unsigned(me: &HumdId, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
         "rid": format!("hello-{}", me.short()),
@@ -146,6 +225,35 @@ pub fn hello_tone(me: &HumdId, caps: &PeerCapabilities) -> Tone {
         "nests": caps.nests,
         "hosts": caps.hosts,
         "can_relay": caps.can_relay,
+        "free_slots": caps.free_slots,
+    })
+}
+
+/// Build the `chi:"hello"` tone a humd emits on connection install.
+/// Carries identity + capabilities + an ed25519 signature over a
+/// timestamped canonical message — the receiver verifies before
+/// admitting the peer.
+///
+/// `humd_id` is derived from `key`'s pubkey; the parameter is kept so
+/// callers can pin a specific id (sim test fixtures, primarily) and
+/// have the verifier catch any inconsistency.
+pub fn hello_tone(me: &HumdId, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
+    let signed_at = now_ms();
+    let msg = handshake_message(me, signed_at);
+    let sig: Signature = key.0.sign(&msg);
+    serde_json::json!({
+        "chi": "hello",
+        "rid": format!("hello-{}", me.short()),
+        "from": me.to_hex(),
+        "humd_id": me.to_hex(),
+        "pubkey": hex::encode(key.pubkey_bytes()),
+        "proto_version": caps.proto_version,
+        "nests": caps.nests,
+        "hosts": caps.hosts,
+        "can_relay": caps.can_relay,
+        "free_slots": caps.free_slots,
+        "signed_at": signed_at,
+        "signature": hex::encode(sig.to_bytes()),
     })
 }
 
@@ -190,11 +298,28 @@ pub trait Transport: Send + Sync {
 /// Latency / drop / partition behaviour is a follow-up — for v0 the
 /// channels deliver instantly and never drop. The sim layer wraps
 /// these with controllable middleware.
+/// Max tones held while partitioned. Realistic enough for sim narratives
+/// (a few dozen petals during a partition window); large enough not to
+/// fall behind in the tests we run. If the queue fills, oldest tones drop
+/// — that matches the real-world "lossy link" semantic for an unbounded
+/// outage.
+pub const PARTITION_BUFFER_CAP: usize = 64;
+
 pub struct InMemoryEndpoint {
     peer: HumdAddr,
     caps: PeerCapabilities,
     tx: mpsc::Sender<Tone>,
     rx: parking_lot::Mutex<Option<mpsc::Receiver<Tone>>>,
+    /// Sim-controlled link state. When `dropped == true`, `send()` accepts
+    /// the tone and buffers it (bounded VecDeque) instead of pushing it
+    /// to the peer's receiver. On `set_partitioned(false)`, the buffered
+    /// tones flush to the peer in order before normal operation resumes.
+    partition: parking_lot::Mutex<PartitionState>,
+}
+
+struct PartitionState {
+    dropped: bool,
+    buffer: VecDeque<Tone>,
 }
 
 impl InMemoryEndpoint {
@@ -207,22 +332,73 @@ impl InMemoryEndpoint {
         b_id: HumdId,
         b_caps: PeerCapabilities,
     ) -> (Arc<dyn PeerConnection>, Arc<dyn PeerConnection>) {
+        let (a, b) = Self::pair_concrete(a_id, a_caps, b_id, b_caps);
+        (a as Arc<dyn PeerConnection>, b as Arc<dyn PeerConnection>)
+    }
+
+    /// Like `pair`, but returns concrete `Arc<InMemoryEndpoint>`s so
+    /// callers (the sim) can drive `set_partitioned` on each side.
+    pub fn pair_concrete(
+        a_id: HumdId,
+        a_caps: PeerCapabilities,
+        b_id: HumdId,
+        b_caps: PeerCapabilities,
+    ) -> (Arc<InMemoryEndpoint>, Arc<InMemoryEndpoint>) {
         let (tx_ab, rx_ab) = mpsc::channel::<Tone>(256);
         let (tx_ba, rx_ba) = mpsc::channel::<Tone>(256);
-        // a's view: peer is b. a sends via tx_ab; a receives via rx_ba.
-        let a: Arc<dyn PeerConnection> = Arc::new(InMemoryEndpoint {
+        let a = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(b_id),
             caps: b_caps.clone(),
             tx: tx_ab,
             rx: parking_lot::Mutex::new(Some(rx_ba)),
+            partition: parking_lot::Mutex::new(PartitionState {
+                dropped: false,
+                buffer: VecDeque::new(),
+            }),
         });
-        let b: Arc<dyn PeerConnection> = Arc::new(InMemoryEndpoint {
+        let b = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(a_id),
             caps: a_caps,
             tx: tx_ba,
             rx: parking_lot::Mutex::new(Some(rx_ab)),
+            partition: parking_lot::Mutex::new(PartitionState {
+                dropped: false,
+                buffer: VecDeque::new(),
+            }),
         });
         (a, b)
+    }
+
+    /// Toggle the partition on this endpoint. While `dropped == true`,
+    /// `send()` queues tones in a bounded buffer (FIFO, oldest dropped
+    /// when full) instead of delivering them. Flipping back to `false`
+    /// flushes the buffer to the peer in original order.
+    ///
+    /// Sim-facing knob — production transports never call this. Note:
+    /// partition is one-directional per endpoint. To fully isolate two
+    /// peers, the caller flips both endpoints in the pair.
+    pub fn set_partitioned(&self, dropped: bool) {
+        // Drain the buffer under the lock if we're healing — but issue
+        // the actual sends *after* releasing it so the await doesn't
+        // happen while holding a sync mutex.
+        let drained: Vec<Tone> = {
+            let mut p = self.partition.lock();
+            p.dropped = dropped;
+            if !dropped {
+                p.buffer.drain(..).collect()
+            } else {
+                Vec::new()
+            }
+        };
+        if !drained.is_empty() {
+            // try_send for the flush — if the receiver is closed or full
+            // we silently drop, which is the realistic "buffer overrun
+            // during long partition" semantic. Tests use a short window
+            // so this branch should never fire in practice.
+            for tone in drained {
+                let _ = self.tx.try_send(tone);
+            }
+        }
     }
 }
 
@@ -232,6 +408,19 @@ impl PeerConnection for InMemoryEndpoint {
     fn capabilities(&self) -> &PeerCapabilities { &self.caps }
 
     async fn send(&self, tone: Tone) -> Result<()> {
+        // Partitioned: buffer with a bounded queue (oldest evicted when
+        // capacity is hit). Tone is "accepted" from the caller's point
+        // of view — the wire just hasn't delivered yet.
+        {
+            let mut p = self.partition.lock();
+            if p.dropped {
+                if p.buffer.len() >= PARTITION_BUFFER_CAP {
+                    p.buffer.pop_front();
+                }
+                p.buffer.push_back(tone);
+                return Ok(());
+            }
+        }
         self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))
     }
 
@@ -269,6 +458,14 @@ pub struct Ensemble {
     me: HumdId,
     peers: Arc<RwLock<HashMap<HumdId, Peer>>>,
     inbox: broadcast::Sender<Tone>,
+    /// When true, peers whose `chi:"hello"` is missing or fails
+    /// verification are ejected (T3+ federation semantics). When false
+    /// (default, T1), unsigned hellos are tolerated — caps are learned
+    /// without proof of ownership and the connection stays installed.
+    /// Invalid (signed-but-fails-verify) hellos are *always* ejected
+    /// regardless of mode: a present pubkey that fails to verify is
+    /// hostile, not legacy.
+    strict_auth: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -290,21 +487,40 @@ impl Ensemble {
             me,
             peers: Arc::new(RwLock::new(HashMap::new())),
             inbox,
+            strict_auth: false,
         }
+    }
+
+    /// Build an ensemble that rejects peers whose hellos aren't
+    /// cryptographically verified. Federation (T3+) wants this on;
+    /// own-devices (T1) leaves it off and tolerates unsigned T1 hellos.
+    pub fn with_strict_auth(me: HumdId, strict: bool) -> Self {
+        let mut e = Self::new(me);
+        e.strict_auth = strict;
+        e
     }
 
     pub fn me(&self) -> HumdId { self.me }
 
+    pub fn strict_auth(&self) -> bool { self.strict_auth }
+
     /// Wire a peer connection into the ensemble: announce ourselves with
-    /// a `chi:"hello"`, register the peer, and start draining its
-    /// receiver into the shared inbox. Hellos from the peer update
-    /// `learned_caps`; everything else fans out via [`subscribe`].
+    /// a signed `chi:"hello"`, register the peer, and start draining
+    /// its receiver into the shared inbox. The peer's first hello is
+    /// verified before any of its tones reach subscribers — a bad
+    /// signature, id/pubkey mismatch, or stale timestamp closes the
+    /// connection and removes the peer entry.
     ///
     /// Replaces any prior entry for the same id (old drainer task ends
     /// when its receiver drops).
-    pub fn install(&self, conn: Arc<dyn PeerConnection>, my_caps: PeerCapabilities) {
+    pub fn install(
+        &self,
+        conn: Arc<dyn PeerConnection>,
+        my_caps: PeerCapabilities,
+        my_key: &HumdKey,
+    ) {
         let id = conn.peer().id;
-        let hello = hello_tone(&self.me, &my_caps);
+        let hello = hello_tone(&self.me, my_key, &my_caps);
         // Fire-and-forget the hello — if the channel is full or closed
         // the drainer / peer will surface it; install must not block.
         let hello_conn = conn.clone();
@@ -321,6 +537,8 @@ impl Ensemble {
         if let Some(mut rx) = rx {
             let peers = self.peers.clone();
             let inbox = self.inbox.clone();
+            let conn_for_drain = conn.clone();
+            let strict = self.strict_auth;
             tokio::spawn(async move {
                 // Only the FIRST chi:"hello" off this connection is the
                 // peer handshake — we absorb it to learn caps. Any
@@ -332,9 +550,53 @@ impl Ensemble {
                     let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
                     if is_hello && !handshake_seen {
                         handshake_seen = true;
-                        if let Some(caps) = parse_hello_caps(&tone) {
-                            if let Some(p) = peers.write().get_mut(&id) {
-                                p.learned_caps = Some(caps);
+                        match parse_hello(&tone) {
+                            HelloParse::Verified(claimed_id, caps) if claimed_id == id => {
+                                if let Some(p) = peers.write().get_mut(&id) {
+                                    p.learned_caps = Some(caps);
+                                }
+                            }
+                            HelloParse::Verified(claimed_id, _) => {
+                                tracing::warn!(
+                                    target: "ensemble",
+                                    transport_id = %id.short(),
+                                    claimed_id = %claimed_id.short(),
+                                    "hello.rejected: claimed humd_id does not match transport-peer id"
+                                );
+                                peers.write().remove(&id);
+                                conn_for_drain.close();
+                                return;
+                            }
+                            HelloParse::Unsigned(claimed_id, caps) => {
+                                if strict {
+                                    tracing::warn!(
+                                        target: "ensemble",
+                                        transport_id = %id.short(),
+                                        claimed_id = %claimed_id.short(),
+                                        "hello.rejected: strict_auth requires signed hello"
+                                    );
+                                    peers.write().remove(&id);
+                                    conn_for_drain.close();
+                                    return;
+                                }
+                                // T1 compat: learn caps without proof. We
+                                // still require the claimed id match the
+                                // transport view — anything else is just
+                                // a confused peer, not a hostile one,
+                                // but the registry key has to match.
+                                if claimed_id == id {
+                                    if let Some(p) = peers.write().get_mut(&id) {
+                                        p.learned_caps = Some(caps);
+                                    }
+                                }
+                            }
+                            HelloParse::Invalid => {
+                                // Pubkey was present and failed to
+                                // verify — always hostile. Eject in both
+                                // strict and lax modes.
+                                peers.write().remove(&id);
+                                conn_for_drain.close();
+                                return;
                             }
                         }
                         // First hello absorbed — handshake done.
@@ -348,11 +610,96 @@ impl Ensemble {
         }
     }
 
-    /// Back-compat shim: install with default caps. Existing callers
-    /// that don't care about advertising capabilities can keep using
-    /// `add_peer`; new code should prefer `install`.
+    /// Back-compat shim: install with default caps and an *unsigned*
+    /// hello. Existing tests / T1 callers that don't own a HumdKey can
+    /// keep using this; new code should prefer `install` so the hello
+    /// is signed and `with_strict_auth` ensembles will admit the peer.
     pub fn add_peer(&self, conn: Arc<dyn PeerConnection>) {
-        self.install(conn, PeerCapabilities::default());
+        self.install_unsigned(conn, PeerCapabilities::default());
+    }
+
+    /// Like [`Ensemble::add_peer`] but with caller-supplied caps — the
+    /// outbound unsigned hello carries the real `nests` / `free_slots`
+    /// instead of all-empty defaults, so the peer's `learned_caps` ends
+    /// up populated for routing decisions (overflow, model coverage).
+    pub fn add_peer_with_caps(&self, conn: Arc<dyn PeerConnection>, caps: PeerCapabilities) {
+        self.install_unsigned(conn, caps);
+    }
+
+    /// Install a peer connection without signing the outbound hello.
+    /// Mirror of [`Ensemble::install`] for callers that don't hold an
+    /// identity yet (T1) — strict-auth ensembles on the other end will
+    /// reject; lax-auth ones learn caps without crypto.
+    pub fn install_unsigned(
+        &self,
+        conn: Arc<dyn PeerConnection>,
+        my_caps: PeerCapabilities,
+    ) {
+        let id = conn.peer().id;
+        let hello = hello_tone_unsigned(&self.me, &my_caps);
+        let hello_conn = conn.clone();
+        tokio::spawn(async move {
+            let _ = hello_conn.send(hello).await;
+        });
+
+        let rx = conn.take_receiver();
+        self.peers.write().insert(
+            id,
+            Peer { conn: conn.clone(), learned_caps: None },
+        );
+
+        if let Some(mut rx) = rx {
+            let peers = self.peers.clone();
+            let inbox = self.inbox.clone();
+            let conn_for_drain = conn.clone();
+            let strict = self.strict_auth;
+            tokio::spawn(async move {
+                let mut handshake_seen = false;
+                while let Some(tone) = rx.recv().await {
+                    let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
+                    if is_hello && !handshake_seen {
+                        handshake_seen = true;
+                        match parse_hello(&tone) {
+                            HelloParse::Verified(claimed_id, caps) if claimed_id == id => {
+                                if let Some(p) = peers.write().get_mut(&id) {
+                                    p.learned_caps = Some(caps);
+                                }
+                            }
+                            HelloParse::Verified(claimed_id, _) => {
+                                tracing::warn!(
+                                    target: "ensemble",
+                                    transport_id = %id.short(),
+                                    claimed_id = %claimed_id.short(),
+                                    "hello.rejected: claimed humd_id does not match transport-peer id"
+                                );
+                                peers.write().remove(&id);
+                                conn_for_drain.close();
+                                return;
+                            }
+                            HelloParse::Unsigned(claimed_id, caps) => {
+                                if strict {
+                                    peers.write().remove(&id);
+                                    conn_for_drain.close();
+                                    return;
+                                }
+                                if claimed_id == id {
+                                    if let Some(p) = peers.write().get_mut(&id) {
+                                        p.learned_caps = Some(caps);
+                                    }
+                                }
+                            }
+                            HelloParse::Invalid => {
+                                peers.write().remove(&id);
+                                conn_for_drain.close();
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                    let _ = inbox.send(tone);
+                }
+            });
+        }
     }
 
     pub fn remove_peer(&self, id: &HumdId) {
@@ -403,11 +750,81 @@ impl Ensemble {
     }
 }
 
-/// Pull caps out of a `chi:"hello"` tone. Returns `None` if required
-/// fields are missing — we don't fail loudly because future hellos may
-/// carry richer shapes and older humds should still register the peer.
-fn parse_hello_caps(tone: &Tone) -> Option<PeerCapabilities> {
+/// Pull caps out of a `chi:"hello"` tone AND verify its signature.
+///
+/// Returns `Some((claimed_id, caps))` only if all of:
+///   - `pubkey`, `signature`, `signed_at`, `humd_id` parse cleanly
+///   - `sha256(pubkey) == claimed humd_id`
+///   - signature verifies over the canonical handshake message
+///   - `signed_at` is within ±60s of local clock
+///
+/// Returns `None` on any failure — the drainer interprets that as
+/// "close the connection, don't admit the peer." A `tracing::warn!`
+/// names the specific failure so operators can debug.
+pub fn parse_hello_caps(tone: &Tone) -> Option<(HumdId, PeerCapabilities)> {
     let proto_version = tone.get("proto_version")?.as_str()?.to_string();
+
+    let claimed_humd_id_hex = tone.get("humd_id")?.as_str()?;
+    let claimed_humd_id_bytes = hex::decode(claimed_humd_id_hex).ok()?;
+    if claimed_humd_id_bytes.len() != 32 {
+        tracing::warn!(target: "ensemble", "hello.rejected: humd_id wrong length");
+        return None;
+    }
+    let mut claimed_id_arr = [0u8; 32];
+    claimed_id_arr.copy_from_slice(&claimed_humd_id_bytes);
+    let claimed_id = HumdId(claimed_id_arr);
+
+    let pubkey_hex = tone.get("pubkey").and_then(|v| v.as_str())?;
+    let pubkey_bytes = hex::decode(pubkey_hex).ok()?;
+    if pubkey_bytes.len() != 32 {
+        tracing::warn!(target: "ensemble", "hello.rejected: pubkey wrong length");
+        return None;
+    }
+    let mut pubkey_arr = [0u8; 32];
+    pubkey_arr.copy_from_slice(&pubkey_bytes);
+
+    if HumdId::from_pubkey(&pubkey_arr) != claimed_id {
+        tracing::warn!(
+            target: "ensemble",
+            humd_id = %claimed_id.short(),
+            "hello.rejected: humd_id does not match sha256(pubkey)"
+        );
+        return None;
+    }
+
+    let signed_at = tone.get("signed_at").and_then(|v| v.as_i64())?;
+    let drift = (now_ms() - signed_at).abs();
+    if drift > HANDSHAKE_SKEW_MS {
+        tracing::warn!(
+            target: "ensemble",
+            humd_id = %claimed_id.short(),
+            drift_ms = drift,
+            "hello.rejected: signed_at outside skew window"
+        );
+        return None;
+    }
+
+    let sig_hex = tone.get("signature").and_then(|v| v.as_str())?;
+    let sig_bytes = hex::decode(sig_hex).ok()?;
+    if sig_bytes.len() != 64 {
+        tracing::warn!(target: "ensemble", "hello.rejected: signature wrong length");
+        return None;
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = Signature::from_bytes(&sig_arr);
+
+    let verifying_key = VerifyingKey::from_bytes(&pubkey_arr).ok()?;
+    let msg = handshake_message(&claimed_id, signed_at);
+    if verifying_key.verify(&msg, &signature).is_err() {
+        tracing::warn!(
+            target: "ensemble",
+            humd_id = %claimed_id.short(),
+            "hello.rejected: signature verification failed"
+        );
+        return None;
+    }
+
     let nests = tone
         .get("nests")
         .and_then(|v| v.as_array())
@@ -419,7 +836,67 @@ fn parse_hello_caps(tone: &Tone) -> Option<PeerCapabilities> {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let can_relay = tone.get("can_relay").and_then(|v| v.as_bool()).unwrap_or(false);
-    Some(PeerCapabilities { proto_version, nests, hosts, can_relay })
+    let free_slots = tone
+        .get("free_slots")
+        .and_then(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_u64().map(|n| n as usize)
+            }
+        });
+    Some((claimed_id, PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots }))
+}
+
+/// Three-way parse of a `chi:"hello"` tone — signed/verified, unsigned
+/// (T1 compat), or invalid. The drainer maps each arm to an admission
+/// decision (admit, admit-if-lax, eject).
+pub fn parse_hello(tone: &Tone) -> HelloParse {
+    let has_pubkey = tone.get("pubkey").and_then(|v| v.as_str()).is_some();
+    if has_pubkey {
+        match parse_hello_caps(tone) {
+            Some((id, caps)) => HelloParse::Verified(id, caps),
+            None => HelloParse::Invalid,
+        }
+    } else {
+        let Some(proto_version) = tone
+            .get("proto_version")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+        else {
+            return HelloParse::Invalid;
+        };
+        let Some(humd_hex) = tone.get("humd_id").and_then(|v| v.as_str()) else {
+            return HelloParse::Invalid;
+        };
+        let Ok(bytes) = hex::decode(humd_hex) else {
+            return HelloParse::Invalid;
+        };
+        if bytes.len() != 32 {
+            return HelloParse::Invalid;
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        let claimed_id = HumdId(arr);
+        let nests = tone
+            .get("nests")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let hosts = tone
+            .get("hosts")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let can_relay = tone.get("can_relay").and_then(|v| v.as_bool()).unwrap_or(false);
+        let free_slots = tone
+            .get("free_slots")
+            .and_then(|v| if v.is_null() { None } else { v.as_u64().map(|n| n as usize) });
+        HelloParse::Unsigned(
+            claimed_id,
+            PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots },
+        )
+    }
 }
 
 #[cfg(test)]
@@ -500,19 +977,23 @@ mod tests {
     /// learn the other's HumdId + caps via the install handshake.
     #[tokio::test]
     async fn install_exchanges_hellos_and_learns_caps() {
-        let a_id = HumdId::random();
-        let b_id = HumdId::random();
+        let a_key = HumdKey::generate();
+        let b_key = HumdKey::generate();
+        let a_id = a_key.humd_id();
+        let b_id = b_key.humd_id();
         let a_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
             nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: true,
+            free_slots: None,
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
             nests: vec!["claude-repl".into()],
             hosts: vec!["bob".into()],
             can_relay: false,
+            free_slots: None,
         };
         let (a_side, b_side) = InMemoryEndpoint::pair(
             a_id, b_caps.clone(),  // a's transport-view of b
@@ -521,8 +1002,8 @@ mod tests {
 
         let ensemble_a = Ensemble::new(a_id);
         let ensemble_b = Ensemble::new(b_id);
-        ensemble_a.install(a_side, a_caps.clone());
-        ensemble_b.install(b_side, b_caps.clone());
+        ensemble_a.install(a_side, a_caps.clone(), &a_key);
+        ensemble_b.install(b_side, b_caps.clone(), &b_key);
 
         // Each side's drainer eats the other's hello and writes
         // learned_caps. Poll briefly — the spawned tasks need a tick.
@@ -564,8 +1045,10 @@ mod tests {
     /// first hello — the handshake — is absorbed.
     #[tokio::test]
     async fn second_hello_on_same_peer_passes_through() {
-        let me = HumdId::random();
-        let peer_id = HumdId::random();
+        let me_key = HumdKey::generate();
+        let peer_key = HumdKey::generate();
+        let me = me_key.humd_id();
+        let peer_id = peer_key.humd_id();
         let (mine, theirs) = InMemoryEndpoint::pair(
             me, PeerCapabilities::default(),
             peer_id, PeerCapabilities::default(),
@@ -573,11 +1056,11 @@ mod tests {
 
         let ensemble = Ensemble::new(me);
         let mut sub = ensemble.subscribe();
-        ensemble.install(mine, PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() });
+        ensemble.install(mine, PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }, &me_key);
 
         // First hello — handshake, absorbed.
         theirs
-            .send(hello_tone(&peer_id, &PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }))
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }))
             .await
             .unwrap();
         // Second hello — application-level, should fan out.
@@ -604,8 +1087,10 @@ mod tests {
     /// hellos are absorbed and never surface.
     #[tokio::test]
     async fn subscribe_forwards_remote_tones_but_swallows_hello() {
-        let me = HumdId::random();
-        let peer_id = HumdId::random();
+        let me_key = HumdKey::generate();
+        let peer_key = HumdKey::generate();
+        let me = me_key.humd_id();
+        let peer_id = peer_key.humd_id();
         let (mine, theirs) = InMemoryEndpoint::pair(
             me, PeerCapabilities::default(),
             peer_id, PeerCapabilities::default(),
@@ -613,12 +1098,12 @@ mod tests {
 
         let ensemble = Ensemble::new(me);
         let mut sub = ensemble.subscribe();
-        ensemble.install(mine, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() });
+        ensemble.install(mine, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() }, &me_key);
 
         // The peer side sends a hello (which the ensemble should
         // absorb) followed by a real tone (which should fan out).
         theirs
-            .send(hello_tone(&peer_id, &PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() }))
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() }))
             .await
             .unwrap();
         theirs

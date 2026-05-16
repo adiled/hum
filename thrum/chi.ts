@@ -4,7 +4,7 @@
 // the file is regenerated on every cargo build of thrum-core (build.rs).
 // Manual regen: `cargo run -p codegen`.
 
-export const THRUM_VERSION = "0.3.0" as const;
+export const THRUM_VERSION = "0.5.0" as const;
 
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
@@ -61,6 +61,12 @@ export const Chi = {
   peerAdd: "peer-add",
   /** drop a peer humd — `{ humd_id: hex }` */
   peerRemove: "peer-remove",
+  /** peer humd asks to observe a sid hosted here — `{ sid, to, from, hearOnly }`. The host records `from` as an observer of `sid`; reply tones for that sid fan out to every observer in addition to the prompt origin. */
+  attach: "attach",
+  /** peer humd stops observing — `{ sid, to, from }`. The host drops `from` from the observer roster for `sid`. */
+  detach: "detach",
+  /** reconcile WaneTracker after a partition heal — `{ from, snapshot }` where `snapshot` is a map of sigil → wane value. The receiver merges each entry by taking the max of local and remote (wane is a Lamport clock; max is convergent). No reply is required — both sides emit their snapshot on heal, so each is informed exactly once. */
+  waneSync: "wane-sync",
 } as const;
 export type ChiKind = typeof Chi[keyof typeof Chi];
 

@@ -36,6 +36,7 @@ ensemble = { path = "../ensemble" }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 hex = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

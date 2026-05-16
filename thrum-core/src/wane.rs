@@ -41,6 +41,30 @@ impl WaneTracker {
     pub fn behind(&self, sigil: &str, remote: u64) -> bool {
         remote > self.get(sigil)
     }
+
+    /// Full snapshot of every tracked sigil → wane. Used by the partition
+    /// reconciliation handshake — both sides exchange snapshots on heal
+    /// and merge by max.
+    pub fn snapshot(&self) -> HashMap<String, u64> {
+        self.counters.lock().clone()
+    }
+
+    /// Merge a remote snapshot into local state: for each sigil, take the
+    /// max of local and remote. Wane is a Lamport clock — max is the
+    /// convergent join. Returns the count of sigils whose local value
+    /// advanced.
+    pub fn merge(&self, remote: &HashMap<String, u64>) -> usize {
+        let mut g = self.counters.lock();
+        let mut advanced = 0;
+        for (sigil, &rv) in remote {
+            let slot = g.entry(sigil.clone()).or_insert(0);
+            if rv > *slot {
+                *slot = rv;
+                advanced += 1;
+            }
+        }
+        advanced
+    }
 }
 
 #[cfg(test)]
