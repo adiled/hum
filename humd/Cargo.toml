@@ -3,7 +3,10 @@ name = "humd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "humd — the hum daemon. Boots every wing in one process."
+description = "humd — the hum daemon. Library face (`humd::run`) for tests + simulators; binary `humd` for production."
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "humd"
