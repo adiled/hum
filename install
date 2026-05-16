@@ -590,7 +590,7 @@ Environment=XDG_STATE_HOME=$XDG_STATE_HOME
 Environment=XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR
 Environment=PATH=$(dirname $CLAUDE):$(dirname $NODE):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 $($IS_ROOT || echo "Environment=HUM_PERMISSION_MODE=bypassPermissions")
-ExecStart=$NODE --import file://$HUM_SRC/node_modules/tsx/dist/loader.mjs $HUM_SRC/humd/humd.ts
+ExecStart=$HOME/.local/bin/humd
 Restart=on-failure
 RestartSec=2s
 StandardOutput=journal

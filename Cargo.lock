@@ -510,7 +510,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "humd-bin"
+name = "humd"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -523,7 +523,7 @@ dependencies = [
  "graft",
  "hums",
  "ids",
- "mcpd",
+ "mcp",
  "nest",
  "penny",
  "serde_json",
@@ -711,7 +711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
-name = "mcpd"
+name = "mcp"
 version = "0.0.0"
 dependencies = [
  "anyhow",

@@ -12,7 +12,7 @@
 //! Glob / Grep; MultiEdit / Apply / TodoWrite are stubs.
 //!
 //! ```no_run
-//! use mcpd::{Registry, serve};
+//! use mcp::{Registry, serve};
 //! # async fn run() -> anyhow::Result<()> {
 //! let registry = Registry::new();
 //! serve("127.0.0.1:7777".parse().unwrap(), registry).await?;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use mcpd::{serve as mcp_serve, Registry as McpRegistry};
+use mcp::{serve as mcp_serve, Registry as McpRegistry};
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker, THRUM_VERSION};
@@ -30,15 +30,26 @@ fn runtime_dir() -> PathBuf {
     base.join("hum")
 }
 
-fn thrum_socket_path() -> PathBuf {
+/// Base socket path. Matches the TS daemon convention: `HUM_SOCKET` (if
+/// set) is the *base*, and the daemon appends `.thrum` / `.http` to it
+/// for the two surfaces. Default base: `$XDG_RUNTIME_DIR/hum/hum.sock`.
+fn socket_base() -> PathBuf {
     if let Ok(p) = std::env::var("HUM_SOCKET") {
         return PathBuf::from(p);
     }
-    runtime_dir().join("hum.sock.thrum")
+    runtime_dir().join("hum.sock")
+}
+
+fn thrum_socket_path() -> PathBuf {
+    let mut p = socket_base().into_os_string();
+    p.push(".thrum");
+    PathBuf::from(p)
 }
 
 fn http_socket_path() -> PathBuf {
-    runtime_dir().join("hum.sock.http")
+    let mut p = socket_base().into_os_string();
+    p.push(".http");
+    PathBuf::from(p)
 }
 
 fn penny_path() -> PathBuf {
