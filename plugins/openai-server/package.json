@@ -1,0 +1,19 @@
+{
+  "name": "@hum/openai-server",
+  "version": "0.0.0",
+  "description": "OpenAI-compatible HTTP surface for hum",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "hum-openai-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "@types/node": "^22.19.17"
+  }
+}
