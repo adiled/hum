@@ -86,7 +86,7 @@ const DAEMON_SOCK = (process.env.HUM_SOCKET ?? `${process.env.XDG_RUNTIME_DIR ??
 async function deleteSession(sid: string): Promise<void> {
   // 1. Tell daemon to kill the claude subprocess and drop session state
   try {
-    await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", opencodeSessionId: sid }) });
+    await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
   } catch {}
   // 2. Delete from opencode's side
   try {
@@ -427,8 +427,8 @@ afterEach(async () => {
   for (const sid of activeSessions) {
     try {
       const state = await getSessionState(sid);
-      if (state?.claudeSessionPath) {
-        assertCleanHistory(state.claudeSessionPath);
+      if (state?.nestPath) {
+        assertCleanHistory(state.nestPath);
       }
     } catch (e) {
       // Log but don't swallow — let the assertion fail the test
@@ -899,8 +899,8 @@ describe("e2e-serve: provider migration (#7)", () => {
 
     // JSONL: count ghosts vs seeded entries
     const state = await getSessionState(sid);
-    if (state?.claudeSessionPath && existsSync(state.claudeSessionPath)) {
-      const lines = readFileSync(state.claudeSessionPath, "utf-8").trim().split("\n")
+    if (state?.nestPath && existsSync(state.nestPath)) {
+      const lines = readFileSync(state.nestPath, "utf-8").trim().split("\n")
         .filter(Boolean).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const ghosts = lines.filter((l: any) =>
         l.type === "assistant" && l.message?.content?.[0]?.text?.includes("No response requested")
@@ -934,8 +934,8 @@ describe("e2e-serve: provider migration (#7)", () => {
 
     // JSONL parity: zero ghosts
     const state = await getSessionState(sid);
-    if (state?.claudeSessionPath && existsSync(state.claudeSessionPath)) {
-      const lines = readFileSync(state.claudeSessionPath, "utf-8").trim().split("\n")
+    if (state?.nestPath && existsSync(state.nestPath)) {
+      const lines = readFileSync(state.nestPath, "utf-8").trim().split("\n")
         .filter(Boolean).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const ghosts = lines.filter((l: any) => l.message?.content?.[0]?.text?.includes("No response requested"));
       expect(ghosts.length).toBe(0);
@@ -959,8 +959,8 @@ describe("e2e-serve: provider migration (#7)", () => {
 
     // JSONL parity: no ghosts, no empty assistant entries
     const state = await getSessionState(sid);
-    if (state?.claudeSessionPath && existsSync(state.claudeSessionPath)) {
-      const lines = readFileSync(state.claudeSessionPath, "utf-8").trim().split("\n")
+    if (state?.nestPath && existsSync(state.nestPath)) {
+      const lines = readFileSync(state.nestPath, "utf-8").trim().split("\n")
         .filter(Boolean).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const ghosts = lines.filter((l: any) => l.message?.content?.[0]?.text?.includes("No response requested"));
       expect(ghosts.length).toBe(0);
@@ -995,8 +995,8 @@ describe("e2e-serve: provider migration (#7)", () => {
 
     // JSONL parity: no duplicate user messages from re-seeding
     const state = await getSessionState(sid);
-    if (state?.claudeSessionPath && existsSync(state.claudeSessionPath)) {
-      assertCleanHistory(state.claudeSessionPath);
+    if (state?.nestPath && existsSync(state.nestPath)) {
+      assertCleanHistory(state.nestPath);
     }
   }, TIMEOUT);
 });
@@ -1208,7 +1208,7 @@ describe("e2e-serve: compaction", () => {
     // Send one message via hum to establish a Claude CLI process + JSONL
     await sendMessage(sid, "Quick recap: what is the naming convention we discussed? Just list the key terms.");
     const stateBefore = await getSessionState(sid);
-    const claudeIdBefore = stateBefore?.claudeSessionId;
+    const claudeIdBefore = stateBefore?.nestId;
     expect(claudeIdBefore).toBeTruthy();
 
     // Subscribe to session.compacted event before triggering
@@ -1230,7 +1230,7 @@ describe("e2e-serve: compaction", () => {
 
     // Kill Claude CLI process first to free memory for compaction
     try {
-      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", opencodeSessionId: sid }) });
+      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
     } catch {}
     await new Promise(r => setTimeout(r, 1_000));
 
@@ -1257,7 +1257,7 @@ describe("e2e-serve: compaction", () => {
 
     // Claude session ID must have changed — proves JSONL was re-seeded
     const stateAfter = await getSessionState(sid);
-    expect(stateAfter?.claudeSessionId).not.toBe(claudeIdBefore);
+    expect(stateAfter?.nestId).not.toBe(claudeIdBefore);
   }, 300_000); // 5 min — free model compaction is slow
 });
 
@@ -1338,7 +1338,7 @@ describe("e2e-serve: session forking", () => {
 
     // Verify JSONL was created (cold-start seed happened)
     const state = await getSessionState(forkedSid);
-    expect(state?.claudeSessionId).toBeTruthy();
+    expect(state?.nestId).toBeTruthy();
   }, TIMEOUT);
 });
 
@@ -1405,8 +1405,8 @@ describe("e2e-serve: vision", () => {
 
     // Assert the JSONL contains an image part in Claude CLI format
     const state = await getSessionState(sid);
-    expect(state?.claudeSessionPath).toBeTruthy();
-    const lines = readFileSync(state.claudeSessionPath, "utf-8").trim().split("\n")
+    expect(state?.nestPath).toBeTruthy();
+    const lines = readFileSync(state.nestPath, "utf-8").trim().split("\n")
       .filter(Boolean).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     const userMsgs = lines.filter((l: any) => l.type === "user" && l.message?.role === "user");
     const imageParts = userMsgs.flatMap((l: any) =>
@@ -1495,14 +1495,14 @@ describe("e2e-serve: drone swallow + retrofit", () => {
 
     // Get the JSONL path and corrupt it — delete the file so --resume fails
     const state = await getSessionState(sid);
-    if (state?.claudeSessionPath) {
+    if (state?.nestPath) {
       const { unlinkSync } = await import("fs");
-      try { unlinkSync(state.claudeSessionPath); } catch {}
+      try { unlinkSync(state.nestPath); } catch {}
     }
 
     // Kill the process — next message will respawn with broken seed
     try {
-      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", opencodeSessionId: sid }) });
+      await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) });
     } catch {}
     await new Promise(r => setTimeout(r, 2_000));
 

@@ -65,8 +65,8 @@ export function echo(tone: Tone, ok = true, error?: string): Echo {
 export interface BreathSession {
   sigil: string;
   sid: string;
-  claudeSessionId: string | null;
-  claudeSessionPath: string | null;
+  nestId: string | null;
+  nestPath: string | null;
   // uuid of the last JSONL entry hum considers "in sync" with OC's petals.
   // graft() returns a plain uuid string; the wire type used to be a tuple of
   // [uuid, role] but the role half was never populated. Kept as string to

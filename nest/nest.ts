@@ -9,14 +9,14 @@ import type { HumConfig } from "../fs/config.ts";
 
 import { pickPerch } from "./index.ts";
 import { encodePrompt, encodeToolResult, parseLine } from "./protocol.ts";
-import type { Roost, BloomListener, NestSession, PermitHoldEntry, RoostProc } from "./types.ts";
+import type { Roost, BloomListener, Hum, PermitHoldEntry, RoostProc } from "./types.ts";
 
 export interface NestDeps {
   cfg: HumConfig;
   cliPath: string;
   mcpUrl: string;
-  sessions: Map<string, NestSession>;
-  saveSessions: (sid?: string) => void;
+  hums: Map<string, Hum>;
+  saveHums: (sid?: string) => void;
   drift: {
     mark: (sigil: string, event: string) => void;
     span: (sigil: string, name: string, ms: number) => void;
@@ -44,7 +44,7 @@ export class Nest {
     poolKey: string,
     modelId: string,
     listener: BloomListener,
-    claudeSessionId?: string,
+    resumeId?: string,
     permissions?: unknown[],
     systemPrompt?: string,
     allowedTools?: string[],
@@ -59,7 +59,7 @@ export class Nest {
     }
     let roost = this.roosts.get(poolKey);
 
-    const session = this.d.sessions.get(poolKey);
+    const session = this.d.hums.get(poolKey);
     if (session?.needsRespawn) {
       if (roost) {
         trace("nest.respawn", { poolKey, reason: "seed" });
@@ -69,7 +69,7 @@ export class Nest {
         roost = undefined;
       }
       session.needsRespawn = false;
-      this.d.saveSessions(poolKey);
+      this.d.saveHums(poolKey);
     }
 
     const idleTimer = this.idleTimers.get(poolKey);
@@ -94,7 +94,7 @@ export class Nest {
           trace("nest.rejected", { poolKey, reason: "maxProcs", active: this.roosts.size });
         }
       }
-      roost = this.spawnProc(poolKey, modelId, claudeSessionId ?? session?.claudeSessionId ?? undefined, permissions, systemPrompt, allowedTools, sessionCwd, planMode);
+      roost = this.spawnProc(poolKey, modelId, resumeId || session.nest?.[0]?.id || undefined, permissions, systemPrompt, allowedTools, sessionCwd, planMode);
     } else {
       mcpSetPerms((permissions ?? []) as any);
       mcpSetAllowed(allowedTools);
@@ -195,7 +195,7 @@ export class Nest {
   private spawnProc(
     poolKey: string,
     modelId: string,
-    claudeSessionId?: string,
+    resumeId?: string,
     permissions?: unknown[],
     systemPrompt?: string,
     allowedTools?: string[],
@@ -245,11 +245,11 @@ export class Nest {
     }
     const spawnCwd = sessionCwd ?? process.env.HUM_CWD ?? process.env.HOME ?? "/";
 
-    let effectiveResumeId: string | undefined = claudeSessionId;
-    if (claudeSessionId) {
-      const jsonlPath = getSessionPath(spawnCwd, claudeSessionId);
+    let effectiveResumeId: string | undefined = resumeId;
+    if (resumeId) {
+      const jsonlPath = getSessionPath(spawnCwd, resumeId);
       if (!existsSync(jsonlPath)) {
-        trace("nest.resume.stale", { poolKey, claudeSessionId, jsonlPath });
+        trace("nest.resume.stale", { poolKey, resumeId, jsonlPath });
         effectiveResumeId = undefined;
       } else {
         try {
@@ -263,7 +263,7 @@ export class Nest {
       }
     }
 
-    const harnessSessionId = usePty ? (effectiveResumeId ?? randomUUID()) : effectiveResumeId;
+    const harnessSessionId = usePty ? (effectiveResumeId || randomUUID()) : effectiveResumeId;
     if (effectiveResumeId) {
       cmd.push("--resume", effectiveResumeId);
     } else if (usePty && harnessSessionId) {
@@ -301,7 +301,7 @@ export class Nest {
 
     const roost: Roost = { proc: roostProc, listeners: new Map(), activeSid: null, ephemeral: perch.ephemeral, poolKey };
     this.roosts.set(poolKey, roost);
-    info("nest.awakened", { poolKey, model: modelId, pid: roostProc.pid, usePty, resume: claudeSessionId ?? "none" });
+    info("nest.awakened", { poolKey, model: modelId, pid: roostProc.pid, usePty, resume: resumeId ?? "none" });
     this.d.thrumPulse("roost-spawned", poolKey, { pid: roostProc.pid });
 
     if (!perch.ephemeral) {

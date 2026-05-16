@@ -41,7 +41,7 @@ async function createSession(): Promise<string> {
 }
 
 async function deleteSession(sid: string): Promise<void> {
-  try { await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", opencodeSessionId: sid }) }); } catch {}
+  try { await unixFetch(DAEMON_SOCK, "/", { method: "POST", body: JSON.stringify({ action: "cleanup", pluginId: sid }) }); } catch {}
   try { const p = spawn("opencode", ["session", "delete", sid].filter(Boolean), { cwd: PROJECT_DIR, stdio: ["pipe", "pipe", "pipe"] }); await new Promise<void>(r => p.on("exit", () => r())); } catch {}
 }
 

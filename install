@@ -276,6 +276,43 @@ migrate_from_clwnd() {
     DID=1
   fi
 
+  # State directory + sessions.json → hums.json. The daemon's loadHums()
+  # also handles in-memory porting of flat claudeSessionId / opencodeSessionId
+  # / claudeSessionPath fields into nest[] / plugin[] arrays on next load;
+  # this step just lines up the filename so loadHums finds the data.
+  local OLD_STATE="$HOME/.local/state/clwnd"
+  local NEW_STATE="$HOME/.local/state/hum"
+  if [ -d "$OLD_STATE" ] && [ ! -d "$NEW_STATE" ]; then
+    echo "[migrate] $OLD_STATE → $NEW_STATE"
+    mv "$OLD_STATE" "$NEW_STATE"
+    DID=1
+  fi
+  if [ -f "$NEW_STATE/sessions.json" ] && [ ! -f "$NEW_STATE/hums.json" ]; then
+    mv "$NEW_STATE/sessions.json" "$NEW_STATE/hums.json"
+    DID=1
+  fi
+  if [ -f "$NEW_STATE/hums.json" ] && command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs = require("fs");
+      const path = process.argv[1];
+      const data = JSON.parse(fs.readFileSync(path, "utf8"));
+      let changed = false;
+      for (const [oid, s] of Object.entries(data)) {
+        if (!s || typeof s !== "object") continue;
+        const cwd = s.cwd ?? process.env.HOME ?? "/";
+        if (!Array.isArray(s.nest))   { s.nest   = [{ nest: "claude-repl", id: s.claudeSessionId ?? "" }]; changed = true; }
+        if (!Array.isArray(s.plugin)) { s.plugin = [{ plugin: "opencode",  id: s.opencodeSessionId ?? oid }]; changed = true; }
+        if ("claudeSessionId"   in s) { delete s.claudeSessionId;   changed = true; }
+        if ("opencodeSessionId" in s) { delete s.opencodeSessionId; changed = true; }
+        if ("claudeSessionPath" in s) { delete s.claudeSessionPath; changed = true; }
+      }
+      if (changed) {
+        fs.writeFileSync(path, JSON.stringify(data));
+        console.log("[migrate] hums.json ported flat -> nest[]/plugin[]");
+      }
+    ' "$NEW_STATE/hums.json" || true
+  fi
+
   if [ "$DID" = "1" ]; then
     echo "[migrate] clwnd → hum migration complete."
   fi

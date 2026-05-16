@@ -60,7 +60,7 @@ Respond with ONLY JSON: { "action": "reseed" | "alert" | "none", "reason": "one 
   "stuck": `No tokens streaming but the process is alive. In-flight tools with no progress. Permission pending with no user action.
 Respond with ONLY JSON: { "action": "respawn" | "alert" | "none", "reason": "one line" }`,
 
-  "drift": `Local and remote wane diverge. One side's state is stale. This means turnsSent, claudeSessionId, or needsRespawn are out of sync.
+  "drift": `Local and remote wane diverge. One side's state is stale. This means turnsSent, nestId, or needsRespawn are out of sync.
 Respond with ONLY JSON: { "action": "reseed" | "respawn" | "none", "reason": "one line" }`,
 
   "duplicate": `The AI repeated the same text or tool call. Suggests double-emission from streaming + final message, or duplicate thrum routing.

@@ -250,7 +250,7 @@ async function awakenHum(): Promise<void> {
           pluginDrone.heard(msg);
           if (msg.chi === "echo") { trace("thrum.echo", { rid: msg.rid, ok: msg.ok }); continue; }
           if (msg.chi === "breath") {
-            const sessions = (msg.sessions ?? []) as Array<{ sid: string; sigil: string; wane: number }>;
+            const hums = (msg.sessions ?? []) as Array<{ sid: string; sigil: string; wane: number }>;
             trace("thrum.breath.received", { sessions: sessions.length, synced: sessions.length });
             continue;
           }

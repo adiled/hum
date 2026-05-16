@@ -17,7 +17,7 @@ export interface RoostProc {
 
 export interface BloomListener {
   sessionId: string;
-  onRoost(claudeId: string, model: string, tools: string[]): void;
+  onRoost(nestId: string, model: string, tools: string[]): void;
   onPetal(type: string, payload: Record<string, unknown>): void;
   onWilt(harvest: { finishReason: string; usage: Record<string, number> | undefined; providerMetadata: Record<string, unknown> }): void;
   onThorn(wound: string): void;
@@ -31,9 +31,10 @@ export interface Roost {
   poolKey?: string;
 }
 
-export interface NestSession {
+export interface Hum {
   needsRespawn?: boolean;
-  claudeSessionId?: string | null;
+  nest?: Array<{ nest: string; id: string }>;
+  cwd?: string;
 }
 
 export interface PermitHoldEntry {
