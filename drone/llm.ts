@@ -4,7 +4,7 @@
 
 import { TRIAGE_PROMPT, buildTriagePrompt, buildTreatPrompt, type DroneContext, type TriageCategory } from "./prompts.ts";
 import type { Assessment } from "../thrum.ts";
-import { loadConfig } from "../config.ts";
+import { loadConfig } from "../fs/config.ts";
 
 export interface DroneJudgment {
   assessment: Assessment;

@@ -176,10 +176,10 @@ export {
   type DroneBeat,
   type DroneAction,
   type DroneEvaluator,
-} from "../fs/drone/drone.ts";
+} from "../drone/drone.ts";
 
 export {
   classifySuspicion,
   heuristicSuspicion,
   type SuspicionLevel,
-} from "../fs/drone/classify.ts";
+} from "../drone/classify.ts";

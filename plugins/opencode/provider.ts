@@ -10,7 +10,7 @@ import { appendFileSync, mkdirSync } from "fs";
 import { connect as netConnect, type Socket as NetSocket } from "net";
 import { loadConfig, type HumConfig as CfgShape } from "../../fs/config.ts";
 import { sigil as makeSigil, duskIn } from "../../thrum/index.ts";
-import { Drone, stubDrone, type DroneAction } from "../../fs/drone/index.ts";
+import { Drone, stubDrone, type DroneAction } from "../../drone/index.ts";
 import { sessionPathParam, setCompatTrace } from "./compat.ts";
 
 import type {

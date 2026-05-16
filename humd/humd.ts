@@ -8,14 +8,14 @@ import { fileURLToPath } from "url";
 import { trace, info } from "../log.ts";
 import { loadConfig } from "../fs/config.ts";
 import { sigil, rid as makeRid, echo, pulse, isDusk, WaneTracker, type Tone, type Breath, type BreathSession, type Reach, type PulseKind, type Pulse } from "../thrum/index.ts";
-import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../fs/drone/index.ts";
+import { Drone, classifySuspicion, droneThink, setDroneWorkspace, releaseDroneSession, stubDrone, Cup, type DroneBeat, type DroneState, type DroneAction } from "../drone/index.ts";
 import { graft, createSession as createClaudeSession, sessionDir as getSessionDir, sessionPath as getSessionPath, lastUuid, sanitizeJsonl, pruneJsonl, type GraftResult } from "../fs/session.ts";
-import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../fs/penny.ts";
-import * as drift from "../fs/drift.ts";
+import { penny, pennyAdd, pennyLoad, pennySave, pennyReset, type PennyDelta } from "../penny/index.ts";
+import * as drift from "../drift/index.ts";
 import { pickPerch, type RoostProc } from "../nest/index.ts";
 import { Nest, type NestDeps } from "../nest/nest.ts";
 import type { Roost, BloomListener, PermitHoldEntry } from "../nest/types.ts";
-import { mintId } from "../fs/id.ts";
+import { mintId } from "../id.ts";
 
 
 // BloomListener, Roost, encodePrompt/encodeToolResult, parseLine, and the

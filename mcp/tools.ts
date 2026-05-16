@@ -8,8 +8,8 @@ import { execSync, spawn as spawnProc } from "child_process";
 import { resolve, dirname, relative, extname, join as pathJoin } from "path";
 
 import { trace } from "../log.ts";
-import { penny } from "../fs/penny.ts";
-import * as drift from "../fs/drift.ts";
+import { penny } from "../penny/index.ts";
+import * as drift from "../drift/index.ts";
 import { fileSymbols, formatSymbols, readSymbol, isSupported as astSupported, isWasmLanguage, astGrep, searchSymbols, validateSyntax, symbolByteRange, type Symbol } from "../fs/ast.ts";
 import { loadConfig } from "../fs/config.ts";
 import { resolveWord, resolvePhrase, resolveSentence, resolveParagraph, discoverAnchors, formatAnchors } from "../fs/linguistic.ts";
