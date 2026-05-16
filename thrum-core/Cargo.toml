@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Wire-protocol types and primitives for the thrum (NDJSON socket between humd and nestlings)."
+build = "build.rs"
 
 [dependencies]
 serde = { workspace = true }
@@ -13,6 +14,9 @@ hex = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = "0.12"
 strum = { version = "0.26", features = ["derive"] }
+
+[build-dependencies]
+codegen = { path = "../codegen" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

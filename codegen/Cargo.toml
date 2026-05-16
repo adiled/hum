@@ -3,13 +3,15 @@ name = "codegen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Generate consumer-side chi registries from the Rust source of truth (thrum-core). Today: emit thrum/generated.ts. Tomorrow: proto, JSON Schema, …"
+description = "Generate consumer-side chi registries from the Rust source of truth (thrum-core/src/chi.rs). Today: emit thrum/chi.ts. Tomorrow: proto, JSON Schema, …"
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "codegen"
 path = "src/main.rs"
 
 [dependencies]
-thrum-core = { path = "../thrum-core" }
-strum = "0.26"
 anyhow = { workspace = true }
+regex = { workspace = true }

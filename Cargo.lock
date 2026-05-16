@@ -207,8 +207,7 @@ name = "codegen"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "strum",
- "thrum-core",
+ "regex",
 ]
 
 [[package]]
@@ -1283,6 +1282,7 @@ dependencies = [
 name = "thrum-core"
 version = "0.0.0"
 dependencies = [
+ "codegen",
  "hex",
  "parking_lot",
  "serde",
