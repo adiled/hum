@@ -11,7 +11,7 @@ the wire is supposed to do under it.
 Prose lives here so the *shape* of the narrative can be argued without
 the noise of test fixtures. The matching test under `sim/` asserts the
 same story in Rust, against the in-memory ensemble transport
-(`ensemble::InMemoryEndpoint`) wired by [`/root/clwnd/sim/`](../sim/).
+(`ensemble::InMemoryEndpoint`) wired by [`/root/hum/sim/`](../sim/).
 
 Pairing is strict — one MD, one test:
 
@@ -33,7 +33,7 @@ same document in two registers.
 
 For the daemon-native shape these scenarios exercise — `HumdId`,
 `PeerCapabilities`, `Transport`, `Ensemble::route` — see
-[`/root/clwnd/ensemble/`](../ensemble/). Wane tracking lives in
+[`/root/hum/ensemble/`](../ensemble/). Wane tracking lives in
 `thrum-core::WaneTracker`. Trust tiers (T1 own-devices through T4 open
 p2p) appear here as setup parameters; the daemon code is identical
 across tiers, only the `Transport` impl swaps.

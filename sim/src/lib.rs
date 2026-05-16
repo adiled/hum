@@ -262,6 +262,18 @@ impl Sim {
         result
     }
 
+    /// Tap the next tone arriving from a peer (via the ensemble) at
+    /// `humd`. Returns `None` on timeout. Useful for tests that prove
+    /// pure routing — no nest, no sid claim, no broadcast required.
+    pub async fn humd_peer_tap(&self, humd: HumdId, timeout: Duration) -> Option<Value> {
+        let h = self.humds.read().get(&humd).cloned()?;
+        let mut rx = h.ensemble.subscribe();
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Ok(tone)) => Some(tone),
+            _ => None,
+        }
+    }
+
     /// Shutdown all humds and drain their join handles.
     pub async fn shutdown(self) {
         let humds: Vec<Arc<SimHumd>> = self.humds.read().values().cloned().collect();

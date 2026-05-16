@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn cwd_hash_basic() {
-        assert_eq!(cwd_hash(Path::new("/root/clwnd")), "-root-clwnd");
+        assert_eq!(cwd_hash(Path::new("/root/hum")), "-root-hum");
         assert_eq!(cwd_hash(Path::new("/a_b.c/d")), "-a-b-c-d");
     }
 

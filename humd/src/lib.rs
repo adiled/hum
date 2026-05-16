@@ -182,6 +182,29 @@ where
         trace!("mcp.bind.skipped");
     }
 
+    // Ensemble inbound pump — every tone arriving from a peer humd is
+    // injected back through our own Thrum's sink as if it had arrived
+    // from a special "ensemble" client. This is how `to:`-routed tones
+    // from peer-A reach peer-B's HumdSink dispatch.
+    if let Some(ens) = cfg.ensemble.clone() {
+        let mut rx = ens.subscribe();
+        let thrum_for_pump = thrum.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(tone) => {
+                        thrum_for_pump.inject_tone("ensemble", tone).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "ensemble.inbox.lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            trace!("ensemble.inbox.closed");
+        });
+    }
+
     info!("humd.ready");
     shutdown.await;
     info!("humd.shutting-down");
