@@ -578,7 +578,9 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
       if ("systemPrompt" in msg && systemPrompt !== undefined) session.lastSystemPrompt = systemPrompt;
       if ("allowedTools" in msg && allowedTools !== undefined) session.lastAllowedTools = allowedTools;
       const cwd = msg.cwd as string | undefined;
-      const ocServerUrl = (msg.ocServerUrl as string) || DEFAULT_OC_URL;
+      // OC's HTTP callback URL is nestling-private — pulled from ext.opencode.
+      const ext = (msg.ext as Record<string, Record<string, unknown>> | undefined) ?? {};
+      const ocServerUrl = ((ext.opencode?.serverUrl as string | undefined) ?? DEFAULT_OC_URL);
 
       if (cwd) mcpSetCwd(cwd);
       if (permissions.length > 0) {
@@ -619,7 +621,10 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           clearNestlerTools(sid);
         }
 
-        // External MCP tools — register for this session, respawn if changed
+        // External MCP tool advertisement — universal hum concept.
+        // A nestler that already knows the tool names served by each
+        // externalMcps server can hint them so the daemon's tools/list
+        // response is complete without a synchronous discovery round-trip.
         const extTools = (msg.externalTools as ExternalToolDef[] | undefined) ?? [];
         const prevNames = (session.externalToolNames ?? []).join(",");
         const currNames = extTools.map(t => t.name).sort().join(",");
@@ -635,8 +640,11 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           }
         }
 
-        // External MCP server configs — daemon connects directly for tool execution
-        const mcpConfigs = (msg.mcpServerConfigs as Array<Record<string, any>> | undefined) ?? [];
+        // External MCP servers (universal hum concept) — the daemon
+        // connects directly to each and executes tool calls on the
+        // nestler's behalf. Tool name registration follows from the
+        // server's tools/list response, not a separate field.
+        const mcpConfigs = (msg.externalMcps as Array<Record<string, any>> | undefined) ?? [];
         if (mcpConfigs.length > 0) {
           setMcpServerConfigs(sid, mcpConfigs as any);
           trace("mcp.configs.registered", { sid, servers: mcpConfigs.map(c => c.name).join(",") });
@@ -644,8 +652,9 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
           clearMcpServerConfigs(sid);
         }
 
-        // Visible tools — OC decides what Claude sees (filtered by agent permissions)
-        const visibleToolNames = msg.visibleTools as string[] | undefined;
+        // Visible tool names — universal filter over hum's full surface
+        // (native + nestler-declared + external MCP). Omit to advertise all.
+        const visibleToolNames = msg.visibleToolNames as string[] | undefined;
         if (visibleToolNames && visibleToolNames.length > 0) {
           setVisibleTools(sid, visibleToolNames);
         }

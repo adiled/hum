@@ -4,7 +4,7 @@
 
 import { createConnection, type Socket } from "node:net";
 
-export const THRUM_VERSION = "0.1.0";
+export const THRUM_VERSION = "0.2.0";
 export const NESTLING_NAME = "grpc";
 
 export type Tone = Record<string, unknown>;

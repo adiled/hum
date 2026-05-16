@@ -13,7 +13,7 @@
 // log a warning on mismatch. The protocol itself doesn't enforce a minimum
 // version yet — see `chi/handshake.ts` (not built) when that arrives.
 
-export const THRUM_VERSION = "0.1.0";
+export const THRUM_VERSION = "0.2.0";
 
 // Every wire-known chi value. Adding a new one bumps the minor version.
 export const Chi = {
@@ -79,6 +79,14 @@ export interface Envelope {
   wane?: number;        // sender's wane for this sigil at send time
   sentAt?: number;      // ms timestamp — for drift attribution
   dusk?: number;        // absolute expiry — past this, drop tone
+
+  // Nestling-private extension bag. Each nestling owns its own key:
+  //   ext.opencode.serverUrl, ext.vercel-ai.someField, …
+  // Thrum core ignores ext; the receiving nestling (or humd, when it
+  // needs to bridge to a specific nestler) reads its own slot.
+  // Always optional. Universal concepts live as top-level fields; only
+  // truly nestling-private state belongs here.
+  ext?: Record<string, Record<string, unknown>>;
 }
 
 // ─── Tone shapes ─────────────────────────────────────────────────────────
@@ -94,27 +102,66 @@ export interface HelloTone extends Envelope {
   nestlerVersion?: string; // package version of the nestling
 }
 
+// A petal is one unit of conversation content (text, image, tool_use,
+// tool_result, …). priorPetals on a prompt is hum's vocabulary for
+// "the history that arrived before this turn." Each nestling sources
+// its petals however it likes — OC walks `client.session.messages`,
+// another might read its own conversation store.
+export type Petal = Record<string, unknown>;
+
+// External MCP server config — hum's universal way to declare an MCP
+// server the daemon should connect to on the nestler's behalf. Same
+// shape whether the nestler discovered it via OC config, env vars,
+// or its own UI.
+export type ExternalMcp =
+  | { name: string; type: "local"; command: string[]; environment?: Record<string, string> }
+  | { name: string; type: "remote"; url: string; headers?: Record<string, string> };
+
 export interface PromptTone extends Envelope {
   chi: "prompt";
   sid: string;
   modelId: string;
+  // The current turn's user input. `content` is the structured form
+  // (text + image parts etc.); `text` is the flat string shortcut.
   content?: string | Array<Record<string, unknown>>;
   text?: string;
   systemPrompt?: string;
+  // Working directory humd binds this hum to. Drives transcript
+  // location and hum-fs MCP grounding. Omit for pure inference.
   cwd?: string;
   nestling?: string;
   nest?: "claude-repl" | "claude-cli";
   hearOnly?: boolean;
+  // Nestler-declared tools. The daemon advertises these to the model
+  // via MCP and forwards calls back to the nestler over thrum.
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  // Per-hum permission rules (allow/deny patterns). Universal shape;
+  // each nestler maps its own permission model onto this.
   permissions?: unknown[];
+  // Subset of tool names the model is allowed to see this turn.
   allowedTools?: string[];
-  priorPetals?: unknown[];
+  // Conversation history known to the nestler at send time. Daemon
+  // grafts new petals into the nest's transcript on receive.
+  priorPetals?: Petal[];
+  // Skip the graft step for this turn — used when the nestler knows
+  // the transcript already matches its view (e.g. mid-tool returns).
   skipGraft?: boolean;
   planMode?: boolean;
-  mcpServerConfigs?: unknown[];
-  visibleTools?: string[];
-  externalTools?: unknown[];
-  ocServerUrl?: string;
+  // External MCP servers the daemon should connect to for this hum.
+  // Daemon executes their tools directly, surfaces results to the model.
+  externalMcps?: ExternalMcp[];
+  // Tool names + schemas served by `externalMcps`. Universal hum
+  // optimization: a nestler that already knows them spares the daemon
+  // a synchronous tools/list discovery round-trip per spawn. Omit and
+  // the daemon will discover them on demand (TODO).
+  externalTools?: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }>;
+  // Tool names that should be visible to the model this turn — a
+  // filter over hum's native tools + nestler-declared tools + external
+  // MCP tools. Omit to advertise all.
+  visibleToolNames?: string[];
+  // Penny is hum's lifetime accounting. Nestlers ship counter
+  // increments (number of token swaps, tool exec counts, etc.) that
+  // the daemon merges into its persistent ledger.
   pennyDelta?: Record<string, number>;
 }
 
@@ -153,16 +200,22 @@ export interface ToolResultTone extends Envelope {
   result: string;
 }
 
+// A petal-cell is the nestler's view of one unit of its conversation
+// state — the nestler's analog to a JSONL entry in the nest's
+// transcript. Cell is hum's vocab for "the addressable container
+// around a petal." Nestlers ship petal-cell tones whenever their
+// view of the hum's conversation graph changes, so the daemon can
+// keep the nest's transcript aligned (graft, prune, retag).
 export interface PetalCellTone extends Envelope {
   chi: "petal-cell";
   sid: string;
-  event: string;
-  role?: string;
-  model?: string;
-  provider?: string;
-  messageId?: string;
-  parentId?: string;
-  completed?: number;
+  event: string;            // what changed: "updated", "removed", …
+  role?: string;            // petal role: user / assistant / tool / system
+  model?: string;            // model id at the time of the petal
+  provider?: string;         // provider id at the time of the petal
+  messageId?: string;        // nestler's id for this petal
+  parentId?: string;         // parent in the nestler's graph
+  completed?: number;        // ms timestamp the petal finalized
 }
 
 export interface BreathSessionView {

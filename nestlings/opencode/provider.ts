@@ -246,7 +246,7 @@ async function awakenHum(): Promise<void> {
           rid: `hello-${Date.now().toString(36)}`,
           from: "opencode",
           nestling: "opencode",
-          protoVersion: "0.1.0",
+          protoVersion: "0.2.0",
         }) + "\n");
       } catch { /* socket already dead — ignore */ }
     });
@@ -1147,11 +1147,11 @@ export class HumModel implements LanguageModelV3 {
         ...(sendAllowedTools ? { allowedTools } : {}),
         hearOnly,
         skipGraft: skipGraft || undefined,
-        ocServerUrl: self.config.pluginInput?.serverUrl?.toString(),
+        ext: { opencode: { serverUrl: self.config.pluginInput?.serverUrl?.toString() } },
         ...(elidePriorPetals ? {} : { priorPetals }),
         externalTools: externalTools.length > 0 ? externalTools : undefined,
-        mcpServerConfigs: await getMcpServerConfigs(this.config.client),
-        visibleTools: visibleExternalNames,
+        externalMcps: await getMcpServerConfigs(this.config.client),
+        visibleToolNames: visibleExternalNames,
         planMode: isPlan || undefined,
         ...(pd ? { pennyDelta: pd } : {}),
         dusk: duskIn(30_000),
@@ -1230,7 +1230,7 @@ export class HumModel implements LanguageModelV3 {
             content, text, systemPrompt,
             permissions, allowedTools, hearOnly,
             skipGraft: skipGraft || undefined,
-            ocServerUrl: self.config.pluginInput?.serverUrl?.toString(),
+            ext: { opencode: { serverUrl: self.config.pluginInput?.serverUrl?.toString() } },
             priorPetals,
             planMode: isPlan || undefined,
             dusk: duskIn(30_000),
