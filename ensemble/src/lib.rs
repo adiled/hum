@@ -322,19 +322,26 @@ impl Ensemble {
             let peers = self.peers.clone();
             let inbox = self.inbox.clone();
             tokio::spawn(async move {
+                // Only the FIRST chi:"hello" off this connection is the
+                // peer handshake — we absorb it to learn caps. Any
+                // subsequent chi:"hello" is application-level (a
+                // tunnelled nestler announcing itself, etc.) and must
+                // pass through to subscribers.
+                let mut handshake_seen = false;
                 while let Some(tone) = rx.recv().await {
-                    if tone.get("chi").and_then(|v| v.as_str()) == Some("hello") {
+                    let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
+                    if is_hello && !handshake_seen {
+                        handshake_seen = true;
                         if let Some(caps) = parse_hello_caps(&tone) {
                             if let Some(p) = peers.write().get_mut(&id) {
                                 p.learned_caps = Some(caps);
                             }
                         }
-                        // Hellos are absorbed — daemon code shouldn't have
-                        // to filter handshake tones out of the firehose.
+                        // First hello absorbed — handshake done.
                         continue;
                     }
-                    // Receivers may be absent (no subscribers yet); that's
-                    // fine — broadcast drops to nobody listening.
+                    // Everything else (including subsequent hellos) fans
+                    // out. Receivers may be absent — broadcast drops.
                     let _ = inbox.send(tone);
                 }
             });
@@ -549,6 +556,48 @@ mod tests {
         let learned_a = ensemble_b.peer_caps(&a_id).expect("a registered on b");
         assert_eq!(learned_a.nests, vec!["claude-cli".to_string()]);
         assert!(learned_a.can_relay);
+    }
+
+    /// Second + subsequent hellos on the same peer connection are
+    /// application-level (e.g. a tunneled nestler announcing itself
+    /// via the ensemble) and must surface to subscribers. Only the
+    /// first hello — the handshake — is absorbed.
+    #[tokio::test]
+    async fn second_hello_on_same_peer_passes_through() {
+        let me = HumdId::random();
+        let peer_id = HumdId::random();
+        let (mine, theirs) = InMemoryEndpoint::pair(
+            me, PeerCapabilities::default(),
+            peer_id, PeerCapabilities::default(),
+        );
+
+        let ensemble = Ensemble::new(me);
+        let mut sub = ensemble.subscribe();
+        ensemble.install(mine, PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() });
+
+        // First hello — handshake, absorbed.
+        theirs
+            .send(hello_tone(&peer_id, &PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }))
+            .await
+            .unwrap();
+        // Second hello — application-level, should fan out.
+        theirs
+            .send(json!({
+                "chi": "hello",
+                "rid": "tunneled-hello",
+                "from": "nestler-via-tunnel",
+                "nestling": "vercel-ai",
+            }))
+            .await
+            .unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("subscribe channel timed out")
+            .expect("subscribe channel closed");
+        assert_eq!(got.get("chi").unwrap(), "hello");
+        assert_eq!(got.get("rid").unwrap(), "tunneled-hello");
+        assert_eq!(got.get("nestling").unwrap(), "vercel-ai");
     }
 
     /// Non-hello tones from a peer must reach `subscribe()` listeners;

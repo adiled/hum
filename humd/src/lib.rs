@@ -231,6 +231,36 @@ struct HumdSink {
 struct NestListener {
     sid: String,
     thrum: Thrum,
+    /// When the prompt arrived from a peer humd, `origin` carries that
+    /// humd's id. Reply tones (chunk, finish, session-ready, error) get
+    /// stamped `to: <origin>` and routed via the ensemble so they reach
+    /// the originating peer. None ⇒ purely local nestler, normal
+    /// thrum_broadcast suffices.
+    origin: Option<ensemble::HumdId>,
+    ensemble: Option<Arc<Ensemble>>,
+}
+
+impl NestListener {
+    /// Build a reply tone and dispatch — locally and/or to the origin
+    /// peer. Idempotent across both branches: a reply to a local
+    /// nestler just goes through thrum_broadcast; a reply for a remote
+    /// origin gets stamped with `to:` and routed via the ensemble.
+    /// Both happen when the listener serves a hum that is being
+    /// observed locally AND owned by a peer.
+    async fn dispatch_reply(&self, tone: serde_json::Map<String, Value>) {
+        let mut value = Value::Object(tone);
+        if let (Some(origin), Some(ens)) = (&self.origin, &self.ensemble) {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("to".into(), Value::String(origin.to_hex()));
+                obj.insert("from".into(), Value::String(ens.me().to_hex()));
+            }
+            if let Err(e) = ens.route(value.clone()).await {
+                warn!(sid = %self.sid, err = %e, "reply.route.failed");
+            }
+        }
+        // Local broadcast — no-op if no local clients claim the sigil.
+        self.thrum.thrum_broadcast(&self.sid, "claude", value);
+    }
 }
 
 #[async_trait::async_trait]
@@ -246,41 +276,38 @@ impl nest::Listener for NestListener {
         if let Some(obj) = payload.as_object() {
             for (k, v) in obj { body.insert(k.clone(), v.clone()); }
         }
-        self.thrum.thrum_broadcast(&self.sid, "claude", Value::Object(body));
+        self.dispatch_reply(body).await;
     }
 
     async fn on_roost(&self, nest_id: &str, model: &str, tools: Vec<String>) {
-        let tone = serde_json::json!({
-            "chi": "session-ready",
-            "sid": self.sid,
-            "rid": thrum_core::rid(),
-            "nestId": nest_id,
-            "model": model,
-            "tools": tools,
-        });
-        self.thrum.thrum_broadcast(&self.sid, "claude", tone);
+        let mut body = serde_json::Map::new();
+        body.insert("chi".into(), Value::String("session-ready".into()));
+        body.insert("sid".into(), Value::String(self.sid.clone()));
+        body.insert("rid".into(), Value::String(thrum_core::rid()));
+        body.insert("nestId".into(), Value::String(nest_id.into()));
+        body.insert("model".into(), Value::String(model.into()));
+        body.insert("tools".into(), serde_json::json!(tools));
+        self.dispatch_reply(body).await;
     }
 
     async fn on_wilt(&self, finish_reason: &str, usage: Option<Value>, provider_meta: Value) {
-        let tone = serde_json::json!({
-            "chi": "finish",
-            "sid": self.sid,
-            "rid": thrum_core::rid(),
-            "finishReason": finish_reason,
-            "usage": usage.unwrap_or(Value::Null),
-            "providerMetadata": provider_meta,
-        });
-        self.thrum.thrum_broadcast(&self.sid, "claude", tone);
+        let mut body = serde_json::Map::new();
+        body.insert("chi".into(), Value::String("finish".into()));
+        body.insert("sid".into(), Value::String(self.sid.clone()));
+        body.insert("rid".into(), Value::String(thrum_core::rid()));
+        body.insert("finishReason".into(), Value::String(finish_reason.into()));
+        body.insert("usage".into(), usage.unwrap_or(Value::Null));
+        body.insert("providerMetadata".into(), provider_meta);
+        self.dispatch_reply(body).await;
     }
 
     async fn on_thorn(&self, wound: &str) {
-        let tone = serde_json::json!({
-            "chi": "error",
-            "sid": self.sid,
-            "rid": thrum_core::rid(),
-            "message": wound,
-        });
-        self.thrum.thrum_broadcast(&self.sid, "claude", tone);
+        let mut body = serde_json::Map::new();
+        body.insert("chi".into(), Value::String("error".into()));
+        body.insert("sid".into(), Value::String(self.sid.clone()));
+        body.insert("rid".into(), Value::String(thrum_core::rid()));
+        body.insert("message".into(), Value::String(wound.into()));
+        self.dispatch_reply(body).await;
     }
 }
 
@@ -303,6 +330,33 @@ impl ToneSink for HumdSink {
                     if let Err(e) = ensemble.route(tone).await {
                         warn!(client_id, err = %e, "ensemble.route.failed");
                     }
+                    return;
+                }
+            }
+        }
+
+        // Inbound from a peer humd carrying daemon→nestler chi: forward
+        // to local clients claiming the sid (the synthetic nestler that
+        // originated the prompt). Without this, replies routed back
+        // across the ensemble hit the daemon but never reach the
+        // nestler tap.
+        if client_id == "ensemble" {
+            let is_reply = matches!(
+                chi,
+                Some(Chi::Chunk)
+                    | Some(Chi::Finish)
+                    | Some(Chi::Error)
+                    | Some(Chi::SessionReady)
+                    | Some(Chi::Pulse)
+                    | Some(Chi::ToolCall)
+                    | Some(Chi::ToolMeta)
+                    | Some(Chi::PermissionAsk)
+            );
+            if is_reply {
+                let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
+                if let Some(sid) = sid_opt {
+                    trace!(client_id, %chi_str, %sid, "thrum.recv.peer-reply.forward");
+                    self.thrum.thrum_broadcast(&sid, "claude", tone);
                     return;
                 }
             }
@@ -333,10 +387,30 @@ impl ToneSink for HumdSink {
                 }
                 self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
                 self.thrum.claim_sigil(client_id, &sid);
-                trace!(sid, model, "thrum.recv.prompt");
+                // Origin detection: if the prompt arrived from a peer
+                // (we received it via the ensemble pump, whose synthetic
+                // client_id is "ensemble", and the tone carries a `from`
+                // humd id that isn't us), reply tones must route back
+                // there via the ensemble.
+                let origin = if client_id == "ensemble" {
+                    tone.get("from")
+                        .and_then(Value::as_str)
+                        .and_then(parse_humd_id)
+                        .filter(|h| {
+                            self.ensemble
+                                .as_ref()
+                                .map(|e| *h != e.me())
+                                .unwrap_or(false)
+                        })
+                } else {
+                    None
+                };
+                trace!(sid, model, ?origin, "thrum.recv.prompt");
                 let listener: Arc<dyn nest::Listener> = Arc::new(NestListener {
                     sid: sid.clone(),
                     thrum: self.thrum.clone(),
+                    origin,
+                    ensemble: self.ensemble.clone(),
                 });
                 let mut spec = nest::SpawnSpec::new(sid.clone(), model.clone(), cwd.clone());
                 spec.system_prompt = system_prompt;
@@ -404,4 +478,14 @@ impl ToneSink for HumdSink {
             }
         }
     }
+}
+
+/// Parse a hex HumdId string back into the typed [`ensemble::HumdId`].
+/// Returns None on bad length or non-hex characters.
+fn parse_humd_id(s: &str) -> Option<ensemble::HumdId> {
+    let bytes = hex::decode(s).ok()?;
+    if bytes.len() != 32 { return None; }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Some(ensemble::HumdId(arr))
 }

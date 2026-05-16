@@ -26,7 +26,6 @@
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires bidirectional ensemble routing for chunk/finish reply tones"]
 async fn phone_laptop_roam() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -54,35 +53,38 @@ async fn phone_laptop_roam() {
     )
     .expect("phone nestler accepts outbound roam prompt");
 
-    // Phone's nestler tap should receive a chi:finish once the laptop's
-    // MockPerch has walked the canned event sequence and the reply has
-    // travelled back across the wire.
-    //
-    // Generous timeout — two humds, one hop, one mock turn.
-    let finish = sim
-        .nestler_recv(phone.id, "hum-X", Duration::from_secs(2))
-        .await;
+    // Phone's nestler tap drains tones on hum-X until it sees the
+    // finish. The bridge emits chunks (stream_start / text_delta /
+    // content_block_stop) before the finish — they all stamp with
+    // `to: <phone.id>` and route back across the wire.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut saw_text_delta = false;
+    let mut finish: Option<serde_json::Value> = None;
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let Some(tone) = sim.nestler_recv(phone.id, "hum-X", remaining).await else { break };
+        let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if chi == "chunk"
+            && tone.get("chunkType").and_then(|v| v.as_str()) == Some("text_delta")
+            && tone.get("delta").and_then(|v| v.as_str()) == Some("HELLO")
+        {
+            saw_text_delta = true;
+        }
+        if chi == "finish" {
+            finish = Some(tone);
+            break;
+        }
+    }
 
-    assert!(
-        finish.is_some(),
-        "phone should receive chi:finish for hum-X within 2s — \
-         reply-tone routing missing if this is None"
-    );
-    let f = finish.unwrap();
+    assert!(saw_text_delta, "phone should see a text_delta chunk with HELLO routed back");
+    let f = finish.expect("phone should receive chi:finish for hum-X within 2s");
+    assert_eq!(f.get("chi").and_then(|v| v.as_str()), Some("finish"));
+    assert_eq!(f.get("sid").and_then(|v| v.as_str()), Some("hum-X"));
+    // The reply tone carries `to: phone.id` because the laptop addressed
+    // it back at the prompt's origin.
     assert_eq!(
-        f.get("chi").and_then(|v| v.as_str()),
-        Some("finish"),
-        "phone tap should see chi:finish, got {f:?}"
+        f.get("to").and_then(|v| v.as_str()),
+        Some(phone.id.to_hex().as_str()),
+        "finish tone should be addressed at the originating humd"
     );
-    assert_eq!(
-        f.get("sid").and_then(|v| v.as_str()),
-        Some("hum-X"),
-        "finish must carry sid hum-X across the wire"
-    );
-
-    // TODO(sim-api): the laptop's HumdSink needs to mark the prompt's
-    // origin (humd-B) on the listener so the wilt/petal callbacks know
-    // to address reply tones with `to: <phone.id hex>`. If sim exposes
-    // an explicit hook (e.g. `sim.set_reply_target(laptop.id, sid,
-    // phone.id)`), wire it here once available.
 }
