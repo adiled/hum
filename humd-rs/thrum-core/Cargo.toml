@@ -1,0 +1,17 @@
+[package]
+name = "thrum-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wire-protocol types and primitives for the thrum (NDJSON socket between humd and nestlings)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = "0.12"
+
+[dev-dependencies]
+serde_json = { workspace = true }

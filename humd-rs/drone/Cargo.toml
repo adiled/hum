@@ -1,0 +1,14 @@
+[package]
+name = "drone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "hum's sentinel: observes every tone, classifies suspicion, assesses health."
+
+[dependencies]
+thrum-core = { path = "../thrum-core" }
+regex = "1"
+parking_lot = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

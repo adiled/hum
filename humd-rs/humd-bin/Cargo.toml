@@ -1,0 +1,39 @@
+[package]
+name = "humd-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "humd — the hum daemon. Boots every wing in one process."
+
+[[bin]]
+name = "humd"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+# Path deps on every workspace crate. mcpd is stubbed inline (TODO)
+# until its registry/server modules compile.
+thrum-core = { path = "../thrum-core" }
+thrumd = { path = "../thrumd" }
+config = { path = "../config" }
+ids = { path = "../ids" }
+graft = { path = "../graft" }
+drift = { path = "../drift" }
+nest = { path = "../nest" }
+hums = { path = "../hums" }
+penny = { path = "../penny" }
+drone = { path = "../drone" }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+
+[[example]]
+name = "smoke"
+path = "examples/smoke.rs"

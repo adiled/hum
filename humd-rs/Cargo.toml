@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "thrum-core",
+    "thrumd",
+    "ids",
+    "config",
+    "codegen",
+    "graft",
+    "drift",
+    "humd-bin",
+    "mcpd",
+    "nest",
+    "hums",
+    "drone",
+    "penny",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+async-trait = "0.1"
+directories = "5"
+parking_lot = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+regex = "1"

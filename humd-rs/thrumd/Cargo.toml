@@ -1,0 +1,17 @@
+[package]
+name = "thrumd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NDJSON unix-socket thrum server — listens, dispatches, broadcasts."
+
+[dependencies]
+thrum-core = { path = "../thrum-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { version = "1", features = ["v4"] }

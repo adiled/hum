@@ -1,0 +1,25 @@
+[package]
+name = "mcpd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "hum's MCP server — HTTP JSON-RPC. Native filesystem + process tools, plus passthrough for nestler-declared and external MCP tools."
+
+[dependencies]
+thrum-core = { path = "../thrum-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.7"
+tower = "0.5"
+parking_lot = "0.12"
+regex = "1"
+base64 = "0.22"
+mime_guess = "2"
+
+[dev-dependencies]
+tokio = { workspace = true }

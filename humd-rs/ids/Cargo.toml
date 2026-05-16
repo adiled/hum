@@ -1,0 +1,9 @@
+[package]
+name = "ids"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "hum-native 256-bit Crockford-base32 identifiers: 48-bit ms timestamp + 208 random bits."
+
+[dependencies]
+rand = { workspace = true }
