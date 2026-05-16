@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Listener, Perch, PerchSpawnArgs, Roost};
+use crate::{encode_cancel, encode_prompt, encode_tool_result, Listener, Perch, SpawnSpec, Roost};
 
 pub struct NestConfig {
     pub max_procs: usize,
@@ -71,7 +71,7 @@ impl Nest {
         self: &Arc<Self>,
         pool_key: &str,
         listener: Arc<dyn Listener>,
-        spawn_args: PerchSpawnArgs,
+        spec: SpawnSpec,
         use_pty: bool,
     ) -> Result<()> {
         // Fast path: existing roost.
@@ -98,7 +98,7 @@ impl Nest {
         } else {
             self.perch_pipe.clone()
         };
-        let roost = perch.spawn(spawn_args).await?;
+        let roost = perch.spawn(spec).await?;
         let ephemeral = roost.ephemeral;
         let pool_key_owned = pool_key.to_string();
 

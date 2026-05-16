@@ -178,6 +178,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nest",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "claude-repl"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nest",
+ "portable-pty",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codegen"
 version = "0.0.0"
 dependencies = [
@@ -490,6 +515,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "claude-cli",
+ "claude-repl",
  "config",
  "drift",
  "drone",

@@ -24,6 +24,8 @@ ids = { path = "../ids" }
 graft = { path = "../graft" }
 drift = { path = "../drift" }
 nest = { path = "../nest" }
+claude-cli = { path = "../nests/claude-cli" }
+claude-repl = { path = "../nests/claude-repl" }
 hums = { path = "../hums" }
 penny = { path = "../penny" }
 drone = { path = "../drone" }

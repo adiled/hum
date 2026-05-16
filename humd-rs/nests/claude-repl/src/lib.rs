@@ -1,12 +1,12 @@
-//! PtyPerch — interactive `claude` over a PTY. v0 stub.
+//! claude-repl — interactive `claude` over a PTY. v0 stub.
 //!
 //! Real behavior in TS lives in `nests/claude-repl/harness.ts`: a FSM
 //! (NESTING → PERCHED → HUNTING → WILTING → HUSHED/FELLED), an ANSI/DEC
 //! responder, hook FIFO, and JSONL transcript synth into stream-json.
 //!
-//! v0: spawn the PTY, watch stdout, mark PERCHED after 2s idle OR when
-//! the prompt glyph `❯` shows up. No transcript synth, no hooks, no
-//! classifier. The roost compiles and runs — it just can't carry a turn.
+//! v0: spawn the PTY, watch stdout, mark PERCHED when the prompt glyph
+//! `❯` shows up. No transcript synth, no hooks, no classifier. The roost
+//! compiles and runs — it just can't carry a turn.
 
 use std::io::Read;
 
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use crate::{Perch, PerchSpawnArgs, Roost};
+use nest::{Perch, Roost, SpawnSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -32,21 +32,52 @@ enum HarnessState {
     Felled,
 }
 
-pub struct PtyPerch;
+pub struct ClaudeReplPerch;
 
-impl Default for PtyPerch {
+impl Default for ClaudeReplPerch {
     fn default() -> Self {
         Self
     }
 }
 
+/// Build the claude args for REPL/PTY mode. No `-p`, no `--input-format` —
+/// interactive Ink TUI mode. Pure function for unit testing.
+pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
+    let mut argv = vec![
+        "--verbose".to_string(),
+        "--model".to_string(), spec.model_id.clone(),
+        "--dangerously-skip-permissions".to_string(),
+        "--disable-slash-commands".to_string(),
+    ];
+    if let Some(mcp_url) = spec.mcp_url.as_deref() {
+        let mcp_config = serde_json::json!({
+            "mcpServers": {
+                "hum": { "type": "http", "url": format!("{}/s/{}", mcp_url, spec.sid) }
+            }
+        }).to_string();
+        argv.push("--mcp-config".into());
+        argv.push(mcp_config);
+        argv.push("--strict-mcp-config".into());
+    }
+    if let Some(sp) = spec.system_prompt.as_deref() {
+        argv.push("--system-prompt".into());
+        argv.push(sp.to_string());
+    }
+    if let Some(harness_sid) = spec.resume_id.as_deref() {
+        argv.push("--resume".into());
+        argv.push(harness_sid.to_string());
+    }
+    argv
+}
+
 #[async_trait]
-impl Perch for PtyPerch {
+impl Perch for ClaudeReplPerch {
     fn ephemeral(&self) -> bool {
         true
     }
 
-    async fn spawn(&self, args: PerchSpawnArgs) -> Result<Roost> {
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
+        let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -57,12 +88,21 @@ impl Perch for PtyPerch {
             })
             .context("openpty")?;
 
-        let mut cmd = CommandBuilder::new(&args.command);
-        cmd.cwd(&args.cwd);
-        for (k, v) in &args.env {
+        let mut cmd = CommandBuilder::new(&cli);
+        cmd.cwd(&spec.cwd);
+        if let Ok(path) = std::env::var("PATH") { cmd.env("PATH", path); }
+        if let Ok(home) = std::env::var("HOME") { cmd.env("HOME", home); }
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
+        cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        cmd.env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1");
+        if !spec.plan_mode {
+            cmd.env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "1");
+        }
+        for (k, v) in &spec.env {
             cmd.env(k, v);
         }
-        for a in &args.args {
+        for a in build_argv(&spec) {
             cmd.arg(a);
         }
 
@@ -98,7 +138,7 @@ impl Perch for PtyPerch {
         // stdout reader — pumped on a blocking thread because portable-pty's
         // Reader is sync. State stays in-task: idle-2s OR sees `❯` → PERCHED.
         let tx_evt_out = tx_evt.clone();
-        let harness_sid = args.harness_session_id.clone().unwrap_or_default();
+        let harness_sid = spec.resume_id.clone().unwrap_or_default();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let mut acc = String::new();

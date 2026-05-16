@@ -16,25 +16,60 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 
-pub mod pipe;
 pub mod pool;
-pub mod pty;
 
-pub use pipe::PipePerch;
 pub use pool::Nest;
-pub use pty::PtyPerch;
 
-/// Args the daemon hands to a perch when it asks for a fresh roost.
+/// High-level spec the daemon hands to a perch. The perch is responsible
+/// for turning this into whatever command line / process invocation its
+/// underlying harness needs — claude CLI args, env vars, etc.  The daemon
+/// stays harness-agnostic.
 #[derive(Debug, Clone)]
-pub struct PerchSpawnArgs {
-    pub command: String,
-    pub args: Vec<String>,
+pub struct SpawnSpec {
+    /// hum session id for this roost.
+    pub sid: String,
+    /// Model id to run on (e.g. "claude-sonnet-4-6", "claude-haiku-4-5").
+    pub model_id: String,
+    /// Working directory for the spawned process. Drives transcript
+    /// location and fs MCP grounding.
     pub cwd: String,
+    /// Optional system prompt to prepend to the conversation.
+    pub system_prompt: Option<String>,
+    /// Optional MCP HTTP base URL (e.g. "http://127.0.0.1:29147"). The
+    /// perch wires this into its harness's MCP config so the spawned
+    /// process can reach hum's tool surface.
+    pub mcp_url: Option<String>,
+    /// Optional path to the claude CLI binary. None → "claude" on PATH.
+    pub cli_path: Option<String>,
+    /// Optional resume id — the harness uses this to pick up an existing
+    /// transcript instead of starting fresh.
+    pub resume_id: Option<String>,
+    /// Plan mode — disables adaptive-thinking env.
+    pub plan_mode: bool,
+    /// Permissions allowlist names — passed to the harness's tool filter.
+    pub permissions: Vec<String>,
+    /// Allowed tool names — narrows what the harness advertises.
+    pub allowed_tools: Vec<String>,
+    /// Extra env overrides spread onto the spawn (after defaults).
     pub env: HashMap<String, String>,
-    /// PTY mode only: id the harness expects the transcript to land at.
-    pub harness_session_id: Option<String>,
-    /// PTY mode only: JSONL transcript file path the harness polls.
-    pub transcript_path: Option<String>,
+}
+
+impl SpawnSpec {
+    pub fn new(sid: impl Into<String>, model_id: impl Into<String>, cwd: impl Into<String>) -> Self {
+        Self {
+            sid: sid.into(),
+            model_id: model_id.into(),
+            cwd: cwd.into(),
+            system_prompt: None,
+            mcp_url: None,
+            cli_path: None,
+            resume_id: None,
+            plan_mode: false,
+            permissions: Vec::new(),
+            allowed_tools: Vec::new(),
+            env: HashMap::new(),
+        }
+    }
 }
 
 /// A Roost is one live Claude subprocess seen from the daemon side.
@@ -59,7 +94,7 @@ pub struct Roost {
 #[async_trait]
 pub trait Perch: Send + Sync {
     fn ephemeral(&self) -> bool;
-    async fn spawn(&self, args: PerchSpawnArgs) -> Result<Roost>;
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost>;
 }
 
 /// Listener receives parsed Claude stream events for one session bound to a

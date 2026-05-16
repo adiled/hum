@@ -11,6 +11,8 @@ members = [
     "humd-bin",
     "mcpd",
     "nest",
+    "nests/claude-cli",
+    "nests/claude-repl",
     "hums",
     "drone",
     "penny",
