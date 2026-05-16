@@ -64,6 +64,7 @@ export type {
   Envelope,
   LooseTone,
   Tone as TypedTone,
+  HelloTone,
   PromptTone, CancelTone, CleanupTone, CurateTone,
   ReleasePermitTone, TendrilResultTone, ToolResultTone, PetalCellTone,
   BreathTone, ChunkTone, FinishTone, ErrorTone,

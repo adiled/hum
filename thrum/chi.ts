@@ -18,6 +18,7 @@ export const THRUM_VERSION = "0.1.0";
 // Every wire-known chi value. Adding a new one bumps the minor version.
 export const Chi = {
   // ── Nestler → Daemon ─────────────────────────────────────────────────
+  hello:         "hello",          // announce self — protoVersion, nestling, version
   prompt:        "prompt",         // start a turn — content, system, tools
   cancel:        "cancel",         // interrupt mid-turn
   cleanup:       "cleanup",        // session deleted, drop daemon state
@@ -83,6 +84,15 @@ export interface Envelope {
 // ─── Tone shapes ─────────────────────────────────────────────────────────
 // Discriminated by `chi`. Each shape names ONLY the chi-specific fields;
 // envelope fields above are merged in.
+
+export interface HelloTone extends Envelope {
+  chi: "hello";
+  // Nestler's announcement on connect. All optional — daemon should
+  // tolerate clients that say nothing more than `chi: "hello"`.
+  protoVersion?: string;   // nestler's thrum protocol version
+  nestling?: string;       // representation name: "opencode", "vercel-ai", "openai-server", "grpc", …
+  nestlerVersion?: string; // package version of the nestling
+}
 
 export interface PromptTone extends Envelope {
   chi: "prompt";
@@ -295,6 +305,7 @@ export interface DroneRetrofitTone extends Envelope {
 // parsing where the chi switches behavior; the loose `LooseTone` is the
 // fallback for code that still treats tones as bag-of-fields.
 export type Tone =
+  | HelloTone
   | PromptTone | CancelTone | CleanupTone | CurateTone
   | ReleasePermitTone | TendrilResultTone | ToolResultTone | PetalCellTone
   | BreathTone | ChunkTone | FinishTone | ErrorTone

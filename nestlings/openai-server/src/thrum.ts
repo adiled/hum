@@ -1,5 +1,8 @@
 import { createConnection, type Socket } from "node:net";
 
+export const THRUM_VERSION = "0.1.0";
+export const NESTLING_NAME = "openai-server";
+
 // Minimal thrum client. Connects to hum's NDJSON socket, sends framed
 // tones, dispatches incoming tones to subscribers by `sid`.
 
@@ -31,6 +34,13 @@ export class ThrumClient {
       s.on("connect", () => {
         this.sock = s;
         this.connected = true;
+        s.write(JSON.stringify({
+          chi: "hello",
+          rid: `hello-${Date.now().toString(36)}`,
+          from: NESTLING_NAME,
+          nestling: NESTLING_NAME,
+          protoVersion: THRUM_VERSION,
+        }) + "\n");
         for (const line of this.pending) s.write(line);
         this.pending = [];
         resolve();

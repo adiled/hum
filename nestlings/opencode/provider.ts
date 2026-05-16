@@ -238,6 +238,17 @@ async function awakenHum(): Promise<void> {
       thrumAlive = true;
       if (thrumReady) { thrumReady.resolve(); thrumReady = null; }
       trace("thrum.connected");
+      // Announce self with the protocol version this nestling targets.
+      // Daemon traces mismatches; harmless if missing.
+      try {
+        thrumSocket?.write(JSON.stringify({
+          chi: "hello",
+          rid: `hello-${Date.now().toString(36)}`,
+          from: "opencode",
+          nestling: "opencode",
+          protoVersion: "0.1.0",
+        }) + "\n");
+      } catch { /* socket already dead — ignore */ }
     });
     thrumSocket.on("data", (data) => {
       thrumEcho += data.toString();

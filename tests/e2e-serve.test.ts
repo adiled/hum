@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync, openSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -363,11 +363,7 @@ beforeAll(async () => {
   // Claude permissions for MCP tools
   mkdirSync(join(PROJECT_DIR, ".claude"), { recursive: true });
   writeFileSync(join(PROJECT_DIR, ".claude", "settings.json"), JSON.stringify({
-    permissions: { allow: [
-      "mcp__hum__read(*)", "mcp__hum__edit(*)", "mcp__hum__write(*)",
-      "mcp__hum__bash(*)", "mcp__hum__glob(*)", "mcp__hum__grep(*)",
-      "mcp__hum__resolve_library_id(*)", "mcp__hum__get_library_docs(*)",
-    ] },
+    permissions: { allow: ["mcp__hum__*"] },
   }, null, 2));
 
 
@@ -378,7 +374,8 @@ beforeAll(async () => {
 
   stamp("project setup done");
   // Start opencode serve — ONCE for the entire suite
-  server = spawn("opencode", ["serve", "--port", String(PORT), "--hostname", "127.0.0.1"], { cwd: PROJECT_DIR, env: { ...process.env }, stdio: ["pipe", "ignore", "ignore"] });
+  const serverLog = openSync("/tmp/oc-serve.log", "w");
+  server = spawn("opencode", ["serve", "--port", String(PORT), "--hostname", "127.0.0.1"], { cwd: PROJECT_DIR, env: { ...process.env }, stdio: ["ignore", serverLog, serverLog] });
 
   // Wait for server readiness
   const deadline = Date.now() + 20_000;

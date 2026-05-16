@@ -4,6 +4,11 @@
 
 import { createConnection, type Socket } from "node:net";
 
+// Thrum protocol version this nestling targets. Bump when adopting a new
+// chi or envelope field that the daemon must understand.
+export const THRUM_VERSION = "0.1.0";
+export const NESTLING_NAME = "vercel-ai";
+
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
 
@@ -36,6 +41,15 @@ export class ThrumClient {
         this.sock = s;
         this.connected = true;
         this.connecting = null;
+        // Announce ourselves before flushing pending. Daemon traces
+        // version mismatches but does not yet reject.
+        s.write(JSON.stringify({
+          chi: "hello",
+          rid: `hello-${Date.now().toString(36)}`,
+          from: NESTLING_NAME,
+          nestling: NESTLING_NAME,
+          protoVersion: THRUM_VERSION,
+        }) + "\n");
         for (const line of this.pending) s.write(line);
         this.pending = [];
         resolve();

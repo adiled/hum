@@ -498,6 +498,20 @@ function thrumHear(clientId: string, msg: Record<string, unknown>): void {
   }
 
   switch (chi) {
+    case "hello": {
+      // Nestler announcing itself. Optional but courteous. Daemon logs
+      // version mismatch as a warning — neither side is forced to react
+      // yet (THRUM_VERSION rev'd minor when shapes evolve; today the
+      // protocol is still 0.x — anything goes).
+      const nestling = msg.nestling as string | undefined;
+      const protoVersion = msg.protoVersion as string | undefined;
+      const nestlerVersion = msg.nestlerVersion as string | undefined;
+      info("thrum.hello", { clientId: clientId.slice(0, 8), nestling, protoVersion, nestlerVersion });
+      if (protoVersion && protoVersion !== THRUM_VERSION) {
+        trace("thrum.version.mismatch", { clientId: clientId.slice(0, 8), daemon: THRUM_VERSION, nestler: protoVersion, nestling });
+      }
+      break;
+    }
     case "perf-mark": {
       // Plugin-emitted perf marks. Daemon merges into the active bloom's
       // record. Each field is optional; multiple may be set per message.
