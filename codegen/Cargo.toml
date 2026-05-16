@@ -3,12 +3,13 @@ name = "codegen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mirror chi.ts → Rust. Tiny CLI: read the TS, emit the enum + THRUM_VERSION."
+description = "Generate consumer-side chi registries from the Rust source of truth (thrum-core). Today: emit thrum/generated.ts. Tomorrow: proto, JSON Schema, …"
 
 [[bin]]
 name = "codegen"
 path = "src/main.rs"
 
 [dependencies]
-regex = { workspace = true }
+thrum-core = { path = "../thrum-core" }
+strum = "0.26"
 anyhow = { workspace = true }

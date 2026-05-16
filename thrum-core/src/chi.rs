@@ -5,13 +5,15 @@
 //! format speaking kebabs (`"tool-call"`, `"release-permit"`).
 
 use serde::{Deserialize, Serialize};
+use strum::{EnumIter, IntoStaticStr};
 
 /// Discriminator for every thrum frame.
 ///
 /// Direction is encoded in the docstring, not the type — the same socket
 /// carries both directions and either end may legally send any chi.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum Chi {
     // ── Nestler → Daemon ────────────────────────────────────────────
     /// announce self — protoVersion, nestling, version
@@ -69,8 +71,9 @@ pub enum Chi {
 }
 
 /// `pulse.kind` — its own enum within `chi:"pulse"` tones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum PulseKind {
     /// process created
     RoostSpawned,

@@ -1,161 +1,136 @@
-//! Mirror `thrum/chi.ts` into Rust. Tiny CLI; no TS parser, just text scanning.
+//! Generate consumer-side chi registries from the Rust source of truth.
 //!
-//! Reads the `Chi` const-object block and the `THRUM_VERSION` literal, emits
-//! a Rust source file with the matching enum and version constant. Validates
-//! that every camelCase TS key, when serialized as kebab-case from the
-//! generated variant, equals its wire value.
+//! `thrum-core/src/chi.rs` owns the canonical `Chi` and `PulseKind` enums
+//! plus `THRUM_VERSION`. This binary iterates them via `strum` and emits a
+//! file targets like TypeScript (`thrum/generated.ts`) can consume.
+//!
+//! Today: emits `thrum/generated.ts` — a TS module exporting the same
+//! const-object + literal-union shape `chi.ts` used to hand-maintain.
+//! `thrum/chi.ts` imports the enums + version from `generated.ts` and
+//! adds the hand-written tone shapes alongside.
+//!
+//! Tomorrow: proto, JSON Schema, Python, … all from the same iter.
 
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context, Result};
-use regex::Regex;
+use anyhow::{Context, Result};
+use strum::IntoEnumIterator;
+use thrum_core::{Chi, PulseKind, THRUM_VERSION};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let input = args
-        .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_input);
-    let output = args
-        .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_output);
+    let target = args.next().unwrap_or_else(|| "ts".into());
+    let output = args.next().map(PathBuf::from);
 
-    let src = fs::read_to_string(&input)
-        .with_context(|| format!("read {}", input.display()))?;
-
-    let version = extract_version(&src)?;
-    let chi = extract_const_block(&src, "Chi")?;
-    let pulse = extract_const_block(&src, "PulseKind")?;
-
-    for (key, wire) in chi.iter().chain(pulse.iter()) {
-        let derived = camel_to_kebab(key);
-        if derived != *wire {
-            bail!(
-                "wire mismatch: key `{}` would serialize as `{}` but file says `{}`",
-                key, derived, wire
-            );
-        }
+    match target.as_str() {
+        "ts" => emit_ts(output.unwrap_or_else(default_ts_output))?,
+        other => anyhow::bail!("unknown target {other}; valid: ts"),
     }
-
-    let out = render_rust(&version, &chi, &pulse);
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).ok();
-    }
-    fs::write(&output, out).with_context(|| format!("write {}", output.display()))?;
-    eprintln!("codegen: {} ({} chi, {} pulse) -> {}", version, chi.len(), pulse.len(), output.display());
     Ok(())
 }
 
-fn default_input() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../thrum/chi.ts")
+fn default_ts_output() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum/chi.ts")
 }
 
-fn default_output() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-core/src/generated.rs")
-}
+fn emit_ts(output: PathBuf) -> Result<()> {
+    let chi: Vec<(&'static str, String)> = Chi::iter()
+        .map(|c| {
+            let wire: &'static str = c.into();
+            let camel = pascal_to_camel(&format!("{:?}", c));
+            (wire, camel)
+        })
+        .collect();
+    let pulse: Vec<(&'static str, String)> = PulseKind::iter()
+        .map(|p| {
+            let wire: &'static str = p.into();
+            let camel = pascal_to_camel(&format!("{:?}", p));
+            (wire, camel)
+        })
+        .collect();
 
-fn extract_version(src: &str) -> Result<String> {
-    let re = Regex::new(r#"export\s+const\s+THRUM_VERSION\s*=\s*"([^"]+)""#)?;
-    let caps = re
-        .captures(src)
-        .ok_or_else(|| anyhow!("THRUM_VERSION not found"))?;
-    Ok(caps[1].to_string())
-}
-
-/// Find `export const <name> = {` and collect `key: "value"` pairs until the
-/// matching `}`. Tolerates `// comments` and arbitrary whitespace; ignores
-/// any line that isn't a key-value pair (e.g. blank or comment-only lines).
-fn extract_const_block(src: &str, name: &str) -> Result<Vec<(String, String)>> {
-    let opener = Regex::new(&format!(r"export\s+const\s+{}\s*=\s*\{{", regex::escape(name)))?;
-    let m = opener
-        .find(src)
-        .ok_or_else(|| anyhow!("`export const {} = {{` not found", name))?;
-    let body_start = m.end();
-    // Walk forward tracking brace depth so we stop at the matching `}`.
-    let bytes = src.as_bytes();
-    let mut depth = 1usize;
-    let mut i = body_start;
-    while i < bytes.len() && depth > 0 {
-        match bytes[i] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    if depth != 0 {
-        bail!("unterminated `{}` block", name);
-    }
-    let body = &src[body_start..i];
-
-    // key:  "value"  — comments after the closing quote are stripped by regex.
-    let pair = Regex::new(r#"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*"([^"]+)""#)?;
-    let mut out = Vec::new();
-    for caps in pair.captures_iter(body) {
-        out.push((caps[1].to_string(), caps[2].to_string()));
-    }
-    if out.is_empty() {
-        bail!("`{}` block parsed but yielded no entries", name);
-    }
-    Ok(out)
-}
-
-fn camel_to_kebab(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn camel_to_pascal(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn render_rust(version: &str, chi: &[(String, String)], pulse: &[(String, String)]) -> String {
     let mut s = String::new();
-    s.push_str("// @generated by `cargo run -p codegen` from thrum/chi.ts — DO NOT EDIT.\n");
+    s.push_str("// @generated by `cargo run -p codegen` from thrum-core/src/chi.rs — DO NOT EDIT.\n");
     s.push_str("//\n");
-    s.push_str("// Source of truth lives in TypeScript so the nestlers and the daemon\n");
-    s.push_str("// agree on one wire registry. Re-run codegen whenever chi.ts moves.\n\n");
-    s.push_str("use serde::{Deserialize, Serialize};\n\n");
-    s.push_str(&format!("pub const THRUM_VERSION: &str = \"{}\";\n\n", version));
+    s.push_str("// Rust is the canonical home of the wire registry. Hand-edit chi.rs;\n");
+    s.push_str("// regen by running `cargo run -p codegen`. This file ships with the\n");
+    s.push_str("// TS side so nestlings don't need a build-time Rust toolchain.\n\n");
 
-    s.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n");
-    s.push_str("#[serde(rename_all = \"kebab-case\")]\n");
-    s.push_str("pub enum Chi {\n");
-    for (key, _wire) in chi {
-        s.push_str(&format!("    {},\n", camel_to_pascal(key)));
+    // ── Version ──
+    s.push_str(&format!("export const THRUM_VERSION = \"{}\" as const;\n\n", THRUM_VERSION));
+
+    // ── Chi registry ──
+    s.push_str("// Every wire-known chi value. Adding a new variant bumps the\n");
+    s.push_str("// protocol minor; renaming/removing bumps major.\n");
+    s.push_str("export const Chi = {\n");
+    for (wire, camel) in &chi {
+        s.push_str(&format!("  {}: \"{}\",\n", camel, wire));
     }
+    s.push_str("} as const;\n");
+    s.push_str("export type ChiKind = typeof Chi[keyof typeof Chi];\n\n");
+    s.push_str("export const ALL_CHI: ReadonlySet<ChiKind> = new Set(Object.values(Chi));\n");
+    s.push_str("export function isValidChi(s: string): s is ChiKind { return ALL_CHI.has(s as ChiKind); }\n\n");
+
+    // ── PulseKind ──
+    s.push_str("// pulse.kind is its own enum within chi:\"pulse\" tones.\n");
+    s.push_str("export const PulseKind = {\n");
+    for (wire, camel) in &pulse {
+        s.push_str(&format!("  {}: \"{}\",\n", camel, wire));
+    }
+    s.push_str("} as const;\n");
+    s.push_str("export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];\n\n");
+
+    // ── Envelope ──
+    s.push_str("// Fields every tone may carry. `chi` and `rid` are required; the rest\n");
+    s.push_str("// are situational. `ext` is the nestling-private extension bag —\n");
+    s.push_str("// thrum ignores it, each nestling owns its own key.\n");
+    s.push_str("export interface Envelope {\n");
+    s.push_str("  chi: ChiKind;\n");
+    s.push_str("  rid: string;        // correlation id — required, unique per send\n");
+    s.push_str("  from?: string;      // sender identity\n");
+    s.push_str("  to?: string;        // recipient identity (omit = sid-routed or broadcast)\n");
+    s.push_str("  sigil?: string;     // sentinel pairing hash for this sid\n");
+    s.push_str("  sid?: string;       // hum session id\n");
+    s.push_str("  wane?: number;      // sender's wane for this sigil at send time\n");
+    s.push_str("  sentAt?: number;    // ms timestamp for drift attribution\n");
+    s.push_str("  dusk?: number;      // absolute expiry; past this, drop tone\n");
+    s.push_str("  ext?: Record<string, Record<string, unknown>>;\n");
     s.push_str("}\n\n");
 
-    s.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n");
-    s.push_str("#[serde(rename_all = \"kebab-case\")]\n");
-    s.push_str("pub enum PulseKind {\n");
-    for (key, _wire) in pulse {
-        s.push_str(&format!("    {},\n", camel_to_pascal(key)));
-    }
+    // A tone is the envelope plus any chi-specific fields. We don't enumerate
+    // per-chi shapes in TS — the daemon has the typed structs. TS consumers
+    // walk raw fields by name.
+    s.push_str("export type Tone = Envelope & Record<string, unknown>;\n\n");
+
+    // Validators — runtime structural checks at the receive boundary.
+    s.push_str("export function isEnvelope(x: unknown): x is Envelope {\n");
+    s.push_str("  if (!x || typeof x !== \"object\") return false;\n");
+    s.push_str("  const o = x as Record<string, unknown>;\n");
+    s.push_str("  return typeof o.chi === \"string\"\n");
+    s.push_str("    && (typeof o.rid === \"string\" || o.rid === undefined)\n");
+    s.push_str("    && (o.sid === undefined || typeof o.sid === \"string\");\n");
+    s.push_str("}\n\n");
+
+    s.push_str("export function isKnownTone(x: unknown): x is Tone {\n");
+    s.push_str("  return isEnvelope(x) && isValidChi((x as Envelope).chi as string);\n");
     s.push_str("}\n");
 
-    s
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&output, s).with_context(|| format!("write {}", output.display()))?;
+    eprintln!("codegen ts: {} ({} chi, {} pulse) -> {}", THRUM_VERSION, chi.len(), pulse.len(), output.display());
+    Ok(())
+}
+
+/// "PetalCell" → "petalCell". Pure ASCII; first char lowercased.
+fn pascal_to_camel(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_ascii_lowercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -163,16 +138,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kebab() {
-        assert_eq!(camel_to_kebab("hello"), "hello");
-        assert_eq!(camel_to_kebab("toolCall"), "tool-call");
-        assert_eq!(camel_to_kebab("releasePermit"), "release-permit");
-        assert_eq!(camel_to_kebab("droneRetrofit"), "drone-retrofit");
-    }
-
-    #[test]
-    fn pascal() {
-        assert_eq!(camel_to_pascal("hello"), "Hello");
-        assert_eq!(camel_to_pascal("toolCall"), "ToolCall");
+    fn camel() {
+        assert_eq!(pascal_to_camel("Hello"), "hello");
+        assert_eq!(pascal_to_camel("PetalCell"), "petalCell");
+        assert_eq!(pascal_to_camel("DroneRetrofit"), "droneRetrofit");
+        assert_eq!(pascal_to_camel(""), "");
     }
 }

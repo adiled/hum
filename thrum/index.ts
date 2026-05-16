@@ -47,8 +47,10 @@ export interface Tone {
   [key: string]: unknown; // payload fields
 }
 
-// Re-export the canonical registry so consumers can `import { Chi, THRUM_VERSION } from "thrum"`
-// without having to know about chi.ts.
+// Re-export the canonical registry so consumers can
+// `import { Chi, THRUM_VERSION } from "thrum"` without having to know
+// about chi.ts. chi.ts is *generated* from thrum-core/src/chi.rs by the
+// `codegen` crate — Rust is the source of truth.
 export {
   Chi,
   ALL_CHI,
@@ -62,16 +64,7 @@ export type {
   ChiKind,
   PulseKindT,
   Envelope,
-  LooseTone,
   Tone as TypedTone,
-  HelloTone,
-  PromptTone, CancelTone, CleanupTone, CurateTone,
-  ReleasePermitTone, TendrilResultTone, ToolResultTone, PetalCellTone,
-  BreathTone, ChunkTone, FinishTone, ErrorTone,
-  SessionReadyTone, PulseTone, PermissionAskTone,
-  TendrilReachTone, ToolCallTone, ToolMetaTone,
-  EchoTone, PerfMarkTone, LogTone, DroneTone, DroneRetrofitTone,
-  BreathSessionView,
 } from "./chi.ts";
 
 let ridCounter = 0;
