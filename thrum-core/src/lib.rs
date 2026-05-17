@@ -22,4 +22,4 @@ pub use wane::WaneTracker;
 ///   - patch: docstring tweaks, optional fields added with safe defaults
 ///   - minor: new chi value, new required field with backward-compat path
 ///   - major: removed chi, renamed chi, removed field, changed semantics
-pub const THRUM_VERSION: &str = "0.5.0";
+pub const THRUM_VERSION: &str = "0.6.0";

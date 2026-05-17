@@ -534,6 +534,7 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::Attach => "attach",
         Chi::Detach => "detach",
         Chi::WaneSync => "wane-sync",
+        Chi::GossipPublish => "gossip-publish",
     }
 }
 

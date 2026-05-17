@@ -4,7 +4,7 @@
 // the file is regenerated on every cargo build of thrum-core (build.rs).
 // Manual regen: `cargo run -p codegen`.
 
-export const THRUM_VERSION = "0.5.0" as const;
+export const THRUM_VERSION = "0.6.0" as const;
 
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
@@ -67,6 +67,8 @@ export const Chi = {
   detach: "detach",
   /** reconcile WaneTracker after a partition heal — `{ from, snapshot }` where `snapshot` is a map of sigil → wane value. The receiver merges each entry by taking the max of local and remote (wane is a Lamport clock; max is convergent). No reply is required — both sides emit their snapshot on heal, so each is informed exactly once. */
   waneSync: "wane-sync",
+  /** ensemble-wide gossip pub-sub message — `{ topic, payload, from, msg_id }`. Fan-out broadcast above the Transport seam: every PeerConnection is a gossip neighbor. The receiver dedups on `msg_id` (sha256("topic:rid:from:payload")[..16]) using a bounded LRU, dispatches to per-topic subscribers, and re-fans the tone to every OTHER installed peer so the message percolates across the mesh. Distinct from unicast `route` (which targets ONE humd) — gossip is mesh-wide announcements: hum relocation, humd overload, drone alerts. */
+  gossipPublish: "gossip-publish",
 } as const;
 export type ChiKind = typeof Chi[keyof typeof Chi];
 

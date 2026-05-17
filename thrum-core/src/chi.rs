@@ -87,6 +87,16 @@ pub enum Chi {
     /// clock; max is convergent). No reply is required — both sides emit
     /// their snapshot on heal, so each is informed exactly once.
     WaneSync,
+    /// ensemble-wide gossip pub-sub message —
+    /// `{ topic, payload, from, msg_id }`. Fan-out broadcast above the
+    /// Transport seam: every PeerConnection is a gossip neighbor. The
+    /// receiver dedups on `msg_id` (sha256("topic:rid:from:payload")[..16])
+    /// using a bounded LRU, dispatches to per-topic subscribers, and
+    /// re-fans the tone to every OTHER installed peer so the message
+    /// percolates across the mesh. Distinct from unicast `route` (which
+    /// targets ONE humd) — gossip is mesh-wide announcements: hum
+    /// relocation, humd overload, drone alerts.
+    GossipPublish,
 }
 
 /// `pulse.kind` — its own enum within `chi:"pulse"` tones.

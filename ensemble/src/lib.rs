@@ -50,6 +50,9 @@ pub use tls::{
 pub mod iroh;
 pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
 
+pub mod gossip;
+pub use gossip::{gossip_tone, mint_msg_id, GossipState, GOSSIP_CHI, GOSSIP_SEEN_CAP};
+
 /// Domain-separation tag binds a signature to the ensemble handshake.
 /// Bump the version suffix if the canonical message shape changes.
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
@@ -470,6 +473,10 @@ pub struct Ensemble {
     me: HumdId,
     peers: Arc<RwLock<HashMap<HumdId, Peer>>>,
     inbox: broadcast::Sender<Tone>,
+    /// Shared gossip seen-set + per-topic broadcast senders. One Arc per
+    /// ensemble; cloned into every install() drainer task so the dedup
+    /// + topic dispatch happens without locking the main peer map.
+    gossip: Arc<GossipState>,
     /// When true, peers whose `chi:"hello"` is missing or fails
     /// verification are ejected (T3+ federation semantics). When false
     /// (default, T1), unsigned hellos are tolerated — caps are learned
@@ -499,6 +506,7 @@ impl Ensemble {
             me,
             peers: Arc::new(RwLock::new(HashMap::new())),
             inbox,
+            gossip: GossipState::new(),
             strict_auth: false,
         }
     }
@@ -551,6 +559,7 @@ impl Ensemble {
             let inbox = self.inbox.clone();
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
+            let gossip = self.gossip.clone();
             tokio::spawn(async move {
                 // Only the FIRST chi:"hello" off this connection is the
                 // peer handshake — we absorb it to learn caps. Any
@@ -614,6 +623,16 @@ impl Ensemble {
                         // First hello absorbed — handshake done.
                         continue;
                     }
+                    // Gossip pub-sub: chi:"gossip-publish" gets deduped
+                    // against the seen-set, dispatched to topic
+                    // subscribers, and re-fanned to every OTHER peer.
+                    // Falls through to the inbox fan-out if the tone is
+                    // malformed (treats it as opaque application data).
+                    if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
+                        if handle_gossip(&gossip, &peers, &id, &tone).await {
+                            continue;
+                        }
+                    }
                     // Everything else (including subsequent hellos) fans
                     // out. Receivers may be absent — broadcast drops.
                     let _ = inbox.send(tone);
@@ -665,6 +684,7 @@ impl Ensemble {
             let inbox = self.inbox.clone();
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
+            let gossip = self.gossip.clone();
             tokio::spawn(async move {
                 let mut handshake_seen = false;
                 while let Some(tone) = rx.recv().await {
@@ -708,6 +728,11 @@ impl Ensemble {
                         }
                         continue;
                     }
+                    if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
+                        if handle_gossip(&gossip, &peers, &id, &tone).await {
+                            continue;
+                        }
+                    }
                     let _ = inbox.send(tone);
                 }
             });
@@ -738,6 +763,52 @@ impl Ensemble {
     /// are absorbed by the ensemble; subscribers only see real traffic.
     pub fn subscribe(&self) -> broadcast::Receiver<Tone> {
         self.inbox.subscribe()
+    }
+
+    /// Publish a gossip message to every installed peer. Mints an
+    /// `msg_id` from `(topic, rid, me, payload)`, marks it seen locally
+    /// (so we don't re-fan it on the inevitable echo), and sends a
+    /// `chi:"gossip-publish"` tone over every `PeerConnection`. Local
+    /// `subscribe_topic` subscribers do NOT see their own publish — that
+    /// matches typical pub-sub ergonomics (and matches the test fixture
+    /// in `gossip_integration.rs`); use a direct channel if you want to
+    /// hear yourself.
+    ///
+    /// Best-effort: per-peer send failures are logged but don't abort
+    /// the broadcast — one slow link can't stall the mesh. Sits ABOVE
+    /// `route()` semantically; both share the `PeerConnection.send`
+    /// wire but `publish` is mesh-wide and `route` is unicast.
+    pub async fn publish(&self, topic: &str, payload: serde_json::Value) {
+        let rid = format!("gossip-{}-{}", topic, now_ms());
+        let msg_id = mint_msg_id(topic, &rid, &self.me, &payload);
+        // Mark seen locally so the next-hop echo (peer re-fans back to
+        // us) is dropped at the drainer's seen check.
+        self.gossip.note_seen(&msg_id);
+        let tone = gossip_tone(topic, &rid, &self.me, payload, &msg_id);
+        let conns: Vec<Arc<dyn PeerConnection>> = {
+            let peers = self.peers.read();
+            peers.values().map(|p| p.conn.clone()).collect()
+        };
+        for conn in conns {
+            if let Err(e) = conn.send(tone.clone()).await {
+                tracing::debug!(
+                    target: "ensemble.gossip",
+                    peer = %conn.peer().id.short(),
+                    topic = topic,
+                    error = %e,
+                    "publish send failed"
+                );
+            }
+        }
+    }
+
+    /// Subscribe to a gossip topic. Returns a `broadcast::Receiver`
+    /// scoped to ONE topic — distinct from `subscribe()` which sees
+    /// every tone the ensemble drainer fans out. The channel is created
+    /// lazily on first call and shared across subsequent subscribers
+    /// to the same topic.
+    pub fn subscribe_topic(&self, topic: &str) -> broadcast::Receiver<serde_json::Value> {
+        self.gossip.subscribe(topic)
     }
 
     /// Send a tone to the peer named in `tone.to` (must be present and
@@ -909,6 +980,65 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
             PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots },
         )
     }
+}
+
+/// Drainer-side handling for a `chi:"gossip-publish"` tone. Returns
+/// `true` if the tone was consumed by the gossip layer (don't fan into
+/// the regular inbox), `false` if it was malformed (fall back to
+/// treating it as opaque traffic).
+///
+/// Semantics:
+///   1. Parse topic + msg_id + payload. Malformed → return false.
+///   2. Check `msg_id` against the seen-set. Already seen → consumed
+///      (return true), nothing else happens (dedup short-circuit).
+///   3. Mark seen. Dispatch payload to any local topic subscribers.
+///   4. Re-fan the original tone to every OTHER installed peer (skip
+///      the peer it arrived from — `arrived_from`).
+///
+/// Send failures during re-fan are logged but don't stop the loop:
+/// gossip is best-effort; one dead link can't deafen the mesh.
+async fn handle_gossip(
+    gossip: &Arc<gossip::GossipState>,
+    peers: &Arc<RwLock<HashMap<HumdId, Peer>>>,
+    arrived_from: &HumdId,
+    tone: &Tone,
+) -> bool {
+    let parsed = match gossip::parse_gossip(tone) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !gossip.note_seen(parsed.msg_id) {
+        // Already saw this msg_id — drop. Don't dispatch, don't re-fan.
+        return true;
+    }
+    // Local dispatch: if anyone subscribed to this topic, deliver the
+    // payload. Subscribers see the payload value only, not the wire
+    // envelope — they don't care about msg_id / from at the API level.
+    if let Some(tx) = gossip.sender(parsed.topic) {
+        let _ = tx.send(parsed.payload.clone());
+    }
+    // Re-fan to every OTHER installed peer. Snapshot the connection
+    // list under the read lock, then release it before the awaits so
+    // we don't hold parking_lot across an await point.
+    let others: Vec<Arc<dyn PeerConnection>> = {
+        let peers = peers.read();
+        peers
+            .iter()
+            .filter(|(id, _)| *id != arrived_from)
+            .map(|(_, p)| p.conn.clone())
+            .collect()
+    };
+    for conn in others {
+        if let Err(e) = conn.send(tone.clone()).await {
+            tracing::debug!(
+                target: "ensemble.gossip",
+                peer = %conn.peer().id.short(),
+                error = %e,
+                "re-fan send failed"
+            );
+        }
+    }
+    true
 }
 
 #[cfg(test)]

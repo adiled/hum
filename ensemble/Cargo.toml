@@ -30,6 +30,9 @@ iroh = "1.0.0-rc.0"
 # No CA, no chain — peers trust because they configured the fingerprint.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"] }
+# Bounded seen-set for the gossip fan-out layer. See gossip.rs header
+# for the choice rationale (homegrown vs libp2p-gossipsub).
+lru = "0.12"
 
 [dev-dependencies]
 # Self-signed cert generation for the TLS integration test. Pinned to
