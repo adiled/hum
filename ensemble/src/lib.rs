@@ -65,6 +65,11 @@ pub use kad::{
 pub mod nestlings;
 pub use nestlings::{NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
 
+// Headroom advertise — `PeerCapabilities` gains a runtime snapshot of
+// free slots / pressure / p95 latency so peer humds can route away from
+// saturated nodes. Filled in by Tier 2 agent.
+pub mod headroom;
+
 #[cfg(feature = "onchain")]
 pub mod onchain;
 

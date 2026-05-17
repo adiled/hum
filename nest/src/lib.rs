@@ -19,6 +19,14 @@ use tokio::sync::{mpsc, Mutex};
 pub mod mock;
 pub mod pool;
 
+// Resource-oriented primitives for the Roost as a system resource.
+// Filled in by parallel work; declared together so contributors don't race
+// on this file. See each module's docstring for scope.
+pub mod metrics;   // per-roost observability (RSS, CPU, fds)
+pub mod limits;    // per-roost OS-level caps (rlimit, cgroups)
+pub mod budget;    // per-roost soft caps (tokens, tool-call rates)
+pub mod health;    // pool-wide pressure tiers + eviction policy
+
 pub use mock::MockPerch;
 pub use pool::Nest;
 
