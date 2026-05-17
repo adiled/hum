@@ -1,3 +1,8 @@
+---
+title: "thrum"
+description: "wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings"
+---
+
 # thrum
 
 > _wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings_

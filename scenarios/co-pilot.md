@@ -1,3 +1,8 @@
+---
+title: "co-pilot"
+description: "two operators, one hum — one drives, one watches over the shoulder"
+---
+
 # co-pilot
 
 > _two operators, one hum — one drives, one watches over the shoulder_

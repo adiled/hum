@@ -1,3 +1,8 @@
+---
+title: "hum"
+description: "The only AI stack nestled on a biodiverse agentic kernel framework."
+---
+
 <p align="center">
   <strong>﹏ hum ﹏</strong>
   <br>

@@ -1,3 +1,8 @@
+---
+title: "anthropic-server"
+description: "Anthropic-compatible HTTP surface for hum (POST /v1/messages, SSE streaming)"
+---
+
 # anthropic-server
 
 > _Anthropic-compatible HTTP surface for hum (POST /v1/messages, SSE streaming)_

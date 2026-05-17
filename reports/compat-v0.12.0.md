@@ -1,3 +1,7 @@
+---
+title: "compat-v0.12.0"
+---
+
 ## Tool Calls
 
 | Tool | CC | hum | Brokered | OC | Cov | Status |

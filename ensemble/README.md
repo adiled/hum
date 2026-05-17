@@ -1,3 +1,8 @@
+---
+title: "ensemble"
+description: "what humds make together when they cooperate"
+---
+
 # ensemble
 
 > *what humds make together when they cooperate*

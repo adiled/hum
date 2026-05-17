@@ -1,3 +1,8 @@
+---
+title: "grpc-nestling"
+description: "gRPC bridge to hum — bidi stream, every chi flows through; transport-only nestling"
+---
+
 # grpc-nestling
 
 > _gRPC bridge to hum — bidi stream, every chi flows through; transport-only nestling_

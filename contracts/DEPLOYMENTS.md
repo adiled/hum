@@ -1,3 +1,8 @@
+---
+title: "DEPLOYMENTS"
+description: "Known deployments of IHumdRegistry-shaped contracts, by chain and subnet."
+---
+
 # DEPLOYMENTS
 
 Known deployments of `IHumdRegistry`-shaped contracts, by chain and

@@ -1,3 +1,7 @@
+---
+title: "site"
+---
+
 # site
 
 GitHub Pages source for [hum](https://github.com/adiled/hum). Built with

@@ -1,3 +1,8 @@
+---
+title: "gsm-modem"
+description: "hum-on-a-burner-phone — USB GSM modem nestling driven by AT commands"
+---
+
 # gsm-modem
 
 > _hum-on-a-burner-phone — USB GSM modem nestling driven by AT commands_

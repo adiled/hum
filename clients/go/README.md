@@ -1,3 +1,8 @@
+---
+title: "thrum (Go)"
+description: "wire-protocol primitives for Go nestlings"
+---
+
 # thrum (Go)
 
 > _wire-protocol primitives for Go nestlings_

@@ -1,3 +1,8 @@
+---
+title: "vercel-ai"
+description: "Vercel AI SDK provider for hum — pure, no OC coupling"
+---
+
 # vercel-ai
 
 > _Vercel AI SDK provider for hum — pure, no OC coupling_

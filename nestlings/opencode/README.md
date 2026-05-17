@@ -1,3 +1,7 @@
+---
+title: "opencode"
+---
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/adiled/hum/main/hum.gif" alt="hum" />
 </p>

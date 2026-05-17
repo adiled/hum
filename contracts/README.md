@@ -1,3 +1,8 @@
+---
+title: "contracts"
+description: "on-chain commitments for hum — slashable identity, manifest pointers, future settlement"
+---
+
 # contracts
 
 > _on-chain commitments for hum — slashable identity, manifest pointers, future settlement_

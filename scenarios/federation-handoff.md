@@ -1,3 +1,8 @@
+---
+title: "federation-handoff"
+description: "two orgs shake hands, one hum crosses the seam under bounded power"
+---
+
 # federation-handoff
 
 > _two orgs shake hands, one hum crosses the seam under bounded power_

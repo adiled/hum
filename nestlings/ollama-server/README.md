@@ -1,3 +1,8 @@
+---
+title: "ollama-server (Rust)"
+description: "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client"
+---
+
 # ollama-server (Rust)
 
 > _Ollama-compatible HTTP surface for hum — drop-in for any Ollama client_

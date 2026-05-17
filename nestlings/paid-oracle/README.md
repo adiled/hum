@@ -1,3 +1,8 @@
+---
+title: "paid-oracle"
+description: "x402-style paid oracle nestling — sells one price per USDC payment, verified on-chain"
+---
+
 # paid-oracle
 
 > _x402-style paid oracle nestling — sells one price per USDC payment, verified on-chain_

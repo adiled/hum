@@ -1,3 +1,8 @@
+---
+title: "partition-and-heal"
+description: "the wire breaks; both sides keep humming; the wire mends; the wanes reconcile"
+---
+
 # partition-and-heal
 
 > _the wire breaks; both sides keep humming; the wire mends; the wanes reconcile_

@@ -1,3 +1,8 @@
+---
+title: "openai-server"
+description: "OpenAI-compatible HTTP surface for hum"
+---
+
 # openai-server
 
 > _OpenAI-compatible HTTP surface for hum_

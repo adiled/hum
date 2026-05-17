@@ -1,3 +1,8 @@
+---
+title: "thrum (Python)"
+description: "wire-protocol primitives for Python nestlings"
+---
+
 # thrum (Python)
 
 > _wire-protocol primitives for Python nestlings_

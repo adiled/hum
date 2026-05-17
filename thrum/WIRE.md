@@ -1,3 +1,8 @@
+---
+title: "thrum wire spec"
+description: "the language-neutral protocol nestlings speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library."
+---
+
 # thrum wire spec
 
 > _the language-neutral protocol nestlings speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._

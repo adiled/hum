@@ -1,3 +1,8 @@
+---
+title: "scenarios"
+description: "prose specs of ensemble narratives — one story per file, each paired 1:1 with a sim test"
+---
+
 # scenarios
 
 > _prose specs of ensemble narratives — one story per file, each paired 1:1 with a sim test_
