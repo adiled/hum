@@ -233,11 +233,11 @@ nest/
 └── README.md
 ```
 
-Concrete `Perch` impls live under [`nests/`](../nests):
+Concrete `Perch` impls live under [`perches/`](../nests):
 
-- [`nests/claude-cli/`](../nests/claude-cli) — `claude -p` stream-json over pipe
-- [`nests/claude-repl/`](../nests/claude-repl) — PTY-mode interactive fallback
-- [`nests/common/`](../nests/common) — shared building blocks across nest impls
+- [`perches/claude-cli/`](../perches/claude-cli) — `claude -p` stream-json over pipe
+- [`perches/claude-repl/`](../perches/claude-repl) — PTY-mode interactive fallback
+- [`perches/common/`](../perches/common) — shared building blocks across nest impls
   (e.g. the regex `Classifier` for drone's context-loss detection)
 
 ## See also

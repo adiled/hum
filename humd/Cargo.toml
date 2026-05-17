@@ -26,8 +26,8 @@ config = { path = "../config" }
 ids = { path = "../ids" }
 drift = { path = "../drift" }
 nest = { path = "../nest" }
-claude-cli = { path = "../nests/claude-cli" }
-claude-repl = { path = "../nests/claude-repl" }
+claude-cli = { path = "../perches/claude-cli" }
+claude-repl = { path = "../perches/claude-repl" }
 hums = { path = "../hums" }
 penny = { path = "../penny" }
 drone = { path = "../drone" }
