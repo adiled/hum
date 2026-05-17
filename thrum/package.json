@@ -1,0 +1,36 @@
+{
+  "name": "thrum",
+  "version": "0.7.0",
+  "description": "Wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings.",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./chi": "./chi.ts",
+    "./helpers": "./helpers.ts"
+  },
+  "files": [
+    "index.ts",
+    "chi.ts",
+    "helpers.ts",
+    "README.md"
+  ],
+  "keywords": [
+    "thrum",
+    "hum",
+    "p2p",
+    "agents",
+    "ndjson"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adiled/hum.git",
+    "directory": "thrum"
+  },
+  "homepage": "https://adiled.github.io/hum/",
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -62,6 +62,9 @@ pub use kad::{
     KAD_FIND_NODE_CHI, KAD_FIND_NODE_RESP_CHI, KAD_K, KAD_MAX_ROUNDS,
 };
 
+pub mod nestlings;
+pub use nestlings::{NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
+
 /// Domain-separation tag binds a signature to the ensemble handshake.
 /// Bump the version suffix if the canonical message shape changes.
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
@@ -108,6 +111,19 @@ impl HumdId {
     pub fn to_hex(&self) -> String { hex::encode(self.0) }
     /// First 8 hex chars — for human-readable logs.
     pub fn short(&self) -> String { hex::encode(&self.0[..4]) }
+
+    /// Parse a 64-char lowercase-hex id (the on-wire form). Accepts
+    /// upper or mixed case too; rejects anything that isn't exactly
+    /// 32 bytes once decoded.
+    pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
+        let bytes = hex::decode(s)?;
+        if bytes.len() != 32 {
+            return Err(hex::FromHexError::InvalidStringLength);
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(Self(out))
+    }
 }
 
 impl fmt::Display for HumdId {
@@ -857,6 +873,101 @@ impl Ensemble {
     /// to the same topic.
     pub fn subscribe_topic(&self, topic: &str) -> broadcast::Receiver<serde_json::Value> {
         self.gossip.subscribe(topic)
+    }
+
+    /// Announce a nestling running on this humd to the mesh. Wraps a
+    /// [`NestlingAnnounce::Advertise`] in a gossip-publish on
+    /// [`ANNOUNCE_TOPIC`]. Call on each nestler handshake; safe to call
+    /// repeatedly (the receiver dedups on payload hash via gossip's
+    /// seen-set, and a manifest update is just a new advertise tone).
+    pub async fn nestling_advertise(&self, manifest: nestlings::NestlingManifest) {
+        let env = nestlings::NestlingAnnounce::Advertise {
+            humd_id: self.me.to_hex(),
+            manifest,
+        };
+        match serde_json::to_value(&env) {
+            Ok(payload) => self.publish(nestlings::ANNOUNCE_TOPIC, payload).await,
+            Err(e) => tracing::warn!(target: "ensemble.nestlings", error = %e, "advertise serialize"),
+        }
+    }
+
+    /// Announce that a nestling has gone away. Same channel as
+    /// [`Ensemble::nestling_advertise`], envelope kind = `retract`.
+    pub async fn nestling_retract(&self, name: &str) {
+        let env = nestlings::NestlingAnnounce::Retract {
+            humd_id: self.me.to_hex(),
+            name: name.to_string(),
+        };
+        match serde_json::to_value(&env) {
+            Ok(payload) => self.publish(nestlings::ANNOUNCE_TOPIC, payload).await,
+            Err(e) => tracing::warn!(target: "ensemble.nestlings", error = %e, "retract serialize"),
+        }
+    }
+
+    /// Raw subscription to every nestling announcement on the mesh.
+    /// Returns a typed mpsc receiver of [`NestlingAnnounce`] envelopes
+    /// (parsed from the underlying gossip topic). Malformed payloads
+    /// are logged and dropped. Backed by a tokio task; drop the
+    /// receiver to stop it.
+    pub fn nestling_announcements(&self) -> mpsc::Receiver<nestlings::NestlingAnnounce> {
+        let mut raw = self.subscribe_topic(nestlings::ANNOUNCE_TOPIC);
+        let (tx, rx) = mpsc::channel(64);
+        tokio::spawn(async move {
+            loop {
+                match raw.recv().await {
+                    Ok(v) => match serde_json::from_value::<nestlings::NestlingAnnounce>(v.clone()) {
+                        Ok(env) => {
+                            if tx.send(env).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => tracing::debug!(
+                            target: "ensemble.nestlings",
+                            error = %e,
+                            payload = %v,
+                            "announce parse"
+                        ),
+                    },
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+        rx
+    }
+
+    /// Discover humds advertising a nestling with the given `name`.
+    /// Returns an mpsc receiver of `(HumdId, NestlingManifest)` pairs
+    /// for matching `Advertise` envelopes. Retract envelopes are
+    /// dropped (caller should track their own roster of seen humds and
+    /// expire entries on retract — surfaced via [`Self::nestling_announcements`]).
+    pub fn nestling_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(HumdId, nestlings::NestlingManifest)> {
+        let needle = name.into();
+        let mut raw = self.subscribe_topic(nestlings::ANNOUNCE_TOPIC);
+        let (tx, rx) = mpsc::channel(64);
+        tokio::spawn(async move {
+            loop {
+                match raw.recv().await {
+                    Ok(v) => {
+                        let parsed: Result<nestlings::NestlingAnnounce, _> =
+                            serde_json::from_value(v);
+                        if let Ok(nestlings::NestlingAnnounce::Advertise { humd_id, manifest }) = parsed {
+                            if manifest.name != needle {
+                                continue;
+                            }
+                            if let Ok(id) = HumdId::from_hex(&humd_id) {
+                                if tx.send((id, manifest)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+        rx
     }
 
     /// Iterative Kademlia FIND_NODE lookup for `target`. Returns the

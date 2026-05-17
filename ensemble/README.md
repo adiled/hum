@@ -90,7 +90,7 @@ use ensemble::{TcpTransport, Transport, HumdAddr};
 let transport = Arc::new(TcpTransport);
 let addr = HumdAddr::new(peer_id).with_hint("tcp:203.0.113.4:14730");
 let conn = transport.connect(&addr).await?;
-ensemble.install(conn, my_caps);
+ensemble.install(conn, my_caps, &key);
 ```
 
 ### Adding a peer over Iroh (NAT-traversed)
@@ -103,7 +103,7 @@ let addr = HumdAddr::new(peer_id)
     .with_hint("iroh:0fb1c8…")              // peer's NodeId
     .with_hint("iroh-ip:203.0.113.4:18820"); // optional direct path
 let conn = transport.connect(&addr).await?;
-ensemble.install(conn, my_caps);
+ensemble.install(conn, my_caps, &key);
 ```
 
 ### Sending a tone to one peer
@@ -186,8 +186,9 @@ Two organizations want their agents to talk. Each side's humd has its
 own Ed25519 identity; they exchange fingerprints out-of-band (slack
 DM, signal, scrap of paper) and pin them in `peers.json`. From that
 point forward, signed `chi:"hello"` handshakes admit each side to the
-other's ensemble. Unsigned or tampered hellos get rejected by
-`Ensemble::with_strict_auth(true)`.
+other's ensemble. Unsigned or tampered hellos get rejected when the
+ensemble is built with `Ensemble::with_strict_auth(me, true)` instead
+of the default `Ensemble::new(me)`.
 
 ## Scenario: agents on the open internet (T4)
 
@@ -202,13 +203,21 @@ pre-shared keys.
 **Self-onboard:**
 
 ```bash
-# One-line install (assumes hum publishes a binary distribution).
-curl -fsSL https://hum.sh/install | sh
+# Clone, build, install. The installer mints an Ed25519 identity at
+# $XDG_STATE_HOME/hum/humd.key, writes a systemd --user unit, and
+# starts the daemon. See ../install for the full script.
+git clone https://github.com/adiled/hum.git
+cd hum && ./install
 
-# Daemon auto-mints an identity, picks a port, joins the mesh via
-# bootstrap peers shipped in the default config.
+# Bring it up. Joins the mesh via bootstrap peers in
+# $XDG_CONFIG_HOME/hum/peers.json (empty by default — add peers there).
 systemctl --user start hum
 ```
+
+> No binary distribution yet. The only real surfaces are this repo
+> (`github.com/adiled/hum`) and the docs site at
+> `https://adiled.github.io/hum/`. Anything else (a `hum.sh`,
+> a curl-pipe-sh URL, a package manager entry) does not exist.
 
 **Self-discover:**
 
@@ -235,9 +244,14 @@ The agent's market-making logic lives in a `market-maker` nestling
 (a process that connects to its local humd's thrum socket). Quotes
 are gossip; fills are unicast.
 
-```rust
-// Inside the market-maker nestling — pseudocode using the TS
-// nestlings/* shape, but it works identically in Rust.
+> **Pseudo-code.** No `market-maker` nestling ships in this repo
+> yet — the snippet below sketches the API shape a future nestling
+> would use, in the same TS style as the existing nestlings under
+> `nestlings/`. Don't try to copy-paste this into a working process.
+
+```ts
+// Inside the (hypothetical) market-maker nestling. The wire shape is
+// real (THRUM_VERSION 0.7.0); the helper functions are sketched.
 
 // Publish a quote into the mesh.
 thrum.send({

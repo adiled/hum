@@ -3,7 +3,12 @@ name = "thrum-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Wire-protocol types and primitives for the thrum (NDJSON socket between humd and nestlings)."
+readme = "README.md"
+keywords = ["thrum", "hum", "p2p", "agents", "ndjson"]
+categories = ["network-programming", "encoding"]
 build = "build.rs"
 
 [dependencies]

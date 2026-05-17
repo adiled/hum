@@ -518,6 +518,46 @@ impl ToneSink for HumdSink {
                 trace!(client_id, %chi_str, "thrum.recv.hello");
                 let breath = thrumd::breath_tone(serde_json::json!({}));
                 self.thrum.thrum_to(client_id, breath);
+
+                // Advertise this nestler on the ensemble's nestling-discovery
+                // topic so peer humds know which nestlings are available
+                // here. Skipped if no ensemble is wired (sim or solo run).
+                // Skipped for ensemble-routed tones: those came from a peer
+                // humd whose nestlings we don't host.
+                if client_id != "ensemble" {
+                  if let Some(ensemble) = &self.ensemble {
+                    let name = tone.get("nestling").and_then(Value::as_str)
+                        .map(str::to_string)
+                        // Older nestlings used `from` only; fall back to that
+                        // so they get a manifest too.
+                        .or_else(|| tone.get("from").and_then(Value::as_str).map(str::to_string));
+                    if let Some(name) = name {
+                        let proto = tone.get("protoVersion").and_then(Value::as_str)
+                            .unwrap_or(thrum_core::THRUM_VERSION)
+                            .to_string();
+                        let version = tone.get("version").and_then(Value::as_str)
+                            .or_else(|| tone.get("nestlingVersion").and_then(Value::as_str))
+                            .unwrap_or("0.0.0")
+                            .to_string();
+                        let propensity = tone.get("propensity")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            .unwrap_or_default();
+                        let chi = tone.get("chi")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                            .unwrap_or_default();
+                        let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
+                        let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
+                        manifest.propensity = propensity;
+                        manifest.chi = chi;
+                        manifest.source = source;
+                        let ens = ensemble.clone();
+                        tokio::spawn(async move {
+                            ens.nestling_advertise(manifest).await;
+                        });
+                    }
+                  }
+                }
             }
             Some(Chi::Prompt) => {
                 let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
