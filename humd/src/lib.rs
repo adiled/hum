@@ -36,31 +36,15 @@ type Observers = Arc<RwLock<HashMap<String, Vec<HumdId>>>>;
 
 // ── Public config ──────────────────────────────────────────────────────────
 
-/// Pluggable nest backends. Default = the real claude-cli (pipe) and
-/// claude-repl (pty) perches; sim driver swaps in `nest::MockPerch` so
-/// nothing actually shells out.
-pub struct PerchSet {
-    pub pipe: Arc<dyn nest::Perch>,
-    pub pty: Arc<dyn nest::Perch>,
-}
-
-impl Default for PerchSet {
-    fn default() -> Self {
-        Self {
-            pipe: Arc::new(claude_cli::ClaudeCliPerch),
-            pty: Arc::new(claude_repl::ClaudeReplPerch),
-        }
-    }
-}
-
 /// Where the daemon listens, and how it should pace itself. Construct
 /// via [`DaemonConfig::from_env`] for production defaults or build one
 /// by hand for tests / simulators.
 ///
-/// Three sim hooks layered on top of the production fields:
-/// `thrum_override` (caller-owned Thrum, skip the socket listener),
-/// `ensemble` (peer registry for `to:`-addressed tones), `bind_mcp`
-/// (skip the HTTP MCP listener), and `perches` (swap in mock perches).
+/// humd is a router: perches register over thrum via `chi:"hello"`
+/// with `role:"perch"`. There's no in-process perch hosting anymore.
+/// The sim hooks layer on top: `thrum_override` (caller-owned Thrum,
+/// skip the socket listener), `ensemble` (peer registry for `to:`-
+/// addressed tones), `bind_mcp` (skip the HTTP MCP listener).
 pub struct DaemonConfig {
     pub thrum_path: PathBuf,
     pub http_path: PathBuf,
@@ -75,8 +59,6 @@ pub struct DaemonConfig {
     /// When set, daemon installs this Ensemble for inter-humd routing.
     /// When None, the daemon runs without a peer set (legacy single-host).
     pub ensemble: Option<Arc<Ensemble>>,
-    /// Pluggable nest implementations (default = real claude-cli + claude-repl).
-    pub perches: PerchSet,
     /// When false, skip mcp_serve too (sim doesn't need a live HTTP MCP).
     pub bind_mcp: bool,
     /// Cap on concurrent local hums. `Some(0)` means "always overflow to a
@@ -129,7 +111,6 @@ impl DaemonConfig {
             penny_persist_interval: Duration::from_secs(10),
             thrum_override: None,
             ensemble: None,
-            perches: PerchSet::default(),
             bind_mcp: true,
             capacity_override: None,
             waneman: None,
@@ -228,11 +209,9 @@ where
     // ensemble instead of just cfg.ensemble.
     let ensemble_for_sink = ensemble_opt.clone();
 
-    let nest_cfg = nest::pool::NestConfig {
-        max_procs: cfg.hum_cfg.nest.max_procs as usize,
-        idle_timeout: Duration::from_millis(cfg.hum_cfg.nest.idle_threshold_ms),
-    };
-    let nest_pool = Arc::new(nest::Nest::new(nest_cfg, cfg.perches.pipe, cfg.perches.pty));
+    // humd no longer hosts an in-process nest pool — perches register
+    // over thrum as separate processes. Configuration (max_procs,
+    // idle_threshold) becomes the perch's concern.
     let mcp_url = format!("http://{}", cfg.mcp_addr);
 
     // Caller-owned Thrum (sim) vs daemon-owned (production). When the
@@ -272,7 +251,6 @@ where
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
-        nest: nest_pool.clone(),
         mcp_url: mcp_url.clone(),
         cli_path: cfg.cli_path.clone(),
         ensemble: ensemble_for_sink.clone(),
@@ -424,7 +402,6 @@ fn parse_tag_name(body: &str) -> Option<String> {
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    nest: Arc<nest::Nest>,
     mcp_url: String,
     cli_path: String,
     /// When present, tones with a `to:` hex addressed to a *different*
@@ -589,116 +566,10 @@ impl mcp::ToolInfoHook for ToolInfoBroadcaster {
     }
 }
 
-struct NestListener {
-    sid: String,
-    thrum: Thrum,
-    /// When the prompt arrived from a peer humd, `origin` carries that
-    /// humd's id. Reply tones (chunk, finish, session-ready, error) get
-    /// stamped `to: <origin>` and routed via the ensemble so they reach
-    /// the originating peer. None ⇒ purely local nestler, normal
-    /// thrum_broadcast suffices.
-    origin: Option<ensemble::HumdId>,
-    ensemble: Option<Arc<Ensemble>>,
-    /// Shared with HumdSink — every reply tone fans out to whichever
-    /// peer humds have registered themselves as observers of this sid.
-    observers: Observers,
-    /// Routing tag — cfg.hum_cfg.nest.default, carried in so the
-    /// listener doesn't hardcode a perch name.
-    perch_tag: String,
-}
-
-impl NestListener {
-    /// Build a reply tone and dispatch — locally and/or to the origin
-    /// peer. Idempotent across both branches: a reply to a local
-    /// nestler just goes through thrum_broadcast; a reply for a remote
-    /// origin gets stamped with `to:` and routed via the ensemble.
-    /// Both happen when the listener serves a hum that is being
-    /// observed locally AND owned by a peer.
-    async fn dispatch_reply(&self, tone: serde_json::Map<String, Value>) {
-        let value = Value::Object(tone);
-
-        // Fan-out to observers (peer humds that sent `chi:"attach"` for
-        // this sid). Each observer gets its own copy with `to: <obs>`
-        // and `from: <me>`. This runs in addition to — not instead of —
-        // the origin route and the local broadcast, so a hum can be
-        // driven locally, owned remotely, and shadowed by N observers
-        // all at once.
-        if let Some(ens) = &self.ensemble {
-            let obs = self.observers.read().get(&self.sid).cloned().unwrap_or_default();
-            for peer in obs {
-                let mut copy = value.clone();
-                if let Some(obj) = copy.as_object_mut() {
-                    obj.insert("to".into(), Value::String(peer.to_hex()));
-                    obj.insert("from".into(), Value::String(ens.me().to_hex()));
-                }
-                if let Err(e) = ens.route(copy).await {
-                    warn!(sid = %self.sid, peer = %peer.short(), err = %e, "reply.fanout.failed");
-                }
-            }
-        }
-
-        let mut value = value;
-        if let (Some(origin), Some(ens)) = (&self.origin, &self.ensemble) {
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("to".into(), Value::String(origin.to_hex()));
-                obj.insert("from".into(), Value::String(ens.me().to_hex()));
-            }
-            if let Err(e) = ens.route(value.clone()).await {
-                warn!(sid = %self.sid, err = %e, "reply.route.failed");
-            }
-        }
-        // Local broadcast — no-op if no local clients claim the sigil.
-        self.thrum.thrum_broadcast(&self.sid, &self.perch_tag, value);
-    }
-}
-
-#[async_trait::async_trait]
-impl nest::Listener for NestListener {
-    fn session_id(&self) -> &str { &self.sid }
-
-    async fn on_petal(&self, kind: &str, payload: Value) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("chunk".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("rid".into(), Value::String(thrum_core::rid()));
-        body.insert("chunkType".into(), Value::String(kind.into()));
-        if let Some(obj) = payload.as_object() {
-            for (k, v) in obj { body.insert(k.clone(), v.clone()); }
-        }
-        self.dispatch_reply(body).await;
-    }
-
-    async fn on_roost(&self, nest_id: &str, model: &str, tools: Vec<String>) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("session-ready".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("rid".into(), Value::String(thrum_core::rid()));
-        body.insert("nestId".into(), Value::String(nest_id.into()));
-        body.insert("model".into(), Value::String(model.into()));
-        body.insert("tools".into(), serde_json::json!(tools));
-        self.dispatch_reply(body).await;
-    }
-
-    async fn on_wilt(&self, finish_reason: &str, usage: Option<Value>, provider_meta: Value) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("finish".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("rid".into(), Value::String(thrum_core::rid()));
-        body.insert("finishReason".into(), Value::String(finish_reason.into()));
-        body.insert("usage".into(), usage.unwrap_or(Value::Null));
-        body.insert("providerMetadata".into(), provider_meta);
-        self.dispatch_reply(body).await;
-    }
-
-    async fn on_thorn(&self, wound: &str) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("error".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("rid".into(), Value::String(thrum_core::rid()));
-        body.insert("message".into(), Value::String(wound.into()));
-        self.dispatch_reply(body).await;
-    }
-}
+// (NestListener removed — perches emit chi:"chunk"/"finish" directly
+// over thrum from their own process. humd just routes; see the
+// passthrough block in ToneSink::hear that re-broadcasts those tones
+// on the sigil sid claimed by the originating nestler.)
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
@@ -708,6 +579,30 @@ impl ToneSink for HumdSink {
             .get("chi")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
+
+        // Perch passthrough: any output tone (chunk / finish / error /
+        // tool-call / tool-info / session-ready) coming from a client
+        // registered as an external perch gets re-broadcast on the
+        // sid sigil so the originating nestler receives it. Hello
+        // arrives from the perch but is handled normally below.
+        if !matches!(chi, Some(Chi::Hello)) {
+            let is_perch = {
+                let perches = self.external_perches.read();
+                perches.values().any(|r| r.client_id == client_id)
+            };
+            if is_perch {
+                if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
+                    if matches!(chi,
+                        Some(Chi::Chunk) | Some(Chi::Finish) | Some(Chi::Error)
+                        | Some(Chi::ToolCall) | Some(Chi::ToolInfo) | Some(Chi::SessionReady)
+                        | Some(Chi::Pulse) | Some(Chi::Breath)
+                    ) {
+                        self.thrum.thrum_broadcast(&sid, &self.perch_tag, tone.clone());
+                        return;
+                    }
+                }
+            }
+        }
 
         // Attach from a local nestler addressed at a peer humd needs a
         // sigil claim here *before* the cross-humd router whisks the tone
@@ -938,34 +833,26 @@ impl ToneSink for HumdSink {
                     None
                 };
                 trace!(sid, model, ?origin, "thrum.recv.prompt");
-                let listener: Arc<dyn nest::Listener> = Arc::new(NestListener {
-                    sid: sid.clone(),
-                    thrum: self.thrum.clone(),
-                    origin,
-                    ensemble: self.ensemble.clone(),
-                    observers: self.observers.clone(),
-                    perch_tag: self.perch_tag.clone(),
-                });
-                let mut spec = nest::SpawnSpec::new(sid.clone(), model.clone(), cwd.clone());
-                spec.system_prompt = system_prompt;
-                spec.mcp_url = Some(self.mcp_url.clone());
-                spec.cli_path = Some(self.cli_path.clone());
-                // Nestler opt-in: read tool gates verbatim from the prompt
-                // tone. humd invents no policy — the nestler decides which
-                // built-ins to ban (e.g. to delegate all fs to hum's MCP).
-                spec.allowed_tools = tone.get("allowedTools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .unwrap_or_default();
-                spec.disallowed_tools = tone.get("disallowedTools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .unwrap_or_default();
-                // Nestler-declared tools — body.tools[] from the OpenAI
-                // contract. Register on the MCP session so the perch's
-                // MCP client (claude with --mcp-config) sees them
-                // alongside humd's native MCP tools. Dispatch routes
-                // through NestlerBridge → thrum → originator.
+
+                // Look up a registered external perch by advertised model.
+                let perch_client = {
+                    let perches = self.external_perches.read();
+                    perches.get(&model).map(|r| r.client_id.clone())
+                };
+                let Some(perch_client) = perch_client else {
+                    warn!(sid, model, "prompt.no-perch — no external perch advertises this model");
+                    let err = serde_json::json!({
+                        "chi": "error",
+                        "sid": sid,
+                        "message": format!("no perch advertises model '{}'", model),
+                    });
+                    self.thrum.thrum_broadcast(&sid, &self.perch_tag, err);
+                    return;
+                };
+
+                // Register nestler-declared tools on the MCP session so
+                // the perch's MCP client sees them advertised. Dispatch
+                // still routes through NestlerBridge → thrum → originator.
                 if let Some(nestler_tools) = tone.get("tools").and_then(Value::as_array) {
                     let parsed: Vec<mcp::ToolDef> = nestler_tools.iter().filter_map(|t| {
                         let name = t.get("name").and_then(Value::as_str)?.to_string();
@@ -983,40 +870,60 @@ impl ToneSink for HumdSink {
                         trace!(sid, count = nestler_tools.len(), "mcp.nestler_tools.registered");
                     }
                 }
-                if let Err(e) = self.nest.awaken(&sid, listener, spec, false).await {
-                    warn!(sid, err = %e, "nest.awaken.failed");
-                    return;
+
+                // Forward the prompt tone verbatim to the perch, plus
+                // augment with mcpUrl + cwd if absent (perches need them).
+                let mut forward = tone.clone();
+                if let Some(obj) = forward.as_object_mut() {
+                    if obj.get("cwd").is_none() {
+                        obj.insert("cwd".into(), Value::String(cwd.clone()));
+                    }
+                    if obj.get("mcpUrl").is_none() {
+                        obj.insert("mcpUrl".into(), Value::String(self.mcp_url.clone()));
+                    }
+                    if obj.get("content").is_none() && !text.is_empty() {
+                        obj.insert("content".into(), Value::String(text.clone()));
+                    }
+                    if obj.get("systemPrompt").is_none() {
+                        if let Some(sp) = system_prompt.as_ref() {
+                            obj.insert("systemPrompt".into(), Value::String(sp.clone()));
+                        }
+                    }
                 }
-                // Pass through attachments — perch-agnostic. nest does
-                // the format translation for kinds it knows.
-                let attachments: Vec<nest::Attachment> = tone.get("attachments")
-                    .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(|a| {
-                        let kind = a.get("kind").and_then(Value::as_str)?.to_string();
-                        let media_type = a.get("mediaType").and_then(Value::as_str)
-                            .unwrap_or("application/octet-stream").to_string();
-                        let data = a.get("data").and_then(Value::as_str).map(str::to_string);
-                        let url = a.get("url").and_then(Value::as_str).map(str::to_string);
-                        if data.is_none() && url.is_none() { return None; }
-                        Some(nest::Attachment { kind, media_type, data, url })
-                    }).collect())
-                    .unwrap_or_default();
-                if let Err(e) = self.nest.murmur_with_attachments(&sid, &sid, &text, &attachments).await {
-                    warn!(sid, err = %e, "nest.murmur.failed");
-                }
+                self.thrum.thrum_to(&perch_client, forward);
+                // Track origin for ensemble routing later (TODO post-refactor).
+                let _ = origin;
                 self.waneman.tick(&sid);
             }
             Some(Chi::Cancel) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                    let req_id = thrum_core::rid();
-                    if let Err(e) = self.nest.interrupt(sid, &req_id).await {
-                        trace!(sid, err = %e, "nest.interrupt.failed");
+                    // Forward cancel to whichever perch owns this sid.
+                    // We don't track sid→perch mapping yet; broadcast to
+                    // all perches and let them no-op on unknown sids.
+                    let perches: Vec<String> = {
+                        let p = self.external_perches.read();
+                        p.values().map(|r| r.client_id.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect()
+                    };
+                    for pc in perches {
+                        self.thrum.thrum_to(&pc, tone.clone());
                     }
+                    let _ = sid;
                 }
             }
             Some(Chi::Cleanup) => {
-                if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                    self.nest.fell(sid).await;
+                if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
+                    // Forward cleanup to all registered perches.
+                    let perches: Vec<String> = {
+                        let p = self.external_perches.read();
+                        p.values().map(|r| r.client_id.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect()
+                    };
+                    for pc in perches {
+                        self.thrum.thrum_to(&pc, tone.clone());
+                    }
+                    // MCP registry session drop.
+                    if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
+                        self.mcp_registry.drop_session(sid);
+                    }
                 }
             }
             Some(Chi::Attach) => {

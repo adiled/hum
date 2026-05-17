@@ -165,10 +165,6 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             bind_mcp: false,
-            perches: humd::PerchSet {
-                pipe: Arc::new(nest::MockPerch::default()),
-                pty: Arc::new(nest::MockPerch::default()),
-            },
             capacity_override,
             waneman: Some(waneman.clone()),
             humd_key: None,
@@ -300,10 +296,6 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             bind_mcp: false,
-            perches: humd::PerchSet {
-                pipe: Arc::new(nest::MockPerch::default()),
-                pty: Arc::new(nest::MockPerch::default()),
-            },
             capacity_override,
             waneman: Some(waneman.clone()),
             humd_key: None,
