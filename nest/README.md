@@ -225,9 +225,10 @@ This is what makes the three deployment paradigms work without code
 in this crate noticing:
 
 - **Paradigm 0** (local dev) — every prompt comes via local Unix socket.
-- **Paradigm 1** (local prod) — same as 0; systemd just keeps things alive.
-- **Paradigm 2** (distributed) — prompts may arrive over ensemble; the
-  Nest still calls `Perch::spawn` to fulfill them.
+- **Paradigm 1** (ensemble / distributed) — prompts may arrive over
+  ensemble; the Nest still calls `Perch::spawn` to fulfill them.
+- **Paradigm 2** (managed nestling provisioning) — like 0 in
+  origin-blindness; systemd just keeps the local nestlers alive.
 
 A roost answering a prompt cannot tell whether the original asker was
 on this machine or across the planet. Honest.

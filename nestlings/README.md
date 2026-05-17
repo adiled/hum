@@ -105,14 +105,43 @@ the canonical XDG path (or `HUM_THRUM_SOCK` override).
 
 This paradigm is what every clone-and-build path should land on.
 
-### Paradigm 1 — local prod (systemd, configs persisted, single machine)
+### Paradigm 1 — ensemble (mesh wire, distributed thrums)
 
-You want hum running across reboots on this one machine. Use the
-install scripts:
+**The practical sweet spot.** A nestler on machine X reaches a humd
+on machine Y over the ensemble — its `chi:"hello"` lands at humd-Y
+through the transport (TCP / TLS / Iroh) instead of a local socket.
+
+From humd-Y's point of view: nothing new. Same hello, same manifest,
+same routing. The transport layer bridges bytes; the protocol layer
+doesn't know or care.
+
+What enables this:
+- humd has ensemble built in — wakes the moment `peers.json` has at
+  least one bootstrap entry
+- the remote nestler runs by paradigm 0 (or 2) on *its own* machine
+- humd-Y advertises its nests via `PeerCapabilities.nests`; peer
+  humds discover and route prompts via the ensemble's `route(tone)`
+
+**Nothing extra installs on the humd side.** A foreign nestler doesn't
+touch humd-Y's filesystem. The `source` URL in its hello tells the
+mesh what kind of nestler it is and where its repo lives — purely
+informational; no code is downloaded.
+
+Why this is the everyday mode for any non-trivial deployment:
+compute pools naturally across machines, one humd's models become
+shared compute for many nestlers without you provisioning systemd on
+each.
+
+### Paradigm 2 — managed nestling service provisioning (advanced)
+
+You're running a hum-on-this-machine fleet — persistent across
+reboots, with per-nestling systemd units, per-kind configs on disk,
+the whole operational kit.
 
 ```bash
 ./install                                  # humd: binary + identity + systemd unit
 nestlings/openai-server/install            # one per nestling you want hosted
+nestlings/anthropic-server/install         # etc.
 ```
 
 What this adds over paradigm 0:
@@ -121,39 +150,19 @@ What this adds over paradigm 0:
 - `~/.config/hum/hum.json` seeded with the namespaced 0.3 shape
 - `~/.config/hum/nestlings/<kind>.json` per nestling kind
 - systemd user units (`hum.service`, `hum-openai-server.service`, …)
-- `~/.config/hum/peers.json` scaffolded empty (for paradigm 2 later)
+- `~/.config/hum/peers.json` scaffolded empty
 
-Still single-machine. No ensemble traffic.
-
-### Paradigm 2 — distributed (ensemble, remote nestlers, multi-humd)
-
-The mesh case. A nestler running on machine X reaches a humd on
-machine Y via the ensemble — its `chi:"hello"` arrives at humd-Y over
-TCP/QUIC instead of the local socket.
-
-From humd-Y's point of view: nothing new. Same hello, same manifest,
-same routing. The transport layer (TCP/TLS/Iroh) bridges the bytes;
-the protocol layer doesn't know or care.
-
-What enables this:
-- humd has ensemble built in — turned on by default once peers.json
-  has at least one entry
-- the remote nestler runs by paradigm 0 or 1 *on its own machine*
-- humd-Y advertises its nests via `PeerCapabilities.nests`; peer
-  humds discover and route prompts via the ensemble's `route(tone)`
-
-**No new install on the humd side.** A foreign nestler doesn't need
-this humd's filesystem touched. The `source` field in its hello tells
-the mesh what kind of nestler it is and where its repo lives — purely
-informational; no code is downloaded.
+This is the heaviest mode. Worth it when you want each nestling
+running as a managed service on this host; otherwise paradigm 1
+gives you most of the value with much less ops.
 
 ### Quick which-paradigm-am-I-using
 
 | signal | likely paradigm |
 |---|---|
 | no systemd unit, terminal-launched | 0 |
-| `~/.config/hum/hum.json` exists + `hum.service` listed | 1 |
-| `peers.json` has entries and humd's logs show inbound `hello` from non-local addrs | 2 |
+| `peers.json` has entries and humd's logs show inbound `hello` from non-local addrs | 1 |
+| `~/.config/hum/hum.json` exists, multiple `hum-*.service` units registered | 2 |
 
 The protocol is identical across all three. Install scripts are
 paradigm-1 ergonomics, not protocol requirements.
