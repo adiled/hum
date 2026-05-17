@@ -273,6 +273,13 @@ async function start(): Promise<void> {
         stop?: string | string[];
         seed?: number;
         n?: number;
+        frequency_penalty?: number;
+        presence_penalty?: number;
+        tool_choice?: string | { type: string; function?: { name: string } };
+        parallel_tool_calls?: boolean;
+        response_format?: { type: string; json_schema?: { name?: string; schema?: unknown; strict?: boolean } };
+        logprobs?: boolean;
+        top_logprobs?: number;
         stream_options?: { include_usage?: boolean };
       };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
@@ -285,6 +292,11 @@ async function start(): Promise<void> {
       if (typeof body.n === "number" && body.n > 1) {
         return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
       }
+      // logprobs / top_logprobs aren't emitted by the perches we
+      // ship today. Spec-compliant explicit reject beats silent ignore.
+      if (body.logprobs === true || (typeof body.top_logprobs === "number" && body.top_logprobs > 0)) {
+        return bad(res, "logprobs unsupported by hum perches (claude-cli doesn't emit token probabilities)");
+      }
 
       const stream = body.stream !== false; // default to streaming
       const includeUsage = body.stream_options?.include_usage !== false;
@@ -295,9 +307,24 @@ async function start(): Promise<void> {
       // body.user wins when the client supplies a session id; otherwise
       // derive a stable one from the conversation anchor.
       const sid = body.user ?? `oai-${sessionKey(messages)}`;
-      const { systemPrompt, userPrompt } = messagesToPrompt(messages);
+      let { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
       const attachments = allAttachments(messages);
+
+      // response_format: JSON mode. OpenAI's contract is "the model is
+      // constrained to emit valid JSON." We inject the constraint into
+      // the system prompt — model-side enforcement (no grammar lock
+      // available across all perches). json_schema gets the schema
+      // shown verbatim so the model can mirror it.
+      if (body.response_format && body.response_format.type !== "text") {
+        const fmt = body.response_format;
+        let jsonHint = "Respond with valid JSON only. No prose, no markdown fences.";
+        if (fmt.type === "json_schema" && fmt.json_schema?.schema) {
+          jsonHint += `\nConform to this JSON Schema:\n${JSON.stringify(fmt.json_schema.schema, null, 2)}`;
+        }
+        systemPrompt = systemPrompt ? `${systemPrompt}\n\n${jsonHint}` : jsonHint;
+      }
+
       // Sampling/limit knobs — pass to humd via a sampling block so
       // perches that honor them (anthropic-native, ollama, etc.) can.
       // claude-cli today ignores them; that's fine, they're optional.
@@ -308,6 +335,10 @@ async function start(): Promise<void> {
       if (typeof maxTokens === "number") sampling.maxTokens = maxTokens;
       if (body.stop !== undefined) sampling.stop = body.stop;
       if (typeof body.seed === "number") sampling.seed = body.seed;
+      if (typeof body.frequency_penalty === "number") sampling.frequencyPenalty = body.frequency_penalty;
+      if (typeof body.presence_penalty === "number") sampling.presencePenalty = body.presence_penalty;
+      if (body.tool_choice !== undefined) sampling.toolChoice = body.tool_choice;
+      if (typeof body.parallel_tool_calls === "boolean") sampling.parallelToolCalls = body.parallel_tool_calls;
 
       const chunkId = `chatcmpl-${randomUUID()}`;
       const translator = new OpenAITranslator(chunkId, model, includeUsage);
