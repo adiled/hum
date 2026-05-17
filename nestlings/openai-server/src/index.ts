@@ -219,31 +219,106 @@ async function start(): Promise<void> {
       const { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
 
-      if (!stream) {
-        return bad(res, "non-streaming not implemented; pass stream:true");
-      }
+      const chunkId = `chatcmpl-${randomUUID()}`;
+      const translator = new OpenAITranslator(chunkId, model);
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-
-      const translator = new OpenAITranslator(`chatcmpl-${randomUUID()}`, model);
-
-      thrum.on(sid, (msg) => {
-        const frames = translator.ingest(msg);
-        for (const f of frames) {
-          if (f === "data: [DONE]\n\n") {
+      if (stream) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        thrum.on(sid, (msg) => {
+          const frames = translator.ingest(msg);
+          for (const f of frames) {
+            if (f === "data: [DONE]\n\n") {
+              res.write(f);
+              res.end();
+              thrum.off(sid);
+              return;
+            }
             res.write(f);
-            res.end();
-            thrum.off(sid);
-            return;
           }
-          res.write(f);
-        }
-      });
+        });
+      } else {
+        // Non-streaming: accumulate streamed deltas, fold into a single
+        // chat completion response when [DONE] arrives. Spec-compliant
+        // OpenAI shape — clients that opt out of SSE get one JSON body.
+        let accumulatedContent = "";
+        let accumulatedReasoning = "";
+        const accumulatedToolCalls: Array<{
+          id: string;
+          type: string;
+          function: { name: string; arguments: string };
+        }> = [];
+        let finishReason: string | null = "stop";
+        let usage: Record<string, number> | undefined;
+        thrum.on(sid, (msg) => {
+          const frames = translator.ingest(msg);
+          for (const f of frames) {
+            if (f === "data: [DONE]\n\n") {
+              const body: Record<string, unknown> = {
+                id: chunkId,
+                object: "chat.completion",
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [{
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: accumulatedContent || null,
+                    ...(accumulatedReasoning ? { reasoning_content: accumulatedReasoning } : {}),
+                    ...(accumulatedToolCalls.length > 0 ? { tool_calls: accumulatedToolCalls } : {}),
+                  },
+                  finish_reason: finishReason,
+                }],
+              };
+              if (usage) body.usage = usage;
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+              thrum.off(sid);
+              return;
+            }
+            // Parse the SSE frame to fold into the accumulator.
+            const m = f.match(/^data: (.+)\n\n$/);
+            if (!m) continue;
+            try {
+              const chunk = JSON.parse(m[1]) as {
+                choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }>;
+                usage?: Record<string, number>;
+              };
+              if (chunk.usage) usage = chunk.usage;
+              const choice = chunk.choices?.[0];
+              if (!choice) continue;
+              if (choice.finish_reason) finishReason = choice.finish_reason;
+              const d = choice.delta ?? {};
+              if (typeof d.content === "string") accumulatedContent += d.content;
+              if (typeof d.reasoning_content === "string") accumulatedReasoning += d.reasoning_content;
+              const tcs = d.tool_calls as Array<{
+                index: number;
+                id?: string;
+                type?: string;
+                function?: { name?: string; arguments?: string };
+              }> | undefined;
+              if (Array.isArray(tcs)) {
+                for (const tc of tcs) {
+                  const slot = accumulatedToolCalls[tc.index] ?? {
+                    id: "",
+                    type: "function",
+                    function: { name: "", arguments: "" },
+                  };
+                  if (tc.id) slot.id = tc.id;
+                  if (tc.type) slot.type = tc.type;
+                  if (tc.function?.name) slot.function.name = tc.function.name;
+                  if (tc.function?.arguments) slot.function.arguments += tc.function.arguments;
+                  accumulatedToolCalls[tc.index] = slot;
+                }
+              }
+            } catch {}
+          }
+        });
+      }
 
       req.on("close", () => {
         thrum.off(sid);

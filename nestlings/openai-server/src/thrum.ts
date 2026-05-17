@@ -33,54 +33,94 @@ export class ThrumClient {
   private path: string;
   private connected = false;
   private pending: string[] = [];
+  private bind?: BindInfo;
+  private shuttingDown = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(path?: string) {
     this.path = path ?? defaultThrumPath();
   }
 
   async connect(bind?: BindInfo): Promise<void> {
+    // First-connect resolves on hello write; subsequent reconnects
+    // are silent (driven by the close handler's backoff loop).
+    this.bind = bind;
     return new Promise((resolve, reject) => {
-      const s = createConnection(this.path);
-      s.on("connect", () => {
-        this.sock = s;
-        this.connected = true;
-        const hello: Tone = {
-          chi: "hello",
-          rid: `hello-${Date.now().toString(36)}`,
-          from: NESTLING_NAME,
-          nestling: NESTLING_NAME,
-          protoVersion: THRUM_VERSION,
-          source: "https://github.com/adiled/hum/tree/main/nestlings/openai-server",
-        };
-        if (bind) hello.bind = bind;
-        s.write(JSON.stringify(hello) + "\n");
-        for (const line of this.pending) s.write(line);
-        this.pending = [];
-        resolve();
-      });
-      s.on("data", (chunk: Buffer) => {
-        this.buf += chunk.toString();
-        let nl: number;
-        while ((nl = this.buf.indexOf("\n")) >= 0) {
-          const line = this.buf.slice(0, nl);
-          this.buf = this.buf.slice(nl + 1);
-          if (!line) continue;
-          try {
-            const msg = JSON.parse(line) as Tone;
-            const sid = (msg.sid as string) ?? "";
-            const handler = this.byId.get(sid);
-            if (handler) handler(msg);
-          } catch {}
-        }
-      });
-      s.on("error", (err) => {
-        if (!this.connected) reject(err);
-      });
-      s.on("close", () => {
-        this.connected = false;
-        this.sock = null;
-      });
+      this.attempt(resolve, reject);
     });
+  }
+
+  private attempt(
+    resolve?: () => void,
+    reject?: (e: unknown) => void,
+  ): void {
+    const s = createConnection(this.path);
+    let settled = false;
+    s.on("connect", () => {
+      this.sock = s;
+      this.connected = true;
+      this.reconnectAttempt = 0;
+      const hello: Tone = {
+        chi: "hello",
+        rid: `hello-${Date.now().toString(36)}`,
+        from: NESTLING_NAME,
+        nestling: NESTLING_NAME,
+        protoVersion: THRUM_VERSION,
+        source: "https://github.com/adiled/hum/tree/main/nestlings/openai-server",
+      };
+      if (this.bind) hello.bind = this.bind;
+      s.write(JSON.stringify(hello) + "\n");
+      // Flush anything queued during the disconnect window.
+      for (const line of this.pending) s.write(line);
+      this.pending = [];
+      if (!settled && resolve) { settled = true; resolve(); }
+    });
+    s.on("data", (chunk: Buffer) => {
+      this.buf += chunk.toString();
+      let nl: number;
+      while ((nl = this.buf.indexOf("\n")) >= 0) {
+        const line = this.buf.slice(0, nl);
+        this.buf = this.buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line) as Tone;
+          const sid = (msg.sid as string) ?? "";
+          const handler = this.byId.get(sid);
+          if (handler) handler(msg);
+        } catch {}
+      }
+    });
+    s.on("error", (err) => {
+      // Only reject if we never connected on this attempt; otherwise
+      // let the `close` handler schedule a reconnect.
+      if (!settled && !this.connected && reject) {
+        settled = true;
+        reject(err);
+      }
+    });
+    s.on("close", () => {
+      const wasConnected = this.connected;
+      this.connected = false;
+      this.sock = null;
+      if (this.shuttingDown) return;
+      if (wasConnected) {
+        console.error("[thrum] socket closed; reconnecting…");
+      }
+      this.scheduleReconnect();
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+    // Exponential backoff capped at 30s. Pending writes queue
+    // forward — they ship on the next successful connect.
+    const delay = Math.min(30_000, 250 * Math.pow(2, this.reconnectAttempt));
+    this.reconnectAttempt++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.attempt();
+    }, delay);
   }
 
   send(msg: Tone): void {
@@ -91,4 +131,17 @@ export class ThrumClient {
 
   on(sid: string, handler: SidHandler): void { this.byId.set(sid, handler); }
   off(sid: string): void { this.byId.delete(sid); }
+
+  close(): void {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.sock) {
+      this.sock.end();
+      this.sock = null;
+    }
+    this.connected = false;
+  }
 }
