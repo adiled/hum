@@ -22,9 +22,9 @@ async fn main() -> Result<()> {
 
     let cfg = DaemonConfig::from_env();
     info!(
-        max_procs = cfg.hum_cfg.max_procs,
-        nest = ?cfg.hum_cfg.nest,
-        droned = cfg.hum_cfg.droned,
+        max_procs = cfg.hum_cfg.nest.max_procs,
+        default_perch = %cfg.hum_cfg.nest.default,
+        fs_roots = cfg.hum_cfg.fs.roots.len(),
         "config.loaded"
     );
 

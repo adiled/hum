@@ -235,8 +235,8 @@ where
     let ensemble_for_sink = ensemble_opt.clone();
 
     let nest_cfg = nest::pool::NestConfig {
-        max_procs: cfg.hum_cfg.max_procs as usize,
-        idle_timeout: Duration::from_millis(cfg.hum_cfg.idle_timeout),
+        max_procs: cfg.hum_cfg.nest.max_procs as usize,
+        idle_timeout: Duration::from_millis(cfg.hum_cfg.nest.idle_threshold_ms),
     };
     let nest_pool = Arc::new(nest::Nest::new(nest_cfg, cfg.perches.pipe, cfg.perches.pty));
     let mcp_url = format!("http://{}", cfg.mcp_addr);
@@ -819,13 +819,10 @@ impl ToneSink for HumdSink {
 /// `None` (unspecified / unbounded) — the overflow heuristic in
 /// `pick_overflow_peer` treats `None` as "available."
 fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
-    let nest = match cfg.hum_cfg.nest {
-        config::Nest::ClaudeCli => "claude-cli",
-        config::Nest::ClaudeRepl => "claude-repl",
-    };
+    let nest_name = cfg.hum_cfg.nest.default.clone();
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.into(),
-        nests: vec![nest.to_string()],
+        nests: vec![nest_name],
         hosts: Vec::new(),
         can_relay: false,
         free_slots: None,

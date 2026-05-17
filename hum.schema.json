@@ -5,87 +5,139 @@
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
-    "maxProcs": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Maximum concurrent Claude CLI processes in the nest pool."
+
+    "humd": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Daemon-level knobs.",
+      "properties": {
+        "permissionDuskMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 60000,
+          "description": "Ms a pending permission-ask waits before auto-denying."
+        },
+        "driftRetentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30,
+          "description": "Days of drift-ring samples kept on disk."
+        }
+      }
     },
-    "idleTimeout": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Milliseconds an idle roost stays alive before eviction."
+
+    "fs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Filesystem primitive — what humd is allowed to read and write. Built-in MCP tools (Read/Write/Edit/Glob/Grep/Bash) clamp to these roots. SpawnSpec.cwd must be inside one of them.",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Absolute path or ~-relative. Tilde expanded against $HOME at load time."
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["rw", "ro"],
+                "default": "rw",
+                "description": "rw — read + write tools allowed. ro — Read/Glob/Grep allowed, Write/Edit refused."
+              }
+            }
+          }
+        },
+        "denied": {
+          "type": "array",
+          "default": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"],
+          "items": { "type": "string" },
+          "description": "Hard blacklist. Any path under a denied prefix is refused even if it sits inside a root. Tilde expanded."
+        }
+      }
     },
-    "smallModel": {
-      "type": "string",
-      "description": "Provider/model id used for small tasks (title generation, etc). Empty = auto-discover a free model at plugin startup."
-    },
+
     "nest": {
-      "type": "string",
-      "enum": ["claude-repl", "claude-cli"],
-      "default": "claude-repl",
-      "description": "Default nest implementation for sessions without a per-project override. 'claude-repl' drives the interactive Ink REPL through a PTY; usage bills against Pro/Max subscription. 'claude-cli' falls back to legacy `-p` headless mode that bills against API credits — use this if you have things covered another way, or you want more suffering."
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The pool that hosts roosts. One nest per humd.",
+      "properties": {
+        "maxProcs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4,
+          "description": "Hard cap on concurrent roosts. See nest::NestHealth for the pressure tiers it feeds."
+        },
+        "idleThresholdMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300000,
+          "description": "Ms after last activity before a roost is considered idle and eligible for eviction."
+        },
+        "default": {
+          "type": "string",
+          "default": "claude-repl",
+          "description": "Perch name to spawn into when a chi:prompt doesn't pin one. Must appear in `perches`."
+        }
+      }
     },
-    "projects": {
-      "type": "array",
-      "description": "Project registry. 'id' is the hum-native canonical reference for the project at 'primaryPath'.",
-      "items": {
+
+    "perches": {
+      "type": "object",
+      "default": {},
+      "description": "Per-perch config. Key = perch name (claude-cli, claude-repl, future kinds). Value's shape is owned by the perch crate. Missing block = Default.",
+      "additionalProperties": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "primaryPath"],
         "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{52}$",
-            "description": "hum-native 256-bit identifier (52-char Crockford base32)."
+          "cliPath": { "type": "string", "description": "Override the binary location." },
+          "defaultModel": { "type": "string", "description": "Model id this perch spawns when SpawnSpec doesn't override." },
+          "ccFlags": {
+            "type": "object",
+            "additionalProperties": { "type": ["string", "number", "boolean"] },
+            "description": "Env overrides spread onto every spawn AFTER the perch's defaults."
           },
-          "primaryPath": {
-            "type": "string",
-            "description": "Absolute project directory (no trailing slash)."
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "OS-level resource caps (nest::ResourceLimits). All optional.",
+            "properties": {
+              "rssBytes":     { "type": "integer", "minimum": 0 },
+              "fdCount":      { "type": "integer", "minimum": 0 },
+              "cpuSecs":      { "type": "integer", "minimum": 0 },
+              "wallClockMs":  { "type": "integer", "minimum": 0 },
+              "nice":         { "type": "integer", "minimum": -20, "maximum": 19 }
+            }
+          },
+          "budget": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Soft caps the budget tracker enforces. None = no cap.",
+            "properties": {
+              "tokensPerTurn":      { "type": "integer", "minimum": 0 },
+              "tokensPerDay":       { "type": "integer", "minimum": 0 },
+              "toolCallsPerMinute": { "type": "integer", "minimum": 0 }
+            }
           }
         }
       }
     },
-    "permissionDusk": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Milliseconds a pending permission ask waits before auto-denying."
-    },
-    "droned": {
-      "type": "boolean",
-      "description": "Opt-in drone observer. When off, the thrum is a raw passthrough."
-    },
-    "droneModel": {
+
+    "nestlings": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["providerID", "modelID"],
-      "properties": {
-        "providerID": { "type": "string" },
-        "modelID": { "type": "string" }
-      },
-      "description": "Model the drone uses for its sentinel turns."
-    },
-    "experimental": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "subpath": {
-          "type": "boolean",
-          "description": "Linguistic sub-symbol addressing in read / do_code (foo.when.body, foo.try.otherwise, foo.loop.body, foo.return, etc). Off by default."
-        }
-      },
-      "description": "Experimental feature toggles. Off by default."
-    },
-    "ccFlags": {
-      "type": "object",
-      "description": "Claude CLI environment overrides. Each key/value is spread into the nest spawn env AFTER hum's defaults, so user entries override hum's. Use to re-enable CLAUDE_CODE_DISABLE_* flags hum turns off, or set arbitrary CC-facing env vars.",
+      "default": {},
+      "description": "Per-nestling-server config. Key = nestling name. Value's shape is owned by the nestling.",
       "additionalProperties": {
-        "type": ["string", "number", "boolean"]
+        "type": "object",
+        "properties": {
+          "host":   { "type": "string", "default": "127.0.0.1" },
+          "port":   { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "apiKey": { "type": "string", "default": "", "description": "Auth gate; empty = no auth (dev mode)." }
+        }
       }
-    },
-    "compaction": {
-      "type": "string",
-      "enum": ["off", "curate"],
-      "description": "Compaction behavior for manually-triggered compaction (the 'compact' button in OC TUI). Auto-compaction is permanently off for hum models because their limit.context is set to 0 in opencode.json by install — OC's overflow check skips, no 'compacting…' hiccup, Claude CLI's native microcompaction handles overflow. 'off' (default) — manual compact stub-returns, no JSONL prune. 'curate' — manual compact triggers hum's surgical JSONL prune (strips thinking blocks, trims old tool_results). Other providers' compaction is untouched."
     }
   }
 }
