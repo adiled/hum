@@ -47,6 +47,8 @@ export const Chi = {
   toolCall: "tool-call",
   /** out-of-band metadata for a tool result */
   toolMeta: "tool-meta",
+  /** completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event. */
+  toolInfo: "tool-info",
   /** delivery ack for a rid */
   echo: "echo",
   /** drift timing — measured both ways */

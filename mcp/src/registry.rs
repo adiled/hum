@@ -40,6 +40,31 @@ pub trait PermissionHook: Send + Sync {
     ) -> anyhow::Result<bool>;
 }
 
+/// Hook for observation. Fired after every completed tool execution
+/// (native or nestler-roundtripped). Informational only — the
+/// callback never affects dispatch or response. The host installs
+/// one to broadcast `chi:"tool-info"` to thrum observers (drone,
+/// dashboards, rich nestlings).
+pub trait ToolInfoHook: Send + Sync {
+    fn record(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: Value,
+        result: &str,
+        source: ToolInfoSource,
+    );
+}
+
+/// Where a tool was executed — disambiguates `chi:"tool-info"` events.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolInfoSource {
+    /// Hum's own native MCP tool (Read/Write/Edit/Bash/Glob/Grep…).
+    Native,
+    /// External MCP server (not yet implemented).
+    External,
+}
+
 /// Shared, cheaply cloneable handle. Internally `Arc<Inner>`.
 #[derive(Clone)]
 pub struct Registry {
@@ -51,6 +76,7 @@ struct Inner {
     default_cwd: PathBuf,
     nestler: Mutex<Option<Arc<dyn NestlerHook>>>,
     permission: Mutex<Option<Arc<dyn PermissionHook>>>,
+    tool_info: Mutex<Option<Arc<dyn ToolInfoHook>>>,
 }
 
 impl Registry {
@@ -66,8 +92,13 @@ impl Registry {
                 default_cwd,
                 nestler: Mutex::new(None),
                 permission: Mutex::new(None),
+                tool_info: Mutex::new(None),
             }),
         }
+    }
+
+    pub fn set_tool_info_hook(&self, h: Arc<dyn ToolInfoHook>) {
+        *self.inner.tool_info.lock() = Some(h);
     }
 
     pub fn set_default_cwd(&self, cwd: PathBuf) {
@@ -140,7 +171,15 @@ impl Registry {
         // Native first — they're the authoritative surface.
         if NATIVE_TOOL_NAMES.contains(&name) {
             let sess = self.session(session_id);
-            return tools::dispatch_native(name, args, &sess, &self.inner.permission).await;
+            let args_for_hook = args.clone();
+            let result = tools::dispatch_native(name, args, &sess, &self.inner.permission).await;
+            // Fire the observation hook with the rendered result text
+            // so observers can see {sid, name, args, result} as a
+            // single chi:"tool-info" event.
+            if let Some(hook) = self.inner.tool_info.lock().clone() {
+                hook.record(session_id, name, args_for_hook, &result.output, ToolInfoSource::Native);
+            }
+            return result;
         }
 
         // Nestler-declared — forward over the hook.

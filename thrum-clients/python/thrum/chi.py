@@ -49,6 +49,8 @@ class Chi:
     TOOL_CALL: str = "tool-call"
     # out-of-band metadata for a tool result
     TOOL_META: str = "tool-meta"
+    # completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event.
+    TOOL_INFO: str = "tool-info"
     # delivery ack for a rid
     ECHO: str = "echo"
     # drift timing — measured both ways
@@ -96,6 +98,7 @@ ALL_CHI: frozenset[str] = frozenset({
     "tendril-reach",
     "tool-call",
     "tool-meta",
+    "tool-info",
     "echo",
     "perf-mark",
     "log",

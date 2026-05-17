@@ -26,6 +26,6 @@ pub mod session;
 pub mod tools;
 
 pub use protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDef, ToolResult};
-pub use registry::{NestlerHook, PermissionHook, Registry};
+pub use registry::{NestlerHook, PermissionHook, Registry, ToolInfoHook, ToolInfoSource};
 pub use server::serve;
 pub use session::{PermissionRule, SessionState};

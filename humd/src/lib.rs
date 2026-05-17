@@ -261,6 +261,13 @@ where
         pending: tool_pending.clone(),
         perch_tag: perch_tag.clone(),
     }));
+    // Native MCP tool completions become chi:"tool-info" events on
+    // the wire. Observers see {sid, name, args, result, source} as a
+    // single semantic event — no need to reconstitute from chunks.
+    mcp_registry.set_tool_info_hook(Arc::new(ToolInfoBroadcaster {
+        thrum: thrum.clone(),
+        perch_tag: perch_tag.clone(),
+    }));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -494,7 +501,23 @@ impl mcp::NestlerHook for NestlerBridge {
         // originator. Broadcast tag is the configured nest name.
         self.thrum.thrum_broadcast(session_id, &self.perch_tag, tone);
         match tokio::time::timeout(Duration::from_secs(300), rx).await {
-            Ok(Ok(result)) => Ok(result),
+            Ok(Ok(result)) => {
+                // Emit a chi:"tool-info" tone with the completed pair
+                // so observers (drone, dashboards, rich nestlings) can
+                // render the full call+result without subscribing to
+                // chunk-level fragments.
+                let info = serde_json::json!({
+                    "chi": "tool-info",
+                    "sid": session_id,
+                    "callId": call_id,
+                    "name": tool,
+                    "args": args,
+                    "result": result,
+                    "source": "nestler",
+                });
+                self.thrum.thrum_broadcast(session_id, &self.perch_tag, info);
+                Ok(result)
+            }
             Ok(Err(_)) => {
                 self.pending.lock().remove(&call_id);
                 anyhow::bail!("nestler tool-result channel closed")
@@ -504,6 +527,39 @@ impl mcp::NestlerHook for NestlerBridge {
                 anyhow::bail!("nestler tool-result timed out (300s)")
             }
         }
+    }
+}
+
+/// MCP ToolInfoHook impl — turns native MCP tool completions into
+/// chi:"tool-info" tones on thrum. Pure observation; doesn't affect
+/// MCP dispatch in any way.
+struct ToolInfoBroadcaster {
+    thrum: Thrum,
+    perch_tag: String,
+}
+
+impl mcp::ToolInfoHook for ToolInfoBroadcaster {
+    fn record(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: Value,
+        result: &str,
+        source: mcp::ToolInfoSource,
+    ) {
+        let source_tag = match source {
+            mcp::ToolInfoSource::Native => "native",
+            mcp::ToolInfoSource::External => "external",
+        };
+        let tone = serde_json::json!({
+            "chi": "tool-info",
+            "sid": session_id,
+            "name": tool,
+            "args": args,
+            "result": result,
+            "source": source_tag,
+        });
+        self.thrum.thrum_broadcast(session_id, &self.perch_tag, tone);
     }
 }
 

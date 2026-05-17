@@ -621,6 +621,7 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::GossipPublish => "gossip-publish",
         Chi::KadFindNode => "kad-find-node",
         Chi::KadFindNodeResp => "kad-find-node-resp",
+        Chi::ToolInfo => "tool-info",
     }
 }
 
