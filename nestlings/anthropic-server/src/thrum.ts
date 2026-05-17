@@ -33,64 +33,95 @@ export class ThrumClient {
   private path: string;
   private connected = false;
   private pending: string[] = [];
+  private bind?: BindInfo;
+  private shuttingDown = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(path?: string) {
     this.path = path ?? defaultThrumPath();
   }
 
   async connect(bind?: BindInfo): Promise<void> {
+    this.bind = bind;
     return new Promise((resolve, reject) => {
-      const s = createConnection(this.path);
-      s.on("connect", () => {
-        this.sock = s;
-        this.connected = true;
-        // hello — humd reads `nestling`, `version`, `protoVersion`,
-        // `propensity`, `chi`, `source` to build a NestlingManifest
-        // and gossip it on hum/nestlings/announce. See WIRE.md §Handshake.
-        const hello: Tone = {
-          chi: "hello",
-          rid: `hello-${Date.now().toString(36)}`,
-          from: NESTLING_NAME,
-          nestling: NESTLING_NAME,
-          version: "0.0.0",
-          protoVersion: THRUM_VERSION,
-          propensity: {
-            statefulness: "convention-stateful",
-            richness:     "medium",
-            wire:         "anthropic/messages",
-          },
-          chis: ["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"],
-          source: "https://github.com/adiled/hum/tree/main/nestlings/anthropic-server",
-        };
-        if (bind) hello.bind = bind;
-        s.write(JSON.stringify(hello) + "\n");
-        for (const line of this.pending) s.write(line);
-        this.pending = [];
-        resolve();
-      });
-      s.on("data", (chunk: Buffer) => {
-        this.buf += chunk.toString();
-        let nl: number;
-        while ((nl = this.buf.indexOf("\n")) >= 0) {
-          const line = this.buf.slice(0, nl);
-          this.buf = this.buf.slice(nl + 1);
-          if (!line) continue;
-          try {
-            const msg = JSON.parse(line) as Tone;
-            const sid = (msg.sid as string) ?? "";
-            const handler = (sid && this.byId.get(sid)) || this.wildcard;
-            if (handler) handler(msg);
-          } catch { /* malformed — ignore */ }
-        }
-      });
-      s.on("error", (err) => {
-        if (!this.connected) reject(err);
-      });
-      s.on("close", () => {
-        this.connected = false;
-        this.sock = null;
-      });
+      this.attempt(resolve, reject);
     });
+  }
+
+  private attempt(
+    resolve?: () => void,
+    reject?: (e: unknown) => void,
+  ): void {
+    const s = createConnection(this.path);
+    let settled = false;
+    s.on("connect", () => {
+      this.sock = s;
+      this.connected = true;
+      this.reconnectAttempt = 0;
+      // hello — humd reads `nestling`, `version`, `protoVersion`,
+      // `propensity`, `chi`, `source` to build a NestlingManifest
+      // and gossip it on hum/nestlings/announce. See WIRE.md §Handshake.
+      const hello: Tone = {
+        chi: "hello",
+        rid: `hello-${Date.now().toString(36)}`,
+        from: NESTLING_NAME,
+        nestling: NESTLING_NAME,
+        version: "0.0.0",
+        protoVersion: THRUM_VERSION,
+        propensity: {
+          statefulness: "convention-stateful",
+          richness:     "medium",
+          wire:         "anthropic/messages",
+        },
+        chis: ["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"],
+        source: "https://github.com/adiled/hum/tree/main/nestlings/anthropic-server",
+      };
+      if (this.bind) hello.bind = this.bind;
+      s.write(JSON.stringify(hello) + "\n");
+      for (const line of this.pending) s.write(line);
+      this.pending = [];
+      if (!settled && resolve) { settled = true; resolve(); }
+    });
+    s.on("data", (chunk: Buffer) => {
+      this.buf += chunk.toString();
+      let nl: number;
+      while ((nl = this.buf.indexOf("\n")) >= 0) {
+        const line = this.buf.slice(0, nl);
+        this.buf = this.buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line) as Tone;
+          const sid = (msg.sid as string) ?? "";
+          const handler = (sid && this.byId.get(sid)) || this.wildcard;
+          if (handler) handler(msg);
+        } catch { /* malformed — ignore */ }
+      }
+    });
+    s.on("error", (err) => {
+      if (!settled && !this.connected && reject) {
+        settled = true;
+        reject(err);
+      }
+    });
+    s.on("close", () => {
+      const wasConnected = this.connected;
+      this.connected = false;
+      this.sock = null;
+      if (this.shuttingDown) return;
+      if (wasConnected) console.error("[thrum] socket closed; reconnecting…");
+      this.scheduleReconnect();
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+    const delay = Math.min(30_000, 250 * Math.pow(2, this.reconnectAttempt));
+    this.reconnectAttempt++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.attempt();
+    }, delay);
   }
 
   send(msg: Tone): void {
@@ -102,4 +133,11 @@ export class ThrumClient {
   on(sid: string, handler: SidHandler): void { this.byId.set(sid, handler); }
   off(sid: string): void { this.byId.delete(sid); }
   onAny(handler: SidHandler): void { this.wildcard = handler; }
+
+  close(): void {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.sock) { this.sock.end(); this.sock = null; }
+    this.connected = false;
+  }
 }

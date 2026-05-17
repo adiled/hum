@@ -12,7 +12,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ThrumClient } from "./thrum.ts";
@@ -80,6 +80,82 @@ function checkAuth(req: IncomingMessage): boolean {
   const got = req.headers["x-api-key"] ?? req.headers["authorization"];
   if (typeof got !== "string") return false;
   return got === API_KEY || got === `Bearer ${API_KEY}`;
+}
+
+// ── tenant + audit + usage + rate-limit ────────────────────────────────
+// Gateway concerns. Mirror openai-server's surface so operators get a
+// uniform mental model across nestlings. Each nestling carries its own
+// state directory to keep ledgers independent.
+
+const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/anthropic-server";
+const AUDIT_LOG = join(STATE_DIR, "audit.log");
+const USAGE_PATH = join(STATE_DIR, "usage.json");
+try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}
+
+function tenantOf(req: IncomingMessage): string {
+  const h = req.headers["x-tenant"];
+  if (typeof h === "string" && h.length > 0) return h.replace(/[^A-Za-z0-9_-]/g, "");
+  return "default";
+}
+
+function audit(entry: Record<string, unknown>): void {
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n";
+  try { appendFileSync(AUDIT_LOG, line); } catch {}
+}
+
+interface TenantUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requests: number;
+}
+const USAGE: Record<string, TenantUsage> = (() => {
+  try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
+})();
+let usageDirty = false;
+function trackUsage(tenant: string, input: number, output: number): void {
+  const u = USAGE[tenant] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0 };
+  u.inputTokens += input;
+  u.outputTokens += output;
+  u.totalTokens += input + output;
+  u.requests += 1;
+  USAGE[tenant] = u;
+  usageDirty = true;
+}
+setInterval(() => {
+  if (!usageDirty) return;
+  try {
+    appendFileSync(USAGE_PATH + ".tmp", JSON.stringify(USAGE, null, 2));
+    renameSync(USAGE_PATH + ".tmp", USAGE_PATH);
+    usageDirty = false;
+  } catch {}
+}, 30_000).unref();
+
+interface Bucket { tokens: number; lastRefill: number; }
+const BUCKETS: Record<string, Bucket> = {};
+const RATE_CAPACITY = parseInt(process.env.ANTHROPIC_SERVER_RATE_CAPACITY ?? "60", 10);
+const RATE_REFILL_PER_SEC = parseFloat(process.env.ANTHROPIC_SERVER_RATE_REFILL ?? "1.0");
+function allow(tenant: string): boolean {
+  const now = Date.now();
+  const b = BUCKETS[tenant] ?? { tokens: RATE_CAPACITY, lastRefill: now };
+  const elapsed = (now - b.lastRefill) / 1000;
+  b.tokens = Math.min(RATE_CAPACITY, b.tokens + elapsed * RATE_REFILL_PER_SEC);
+  b.lastRefill = now;
+  if (b.tokens < 1) { BUCKETS[tenant] = b; return false; }
+  b.tokens -= 1;
+  BUCKETS[tenant] = b;
+  return true;
+}
+function tooManyRequests(res: ServerResponse, tenant: string): void {
+  res.writeHead(429, {
+    "Content-Type": "application/json",
+    "Retry-After": "60",
+    "X-RateLimit-Tenant": tenant,
+  });
+  res.end(JSON.stringify({
+    type: "error",
+    error: { type: "rate_limit_error", message: `rate limit exceeded for tenant '${tenant}'` },
+  }));
 }
 
 // ── Anthropic shapes (loose) ───────────────────────────────────────────────
@@ -184,7 +260,7 @@ interface MessagesRequest {
   max_tokens?: number;
 }
 
-async function handleMessages(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleMessages(req: IncomingMessage, res: ServerResponse, tenant: string): Promise<void> {
   const raw = await readBody(req);
   let body: MessagesRequest;
   try {
@@ -195,13 +271,16 @@ async function handleMessages(req: IncomingMessage, res: ServerResponse): Promis
   if (!body.model) return bad(res, 400, "model required");
   if (!Array.isArray(body.messages)) return bad(res, 400, "messages required");
 
-  const sid = randomUUID();
+  // Tenant-prefixed sid keeps multi-tenant traffic isolated on the wire.
+  const baseSid = randomUUID();
+  const sid = tenant === "default" ? baseSid : `${tenant}:${baseSid}`;
   const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
   const stream = body.stream !== false;
   const tools = toolsToThrum(body.tools);
   const systemPrompt = flattenSystem(body.system);
   const text = lastUserMessage(body.messages);
   const toolReturns = trailingToolResults(body.messages);
+  audit({ endpoint: "messages", tenant, model: body.model, sid, stream });
 
   const client = new ThrumClient();
   await client.connect();
@@ -231,9 +310,9 @@ async function handleMessages(req: IncomingMessage, res: ServerResponse): Promis
   });
 
   if (!stream) {
-    return handleNonStream(client, res, sid, messageId, body.model);
+    return handleNonStream(client, res, sid, messageId, body.model, tenant);
   }
-  return handleStream(client, res, sid, messageId, body.model);
+  return handleStream(client, res, sid, messageId, body.model, tenant);
 }
 
 async function handleNonStream(
@@ -242,6 +321,7 @@ async function handleNonStream(
   sid: string,
   messageId: string,
   model: string,
+  tenant: string,
 ): Promise<void> {
   const text: string[] = [];
   const toolUses: ContentBlock[] = [];
@@ -272,6 +352,8 @@ async function handleNonStream(
   if (text.length > 0) content.push({ type: "text", text: text.join("") });
   for (const tu of toolUses) content.push(tu);
 
+  trackUsage(tenant, usage.input_tokens ?? 0, usage.output_tokens ?? 0);
+
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
     id: messageId,
@@ -290,6 +372,7 @@ async function handleStream(
   sid: string,
   messageId: string,
   model: string,
+  tenant: string,
 ): Promise<void> {
   writeSseHeaders(res);
 
@@ -348,10 +431,12 @@ async function handleStream(
         for (const idx of openToolBlocks.values()) {
           sse(res, "content_block_stop", { type: "content_block_stop", index: idx });
         }
+        const finishUsage = (tone.usage as Record<string, number>) ?? { output_tokens: 0 };
+        trackUsage(tenant, finishUsage.input_tokens ?? 0, finishUsage.output_tokens ?? 0);
         sse(res, "message_delta", {
           type: "message_delta",
           delta: { stop_reason: (tone.finishReason as string) || "end_turn", stop_sequence: null },
-          usage: (tone.usage as Record<string, number>) ?? { output_tokens: 0 },
+          usage: finishUsage,
         });
         sse(res, "message_stop", { type: "message_stop" });
         client.off(sid);
@@ -373,11 +458,24 @@ async function handleStream(
 const server = createServer(async (req, res) => {
   if (!checkAuth(req)) return unauthorized(res);
   if (req.method === "POST" && req.url === "/v1/messages") {
+    const tenant = tenantOf(req);
+    if (!allow(tenant)) return tooManyRequests(res, tenant);
     try {
-      await handleMessages(req, res);
+      await handleMessages(req, res, tenant);
     } catch (e) {
       bad(res, 500, (e as Error).message || "internal error");
     }
+    return;
+  }
+  if (req.method === "GET" && req.url === "/v1/usage") {
+    const tenant = tenantOf(req);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ tenant, usage: USAGE[tenant] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0 } }));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("hum-anthropic-server\n");
     return;
   }
   res.writeHead(404, { "Content-Type": "application/json" });
