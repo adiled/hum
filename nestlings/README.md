@@ -68,20 +68,59 @@ of it.
 
 ## Adding a new nestling
 
+The `nestlings/` directory in this repo is a catalogue of reference
+implementations — **not** the registry. The registry is on the mesh:
+every humd gossips its locally-running nestlings on
+`hum/nestlings/announce`, and other humds subscribe.
+
+That means a new nestling does NOT need a PR to this repo. Build it
+in your own codebase, import the contract (`thrum-core` crate or
+`thrum` npm package), handshake with humd, and you're discoverable
+on every humd that's subscribed.
+
+### Steps
+
 1. **Pick a propensity** on each axis. The dimensions decide which
    chi values you can keep.
-2. **Add a thrum client** — see any existing `src/thrum.ts`; ~90 LoC.
-   Connect, send NDJSON, dispatch incoming tones to per-sid handlers.
-3. **Announce yourself** — emit `chi:"hello"` on connect with
-   `nestling`, `protoVersion`, and your own `version`. Daemon traces
-   the announcement and warns on version mismatch.
-4. **Translate or transport.** Translators map thrum chunks into the
+2. **Import the contract.**
+   - Rust: `cargo add thrum-core` (today: `{ git = "https://github.com/adiled/hum.git" }`)
+   - TS: `npm install thrum` (today: `"thrum": "git+https://github.com/adiled/hum.git#main"`)
+3. **Add a thrum client** — see any existing `src/thrum.ts`; ~90 LoC.
+   Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`,
+   send NDJSON, dispatch incoming tones to per-sid handlers.
+4. **Announce yourself** — emit `chi:"hello"` on connect with
+   `nestling`, `protoVersion`, your own `version`, and optionally
+   `propensity`, `chi` (the array of chi values you speak), and
+   `source` (URL pointing at your nestling's repo). Humd builds a
+   `NestlingManifest` from these fields and gossips it to the mesh.
+5. **Translate or transport.** Translators map thrum chunks into the
    outside contract's shape (see `vercel-ai/src/transform.ts`).
    Transports just forward bytes (see `grpc/src/index.ts`).
-5. **Tools, if you have them.** Forward incoming `chi:"tool-call"` to
+6. **Tools, if you have them.** Forward incoming `chi:"tool-call"` to
    whatever your outside world considers a tool. Ship the answer back
    as `chi:"tool-result"` with the same `callId`. The daemon will
    resume the parked model.
+
+### Get discovered
+
+Once a humd has heard your advertise, any other humd can:
+
+```rust
+use ensemble::Ensemble;
+let mut found = ensemble.nestling_discover("market-maker");
+while let Some((humd_id, manifest)) = found.recv().await {
+    // dial them, transact, settle
+}
+```
+
+See [`ensemble/README.md`](../ensemble/README.md) for the full
+discover path including Kademlia lookup of unknown HumdAddrs.
+
+### Want your nestling listed in this repo as reference?
+
+Open a PR adding a row to the **Current catalogue** table above and a
+sentence pointing at your repo. The registry stays on-mesh — this
+table is editorial.
 
 ## Versioning
 

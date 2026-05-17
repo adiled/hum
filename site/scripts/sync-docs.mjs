@@ -18,25 +18,19 @@ const DEST_ROOT  = path.resolve(__dirname, "../src/content/docs/");
  *   title      — Starlight page title
  *   description — short tagline shown in TOC + meta
  */
+// Only README.md files. Other markdown in the repo (scenarios/*.md,
+// docs/*.md) is local-only — included earlier, generated 404s on the
+// deployed site because subpages weren't routed cleanly. The on-mesh
+// model means nestlings live in their own repos anyway; this site
+// reflects what's reference-quality in THIS repo.
 const PAGES = [
-  { src: "README.md",                     slug: "index",                  title: "hum",                       description: "The only AI stack nestled on a biodiverse agentic kernel framework." },
-
-  { src: "ensemble/README.md",            slug: "ensemble/index",         title: "Ensemble — the mesh",       description: "Cross-humd routing, discovery, gossip, Kademlia. Where humds find each other." },
-
-  { src: "nestlings/README.md",           slug: "nestlings/index",        title: "Nestlings — the typology",  description: "Statefulness × richness × wire shape. How to build a new nestling." },
-  { src: "nestlings/opencode/README.md",  slug: "nestlings/opencode",     title: "OpenCode plugin",           description: "Rich, stateful nestling for OpenCode." },
-
-  { src: "scenarios/README.md",           slug: "scenarios/index",        title: "Scenarios — narrative spec", description: "Each markdown maps 1:1 to a sim test." },
-  { src: "scenarios/phone-laptop-roam.md", slug: "scenarios/phone-laptop-roam",  title: "Phone-laptop roam (T1)",      description: "One user, two devices, one hum." },
-  { src: "scenarios/co-pilot.md",         slug: "scenarios/co-pilot",           title: "Co-pilot (T2)",                description: "Two operators, one hum. Tee fan-out across humds." },
-  { src: "scenarios/federation-handoff.md", slug: "scenarios/federation-handoff", title: "Federation handoff (T3)",     description: "Org-to-org, signed handshake, scoped capability." },
-  { src: "scenarios/overflow-inference.md", slug: "scenarios/overflow-inference", title: "Overflow inference (T3/T4)",  description: "Capacity-aware routing across the mesh." },
-  { src: "scenarios/partition-and-heal.md", slug: "scenarios/partition-and-heal", title: "Partition and heal",          description: "Wane reconciliation after the network drops." },
-
-  { src: "docs/HUMAN2HUMAN.md",                  slug: "docs/human2human",            title: "Human-to-human",         description: "Two operators sharing a hum." },
-  { src: "docs/multi-file-transactions.md",      slug: "docs/multi-file-transactions", title: "Multi-file transactions", description: "Atomic edits across files." },
-  { src: "docs/task-tool-architecture.md",       slug: "docs/task-tool-architecture",  title: "Task-tool architecture",  description: "How task / tendril work." },
-  { src: "docs/OC_WORKSPACE_DISCOVERY.md",       slug: "docs/oc-workspace-discovery",  title: "OC workspace discovery",  description: "How OpenCode finds projects." },
+  { src: "README.md",                    slug: "index",              title: "hum",                      description: "The only AI stack nestled on a biodiverse agentic kernel framework." },
+  { src: "ensemble/README.md",           slug: "ensemble/index",     title: "Ensemble — the mesh",      description: "Cross-humd routing, discovery, gossip, Kademlia. Where humds find each other." },
+  { src: "nestlings/README.md",          slug: "nestlings/index",    title: "Nestlings — the typology", description: "Statefulness × richness × wire shape. How to build a new nestling." },
+  { src: "nestlings/opencode/README.md", slug: "nestlings/opencode", title: "OpenCode plugin",          description: "Rich, stateful nestling for OpenCode." },
+  { src: "thrum-core/README.md",         slug: "thrum-core/index",   title: "thrum-core (Rust)",        description: "Wire-protocol primitives for Rust nestlings." },
+  { src: "thrum/README.md",              slug: "thrum/index",        title: "thrum (TS)",               description: "Wire-protocol primitives for TS / JS nestlings." },
+  { src: "scenarios/README.md",          slug: "scenarios/index",    title: "Scenarios",                description: "Five narratives, each mapped 1:1 to a sim test." },
 ];
 
 function escapeYaml(s) {

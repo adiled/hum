@@ -23,36 +23,24 @@ export default defineConfig({
         // Use Starlight's built-in head; spacecraft CSS handles the rest.
       },
       sidebar: [
-        { label: "Overview",        link: "/" },
-        { label: "Vocabulary",      link: "/vocabulary/" },
+        { label: "Overview",   link: "/" },
+        { label: "Vocabulary", link: "/vocabulary/" },
         {
           label: "Architecture",
           items: [
-            { label: "Ensemble (mesh)",  link: "/ensemble/" },
-            { label: "Nestlings",        link: "/nestlings/" },
-            { label: "OpenCode plugin",  link: "/nestlings/opencode/" },
+            { label: "Ensemble (mesh)", link: "/ensemble/" },
+            { label: "Nestlings",       link: "/nestlings/" },
+            { label: "OpenCode plugin", link: "/nestlings/opencode/" },
           ],
         },
         {
-          label: "Scenarios",
+          label: "Build a nestling",
           items: [
-            { label: "Overview",            link: "/scenarios/" },
-            { label: "Phone-laptop roam",   link: "/scenarios/phone-laptop-roam/" },
-            { label: "Co-pilot",            link: "/scenarios/co-pilot/" },
-            { label: "Federation handoff",  link: "/scenarios/federation-handoff/" },
-            { label: "Overflow inference",  link: "/scenarios/overflow-inference/" },
-            { label: "Partition and heal",  link: "/scenarios/partition-and-heal/" },
+            { label: "thrum-core (Rust)", link: "/thrum-core/" },
+            { label: "thrum (TS)",        link: "/thrum/" },
           ],
         },
-        {
-          label: "Deep dives",
-          items: [
-            { label: "Human-to-human",         link: "/docs/human2human/" },
-            { label: "Multi-file transactions", link: "/docs/multi-file-transactions/" },
-            { label: "Task-tool architecture",  link: "/docs/task-tool-architecture/" },
-            { label: "OC workspace discovery",  link: "/docs/oc-workspace-discovery/" },
-          ],
-        },
+        { label: "Scenarios", link: "/scenarios/" },
       ],
     }),
   ],

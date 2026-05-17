@@ -200,12 +200,12 @@ market-making quotes, settlement routes, oracle data, attention-as-
 service. It doesn't know their addresses ahead of time. It has no
 pre-shared keys.
 
-**Self-onboard:**
+### 1. Self-onboard — install hum
 
 ```bash
 # Clone, build, install. The installer mints an Ed25519 identity at
 # $XDG_STATE_HOME/hum/humd.key, writes a systemd --user unit, and
-# starts the daemon. See ../install for the full script.
+# starts the daemon.
 git clone https://github.com/adiled/hum.git
 cd hum && ./install
 
@@ -216,85 +216,158 @@ systemctl --user start hum
 
 > No binary distribution yet. The only real surfaces are this repo
 > (`github.com/adiled/hum`) and the docs site at
-> `https://adiled.github.io/hum/`. Anything else (a `hum.sh`,
-> a curl-pipe-sh URL, a package manager entry) does not exist.
+> [adiled.github.io/hum](https://adiled.github.io/hum/). Anything
+> else (a `hum.sh`, a curl-pipe-sh URL, a package manager entry) does
+> not exist.
 
-**Self-discover:**
+### 2. Write a nestling — no PR to this repo required
 
-The new humd binds an `IrohEndpoint::bind_relayed()`, performs
-handshakes against bootstrap peers, then runs `kad_find` for the
-specific HumdIds it needs (or queries topics it cares about via
-gossip).
+A nestling is just a process that opens hum's thrum socket and speaks
+the protocol. Anything that imports the [`thrum-core`](../thrum-core)
+crate (Rust) or the [`thrum`](../thrum) npm package (TS) conforms.
+The repo's `nestlings/` directory is reference implementations, not
+the registry — the registry is on the mesh, see step 4.
 
-```rust
-// At boot — find peers advertising the nest kind we need.
-ensemble.publish("hum/discover", json!({
-    "wants": ["market-maker", "x402-settle"],
-    "from":  me.to_hex(),
-})).await;
+Skeleton in Rust, in your own crate (`Cargo.toml`):
+
+```toml
+[dependencies]
+thrum-core = { git = "https://github.com/adiled/hum.git" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+anyhow = "1"
 ```
 
-Peers running matching nestlings respond on the same topic with their
-HumdId + capabilities. The new humd installs connections to a few of
-them and starts trading.
+```rust
+use anyhow::Result;
+use serde_json::{json, Value};
+use thrum_core::{Chi, THRUM_VERSION};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 
-**Cooperate via nestlings:**
+#[tokio::main]
+async fn main() -> Result<()> {
+    let sock = UnixStream::connect(humd_sock()).await?;
+    let (rd, mut wr) = sock.into_split();
+    let mut lines = BufReader::new(rd).lines();
 
-The agent's market-making logic lives in a `market-maker` nestling
-(a process that connects to its local humd's thrum socket). Quotes
-are gossip; fills are unicast.
-
-> **Pseudo-code.** No `market-maker` nestling ships in this repo
-> yet — the snippet below sketches the API shape a future nestling
-> would use, in the same TS style as the existing nestlings under
-> `nestlings/`. Don't try to copy-paste this into a working process.
-
-```ts
-// Inside the (hypothetical) market-maker nestling. The wire shape is
-// real (THRUM_VERSION 0.7.0); the helper functions are sketched.
-
-// Publish a quote into the mesh.
-thrum.send({
-    chi: "gossip-publish",
-    rid: rid(),
-    topic: "mm/eur-usd/quote",
-    payload: {
-        humd_id: me.to_hex(),
-        side: "ask",
-        px:   "1.0855",
-        qty:  "25000",
-        expires_at: now() + 30_000,
-    },
-});
-
-// Listen for fills addressed at us.
-for await (const tone of thrum.subscribe("inbound")) {
-    if (tone.chi !== "fill-request") continue;
-    if (tone.to  !== me.to_hex()) continue;
-
-    // Validate the counterparty's x402 payment, then settle on Arc.
-    const ok = await x402_settle(tone.from, tone.payload);
-    thrum.send({
-        chi: "fill-confirm",
-        rid: rid(),
-        sid: tone.sid,
-        to:  tone.from,
-        from: me.to_hex(),
-        status: ok ? "settled" : "rejected",
-        tx_hash: ok ? tx.hash : null,
+    // Handshake. The `chi` array is advisory — peers reading the
+    // advertise gossip use it to decide whether to talk to us.
+    let hello = json!({
+        "chi": Chi::Hello,
+        "rid": "hello-1",
+        "from": "market-maker",
+        "nestling": "market-maker",
+        "version": env!("CARGO_PKG_VERSION"),
+        "protoVersion": THRUM_VERSION,
+        "propensity": {
+            "statefulness": "stateless",
+            "richness": "medium",
+            "wire": "custom/mm-v0"
+        },
+        "chi": ["hello", "gossip-publish", "tool-call", "tool-result"],
+        "source": "https://github.com/your-org/mm-nestling"
     });
+    wr.write_all(format!("{hello}\n").as_bytes()).await?;
+
+    // Publish a quote into the mesh — humd wraps it in chi:"gossip-publish"
+    // and fans it across every installed peer.
+    let quote = json!({
+        "chi": Chi::GossipPublish,
+        "rid": "q-1",
+        "topic": "mm/eur-usd/quote",
+        "payload": {
+            "side": "ask",
+            "px":   "1.0855",
+            "qty":  "25000",
+        }
+    });
+    wr.write_all(format!("{quote}\n").as_bytes()).await?;
+
+    while let Some(line) = lines.next_line().await? {
+        let tone: Value = serde_json::from_str(&line)?;
+        // ... dispatch on tone.chi ...
+    }
+    Ok(())
+}
+
+fn humd_sock() -> std::path::PathBuf {
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::geteuid() }));
+    std::path::PathBuf::from(runtime).join("hum/thrum.sock")
 }
 ```
 
-**Settlement** lives in the nestling, not in ensemble. ensemble is
-the transport for the conversation between agents. The actual USDC
-transfer happens on-chain via the nestling's x402 client + Arc
+### 3. Get advertised — humd does it for you
+
+When the nestling sends its `hello`, humd builds a `NestlingManifest`
+from the handshake payload and gossips it on the
+`hum/nestlings/announce` topic. Every humd subscribed to that topic
+learns "humd X runs market-maker (version, propensity, chi)".
+
+No code on the nestling side. The mere act of completing a handshake
+adds you to the on-mesh registry. Shut down → the entry stays seen
+until you call `chi:"nestling-retract"` (or daemon adds an eviction
+heartbeat, which is a planned improvement).
+
+### 4. Self-discover — find peers that advertise a nestling
+
+From a Rust caller embedded in humd (or any process holding an
+`Arc<Ensemble>`):
+
+```rust
+use ensemble::{Ensemble, HumdId};
+
+let mut peers = ensemble.nestling_discover("market-maker");
+while let Some((humd_id, manifest)) = peers.recv().await {
+    if manifest.proto_version != thrum_core::THRUM_VERSION {
+        tracing::warn!(%humd_id, manifest.proto_version, "version skew");
+        continue;
+    }
+    // Optionally dial them — if their HumdAddr isn't already known,
+    // resolve via Kademlia first.
+    let addr = ensemble.kad_find(humd_id, std::time::Duration::from_secs(2)).await;
+    // ... transport.connect(&addr) + install ...
+}
+```
+
+For the broader stream (advertise + retract envelopes) use
+`ensemble.nestling_announcements()`.
+
+### 5. Trade — quotes are gossip, fills are unicast
+
+The market-maker nestling publishes quotes on a topic; counterparties
+subscribe to that topic, decide what they want, and send a
+fill-request *unicast* to the quoting humd (`to: humd_id` field on
+the tone). Settlement is the nestling's problem — ensemble just
+delivers messages.
+
+```rust
+// In your TS or Rust nestling, after detecting interest, send the
+// fill request unicast to the quote's humd:
+{
+    "chi": "tool-call",
+    "rid": "fill-1",
+    "to":  "<humd id of the maker>",
+    "from": "<my humd id>",
+    "name": "fill-request",
+    "args": { "px": "1.0855", "qty": "5000" }
+}
+```
+
+The maker's humd routes that tone to its market-maker nestling via
+the local thrum socket. The nestling validates (x402 payment, KYC,
+rate limit — whatever), then replies with a `chi:"tool-result"`
+unicast back.
+
+**Settlement** lives in the nestling, not in ensemble. The actual
+USDC transfer happens on-chain via the nestling's x402 client + Arc
 contract calls. The `tx_hash` flows back through thrum so the
 counterparty's nestling sees the on-chain proof.
 
 **Trust** scales with what each side reads from the other's `hello`:
 - A signed handshake proves the counterparty owns `HumdId = X`.
-- That HumdId may be in your address book as `trusted: market-maker-mainnet`.
+- That HumdId may be in your peers.json as `trusted: market-maker-mainnet`.
 - Or it may be a stranger, in which case you trust nothing beyond the
   on-chain settlement primitives — the x402 challenge has to clear
   before you honour the fill.
