@@ -552,10 +552,27 @@ impl ToneSink for HumdSink {
                             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                             .unwrap_or_default();
                         let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
+                        let bind: Option<ensemble::BindAddr> = tone.get("bind")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        // nestlerId: nestler-supplied if present, else
+                        // humd mints one from client_id + now_ms. The
+                        // mint guarantees colocated same-kind nestlers
+                        // get distinct ids without coordination.
+                        let nestler_id = tone.get("nestlerId").and_then(Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| {
+                                let ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                format!("{}-{}", client_id, ms)
+                            });
                         let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
                         manifest.propensity = propensity;
                         manifest.chis = chis;
                         manifest.source = source;
+                        manifest.bind = bind;
+                        manifest.nestler_id = Some(nestler_id);
                         let ens = ensemble.clone();
                         tokio::spawn(async move {
                             ens.nestling_advertise(manifest).await;

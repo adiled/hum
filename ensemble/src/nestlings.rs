@@ -58,6 +58,34 @@ pub struct NestlingManifest {
     /// readers MUST NOT auto-fetch; surface to humans only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Network surface this nestler binds to receive outside-world
+    /// traffic. `None` for nestlers that don't open a port (libraries,
+    /// stdio CLIs). Two nestlers with the same kind + same `bind` are
+    /// colocated nestleds — disambiguated by [`Self::nestler_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<BindAddr>,
+    /// Per-instance id, distinct from the kind name. Lets two nestlers
+    /// of the same nestling kind register without the manifest
+    /// collapsing into one. Minted by the nestler (any unique string —
+    /// UUID, pid+timestamp, etc.) or by humd at hello-accept time if
+    /// the nestler doesn't supply one.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "nestlerId")]
+    pub nestler_id: Option<String>,
+}
+
+/// Network address a nestler advertises. Optional fields stay optional
+/// so non-network nestlers can emit `bind: None` cleanly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindAddr {
+    /// `"127.0.0.1"`, `"0.0.0.0"`, `"::1"`, etc.
+    pub host: String,
+    /// Post-bind port. A nestler that requested port 0 reports the
+    /// kernel-assigned port here.
+    pub port: u16,
+    /// `"http"`, `"grpc"`, `"udp"`, `"sse"`, … free-form. None when the
+    /// scheme is obvious from context (the nestling's `propensity.wire`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
 }
 
 /// Three orthogonal axes from `nestlings/README.md`. Strings on the wire
@@ -91,11 +119,23 @@ impl NestlingManifest {
             propensity: Propensity::default(),
             chis: Vec::new(),
             source: None,
+            bind: None,
+            nestler_id: None,
         }
     }
 
     pub fn with_propensity(mut self, propensity: Propensity) -> Self {
         self.propensity = propensity;
+        self
+    }
+
+    pub fn with_bind(mut self, bind: BindAddr) -> Self {
+        self.bind = Some(bind);
+        self
+    }
+
+    pub fn with_nestler_id(mut self, id: impl Into<String>) -> Self {
+        self.nestler_id = Some(id.into());
         self
     }
 

@@ -63,7 +63,7 @@ pub use kad::{
 };
 
 pub mod nestlings;
-pub use nestlings::{NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
+pub use nestlings::{BindAddr, NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
 
 // Headroom advertise — `PeerCapabilities` gains a runtime snapshot of
 // free slots / pressure / p95 latency so peer humds can route away from
@@ -1525,6 +1525,7 @@ mod tests {
             hosts: vec!["alice".into()],
             can_relay: true,
             free_slots: None,
+            headroom: headroom::RoostHeadroom::default(),
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
@@ -1532,6 +1533,7 @@ mod tests {
             hosts: vec!["bob".into()],
             can_relay: false,
             free_slots: None,
+            headroom: headroom::RoostHeadroom::default(),
         };
         let (a_side, b_side) = InMemoryEndpoint::pair(
             a_id, b_caps.clone(),  // a's transport-view of b
