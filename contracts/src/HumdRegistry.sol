@@ -10,8 +10,9 @@ import {IHumdRegistry} from "./IHumdRegistry.sol";
 ///         signature verification — those are layered in other
 ///         implementations of the same interface.
 ///
-/// @dev Deploy your own per subnet. There is no canonical address —
-///      see `contracts/DEPLOYMENTS.md`.
+/// @dev Deploy your own per subnet. There is no canonical address;
+///      each subnet's humds read the address that subnet's operator
+///      gave them, and isolation is by address.
 contract HumdRegistry is IHumdRegistry {
     /// @notice HumdId → record. Public mapping autogen matches the
     ///         `records(bytes32)` getter in [`IHumdRegistry`].

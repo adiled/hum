@@ -147,11 +147,10 @@ discover path including Kademlia lookup of unknown HumdAddrs.
 ### Want on-chain identity?
 
 For humds that want a censorship-resistant alternative to gossip,
-publish the manifest hash to a `HumdRegistry` deployment — see
-[`contracts/`](../contracts/) and
-[`contracts/DEPLOYMENTS.md`](../contracts/DEPLOYMENTS.md). This is
-independent of ensemble: a solo humd can publish to an on-chain
-registry without ever meshing.
+deploy your own `HumdRegistry` and publish the manifest hash there —
+see [`contracts/`](../contracts/). This is independent of ensemble:
+a solo humd can publish to its own on-chain registry without ever
+meshing.
 
 ### Want your nestling listed in this repo as reference?
 

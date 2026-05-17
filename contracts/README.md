@@ -38,9 +38,6 @@ That means:
   repo today have owner functions, multisigs, or upgrade paths.
   Deploying one is a one-time act.
 
-See [`DEPLOYMENTS.md`](DEPLOYMENTS.md) for known subnet addresses
-(empty by default — your subnet, your entry).
-
 ## What's on-chain vs what isn't
 
 Most of thrum is unsuitable for chain — text streamed at 10–100 Hz
@@ -64,7 +61,6 @@ contracts/
 │   └── HumdRegistry.sol     # vanilla implementation
 ├── test/
 │   └── HumdRegistry.t.sol   # forge tests against the vanilla impl
-├── DEPLOYMENTS.md           # known subnet addresses (your entry, not ours)
 ├── foundry.toml             # build config
 └── README.md
 ```
@@ -107,8 +103,9 @@ export HUMD_REGISTRY_ADDR=0xthe-address-forge-just-printed
 export HUMD_REGISTRY_RPC=https://rpc.testnet.arc.network
 ```
 
-Add your address to [`DEPLOYMENTS.md`](DEPLOYMENTS.md) so other
-people running your subnet can find it.
+That's the whole onboarding. Your subnet's humds use that address;
+other subnets use theirs. Isolation by address — no shared
+coordination needed.
 
 ## How humd uses it
 
