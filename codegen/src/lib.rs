@@ -68,7 +68,7 @@ pub fn emit_helpers(output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Emit the Python chi registry to `output` (typically `clients/python/thrum/chi.py`).
+/// Emit the Python chi registry to `output` (typically `thrum-clients/python/thrum/chi.py`).
 pub fn emit_py(spec: &ChiSpec, output: &Path) -> Result<()> {
     let s = render_py(spec);
     if let Some(parent) = output.parent() {
@@ -88,7 +88,7 @@ pub fn emit_py_helpers(output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Emit the Go chi registry to `output` (typically `clients/go/thrum/chi.go`).
+/// Emit the Go chi registry to `output` (typically `thrum-clients/go/thrum/chi.go`).
 pub fn emit_go(spec: &ChiSpec, output: &Path) -> Result<()> {
     let s = render_go(spec);
     if let Some(parent) = output.parent() {
@@ -118,27 +118,27 @@ pub fn default_lib_rs() -> PathBuf {
 }
 
 pub fn default_ts_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum/chi.ts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/ts/chi.ts")
 }
 
 pub fn default_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum/helpers.ts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/ts/helpers.ts")
 }
 
 pub fn default_py_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../clients/python/thrum/chi.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/python/thrum/chi.py")
 }
 
 pub fn default_py_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../clients/python/thrum/helpers.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/python/thrum/helpers.py")
 }
 
 pub fn default_go_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../clients/go/thrum/chi.go")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/go/thrum/chi.go")
 }
 
 pub fn default_go_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../clients/go/thrum/helpers.go")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/go/thrum/helpers.go")
 }
 
 // ── parsing ────────────────────────────────────────────────────────────────

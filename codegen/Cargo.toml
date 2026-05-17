@@ -3,7 +3,7 @@ name = "codegen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Generate consumer-side chi registries from the Rust source of truth (thrum-core/src/chi.rs). Today: emit thrum/chi.ts. Tomorrow: proto, JSON Schema, …"
+description = "Generate consumer-side chi registries from the Rust source of truth (thrum-core/src/chi.rs). Today: emit clients/{ts,python,go}/. Tomorrow: proto, JSON Schema, …"
 
 [lib]
 path = "src/lib.rs"

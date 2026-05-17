@@ -1,6 +1,6 @@
 //! CLI front for the codegen library. Manual regen:
 //!
-//!   cargo run -p codegen           # write thrum/chi.ts
+//!   cargo run -p codegen           # write clients/ts/chi.ts
 //!   cargo run -p codegen -- --check # exit nonzero if out of date
 //!
 //! The same logic runs from `thrum-core/build.rs` on every cargo build,

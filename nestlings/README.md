@@ -60,7 +60,7 @@ and which are dropped.
 
 ## The chi cheatsheet
 
-`thrum/chi.ts` owns the full registry. Common subsets a new nestling
+`clients/ts/chi.ts` owns the full registry. Common subsets a new nestling
 might pick:
 
 | subset | chi values |
@@ -161,7 +161,7 @@ regardless.
 
 ## Versioning
 
-`THRUM_VERSION` lives in `thrum/chi.ts` and is independent of any
+`THRUM_VERSION` lives in `clients/ts/chi.ts` and is independent of any
 package version. Bump rules:
 
 - **patch**: docstring tweaks, additive-optional fields
