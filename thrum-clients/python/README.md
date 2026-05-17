@@ -64,7 +64,7 @@ asyncio.run(main())
 |---|---|
 | `Chi` | every wire-known chi value as a SCREAMING_SNAKE class constant |
 | `PulseKind` | `pulse.kind` enum |
-| `THRUM_VERSION` | "0.7.0" today; bump rules in [WIRE.md](../../thrum/WIRE.md) |
+| `THRUM_VERSION` | "0.7.0" today; bump rules in [WIRE.md](../../WIRE.md) |
 | `ALL_CHI`, `is_valid_chi(s)` | membership checks |
 | `sigil(sid, nest)` | 12-char content hash |
 | `rid()` | monotonic correlation id |
@@ -81,7 +81,7 @@ hand-edit them. The `__init__.py` and `client.py` are hand-written.
 
 ## See also
 
-- [WIRE.md](../../thrum/WIRE.md) — the language-neutral protocol spec.
+- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
 - [`thrum`](../../thrum) — TypeScript reference client.
 - [`thrum-core`](../../thrum-core) — Rust reference client.
 - [`clients/go`](../go) — Go reference client.

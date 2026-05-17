@@ -414,6 +414,7 @@ dependencies = [
  "async-trait",
  "nest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1339,16 +1340,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "graft"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "serde_json",
- "tempfile",
- "tracing",
-]
-
-[[package]]
 name = "grpc-nestling"
 version = "0.0.0"
 dependencies = [
@@ -1596,7 +1587,6 @@ dependencies = [
  "drone",
  "ed25519-dalek 2.2.0",
  "ensemble",
- "graft",
  "hex",
  "hums",
  "ids",

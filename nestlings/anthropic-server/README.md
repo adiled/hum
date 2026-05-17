@@ -126,5 +126,5 @@ not yet wired.
 
 - [`openai-server`](../openai-server) — symmetric OpenAI surface.
 - [`thrum`](../../thrum) — the npm package this nestling imports.
-- [WIRE.md](../../thrum/WIRE.md) — the language-neutral protocol spec.
+- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

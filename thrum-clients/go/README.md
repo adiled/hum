@@ -99,7 +99,7 @@ hand-edit them. `client.go` is hand-written.
 
 ## See also
 
-- [WIRE.md](../../thrum/WIRE.md) — the language-neutral protocol spec.
+- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
 - [`thrum`](../../thrum) — TypeScript reference client.
 - [`thrum-core`](../../thrum-core) — Rust reference client.
 - [`clients/python`](../python) — Python reference client.

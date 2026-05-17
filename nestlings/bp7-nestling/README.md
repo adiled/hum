@@ -106,4 +106,4 @@ station and see what falls off. (Don't — DSN time is contested.)
 - [NASA ION](https://sourceforge.net/projects/ion-dtn/) — the reference DTN router
 - [bp7-rs](https://github.com/dtn7/bp7-rs) — the Rust crate this nestling uses
 - [Vint Cerf, "An Internet for Mars"](https://www.youtube.com/watch?v=hKt-jK19vHU) — the architecture talk that started this
-- [WIRE.md](../../thrum/WIRE.md) — the underlying thrum protocol
+- [WIRE.md](../../WIRE.md) — the underlying thrum protocol

@@ -113,5 +113,5 @@ You'll get a TwiML response back — same shape Twilio gets.
 - [`openai-server`](../openai-server), [`anthropic-server`](../anthropic-server) — sibling HTTP surfaces.
 - [`gsm-modem`](../gsm-modem) — same idea but talks directly to a USB
   GSM modem instead of going through Twilio.
-- [WIRE.md](../../thrum/WIRE.md) — the language-neutral protocol spec.
+- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

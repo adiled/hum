@@ -144,5 +144,5 @@ swapping in a richer implementation of the same interface.
   off-chain manifest type these commitments are about.
 - [`ensemble/src/onchain.rs`](../ensemble/src/onchain.rs) — Rust
   client. Reads against the interface, works with any implementation.
-- [WIRE.md](../thrum/WIRE.md) — the protocol the manifest describes.
+- [WIRE.md](../WIRE.md) — the protocol the manifest describes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

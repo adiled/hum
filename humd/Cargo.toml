@@ -24,7 +24,6 @@ thrumd = { path = "../thrumd" }
 mcp = { path = "../mcp" }
 config = { path = "../config" }
 ids = { path = "../ids" }
-graft = { path = "../graft" }
 drift = { path = "../drift" }
 nest = { path = "../nest" }
 claude-cli = { path = "../nests/claude-cli" }

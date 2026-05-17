@@ -206,7 +206,7 @@ algorithms match byte-for-byte.
 
 ## See also
 
-- [WIRE.md](../thrum/WIRE.md) — `chi:"drone"` and `chi:"echo"` on
+- [WIRE.md](../WIRE.md) — `chi:"drone"` and `chi:"echo"` on
   the wire.
 - [`ensemble/`](../ensemble) — drone state is per-sigil, not
   per-humd; ensemble routing happens above the drone.

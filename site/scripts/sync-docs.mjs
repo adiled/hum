@@ -131,6 +131,46 @@ function rewriteLinks(body, srcRel, pageMap) {
 }
 
 /**
+ * If a source file lacks frontmatter, synthesize a minimal block so
+ * Starlight has a title to render. The only file expected to need this
+ * is the repo-root README (kept frontmatter-less so GitHub renders the
+ * homepage cleanly); other no-frontmatter files get a best-effort title
+ * derived from their H1 or directory name.
+ *
+ * Files that already start with `---\n` pass through untouched.
+ */
+function ensureFrontmatter(content, rel) {
+  if (content.startsWith("---\n")) return content;
+
+  let title;
+  let description;
+
+  if (rel === "README.md") {
+    title = "hum";
+    description = "The only AI stack nestled on a biodiverse agentic kernel framework.";
+  } else {
+    const h1 = content.match(/^\s*#\s+([^\n]+)/m);
+    if (h1) {
+      title = h1[1].trim();
+    } else {
+      const dir = path.dirname(rel);
+      const base = path.basename(rel, ".md");
+      title = base === "README"
+        ? (dir === "." ? "index" : path.basename(dir))
+        : base;
+    }
+  }
+
+  const escaped = title.replace(/"/g, '\\"');
+  const lines = ["---", `title: "${escaped}"`];
+  if (description) {
+    lines.push(`description: "${description.replace(/"/g, '\\"')}"`);
+  }
+  lines.push("---", "", "");
+  return lines.join("\n") + content;
+}
+
+/**
  * Source files carry their own frontmatter and (typically) an H1. The
  * H1 must be stripped before writing — Starlight renders the title
  * from frontmatter and a duplicate H1 in the body is double-render.
@@ -160,7 +200,8 @@ async function syncOne(rel, pageMap) {
     return null;
   }
   if (!content.startsWith("---\n")) {
-    console.warn(`[sync-docs] no frontmatter at ${rel} — page will use the filename as title`);
+    console.warn(`[sync-docs] no frontmatter at ${rel} — injecting generated block`);
+    content = ensureFrontmatter(content, rel);
   }
   content = stripBodyH1(content);
   content = rewriteLinks(content, rel, pageMap);

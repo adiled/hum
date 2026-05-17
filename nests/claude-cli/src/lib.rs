@@ -5,6 +5,8 @@
 //! subprocess, exposes stdin/stdout/exit through [`nest::Roost`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
 
+pub mod graft;
+
 use std::process::Stdio;
 
 use anyhow::{Context, Result};

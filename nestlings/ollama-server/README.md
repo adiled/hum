@@ -130,5 +130,5 @@ Tool use forwarded; embedding endpoints and image generation are not.
 
 - [`openai-server`](../openai-server), [`anthropic-server`](../anthropic-server) — sibling surfaces.
 - [`thrum`](../../thrum) — the npm package this nestling imports.
-- [WIRE.md](../../thrum/WIRE.md) — the language-neutral protocol spec.
+- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

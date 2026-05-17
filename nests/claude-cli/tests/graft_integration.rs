@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-use graft::{
+use claude_cli::graft::{
     create_claude_session, graft, last_uuid, prune_jsonl, prune_jsonl_with, sanitize_jsonl,
     session_path,
 };
