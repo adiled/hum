@@ -14,13 +14,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ensemble::{Ensemble, HumdId};
+use ensemble::{Ensemble, HumdAddr, HumdId, HumdKey, PeerCapabilities};
 use mcp::{serve as mcp_serve, Registry as McpRegistry};
 use parking_lot::RwLock;
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
+
+mod identity;
+mod peers;
+pub use identity::{key_path, load_or_mint_key};
+pub use peers::{peers_path, PeerConfig};
 
 /// Per-sid observer roster. Maps a hum's `sid` to a list of peer humds
 /// that have asked (via `chi:"attach"`) to receive a copy of every
@@ -83,6 +88,13 @@ pub struct DaemonConfig {
     /// the daemon mints its own. Either way the sink uses the same
     /// shared Arc.
     pub waneman: Option<Arc<WaneTracker>>,
+    /// Persistent humd identity. `from_env` loads (or mints + persists)
+    /// from `$XDG_STATE_HOME/hum/humd.key`. Tests / sims leave this None
+    /// and continue to generate ephemeral keys per spawn.
+    pub humd_key: Option<Arc<HumdKey>>,
+    /// Peers to dial on boot. `from_env` reads
+    /// `$XDG_CONFIG_HOME/hum/peers.json`; missing file = empty list.
+    pub bootstrap_peers: Vec<PeerConfig>,
 }
 
 impl DaemonConfig {
@@ -97,6 +109,16 @@ impl DaemonConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(29147);
+        // Identity is not fatal — if the state dir is unwritable we log
+        // and run without a persisted key (legacy single-host).
+        let humd_key = match identity::load_or_mint_key() {
+            Ok(k) => Some(Arc::new(k)),
+            Err(e) => {
+                warn!(err = %e, "identity.load.failed");
+                None
+            }
+        };
+        let bootstrap_peers = peers::load();
         Self {
             thrum_path: PathBuf::from(thrum_path),
             http_path: PathBuf::from(http_path),
@@ -111,6 +133,8 @@ impl DaemonConfig {
             bind_mcp: true,
             capacity_override: None,
             waneman: None,
+            humd_key,
+            bootstrap_peers,
         }
     }
 }
@@ -156,6 +180,60 @@ where
     let _drift = drift::Drift::new();
     let _drone = drone::Drone::new();
 
+    // Bring up an Ensemble from the persisted identity when the caller
+    // didn't supply one. Sim provides its own pre-wired Ensemble (with
+    // InMemoryEndpoints); the production binary lets us mint one here so
+    // peer dialling has something to install into.
+    let ensemble_opt: Option<Arc<Ensemble>> = match cfg.ensemble.clone() {
+        Some(e) => Some(e),
+        None => cfg.humd_key.as_ref().map(|k| {
+            let me = k.humd_id();
+            info!(humd_id = %me, "ensemble.boot");
+            Arc::new(Ensemble::new(me))
+        }),
+    };
+
+    // Dial-on-boot. Each peer attempt is independently fallible — one
+    // dead host shouldn't sink startup. TcpTransport is the only wired
+    // transport today; other hint prefixes ("iroh:") are skipped with a
+    // log line until their transports land.
+    if let (Some(ens), Some(_key)) = (&ensemble_opt, &cfg.humd_key) {
+        let my_caps = my_capabilities(&cfg);
+        for peer in &cfg.bootstrap_peers {
+            let tcp_hint = peer
+                .hints
+                .iter()
+                .find_map(|h| h.strip_prefix("tcp:"));
+            let Some(addr) = tcp_hint else {
+                trace!(peer = %peer.humd_id.short(), "peers.skip.no-tcp-hint");
+                continue;
+            };
+            let peer_addr = {
+                let mut a = HumdAddr::new(peer.humd_id);
+                for h in &peer.hints { a.hints.push(h.clone()); }
+                a
+            };
+            match ensemble::TcpEndpoint::connect(addr, peer_addr, PeerCapabilities::default()).await {
+                Ok(conn) => {
+                    info!(peer = %peer.humd_id.short(), addr, "peer.dial.ok");
+                    ens.add_peer_with_caps(conn as Arc<dyn ensemble::PeerConnection>, my_caps.clone());
+                }
+                Err(e) => {
+                    warn!(peer = %peer.humd_id.short(), addr, err = %e, "peer.dial.failed");
+                }
+            }
+        }
+    } else if !cfg.bootstrap_peers.is_empty() {
+        warn!(
+            count = cfg.bootstrap_peers.len(),
+            "peers.skip.no-identity-or-ensemble"
+        );
+    }
+
+    // Stash so the rest of run() keeps working off the cfg-or-minted
+    // ensemble instead of just cfg.ensemble.
+    let ensemble_for_sink = ensemble_opt.clone();
+
     let nest_cfg = nest::pool::NestConfig {
         max_procs: cfg.hum_cfg.max_procs as usize,
         idle_timeout: Duration::from_millis(cfg.hum_cfg.idle_timeout),
@@ -176,7 +254,7 @@ where
         nest: nest_pool.clone(),
         mcp_url: mcp_url.clone(),
         cli_path: cfg.cli_path.clone(),
-        ensemble: cfg.ensemble.clone(),
+        ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
     });
@@ -209,7 +287,7 @@ where
     // injected back through our own Thrum's sink as if it had arrived
     // from a special "ensemble" client. This is how `to:`-routed tones
     // from peer-A reach peer-B's HumdSink dispatch.
-    if let Some(ens) = cfg.ensemble.clone() {
+    if let Some(ens) = ensemble_for_sink.clone() {
         let mut rx = ens.subscribe();
         let thrum_for_pump = thrum.clone();
         tokio::spawn(async move {
@@ -687,6 +765,25 @@ impl ToneSink for HumdSink {
                 warn!(client_id, %chi_str, "thrum.recv.unknown-chi");
             }
         }
+    }
+}
+
+/// Capabilities the daemon advertises in the hello we send when dialling
+/// a bootstrap peer. Mirrors the local nest config so peers selecting an
+/// overflow target see what we can actually host. `free_slots` is left
+/// `None` (unspecified / unbounded) — the overflow heuristic in
+/// `pick_overflow_peer` treats `None` as "available."
+fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
+    let nest = match cfg.hum_cfg.nest {
+        config::Nest::ClaudeCli => "claude-cli",
+        config::Nest::ClaudeRepl => "claude-repl",
+    };
+    PeerCapabilities {
+        proto_version: thrum_core::THRUM_VERSION.into(),
+        nests: vec![nest.to_string()],
+        hosts: Vec::new(),
+        can_relay: false,
+        free_slots: None,
     }
 }
 

@@ -33,14 +33,18 @@ hums = { path = "../hums" }
 penny = { path = "../penny" }
 drone = { path = "../drone" }
 ensemble = { path = "../ensemble" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 hex = { workspace = true }
 parking_lot = { workspace = true }
+rand = { workspace = true }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3"
 
 [[example]]
 name = "smoke"

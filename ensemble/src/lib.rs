@@ -38,6 +38,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc};
 
+pub mod tcp;
+pub use tcp::{TcpEndpoint, TcpListener, TcpTransport};
+
 /// Domain-separation tag binds a signature to the ensemble handshake.
 /// Bump the version suffix if the canonical message shape changes.
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";

@@ -19,3 +19,7 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+# T3 transport: iroh QUIC + Noise + NAT hole-punching. v0 scaffold —
+# IrohEndpoint accepts a pre-built iroh::Endpoint; identity unification
+# with HumdKey is a follow-up.
+iroh = "1.0.0-rc.0"
