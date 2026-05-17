@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 import { OpenAITranslator } from "./transform.ts";
 
@@ -68,6 +68,85 @@ function checkAuth(req: IncomingMessage): boolean {
   if (typeof auth !== "string") return false;
   const [scheme, token] = auth.split(" ");
   return scheme === "Bearer" && token === API_KEY;
+}
+
+// ── tenant + audit + usage + rate-limit ──────────────────────────────
+// Lightweight gateway concerns. None of these are kernel-level — they
+// live in the nestling because the wire format (OpenAI shape) is
+// where multi-tenant routing, per-tenant billing, audit trails, and
+// quota enforcement belong. hum's kernel stays format-neutral.
+
+const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/openai-server";
+const AUDIT_LOG = join(STATE_DIR, "audit.log");
+const USAGE_PATH = join(STATE_DIR, "usage.json");
+try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}
+
+function tenantOf(req: IncomingMessage): string {
+  const h = req.headers["x-tenant"];
+  if (typeof h === "string" && h.length > 0) return h.replace(/[^A-Za-z0-9_-]/g, "");
+  return "default";
+}
+
+function audit(entry: Record<string, unknown>): void {
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n";
+  try { appendFileSync(AUDIT_LOG, line); } catch {}
+}
+
+interface TenantUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requests: number;
+}
+const USAGE: Record<string, TenantUsage> = (() => {
+  try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
+})();
+let usageDirty = false;
+function trackUsage(tenant: string, prompt: number, completion: number): void {
+  const u = USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 };
+  u.promptTokens += prompt;
+  u.completionTokens += completion;
+  u.totalTokens += prompt + completion;
+  u.requests += 1;
+  USAGE[tenant] = u;
+  usageDirty = true;
+}
+// Flush usage to disk every 30s. Atomicity not critical — counters
+// are monotonic, a missed update at most undercounts on crash.
+setInterval(() => {
+  if (!usageDirty) return;
+  try {
+    appendFileSync(USAGE_PATH + ".tmp", JSON.stringify(USAGE, null, 2));
+    // Best-effort atomic-ish rename.
+    require("node:fs").renameSync(USAGE_PATH + ".tmp", USAGE_PATH);
+    usageDirty = false;
+  } catch {}
+}, 30_000).unref();
+
+// Token bucket per tenant. Default 60 requests/min, configurable
+// via per-tenant config later. Capacity = burst, refill = sustained.
+interface Bucket { tokens: number; lastRefill: number; }
+const BUCKETS: Record<string, Bucket> = {};
+const RATE_CAPACITY = parseInt(process.env.OPENAI_SERVER_RATE_CAPACITY ?? "60", 10);
+const RATE_REFILL_PER_SEC = parseFloat(process.env.OPENAI_SERVER_RATE_REFILL ?? "1.0");
+function allow(tenant: string): boolean {
+  const now = Date.now();
+  const b = BUCKETS[tenant] ?? { tokens: RATE_CAPACITY, lastRefill: now };
+  const elapsed = (now - b.lastRefill) / 1000;
+  b.tokens = Math.min(RATE_CAPACITY, b.tokens + elapsed * RATE_REFILL_PER_SEC);
+  b.lastRefill = now;
+  if (b.tokens < 1) { BUCKETS[tenant] = b; return false; }
+  b.tokens -= 1;
+  BUCKETS[tenant] = b;
+  return true;
+}
+function tooManyRequests(res: ServerResponse, tenant: string): void {
+  res.writeHead(429, {
+    "Content-Type": "application/json",
+    "Retry-After": "60",
+    "X-RateLimit-Tenant": tenant,
+  });
+  res.end(JSON.stringify({ error: { message: `rate limit exceeded for tenant '${tenant}'`, type: "rate_limit_exceeded" } }));
 }
 
 interface OpenAIMessage {
@@ -257,6 +336,8 @@ async function start(): Promise<void> {
 
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
       if (!checkAuth(req)) return unauthorized(res);
+      const tenant = tenantOf(req);
+      if (!allow(tenant)) return tooManyRequests(res, tenant);
       let body: {
         messages?: OpenAIMessage[];
         model?: string;
@@ -305,8 +386,10 @@ async function start(): Promise<void> {
       // pass-through tag humd will reject loudly rather than guess.
       const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
       // body.user wins when the client supplies a session id; otherwise
-      // derive a stable one from the conversation anchor.
-      const sid = body.user ?? `oai-${sessionKey(messages)}`;
+      // derive a stable one from the conversation anchor. Tenant is
+      // prefixed so different tenants never collide on the same sid.
+      const sid = `${tenant === "default" ? "" : tenant + ":"}${body.user ?? `oai-${sessionKey(messages)}`}`;
+      audit({ endpoint: "chat.completions", tenant, model, sid, stream: body.stream ?? true });
       let { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
       const attachments = allAttachments(messages);
@@ -359,6 +442,16 @@ async function start(): Promise<void> {
               thrum.off(sid);
               return;
             }
+            // Capture per-tenant usage from the dedicated usage frame.
+            const um = f.match(/^data: (.+)\n\n$/);
+            if (um) {
+              try {
+                const parsed = JSON.parse(um[1]) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
+                if (parsed.usage) {
+                  trackUsage(tenant, parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0);
+                }
+              } catch {}
+            }
             res.write(f);
           }
         });
@@ -395,7 +488,10 @@ async function start(): Promise<void> {
                   finish_reason: finishReason,
                 }],
               };
-              if (usage) body.usage = usage;
+              if (usage) {
+                body.usage = usage;
+                trackUsage(tenant, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+              }
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(body));
               thrum.off(sid);
@@ -466,6 +562,202 @@ async function start(): Promise<void> {
           ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
         });
       }
+      return;
+    }
+
+    // ── /v1/responses — OpenAI's newer state-aware API ────────────────
+    // Translates Responses-shape I/O into the same thrum flow as
+    // chat/completions. State continuity rides on hum's session sid
+    // (derived from `previous_response_id` when given, else from
+    // input). Streaming emits Responses-shape SSE events; non-stream
+    // returns the single-object Response body.
+    if (req.method === "POST" && url.pathname === "/v1/responses") {
+      if (!checkAuth(req)) return unauthorized(res);
+      const tenant = tenantOf(req);
+      if (!allow(tenant)) return tooManyRequests(res, tenant);
+      let body: {
+        model?: string;
+        input?: string | Array<{ role?: string; content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> }>;
+        instructions?: string;
+        stream?: boolean;
+        previous_response_id?: string;
+        max_output_tokens?: number;
+        temperature?: number;
+        top_p?: number;
+        tools?: OpenAITool[];
+        tool_choice?: string | { type: string };
+        parallel_tool_calls?: boolean;
+        response_format?: { type: string; json_schema?: unknown };
+      };
+      try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
+      if (!body.input) return bad(res, "input required");
+
+      // Normalize input → text. Input can be a string or a list of
+      // message-like items; image parts also get collected as
+      // attachments for vision-capable perches.
+      let userText = "";
+      const respAttachments: ThrumAttachment[] = [];
+      if (typeof body.input === "string") {
+        userText = body.input;
+      } else if (Array.isArray(body.input)) {
+        const parts: string[] = [];
+        for (const item of body.input) {
+          if (typeof item.content === "string") {
+            parts.push(item.content);
+          } else if (Array.isArray(item.content)) {
+            for (const p of item.content) {
+              if (p.type === "input_text" || p.type === "text") {
+                if (p.text) parts.push(p.text);
+              } else if (p.type === "input_image" || p.type === "image_url") {
+                const u = (p as { image_url?: { url?: string } }).image_url?.url;
+                if (u?.startsWith("data:")) {
+                  const m = u.match(/^data:([^;]+);base64,(.+)$/);
+                  if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
+                } else if (u) {
+                  respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
+                }
+              }
+            }
+          }
+        }
+        userText = parts.join("\n");
+      }
+
+      const stream = body.stream === true;
+      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
+      // sid: derived from previous_response_id (continuation) or input.
+      const anchor = body.previous_response_id ?? userText.slice(0, 256);
+      const sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(anchor).digest("hex").slice(0, 16)}`;
+      const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
+
+      let systemPrompt = body.instructions;
+      if (body.response_format && body.response_format.type !== "text") {
+        const jsonHint = "Respond with valid JSON only. No prose, no markdown fences.";
+        systemPrompt = systemPrompt ? `${systemPrompt}\n\n${jsonHint}` : jsonHint;
+      }
+
+      const sampling: Record<string, unknown> = {};
+      if (typeof body.temperature === "number") sampling.temperature = body.temperature;
+      if (typeof body.top_p === "number") sampling.topP = body.top_p;
+      if (typeof body.max_output_tokens === "number") sampling.maxTokens = body.max_output_tokens;
+      if (body.tool_choice !== undefined) sampling.toolChoice = body.tool_choice;
+      if (typeof body.parallel_tool_calls === "boolean") sampling.parallelToolCalls = body.parallel_tool_calls;
+
+      const tools = toolsFromOpenAI(body.tools);
+      const itemId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const createdAt = Math.floor(Date.now() / 1000);
+
+      if (stream) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        const sse = (event: string, data: Record<string, unknown>) => {
+          res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        };
+        // Responses-shape lifecycle events.
+        sse("response.created", { type: "response.created", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
+        sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: itemId, type: "message", role: "assistant", content: [] } });
+        sse("response.content_part.added", { type: "response.content_part.added", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: "" } });
+        let collected = "";
+        let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+        thrum.on(sid, (msg) => {
+          const chi = msg.chi as string | undefined;
+          if (chi === "chunk" && msg.chunkType === "text_delta") {
+            const delta = (msg.delta as string) ?? "";
+            if (delta) {
+              collected += delta;
+              sse("response.output_text.delta", { type: "response.output_text.delta", item_id: itemId, output_index: 0, content_index: 0, delta });
+            }
+          } else if (chi === "finish") {
+            usage = msg.usage as typeof usage;
+            sse("response.output_text.done", { type: "response.output_text.done", item_id: itemId, output_index: 0, content_index: 0, text: collected });
+            sse("response.content_part.done", { type: "response.content_part.done", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: collected } });
+            sse("response.output_item.done", { type: "response.output_item.done", output_index: 0, item: { id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] } });
+            const inputT = (usage?.input_tokens ?? 0)
+              + (usage?.cache_read_input_tokens ?? 0)
+              + (usage?.cache_creation_input_tokens ?? 0);
+            const outputT = usage?.output_tokens ?? 0;
+            const finalUsage = usage ? {
+              input_tokens: inputT,
+              output_tokens: outputT,
+              total_tokens: inputT + outputT,
+            } : undefined;
+            if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
+            sse("response.completed", { type: "response.completed", response: { id: responseId, object: "response", created_at: createdAt, model, status: "completed", output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }], ...(finalUsage ? { usage: finalUsage } : {}) } });
+            res.write("data: [DONE]\n\n");
+            res.end();
+            thrum.off(sid);
+          } else if (chi === "error") {
+            sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: (msg.message as string) ?? "unknown" } } });
+            res.write("data: [DONE]\n\n");
+            res.end();
+            thrum.off(sid);
+          }
+        });
+      } else {
+        let collected = "";
+        let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+        thrum.on(sid, (msg) => {
+          const chi = msg.chi as string | undefined;
+          if (chi === "chunk" && msg.chunkType === "text_delta") {
+            collected += (msg.delta as string) ?? "";
+          } else if (chi === "finish") {
+            usage = msg.usage as typeof usage;
+            const inputT = (usage?.input_tokens ?? 0)
+              + (usage?.cache_read_input_tokens ?? 0)
+              + (usage?.cache_creation_input_tokens ?? 0);
+            const outputT = usage?.output_tokens ?? 0;
+            const finalUsage = usage ? {
+              input_tokens: inputT,
+              output_tokens: outputT,
+              total_tokens: inputT + outputT,
+            } : undefined;
+            if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              id: responseId,
+              object: "response",
+              created_at: createdAt,
+              model,
+              status: "completed",
+              output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }],
+              ...(finalUsage ? { usage: finalUsage } : {}),
+            }));
+            thrum.off(sid);
+          } else if (chi === "error") {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: (msg.message as string) ?? "unknown", type: "internal_error" } }));
+            thrum.off(sid);
+          }
+        });
+      }
+
+      req.on("close", () => { thrum.off(sid); });
+
+      thrum.send({
+        chi: "prompt",
+        sid,
+        nestling: "openai-server",
+        modelId: model,
+        content: userText,
+        ...(systemPrompt ? { systemPrompt } : {}),
+        ...(tools ? { tools } : {}),
+        ...(respAttachments.length > 0 ? { attachments: respAttachments } : {}),
+        ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
+      });
+      return;
+    }
+
+    // ── /v1/usage — read-only per-tenant usage ledger ─────────────────
+    if (req.method === "GET" && url.pathname === "/v1/usage") {
+      if (!checkAuth(req)) return unauthorized(res);
+      const tenant = tenantOf(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ tenant, usage: USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 } }));
       return;
     }
 
