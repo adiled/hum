@@ -104,7 +104,12 @@ function rewriteLinks(body, srcRel, pageMap) {
     return line.replace(/(\[[^\]]+\])\(([^)]+)\)/g, (m, label, target) => {
       if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return m; // external scheme
       if (target.startsWith("#")) return m;             // anchor
-      if (target.startsWith("/")) return m;             // already absolute
+      if (target.startsWith(SITE_BASE)) return m;       // already base-prefixed
+      // Hand-written absolute repo paths (`/foo/`) — graft the site
+      // base on top so they don't 404 under `/hum/...`.
+      if (target.startsWith("/")) {
+        return `${label}(${SITE_BASE.replace(/\/$/, "")}${target})`;
+      }
 
       const cleaned = target.replace(/^\.\//, "");
       const resolved = path.posix.normalize(

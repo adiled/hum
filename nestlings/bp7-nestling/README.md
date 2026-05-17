@@ -97,9 +97,8 @@ threshold fires after 30s; a Mars round trip is 600× that. The wane
 counter ticks for a wall-clock minute and finds nothing. Your humd
 discovers what it actually feels like to be a peer 90M km away.
 
-For the hackathon version: aim a humd at the actual Mars rover ground
-station and see what falls off. (Don't actually do this — DSN time
-is contested.)
+The thought experiment: aim a humd at an actual Mars rover ground
+station and see what falls off. (Don't — DSN time is contested.)
 
 ## See also
 
@@ -107,4 +106,4 @@ is contested.)
 - [NASA ION](https://sourceforge.net/projects/ion-dtn/) — the reference DTN router
 - [bp7-rs](https://github.com/dtn7/bp7-rs) — the Rust crate this nestling uses
 - [Vint Cerf, "An Internet for Mars"](https://www.youtube.com/watch?v=hKt-jK19vHU) — the architecture talk that started this
-- [WIRE.md](/thrum/wire/) — the underlying thrum protocol
+- [WIRE.md](../../thrum/WIRE.md) — the underlying thrum protocol
