@@ -20,6 +20,8 @@ members = [
     "sim",
     "nestlings/grpc",
     "nestlings/paid-oracle",
+    "nestlings/gsm-modem",
+    "nestlings/ollama-server",
 ]
 
 [workspace.package]

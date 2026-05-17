@@ -1,0 +1,26 @@
+[package]
+name = "ollama-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client."
+
+[dependencies]
+thrum-core = { path = "../../thrum-core" }
+tokio = { workspace = true }
+axum = "0.7"
+tower = "0.5"
+tokio-stream = "0.1"
+bytes = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
+
+[[bin]]
+name = "ollama-server"
+path = "src/main.rs"

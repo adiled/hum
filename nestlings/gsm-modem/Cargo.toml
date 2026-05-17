@@ -1,0 +1,27 @@
+[package]
+name = "gsm-modem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hum-on-a-burner-phone — USB GSM modem nestling driven by AT commands over serial."
+
+[dependencies]
+thrum-core = { path = "../../thrum-core" }
+tokio = { workspace = true }
+tokio-serial = "5"
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
+bytes = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+libc = "0.2"
+
+[[bin]]
+name = "gsm-modem"
+path = "src/main.rs"
