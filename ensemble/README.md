@@ -396,8 +396,9 @@ keeps the mesh layer thin and reusable.
   never reads or writes chain state.
 - **AML / KYC / reputation.** A nestling layered on top can rate-limit,
   scorecard, or refuse to fill. ensemble has no policy.
-- **Model inference.** The `humd` daemon's `nest` crate spawns Claude
-  (or whatever). ensemble doesn't know what's inside a `chi:"prompt"`.
+- **Model inference.** The `humd` daemon's `nest` crate spawns the
+  LLM (claude-cli, claude-repl, future kinds). ensemble doesn't know
+  what's inside a `chi:"prompt"`.
 - **Persistence.** ensemble is in-RAM. Conversation state lives in
   `humd/hums.json`; routing-table seed peers live in `peers.json`.
 - **Smart routing semantics.** A nestling that wants to gossip "this

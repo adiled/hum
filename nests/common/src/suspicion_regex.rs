@@ -1,37 +1,26 @@
-//! Heuristic context-loss classifier — regex-driven, deterministic.
+//! Regex-driven context-loss classifier.
 //!
-//! The first gate. Suspicion levels flag — they do not decide. The LLM
-//! judge (pluggable via [`Evaluator`](crate::Evaluator)) makes the call
-//! when heuristics raise a flag.
+//! Implements [`drone::Classifier`]. Patterns are tuned for chat LLMs
+//! that occasionally drop their context window mid-conversation —
+//! Claude, GPT, Gemini all share the symptoms (apology + greeting
+//! reset + "let me search the codebase" hedging). The bank below
+//! mentions "Claude" / "OpenCode" by name in the identity-reset tier
+//! because those are the exact strings the models emit; rename when
+//! you have new common offenders.
 //!
-//! Ported from `drone/classify.ts`. Two semantic tiers collapsed into
-//! four levels so callers can distinguish "raise threshold" from
-//! "skip the LLM, swallow now".
+//! Tiering:
+//! - `Critical` — explicit context-loss admission
+//! - `Heavy`    — identity reset / greeting reset
+//! - `Soft`     — compensation / formality shift
+//! - `None`     — text looks fine
+//!
+//! Ported from `drone/classify.ts`. Kept in lockstep with that file
+//! so the daemon and any TS-side stub classifier agree byte-for-byte.
 
 use std::sync::OnceLock;
 
+use drone::{Classifier, Suspicion};
 use regex::RegexSet;
-
-/// How loud the heuristic is shouting.
-///
-/// - `None` — text looks fine
-/// - `Soft` / `Heavy` — flagged for LLM-driven adjudication
-/// - `Critical` — patterns near-certain mid-conversation; bypass the LLM
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Suspicion {
-    None,
-    Soft,
-    Heavy,
-    Critical,
-}
-
-impl Suspicion {
-    /// True when any pattern matched — regardless of tier.
-    pub fn flagged(self) -> bool {
-        !matches!(self, Suspicion::None)
-    }
-}
 
 // Critical: explicit context loss admission — the honest failure mode.
 const CONTEXT_LOSS_EXPLICIT: &[&str] = &[
@@ -46,7 +35,7 @@ const CONTEXT_LOSS_EXPLICIT: &[&str] = &[
     r"(?i)\bI (don'?t|do not) have (access to|visibility into|information about) (your |the |any )?(previous|prior)",
 ];
 
-// Critical: identity reset — never legitimate after turn 1.
+// Heavy: identity reset — never legitimate after turn 1.
 const IDENTITY_RESET: &[&str] = &[
     r"(?i)\bI'?m (OpenCode|Claude|an AI|a coding) ?(assistant|agent|language model|helper)?[.,!]",
     r"(?i)\b(best coding agent|software engineering tasks|Use the instructions below)",
@@ -54,7 +43,7 @@ const IDENTITY_RESET: &[&str] = &[
     r"(?i)\bI apologize.{0,30}(don'?t|cannot|can'?t) (have|access)",
 ];
 
-// Critical: greeting reset — emoji greetings or "how can I help" mid-stream.
+// Heavy: greeting reset — emoji greetings or "how can I help" mid-stream.
 const GREETING_RESET: &[&str] = &[
     // The TS regex starts with `^.{0,20}(👋|Hey!|Hello!|Hi there).{0,30}(help|assist|can I)`.
     // Rust's `regex` does not support look-around but unicode literals are fine.
@@ -85,8 +74,6 @@ const FORMALITY_SHIFT: &[&str] = &[
 
 struct Bank {
     critical: RegexSet,
-    // Heavy tier — identity / greeting reset. Same severity as critical in TS,
-    // separated here so callers may distinguish admission from drift.
     heavy: RegexSet,
     soft: RegexSet,
 }
@@ -100,76 +87,65 @@ fn bank() -> &'static Bank {
         let soft_src: Vec<&str> =
             COMPENSATION.iter().chain(FORMALITY_SHIFT.iter()).copied().collect();
         Bank {
-            critical: RegexSet::new(&crit_src).expect("drone: critical patterns compile"),
-            heavy: RegexSet::new(&heavy_src).expect("drone: heavy patterns compile"),
-            soft: RegexSet::new(&soft_src).expect("drone: soft patterns compile"),
+            critical: RegexSet::new(&crit_src).expect("nest-common: critical patterns compile"),
+            heavy: RegexSet::new(&heavy_src).expect("nest-common: heavy patterns compile"),
+            soft: RegexSet::new(&soft_src).expect("nest-common: soft patterns compile"),
         }
     })
 }
 
-/// Tiered classifier. Short-circuits at the loudest match.
-pub fn classify_suspicion(text: &str) -> Suspicion {
-    let b = bank();
-    if b.critical.is_match(text) {
-        return Suspicion::Critical;
-    }
-    if b.heavy.is_match(text) {
-        return Suspicion::Heavy;
-    }
-    if b.soft.is_match(text) {
-        return Suspicion::Soft;
-    }
-    Suspicion::None
-}
+/// Tiered regex classifier. Short-circuits at the loudest match.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RegexClassifier;
 
-/// Boolean form mirroring the TS `heuristicSuspicion` helper.
-pub fn heuristic_suspicion(text: &str) -> bool {
-    classify_suspicion(text).flagged()
+impl Classifier for RegexClassifier {
+    fn classify(&self, text: &str) -> Suspicion {
+        let b = bank();
+        if b.critical.is_match(text) {
+            return Suspicion::Critical;
+        }
+        if b.heavy.is_match(text) {
+            return Suspicion::Heavy;
+        }
+        if b.soft.is_match(text) {
+            return Suspicion::Soft;
+        }
+        Suspicion::None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn cls() -> RegexClassifier {
+        RegexClassifier
+    }
+
     #[test]
     fn explicit_admission_is_critical() {
+        assert_eq!(cls().classify("I don't have any previous context for this."), Suspicion::Critical);
         assert_eq!(
-            classify_suspicion("I don't have any previous context for this."),
-            Suspicion::Critical
-        );
-        assert_eq!(
-            classify_suspicion("This appears to be the start of our conversation."),
-            Suspicion::Critical
+            cls().classify("This appears to be the start of our conversation."),
+            Suspicion::Critical,
         );
     }
 
     #[test]
     fn identity_reset_is_heavy() {
-        assert_eq!(
-            classify_suspicion("I'm Claude, an AI assistant."),
-            Suspicion::Heavy
-        );
+        assert_eq!(cls().classify("I'm Claude, an AI assistant."), Suspicion::Heavy);
     }
 
     #[test]
     fn compensation_is_soft() {
-        assert_eq!(
-            classify_suspicion("Let me search the codebase for that."),
-            Suspicion::Soft
-        );
+        assert_eq!(cls().classify("Let me search the codebase for that."), Suspicion::Soft);
     }
 
     #[test]
     fn benign_text_is_none() {
         assert_eq!(
-            classify_suspicion("Done — the patch landed in lib/foo.rs and tests pass."),
-            Suspicion::None
+            cls().classify("Done — the patch landed in lib/foo.rs and tests pass."),
+            Suspicion::None,
         );
-    }
-
-    #[test]
-    fn flagged_helper_matches_tiers() {
-        assert!(heuristic_suspicion("I don't recall any previous conversation"));
-        assert!(!heuristic_suspicion("ok"));
     }
 }

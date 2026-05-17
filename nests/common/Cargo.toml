@@ -1,0 +1,11 @@
+[package]
+name = "nest-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared building blocks for nests — regex Classifier for the drone's context-loss heuristic, common spawn glue."
+
+[dependencies]
+drone = { path = "../../drone" }
+regex = "1"
+serde = { workspace = true }

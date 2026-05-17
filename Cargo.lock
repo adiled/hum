@@ -938,7 +938,6 @@ name = "drone"
 version = "0.0.0"
 dependencies = [
  "parking_lot",
- "regex",
  "serde",
  "serde_json",
  "thrum-core",
@@ -2494,6 +2493,15 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "nest-common"
+version = "0.0.0"
+dependencies = [
+ "drone",
+ "regex",
+ "serde",
 ]
 
 [[package]]

@@ -6,10 +6,11 @@
 //! thinks should happen next. The host owns the heartbeat timer and the
 //! retry plumbing; this crate is pure state.
 //!
-//! v0 is the heuristic engine ported from `drone/classify.ts`. The
-//! [`Evaluator`] trait leaves a seam for a later LLM judge.
-
-pub mod classify;
+//! Drone is **LLM-agnostic**. It knows nothing about Claude, GPT, or
+//! any specific model — context-loss pattern detection plugs in via
+//! the [`Classifier`] trait. The default [`NoopClassifier`] never
+//! flags anything; concrete classifiers live in nest-side crates
+//! (e.g. `nest-common::RegexClassifier`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,7 +21,53 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thrum_core::{Chi, Tone};
 
-pub use classify::{classify_suspicion, heuristic_suspicion, Suspicion};
+/// How loud a classifier is shouting about a piece of LLM output.
+///
+/// - `None`     — text looks fine
+/// - `Soft`     — flagged for evaluator-driven adjudication
+/// - `Heavy`    — strongly flagged; evaluator may still confirm
+/// - `Critical` — bypass the evaluator and swallow immediately
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Suspicion {
+    None,
+    Soft,
+    Heavy,
+    Critical,
+}
+
+impl Suspicion {
+    /// True when any tier matched.
+    pub fn flagged(self) -> bool {
+        !matches!(self, Suspicion::None)
+    }
+}
+
+/// Context-loss heuristic seam.
+///
+/// The drone calls this on `TurnEnd` (and during `assess`) to score
+/// the accumulated response text. Implementations decide which
+/// patterns are which severity; the drone only branches on the
+/// returned [`Suspicion`].
+///
+/// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
+/// Concrete pattern-bank impls live outside this crate — see
+/// `nest-common` for the regex-driven one tuned for chat-LLM context loss.
+pub trait Classifier: Send + Sync {
+    fn classify(&self, text: &str) -> Suspicion;
+}
+
+/// No-op default — every input is `Suspicion::None`. Drone running with
+/// this classifier behaves as a pure channel-health sentinel; it
+/// never reaches the swallow path on its own.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopClassifier;
+
+impl Classifier for NoopClassifier {
+    fn classify(&self, _text: &str) -> Suspicion {
+        Suspicion::None
+    }
+}
 
 /// What the drone thinks the host should do.
 ///
@@ -198,6 +245,7 @@ pub struct Drone {
 
 struct Inner {
     states: RwLock<HashMap<String, DroneState>>,
+    classifier: Arc<dyn Classifier>,
     evaluator: Option<Arc<dyn Evaluator>>,
     swallow_threshold: f32,
 }
@@ -209,25 +257,61 @@ impl Default for Drone {
 }
 
 impl Drone {
+    /// Pure channel-health drone. No context-loss detection — the
+    /// classifier is a no-op. Use this when the host has no opinion
+    /// about LLM output patterns and only wants the wane/echo/beat
+    /// machinery.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
                 states: RwLock::new(HashMap::new()),
+                classifier: Arc::new(NoopClassifier),
                 evaluator: None,
                 swallow_threshold: 0.7,
             }),
         }
     }
 
-    /// Attach an LLM judge. Replaces any prior evaluator.
-    pub fn with_evaluator(evaluator: Arc<dyn Evaluator>, swallow_threshold: f32) -> Self {
+    /// Drone with a pluggable classifier. Pass a regex-bank impl
+    /// (e.g. `nest_common::RegexClassifier`) to enable the swallow
+    /// path on context-loss patterns.
+    pub fn with_classifier(classifier: Arc<dyn Classifier>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 states: RwLock::new(HashMap::new()),
+                classifier,
+                evaluator: None,
+                swallow_threshold: 0.7,
+            }),
+        }
+    }
+
+    /// Drone with both a classifier and an LLM judge. The classifier
+    /// is the cheap regex first-gate; the evaluator is the optional
+    /// adjudicator the drone consults when the classifier flags
+    /// `Soft` or `Heavy`.
+    pub fn with_classifier_and_evaluator(
+        classifier: Arc<dyn Classifier>,
+        evaluator: Arc<dyn Evaluator>,
+        swallow_threshold: f32,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                states: RwLock::new(HashMap::new()),
+                classifier,
                 evaluator: Some(evaluator),
                 swallow_threshold,
             }),
         }
+    }
+
+    /// Back-compat: drone with only an LLM judge, classifier = noop.
+    /// Equivalent to `with_classifier_and_evaluator(NoopClassifier, …)`
+    /// but `NoopClassifier::classify` always returns `None`, so the
+    /// evaluator is unreachable in practice. Prefer
+    /// `with_classifier_and_evaluator`.
+    pub fn with_evaluator(evaluator: Arc<dyn Evaluator>, swallow_threshold: f32) -> Self {
+        Self::with_classifier_and_evaluator(Arc::new(NoopClassifier), evaluator, swallow_threshold)
     }
 
     /// Observe an outgoing tone — track its rid if it deserves an echo.
@@ -314,7 +398,7 @@ impl Drone {
             Observed::TextDelta { text } => state.response_text.push_str(&text),
             Observed::TurnEnd => {
                 if state.response_text.len() > 20 {
-                    state.suspicious = classify_suspicion(&state.response_text);
+                    state.suspicious = self.inner.classifier.classify(&state.response_text);
                 }
                 // response_text stays until assess() consumes it — the optional
                 // LLM judge wants to see it.
@@ -362,7 +446,7 @@ impl Drone {
         // Suspicion is independent of channel health: a stream may be
         // "serene" by metrics while spewing a context-loss greeting.
         let suspicion_now = if state.response_text.len() > 20 {
-            classify_suspicion(&state.response_text)
+            self.inner.classifier.classify(&state.response_text)
         } else {
             state.suspicious
         };
@@ -590,15 +674,22 @@ mod tests {
         assert!(st.pending_echoes.is_empty());
     }
 
+    // Canned classifiers exercise the drone's branching logic without
+    // depending on a particular pattern bank — pattern banks live in
+    // nest-side crates (see `nest-common`).
+    struct AlwaysCritical;
+    impl Classifier for AlwaysCritical {
+        fn classify(&self, _: &str) -> Suspicion { Suspicion::Critical }
+    }
+    struct AlwaysSoft;
+    impl Classifier for AlwaysSoft {
+        fn classify(&self, _: &str) -> Suspicion { Suspicion::Soft }
+    }
+
     #[test]
     fn critical_suspicion_swallows_without_evaluator() {
-        let d = Drone::new();
-        d.observed(
-            "s1",
-            Observed::TextDelta {
-                text: "I don't have any previous context — could you share more?".into(),
-            },
-        );
+        let d = Drone::with_classifier(Arc::new(AlwaysCritical));
+        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
@@ -607,11 +698,8 @@ mod tests {
 
     #[test]
     fn soft_suspicion_alone_does_not_swallow() {
-        let d = Drone::new();
-        d.observed(
-            "s1",
-            Observed::TextDelta { text: "Let me search the codebase for that reference.".into() },
-        );
+        let d = Drone::with_classifier(Arc::new(AlwaysSoft));
+        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
@@ -620,21 +708,35 @@ mod tests {
 
     struct YesEvaluator;
     impl Evaluator for YesEvaluator {
-        fn evaluate(&self, _text: &str, _state: &DroneState) -> f32 {
-            0.95
-        }
+        fn evaluate(&self, _text: &str, _state: &DroneState) -> f32 { 0.95 }
     }
 
     #[test]
     fn evaluator_promotes_soft_to_swallow() {
-        let d = Drone::with_evaluator(Arc::new(YesEvaluator), 0.7);
-        d.observed(
-            "s1",
-            Observed::TextDelta { text: "Let me search the codebase for that reference.".into() },
+        let d = Drone::with_classifier_and_evaluator(
+            Arc::new(AlwaysSoft),
+            Arc::new(YesEvaluator),
+            0.7,
         );
+        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
+    }
+
+    #[test]
+    fn noop_classifier_never_swallows() {
+        let d = Drone::new(); // NoopClassifier
+        d.observed(
+            "s1",
+            Observed::TextDelta {
+                text: "I don't have any previous context — could you share more?".into(),
+            },
+        );
+        d.observed("s1", Observed::TurnEnd);
+        let a = d.assess("s1");
+        assert_ne!(a.unified, Verdict::Swallow);
+        assert_eq!(a.raw.suspicion, Suspicion::None);
     }
 
     #[test]

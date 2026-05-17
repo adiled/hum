@@ -11,6 +11,7 @@ members = [
     "humd",
     "mcp",
     "nest",
+    "nests/common",
     "nests/claude-cli",
     "nests/claude-repl",
     "hums",

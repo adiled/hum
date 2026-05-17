@@ -65,22 +65,31 @@ serializes it into a `chi:"drone"` tone via `Drone::beat_body(beat)`.
 
 ## Context-loss detection (the *swallow* path)
 
-The most opinionated part of the drone. When an LLM stream produces
-text that smells like context loss — "I don't have any previous
-context", greeting reset, identity reset, formality shift — the
-drone flags it. Detection is two-tier:
+The drone itself **knows nothing about LLMs.** What "context loss"
+looks like in text is plugged in via the [`Classifier`] trait. The
+default [`NoopClassifier`] never flags anything — a bare drone is a
+pure channel-health sentinel and never fires `Swallow` on its own.
 
-1. **Heuristic gate** ([`classify::Suspicion`](src/classify.rs)):
-   regex-driven, deterministic, four levels:
+Detection is two-tier when wired:
+
+1. **Classifier** (`drone::Classifier` trait): inspects text, returns
+   one of four `Suspicion` levels:
    - `None` — text looks fine
-   - `Soft` — compensation, hedging, "let me search the codebase"
-   - `Heavy` — identity / greeting reset
-   - `Critical` — explicit admission of context loss
+   - `Soft` — flagged for evaluator-driven adjudication
+   - `Heavy` — strongly flagged; evaluator may still confirm
+   - `Critical` — bypass the evaluator and swallow immediately
+
+   The regex-driven implementation tuned for chat-LLM context loss
+   ("I don't have any previous context", greeting reset, identity
+   reset, formality shift) lives in
+   [`nests/common`](../nests/common) as `RegexClassifier` — not in
+   this crate. Other nests can ship their own classifiers without
+   touching drone.
 
 2. **LLM judge** (optional, via `Evaluator` trait): when the
-   heuristic flags `Soft` or `Heavy`, the drone can consult a
-   pluggable evaluator. `Critical` always swallows; the evaluator is
-   skipped on the hot path. `Soft`/`Heavy` only swallow if the
+   classifier flags `Soft` or `Heavy`, the drone can consult a
+   pluggable evaluator. `Critical` always swallows; the evaluator
+   is skipped on the hot path. `Soft`/`Heavy` only swallow if the
    evaluator's score crosses `swallow_threshold` (default 0.7).
 
 Suspicion is **independent of channel health** — a perfectly serene
@@ -88,8 +97,8 @@ channel may be spewing a context-loss greeting. The drone notices.
 
 ## Why this exists
 
-Long-running Claude sessions occasionally drop their context window
-mid-conversation. The LLM, robbed of history, fabricates a polite
+Long-running LLM sessions occasionally drop their context window
+mid-conversation. The model, robbed of history, fabricates a polite
 "how can I help" or apologizes for not seeing prior messages. To the
 user this looks like a model crash; to the host it looks like a
 normal turn. Without the drone, hum keeps feeding context to a model
@@ -108,8 +117,13 @@ receive path, and the nestler's per-turn loop:
 
 ```rust
 use drone::{Drone, Observed, Verdict};
+use std::sync::Arc;
 
+// Pure channel-health sentinel — no LLM context-loss detection.
 let drone = Drone::new();
+
+// Or, with a regex classifier from nests/common:
+// let drone = Drone::with_classifier(Arc::new(nest_common::RegexClassifier));
 
 // Send path
 drone.sent(&outgoing_tone);
@@ -136,18 +150,22 @@ let beat = drone.beat(&sigil);
 emit_tone("drone", Drone::beat_body(&beat));
 ```
 
-For LLM judge plug-in:
+For LLM judge plug-in (combined with a classifier):
 
 ```rust
-struct ClaudeJudge;
-impl drone::Evaluator for ClaudeJudge {
+struct LLMJudge;
+impl drone::Evaluator for LLMJudge {
     fn evaluate(&self, text: &str, state: &drone::DroneState) -> f32 {
         // call an LLM, return probability of real context loss
         0.0
     }
 }
 
-let drone = Drone::with_evaluator(Arc::new(ClaudeJudge), 0.7);
+let drone = Drone::with_classifier_and_evaluator(
+    Arc::new(nest_common::RegexClassifier),
+    Arc::new(LLMJudge),
+    0.7,
+);
 ```
 
 ## What this crate is NOT
