@@ -2477,6 +2477,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "libc",
+ "parking_lot",
  "portable-pty",
  "serde",
  "serde_json",
