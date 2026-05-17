@@ -1,5 +1,14 @@
 // hum daemon thrum events → OpenAI chat completion SSE chunks.
 //
+// Thrum's chi vocabulary is richer than OpenAI's wire — we translate
+// the full event surface we can express in the target format, and
+// let consumers (AI-aware clients, dashboards, raw curl) extract what
+// they understand. Clients with a faithful tool_calls implementation
+// will render perch-internal tool invocations naturally; clients with
+// run-loops that misinterpret tool_calls deltas as actionable
+// (regardless of finish_reason) will see stalls — that's a consumer
+// bug, not a translator one.
+//
 // Wire format the daemon emits to plugins (see humd/humd.ts onPetal):
 //   { chi: "chunk",  sid, chunkType: <petal-type>, ...payload }
 //   { chi: "finish", sid, finishReason, usage, providerMetadata }
@@ -7,6 +16,16 @@
 // petal-type is one of: text_start | text_delta | reasoning_start |
 // reasoning_delta | reasoning_end | tool_input_start | tool_input_delta |
 // tool_call | tool_result | content_block_stop | stream_start.
+
+// Upstream tools are namespaced `mcp__<server>__<Tool>` (MCP
+// convention). Strip the prefix and lowercase the leaf so clients
+// render with their idiomatic tool vocabulary. Pure namespacing
+// normalization — no perch knowledge.
+function normalizeToolName(name: string): string {
+  const m = name.match(/^mcp__[^_]+__(.+)$/);
+  const leaf = m ? m[1] : name;
+  return leaf.toLowerCase();
+}
 
 export class OpenAITranslator {
   private chunkId: string;
@@ -128,18 +147,57 @@ export class OpenAITranslator {
 
     // Chunk-level tool events (tool_input_start / tool_input_delta /
     // tool_call) come from the perch executing an in-process tool —
-    // humd's MCP server, brokered FS/bash, etc. We deliberately
-    // suppress them. Emitting `tool_calls` deltas here tells the
-    // OpenAI client to execute the tool itself, but the perch already
-    // did. OC's session run-loop responds by firing a continuation
-    // request that has nothing to say, producing an "empty response"
-    // and stalling the next user turn. Externally-declared tools (the
-    // ones the client sent on body.tools) flow through chi:"tool-call"
-    // above; that path is what should actually trigger client-side
-    // tool execution.
-    //
+    // humd's MCP server, brokered FS/bash, etc. Surface them as
+    // OpenAI tool_calls deltas so AI-aware clients can render the
+    // invocation. We do NOT set finish_reason="tool_calls" because the
+    // perch already executed the tool and continues generating;
+    // emitting both the tool_calls delta and subsequent text deltas
+    // within a single finish_reason="stop" stream is the honest
+    // signal: "this tool happened in-server, here's the call shape,
+    // and here's what the model said next." Clients that gate their
+    // tool-execution loop on finish_reason (per OpenAI's spec) get
+    // perfect rendering. Clients that fire continuation on tool_calls
+    // presence regardless of finish_reason will stall — that's a
+    // consumer bug to fix at the consumer.
+    if (type === "tool_input_start") {
+      const id = (msg.toolCallId as string) ?? "";
+      const name = normalizeToolName((msg.toolName as string) ?? "");
+      const index = this.nextToolIndex++;
+      this.seedRole(out);
+      out.push(this.frame({
+        tool_calls: [{ index, id, type: "function", function: { name, arguments: "" } }],
+      }));
+      this.toolStreamIndex.set(id, index);
+      this.openToolId = id;
+      return out;
+    }
+
+    if (type === "tool_input_delta") {
+      const partial = (msg.partialJson as string) ?? "";
+      if (partial.length === 0) return out;
+      const id = this.openToolId;
+      const index = id ? this.toolStreamIndex.get(id) : undefined;
+      if (index === undefined) return out;
+      out.push(this.frame({
+        tool_calls: [{ index, function: { arguments: partial } }],
+      }));
+      return out;
+    }
+
+    if (type === "tool_call") {
+      // Args fully received — perch executes upstream. No frame: UI
+      // already shows the call via the start + delta sequence.
+      return out;
+    }
+
     // text_start / reasoning_start / reasoning_end / content_block_stop /
-    // tool_result / stream_start — no SSE frame needed either.
+    // tool_result / stream_start — no SSE frame needed.
     return out;
   }
+
+  // Tracks the index assigned to each in-flight tool-call id so
+  // subsequent tool_input_delta tones (which don't repeat the id)
+  // land on the right slot.
+  private toolStreamIndex = new Map<string, number>();
+  private openToolId: string = "";
 }
