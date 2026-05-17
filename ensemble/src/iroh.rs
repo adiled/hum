@@ -255,6 +255,35 @@ impl IrohTransport {
         Ok(Self::new(endpoint))
     }
 
+    /// Bind an [`Endpoint`] with iroh's default public-relay mesh —
+    /// enables NAT hole-punching for WAN T2-T4 peers. Use
+    /// `bind_direct()` for loopback/LAN; this one for cross-internet
+    /// peers behind NAT/firewalls. Requires DNS to reach iroh's
+    /// hosted relays.
+    pub async fn bind_relayed() -> Result<Self> {
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
+            .alpns(vec![IROH_ALPN.to_vec()])
+            .bind()
+            .await
+            .map_err(|e| anyhow!("iroh bind (relayed): {e}"))?;
+        Ok(Self::new(endpoint))
+    }
+
+    /// Bind with an explicit relay URL — for self-hosted relay
+    /// deployments (e.g. an org-run iroh-relay node). Use when n0's
+    /// public mesh isn't trusted or reachable. Uses default QUIC
+    /// address-discovery ports on the relay.
+    pub async fn bind_with_relay(relay_url: iroh::RelayUrl) -> Result<Self> {
+        let map = iroh::RelayMap::from(relay_url);
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![IROH_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Custom(map))
+            .bind()
+            .await
+            .map_err(|e| anyhow!("iroh bind (custom relay): {e}"))?;
+        Ok(Self::new(endpoint))
+    }
+
     /// The wrapped iroh endpoint. Useful for callers that need to
     /// `accept()`, inspect bound sockets, or share one endpoint between
     /// transport and other iroh-based protocols.

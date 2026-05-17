@@ -24,3 +24,15 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # is bound to `hum/<major>.<minor>` so wire-protocol bumps surface as
 # clean handshake rejections instead of silent corruption.
 iroh = "1.0.0-rc.0"
+# T2 transport: TLS-over-TCP with self-signed certs pinned by SHA-256
+# fingerprint. TlsTcpEndpoint / TlsTcpTransport mirror the plaintext
+# TcpEndpoint shape but wrap the stream in a tokio_rustls::TlsStream.
+# No CA, no chain — peers trust because they configured the fingerprint.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"] }
+
+[dev-dependencies]
+# Self-signed cert generation for the TLS integration test. Pinned to
+# 0.13 — its CertifiedKey -> rustls type conversion matches what
+# rustls 0.23 expects (CertificateDer / PrivateKeyDer).
+rcgen = "0.13"

@@ -41,6 +41,12 @@ use tokio::sync::{broadcast, mpsc};
 pub mod tcp;
 pub use tcp::{TcpEndpoint, TcpListener, TcpTransport};
 
+pub mod tls;
+pub use tls::{
+    cert_fingerprint, client_config_pinned, PinnedFingerprintVerifier, TlsTcpEndpoint,
+    TlsTcpListener, TlsTcpTransport, TLS_FP_HINT, TLS_HINT,
+};
+
 pub mod iroh;
 pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
 
