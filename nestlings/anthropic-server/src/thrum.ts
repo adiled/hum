@@ -12,6 +12,12 @@ export const NESTLING_NAME = "anthropic-server";
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
 
+export interface BindInfo {
+  host: string;
+  port: number;
+  scheme: string;
+}
+
 function defaultThrumPath(): string {
   const sock = process.env.HUM_THRUM_SOCK ?? process.env.HUM_THRUM_PATH;
   if (sock) return sock;
@@ -32,7 +38,7 @@ export class ThrumClient {
     this.path = path ?? defaultThrumPath();
   }
 
-  async connect(): Promise<void> {
+  async connect(bind?: BindInfo): Promise<void> {
     return new Promise((resolve, reject) => {
       const s = createConnection(this.path);
       s.on("connect", () => {
@@ -41,7 +47,7 @@ export class ThrumClient {
         // hello — humd reads `nestling`, `version`, `protoVersion`,
         // `propensity`, `chi`, `source` to build a NestlingManifest
         // and gossip it on hum/nestlings/announce. See WIRE.md §Handshake.
-        s.write(JSON.stringify({
+        const hello: Tone = {
           chi: "hello",
           rid: `hello-${Date.now().toString(36)}`,
           from: NESTLING_NAME,
@@ -55,7 +61,9 @@ export class ThrumClient {
           },
           chis: ["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"],
           source: "https://github.com/adiled/hum/tree/main/nestlings/anthropic-server",
-        }) + "\n");
+        };
+        if (bind) hello.bind = bind;
+        s.write(JSON.stringify(hello) + "\n");
         for (const line of this.pending) s.write(line);
         this.pending = [];
         resolve();

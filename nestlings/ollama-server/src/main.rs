@@ -9,6 +9,8 @@
 //! matches thrum's frame format — every `chi:"chunk"` tone maps to
 //! one output line. No SSE re-framing.
 
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,31 +34,80 @@ use uuid::Uuid;
 const NESTLING_NAME: &str = "ollama-server";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Shape of `~/.config/hum/nestlings/ollama-server.json`. All fields
+/// optional — precedence is env > config file > built-in defaults.
+#[derive(Debug, Default, Deserialize)]
+struct FileConfig {
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+}
+
+fn config_file_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home)
+        .join(".config")
+        .join("hum")
+        .join("nestlings")
+        .join("ollama-server.json")
+}
+
+fn read_file_config() -> FileConfig {
+    let path = config_file_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return FileConfig::default(),
+    };
+    serde_json::from_str::<FileConfig>(&raw).unwrap_or_default()
+}
+
 #[derive(Debug, Clone)]
 struct Config {
     sock_path: String,
     listen: String,
     models: Vec<String>,
+    /// Resolved bind address — filled in after the TcpListener actually
+    /// binds, so that requested port 0 reports the kernel-assigned port.
+    bind: Option<SocketAddr>,
 }
 
 impl Config {
-    fn from_env() -> Self {
+    fn load() -> Self {
+        let file = read_file_config();
         let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
             format!("/run/user/{}", unsafe { libc::geteuid() })
         });
-        let port = std::env::var("HUM_OLLAMA_PORT").unwrap_or_else(|_| "11434".into());
-        let host = std::env::var("HUM_OLLAMA_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-        let models: Vec<String> = std::env::var("HUM_OLLAMA_MODELS")
-            .unwrap_or_else(|_| "claude-sonnet-4,claude-haiku-4.5,claude-opus-4.7".into())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let port: u16 = match std::env::var("OLLAMA_SERVER_PORT") {
+            Ok(s) => s.parse().unwrap_or(11434),
+            Err(_) => file.port.unwrap_or(11434),
+        };
+        let host = std::env::var("OLLAMA_SERVER_HOST")
+            .ok()
+            .or(file.host)
+            .unwrap_or_else(|| "127.0.0.1".into());
+        let models: Vec<String> = match std::env::var("OLLAMA_SERVER_MODELS") {
+            Ok(raw) => raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            Err(_) => file.models.unwrap_or_else(|| {
+                vec![
+                    "claude-sonnet-4".into(),
+                    "claude-haiku-4.5".into(),
+                    "claude-opus-4.7".into(),
+                ]
+            }),
+        };
         Self {
             sock_path: std::env::var("HUM_THRUM_SOCK")
                 .unwrap_or_else(|_| format!("{runtime}/hum/thrum.sock")),
             listen: format!("{host}:{port}"),
             models,
+            bind: None,
         }
     }
 }
@@ -166,18 +217,37 @@ async fn open_prompt(
         .with_context(|| format!("connect {}", cfg.sock_path))?;
     let (rd, mut wr) = sock.into_split();
 
-    let hello = json!({
-        "chi": Chi::Hello,
-        "rid": format!("hello-{}", Uuid::new_v4()),
-        "from": NESTLING_NAME,
-        "nestling": NESTLING_NAME,
-        "version": NESTLING_VERSION,
-        "protoVersion": THRUM_VERSION,
-        "propensity": { "statefulness": "convention-stateful", "richness": "medium", "wire": "ollama/api" },
-        "chis": ["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"],
-        "source": "https://github.com/adiled/hum/tree/main/nestlings/ollama-server",
-    });
-    write_line(&mut wr, &hello).await?;
+    let mut hello = serde_json::Map::new();
+    hello.insert("chi".into(), json!(Chi::Hello));
+    hello.insert("rid".into(), Value::String(format!("hello-{}", Uuid::new_v4())));
+    hello.insert("from".into(), Value::String(NESTLING_NAME.into()));
+    hello.insert("nestling".into(), Value::String(NESTLING_NAME.into()));
+    hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
+    hello.insert("protoVersion".into(), Value::String(THRUM_VERSION.into()));
+    hello.insert(
+        "propensity".into(),
+        json!({ "statefulness": "convention-stateful", "richness": "medium", "wire": "ollama/api" }),
+    );
+    hello.insert(
+        "chis".into(),
+        json!(["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"]),
+    );
+    hello.insert(
+        "source".into(),
+        Value::String("https://github.com/adiled/hum/tree/main/nestlings/ollama-server".into()),
+    );
+    if let Some(addr) = cfg.bind {
+        // Raw JSON matching `ensemble::BindAddr` shape — no ensemble dep.
+        hello.insert(
+            "bind".into(),
+            json!({
+                "host": addr.ip().to_string(),
+                "port": addr.port(),
+                "scheme": "http",
+            }),
+        );
+    }
+    write_line(&mut wr, &Value::Object(hello)).await?;
 
     let mut prompt = serde_json::Map::new();
     prompt.insert("chi".into(), json!(Chi::Prompt));
@@ -499,10 +569,14 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let cfg = Arc::new(Config::from_env());
+    let mut cfg = Config::load();
     let listen = cfg.listen.clone();
-    info!(listen = %listen, "ollama-server.start");
+    let listener = tokio::net::TcpListener::bind(&listen).await?;
+    let bound = listener.local_addr()?;
+    cfg.bind = Some(bound);
+    info!(listen = %listen, bound = %bound, "ollama-server.start");
 
+    let cfg = Arc::new(cfg);
     let app = Router::new()
         .route("/", get(root))
         .route("/api/tags", get(tags))
@@ -510,7 +584,6 @@ async fn main() -> Result<()> {
         .route("/api/generate", post(generate))
         .with_state(cfg);
 
-    let listener = tokio::net::TcpListener::bind(&listen).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }

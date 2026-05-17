@@ -9,6 +9,12 @@ export const NESTLING_NAME = "openai-server";
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
 
+export interface BindInfo {
+  host: string;
+  port: number;
+  scheme: string;
+}
+
 function defaultThrumPath(): string {
   const runtime = process.env.XDG_RUNTIME_DIR;
   const base = runtime ? `${runtime}/hum/hum.sock`
@@ -28,19 +34,21 @@ export class ThrumClient {
     this.path = path ?? process.env.HUM_THRUM_PATH ?? defaultThrumPath();
   }
 
-  async connect(): Promise<void> {
+  async connect(bind?: BindInfo): Promise<void> {
     return new Promise((resolve, reject) => {
       const s = createConnection(this.path);
       s.on("connect", () => {
         this.sock = s;
         this.connected = true;
-        s.write(JSON.stringify({
+        const hello: Tone = {
           chi: "hello",
           rid: `hello-${Date.now().toString(36)}`,
           from: NESTLING_NAME,
           nestling: NESTLING_NAME,
           protoVersion: THRUM_VERSION,
-        }) + "\n");
+        };
+        if (bind) hello.bind = bind;
+        s.write(JSON.stringify(hello) + "\n");
         for (const line of this.pending) s.write(line);
         this.pending = [];
         resolve();

@@ -47,9 +47,23 @@ client                           openai-server                       humd
 
 | env | default | what |
 |---|---|---|
-| `HUM_OPENAI_PORT` | `8787` | HTTP listen port |
-| `HUM_OPENAI_HOST` | `0.0.0.0` | HTTP listen host |
+| `OPENAI_SERVER_PORT` | `14620` | HTTP listen port |
+| `OPENAI_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
+| `OPENAI_SERVER_API_KEY` | _(unset → no auth)_ | bearer token required on requests |
 | `HUM_THRUM_PATH` | `$XDG_RUNTIME_DIR/hum/hum.sock.thrum` | humd's NDJSON socket |
+
+The nestling's own kind (`openai-server`) is its env namespace —
+`HUM_*` is reserved for hum-side knobs like `HUM_THRUM_PATH`.
+
+### Config file (optional)
+
+Also reads `~/.config/hum/nestlings/openai-server.json` if present:
+
+```json
+{ "host": "127.0.0.1", "port": 14620, "apiKey": "secret" }
+```
+
+Resolution precedence: **env > config file > built-in defaults**.
 
 ## Run
 
@@ -68,7 +82,7 @@ npx tsx src/index.ts
 ## Use
 
 ```bash
-curl http://localhost:8787/v1/chat/completions \
+curl http://localhost:14620/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "sonnet",
@@ -82,7 +96,7 @@ Drop-in for the OpenAI SDK:
 ```ts
 import OpenAI from "openai";
 const client = new OpenAI({
-  baseURL: "http://localhost:8787/v1",
+  baseURL: "http://localhost:14620/v1",
   apiKey:  "anything",
 });
 const r = await client.chat.completions.create({

@@ -1,11 +1,40 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 import { OpenAITranslator } from "./transform.ts";
 
-const PORT = parseInt(process.env.HUM_OPENAI_PORT ?? "14620", 10);
-const HOST = process.env.HUM_OPENAI_HOST ?? "127.0.0.1";
-const API_KEY = process.env.HUM_OPENAI_API_KEY ?? "";
+interface NestlingConfig {
+  host?: string;
+  port?: number;
+  apiKey?: string;
+}
+
+function readConfigFile(): NestlingConfig {
+  const path = join(homedir(), ".config", "hum", "nestlings", "openai-server.json");
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as NestlingConfig;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const fileConfig = readConfigFile();
+
+// Precedence: env > config file > built-in defaults.
+const PORT = process.env.OPENAI_SERVER_PORT !== undefined
+  ? parseInt(process.env.OPENAI_SERVER_PORT, 10)
+  : (typeof fileConfig.port === "number" ? fileConfig.port : 14620);
+const HOST = process.env.OPENAI_SERVER_HOST
+  ?? fileConfig.host
+  ?? "127.0.0.1";
+const API_KEY = process.env.OPENAI_SERVER_API_KEY
+  ?? fileConfig.apiKey
+  ?? "";
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -119,9 +148,6 @@ function hasTrailingUserAfterTool(messages: OpenAIMessage[]): boolean {
 const thrum = new ThrumClient();
 
 async function start(): Promise<void> {
-  await thrum.connect();
-  console.log(`[hum-openai-server] connected to thrum`);
-
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
@@ -215,9 +241,18 @@ async function start(): Promise<void> {
     res.end();
   });
 
-  server.listen(PORT, HOST, () => {
-    console.log(`[hum-openai-server] listening on http://${HOST}:${PORT}`);
+  await new Promise<void>((resolve) => {
+    server.listen(PORT, HOST, () => resolve());
   });
+
+  // Determine the real bound address (handles port: 0 / wildcard host).
+  const addr = server.address();
+  const actualHost = (addr && typeof addr === "object" && addr.address) ? addr.address : HOST;
+  const actualPort = (addr && typeof addr === "object" && typeof addr.port === "number") ? addr.port : PORT;
+  console.log(`[hum-openai-server] listening on http://${actualHost}:${actualPort}`);
+
+  await thrum.connect({ host: actualHost, port: actualPort, scheme: "http" });
+  console.log(`[hum-openai-server] connected to thrum`);
 }
 
 start().catch(e => { console.error("[hum-openai-server] startup failed:", e); process.exit(1); });

@@ -58,10 +58,22 @@ client                              ollama-server                     humd
 
 | env | default | what |
 |---|---|---|
-| `HUM_OLLAMA_PORT` | `11434` | HTTP listen port (matches Ollama's default) |
-| `HUM_OLLAMA_HOST` | `127.0.0.1` | HTTP listen host |
-| `HUM_OLLAMA_MODELS` | `claude-sonnet-4,claude-haiku-4.5,claude-opus-4.7` | comma-separated list returned by `/api/tags` |
+| `OLLAMA_SERVER_PORT` | `11434` | HTTP listen port (matches Ollama's default) |
+| `OLLAMA_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
+| `OLLAMA_SERVER_MODELS` | `claude-sonnet-4,claude-haiku-4.5,claude-opus-4.7` | comma-separated list returned by `/api/tags` |
 | `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+
+Optional per-kind config file at `~/.config/hum/nestlings/ollama-server.json`:
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 11434,
+  "models": ["claude-sonnet-4", "claude-haiku-4.5", "claude-opus-4.7"]
+}
+```
+
+Precedence: env > config file > built-in defaults.
 
 ## Run
 
@@ -70,7 +82,7 @@ client                              ollama-server                     humd
 cargo run -p ollama-server
 
 # Listen on a different port:
-HUM_OLLAMA_PORT=14620 cargo run -p ollama-server
+OLLAMA_SERVER_PORT=14620 cargo run -p ollama-server
 ```
 
 ## Use

@@ -12,11 +12,40 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { ThrumClient, type Tone } from "./thrum.ts";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { ThrumClient } from "./thrum.ts";
 
-const PORT = parseInt(process.env.HUM_ANTHROPIC_PORT ?? "14622", 10);
-const HOST = process.env.HUM_ANTHROPIC_HOST ?? "127.0.0.1";
-const API_KEY = process.env.HUM_ANTHROPIC_API_KEY ?? "";
+interface NestlingConfig {
+  host?: string;
+  port?: number;
+  apiKey?: string;
+}
+
+function readConfigFile(): NestlingConfig {
+  const path = join(homedir(), ".config", "hum", "nestlings", "anthropic-server.json");
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as NestlingConfig;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const fileConfig = readConfigFile();
+
+// Precedence: env > config file > built-in defaults.
+const PORT = process.env.ANTHROPIC_SERVER_PORT !== undefined
+  ? parseInt(process.env.ANTHROPIC_SERVER_PORT, 10)
+  : (typeof fileConfig.port === "number" ? fileConfig.port : 14622);
+const HOST = process.env.ANTHROPIC_SERVER_HOST
+  ?? fileConfig.host
+  ?? "127.0.0.1";
+const API_KEY = process.env.ANTHROPIC_SERVER_API_KEY
+  ?? fileConfig.apiKey
+  ?? "";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -355,6 +384,26 @@ const server = createServer(async (req, res) => {
   res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: "not found" } }));
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`anthropic-server listening on http://${HOST}:${PORT}`);
-});
+async function start(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.listen(PORT, HOST, () => resolve());
+  });
+
+  const addr = server.address();
+  const boundHost = typeof addr === "object" && addr !== null ? addr.address : HOST;
+  const boundPort = typeof addr === "object" && addr !== null ? addr.port : PORT;
+
+  // Persistent startup-level client announces the nestling with its
+  // actual bound address. Per-request handlers use their own short-
+  // lived clients.
+  const registrar = new ThrumClient();
+  try {
+    await registrar.connect({ host: boundHost, port: boundPort, scheme: "http" });
+  } catch (e) {
+    console.warn(`anthropic-server: thrum announce failed: ${(e as Error).message}`);
+  }
+
+  console.log(`anthropic-server listening on http://${boundHost}:${boundPort}`);
+}
+
+start().catch((e) => { console.error("anthropic-server: startup failed:", e); process.exit(1); });
