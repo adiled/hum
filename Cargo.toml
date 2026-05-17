@@ -22,6 +22,7 @@ members = [
     "nestlings/paid-oracle",
     "nestlings/gsm-modem",
     "nestlings/ollama-server",
+    "nestlings/bp7-nestling",
 ]
 
 [workspace.package]
