@@ -58,21 +58,41 @@ boundary.
 
 ## How a new nest kind gets onto the mesh
 
-Same pattern, no PR to this repo required:
+The `Perch` trait is the only **wire** contract — nothing about a new
+perch shows up on thrum or the ensemble protocol. But binary wiring
+isn't free: humd has to know how to construct your impl at boot.
+
+Two paths, depending on whether you ship in-tree or out-of-tree.
+
+### Out-of-tree (your own humd build)
+
+You maintain a fork (or just a downstream binary) that links your
+perch crate. No PR here required.
 
 1. **Write your Perch impl** in your own Rust crate. Implement
    `nest::Perch` for your roost kind. The crate can live anywhere.
-2. **Build it into your humd.** Add it as a dependency, register the
-   impl with the daemon's nest pool at startup. (Future: dynamic
-   plugin loading.)
-3. **Run your humd.** Its existing `PeerCapabilities.nests` advertise
-   gossips your new nest name to the ensemble.
+2. **Build it into your humd.** Add the crate as a dependency,
+   register the impl on `PerchSet` at startup (replacing or extending
+   the default `claude-cli` / `claude-repl` set).
+3. **Run your humd.** Its `PeerCapabilities` gossip advertises the
+   nest name to the ensemble.
 4. **Other humds discover.** A peer humd routing a `chi:"prompt"`
-   with `modelId: <your-model>` consults the capability gossip,
-   finds your humd, routes the prompt your way.
+   with `modelId: <your-model>` consults the gossip and routes to you.
 
-Nothing new on the wire. Nothing new in the protocol. The `Perch`
-trait is the only contract; the rest is humd-local glue.
+### In-tree (shipped with hum)
+
+To land in this repo, four edits are unavoidable today:
+
+1. Add the crate path under `[workspace]` in the root `Cargo.toml`.
+2. Construct your impl in humd's default `PerchSet` (`humd/src/lib.rs`).
+3. Add a `perches.<name>` block to `hum.schema.json` if your perch
+   has per-perch config.
+4. Mention it in the canonical install if it's part of the default
+   set, or document install instructions next to it otherwise.
+
+The wire stays clean. The build wiring is humd's job, not the wire's
+— that's the honest framing. Future: a dynamic plugin loader removes
+in-tree edits 1–2 (config + docs would still be 3–4).
 
 ## Want your Perch listed here as reference?
 

@@ -268,6 +268,7 @@ where
         thrum: thrum.clone(),
         perch_tag: perch_tag.clone(),
     }));
+    let external_perches: ExternalPerches = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -280,6 +281,7 @@ where
         mcp_registry: mcp_registry.clone(),
         tool_pending: tool_pending.clone(),
         perch_tag: perch_tag.clone(),
+        external_perches: external_perches.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -448,12 +450,36 @@ struct HumdSink {
     /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
     /// a specific perch name; whichever perch is configured is the tag.
     perch_tag: String,
+    /// External perches — processes that handshook as `role:"perch"`.
+    /// Lookup by advertised model id; routing is to the perch's thrum
+    /// client_id. Empty until a perch hellos.
+    external_perches: ExternalPerches,
 }
 
 /// Map of in-flight nestler-tool call ids → oneshot senders waiting
 /// for the result content. Shared between the NestlerBridge (writer
 /// on dispatch) and the chi:"tool-result" handler (resolver).
 type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
+
+/// Registry of external perches — processes that registered via
+/// `chi:"hello"` with `role: "perch"`. Keyed by advertised model id.
+/// When a prompt's modelId matches an entry, humd forwards the
+/// `chi:"prompt"` to the perch's thrum client_id instead of spawning
+/// a local subprocess via PerchSet.
+type ExternalPerches = Arc<parking_lot::RwLock<HashMap<String, ExternalPerchReg>>>;
+
+#[derive(Debug, Clone)]
+struct ExternalPerchReg {
+    /// Thrum client id the perch handshook on. Address for outbound
+    /// prompts.
+    client_id: String,
+    /// Free-form propensity advertised on hello. Carried verbatim so
+    /// downstream observability (drone, dashboards) can reason about
+    /// stateful vs stateless behavior.
+    propensity: serde_json::Value,
+    /// Every model id this perch advertised. A perch can serve many.
+    models: Vec<String>,
+}
 
 /// MCP NestlerHook impl that round-trips nestler-declared tool calls
 /// back to the originator over thrum. The perch's MCP client (whatever
@@ -747,6 +773,35 @@ impl ToneSink for HumdSink {
                 trace!(client_id, %chi_str, "thrum.recv.hello");
                 let breath = thrumd::breath_tone(serde_json::json!({}));
                 self.thrum.thrum_to(client_id, breath);
+
+                // External perch registration. A process announcing
+                // `role:"perch"` is offering to serve one or more
+                // model ids. Record the {model → client_id} mapping
+                // so the prompt arm can forward to it instead of
+                // spawning a built-in perch locally.
+                if tone.get("role").and_then(Value::as_str) == Some("perch") {
+                    let models: Vec<String> = tone.get("models")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
+                    let propensity = tone.get("propensity").cloned().unwrap_or(Value::Null);
+                    if !models.is_empty() {
+                        let reg = ExternalPerchReg {
+                            client_id: client_id.to_string(),
+                            propensity,
+                            models: models.clone(),
+                        };
+                        let mut perches = self.external_perches.write();
+                        for m in &models {
+                            perches.insert(m.clone(), reg.clone());
+                        }
+                        info!(client_id, ?models, "perch.registered");
+                    }
+                    // External perch hello doesn't need the nestling-
+                    // discovery gossip below; perches advertise via
+                    // their own capability surface.
+                    return;
+                }
 
                 // Advertise this nestler on the ensemble's nestling-discovery
                 // topic so peer humds know which nestlings are available

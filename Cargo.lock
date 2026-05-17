@@ -503,10 +503,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "nest",
+ "nest-common",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2606,9 +2608,17 @@ dependencies = [
 name = "nest-common"
 version = "0.30.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "drone",
+ "futures",
+ "nest",
  "regex",
  "serde",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
