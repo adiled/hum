@@ -75,6 +75,89 @@ Lean nestlings deliberately drop tones they can't express. Rich ones
 forward everything and lean on consumer-side machinery to make sense
 of it.
 
+## Three paradigms for running a nestler
+
+The protocol doesn't care where the nestler runs. The same `chi:"hello"`,
+manifest, prompt/chunk/finish triad works in every shape. What differs is
+*deployment*. Three honest modes:
+
+### Paradigm 0 — local dev (no install, no systemd, no ensemble)
+
+The minimal case. Used by contributors and by anyone running hum from
+a clone.
+
+```bash
+# terminal 1 — humd binds $XDG_RUNTIME_DIR/hum/thrum.sock
+cargo run -p humd
+
+# terminal 2 — the nestler launches itself; reads the same default path
+cd nestlings/openai-server
+pnpm install && pnpm run build
+node dist/index.js
+
+# terminal 3 — talk to humd's nest via the openai-shape door
+curl http://127.0.0.1:14620/v1/models
+```
+
+No install scripts. No persistence across reboot. No multi-humd story.
+The socket location is the only contract — both sides resolve it via
+the canonical XDG path (or `HUM_THRUM_SOCK` override).
+
+This paradigm is what every clone-and-build path should land on.
+
+### Paradigm 1 — local prod (systemd, configs persisted, single machine)
+
+You want hum running across reboots on this one machine. Use the
+install scripts:
+
+```bash
+./install                                  # humd: binary + identity + systemd unit
+nestlings/openai-server/install            # one per nestling you want hosted
+```
+
+What this adds over paradigm 0:
+- humd binary at `~/.local/bin/humd`
+- Ed25519 identity at `~/.local/state/hum/humd.key`
+- `~/.config/hum/hum.json` seeded with the namespaced 0.3 shape
+- `~/.config/hum/nestlings/<kind>.json` per nestling kind
+- systemd user units (`hum.service`, `hum-openai-server.service`, …)
+- `~/.config/hum/peers.json` scaffolded empty (for paradigm 2 later)
+
+Still single-machine. No ensemble traffic.
+
+### Paradigm 2 — distributed (ensemble, remote nestlers, multi-humd)
+
+The mesh case. A nestler running on machine X reaches a humd on
+machine Y via the ensemble — its `chi:"hello"` arrives at humd-Y over
+TCP/QUIC instead of the local socket.
+
+From humd-Y's point of view: nothing new. Same hello, same manifest,
+same routing. The transport layer (TCP/TLS/Iroh) bridges the bytes;
+the protocol layer doesn't know or care.
+
+What enables this:
+- humd has ensemble built in — turned on by default once peers.json
+  has at least one entry
+- the remote nestler runs by paradigm 0 or 1 *on its own machine*
+- humd-Y advertises its nests via `PeerCapabilities.nests`; peer
+  humds discover and route prompts via the ensemble's `route(tone)`
+
+**No new install on the humd side.** A foreign nestler doesn't need
+this humd's filesystem touched. The `source` field in its hello tells
+the mesh what kind of nestler it is and where its repo lives — purely
+informational; no code is downloaded.
+
+### Quick which-paradigm-am-I-using
+
+| signal | likely paradigm |
+|---|---|
+| no systemd unit, terminal-launched | 0 |
+| `~/.config/hum/hum.json` exists + `hum.service` listed | 1 |
+| `peers.json` has entries and humd's logs show inbound `hello` from non-local addrs | 2 |
+
+The protocol is identical across all three. Install scripts are
+paradigm-1 ergonomics, not protocol requirements.
+
 ## Adding a new nestling
 
 The `nestlings/` directory in this repo is a catalogue of reference
@@ -110,10 +193,12 @@ censorship-resistant identity.
    Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`,
    send NDJSON, dispatch incoming tones to per-sid handlers.
 4. **Handshake** — emit `chi:"hello"` on connect with `nestling`,
-   `protoVersion`, your own `version`, and optionally `propensity`,
-   `chis` (the array of chi values you speak), and `source` (URL to
-   your nestling's repo). Humd records you locally as soon as this
-   tone lands. **You are now registered with that humd.** Nothing
+   `protoVersion`, your own `version`, plus `source` (URL to your
+   nestling's repo), `bind` (the host/port you're listening on, if
+   you bind one), `propensity`, and `chis` (the chi values you speak).
+   The `source` is non-trivial: humd records it in the manifest so
+   peer humds on the mesh can find the repo and install the same
+   nestling kind locally. You are now registered with humd. Nothing
    else is required for solo / single-machine use.
 5. **Translate or transport.** Translators map thrum chunks into the
    outside contract's shape (see `vercel-ai/src/transform.ts`).

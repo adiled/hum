@@ -205,6 +205,33 @@ In every case: ensemble carries the *envelope*; the nest's roost
 produces the *reply*. The interface between them is the chi vocabulary.
 Nothing model-shaped crosses the seam.
 
+## Where the nest's prompts come from
+
+The nest doesn't differentiate. Both shapes land in the same
+`Nest::murmur(sid, pool_key, content)` call, with the only difference
+being *where the bytes originated*:
+
+| origin | how it reaches the nest |
+|---|---|
+| **local nestler over Unix socket** | humd's thrum dispatcher reads `chi:"prompt"` off the local `thrum.sock` connection. handle_thrum_tone fires with `client_id` = the nestler's connection id. murmur runs. |
+| **ensemble-routed from a peer humd** | a peer humd dialled this humd via transport (TCP/TLS/Iroh); its gossip / route emits a `chi:"prompt"` carrying `to: <my-humd-id>`. humd's ensemble pump dispatches into the same handle_thrum_tone path with `client_id` = `"ensemble"`. murmur runs. |
+
+Same code path. Same prompt body. The nest doesn't read the origin
+field, doesn't care about it. The `client_id != "ensemble"` check at
+the dispatch layer is just for overflow routing (we never bounce
+already-routed work back out) — the nest itself is origin-blind.
+
+This is what makes the three deployment paradigms work without code
+in this crate noticing:
+
+- **Paradigm 0** (local dev) — every prompt comes via local Unix socket.
+- **Paradigm 1** (local prod) — same as 0; systemd just keeps things alive.
+- **Paradigm 2** (distributed) — prompts may arrive over ensemble; the
+  Nest still calls `Perch::spawn` to fulfill them.
+
+A roost answering a prompt cannot tell whether the original asker was
+on this machine or across the planet. Honest.
+
 ## What this crate is NOT
 
 - **Not "compute" by itself.** The compute is the **roost**. This

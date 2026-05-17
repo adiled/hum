@@ -46,6 +46,7 @@ export class ThrumClient {
           from: NESTLING_NAME,
           nestling: NESTLING_NAME,
           protoVersion: THRUM_VERSION,
+          source: "https://github.com/adiled/hum/tree/main/nestlings/openai-server",
         };
         if (bind) hello.bind = bind;
         s.write(JSON.stringify(hello) + "\n");

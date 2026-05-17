@@ -65,6 +65,15 @@ to you. Nothing else is required for a single-machine nestling. The
 ensemble layer (peer humds, gossip) and the on-chain layer
 (`HumdRegistry`) are additive opt-ins on top.
 
+The handshake doesn't distinguish where the bytes came from. A hello
+arriving on humd's local Unix socket and a hello bridged through the
+ensemble from a peer humd hit the same code path. Local-dev runs,
+local-prod-with-systemd setups, and distributed mesh deployments all
+exercise the same `chi:"hello"` shape — see
+[nestlings/README.md](../nestlings/) for the three deployment
+paradigms (local-dev / local-prod / distributed) that share this
+single protocol.
+
 ```json
 {
   "chi": "hello",

@@ -50,11 +50,6 @@ HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
 
 MIN_CLAUDE="2.1.86"
-MIN_OPENCODE="1.4.3"
-
-# openai-server nestling defaults — port matches its README + the
-# provider.hum baseURL hint we print at the end.
-OPENAI_PORT="${HUM_OPENAI_PORT:-14620}"
 
 CMD="${1:-install}"
 OS="$(uname -s)"
@@ -91,9 +86,6 @@ ensure_prereqs() {
   ensure_min_version "claude CLI" "claude" "$MIN_CLAUDE"
   if ! command -v cargo >/dev/null 2>&1; then
     fail "cargo (rustup) not found. Install rustup: https://rustup.rs"
-  fi
-  if ! command -v pnpm >/dev/null 2>&1; then
-    warn "pnpm not on PATH — openai-server nestling won't build. Install: https://pnpm.io/installation"
   fi
 }
 
@@ -191,36 +183,6 @@ JSON
   log "  edit fs.roots to match where you actually code."
 }
 
-# ─── per-nestling config files ───────────────────────────────────────────────
-
-# Each nestling is a separate process that owns its own config. humd's
-# hum.json carries none of this. We seed one file per nestling kind so
-# the user has somewhere obvious to edit.
-ensure_nestling_config() {
-  local KIND="$1"; shift
-  local DEFAULTS="$1"
-  local DIR="$HUM_CONFIG/nestlings"
-  local FILE="$DIR/$KIND.json"
-  mkdir -p "$DIR"
-  if [ -s "$FILE" ]; then
-    log "nestling config: $FILE ✓"
-    return 0
-  fi
-  printf '%s\n' "$DEFAULTS" > "$FILE"
-  log "wrote default nestling config at $FILE"
-}
-
-ensure_openai_server_config() {
-  ensure_nestling_config "openai-server" "$(cat <<JSON
-{
-  "host": "127.0.0.1",
-  "port": $OPENAI_PORT,
-  "apiKey": ""
-}
-JSON
-)"
-}
-
 # ─── humd binary ─────────────────────────────────────────────────────────────
 
 build_humd() {
@@ -243,27 +205,6 @@ build_humd() {
   [ -x "$HUM_BIN" ] || fail "humd binary not at $HUM_BIN after build"
   log "humd installed at $HUM_BIN"
   log "  version: $($HUM_BIN --version 2>&1 || echo 'unknown')"
-}
-
-# ─── openai-server nestling — the 0.3 front door ────────────────────────────
-
-build_openai_server() {
-  local SRC="$(dirname "$0")"
-  if [ ! -d "$SRC/nestlings/openai-server" ]; then
-    SRC="$HUM_SRC"
-  fi
-  local NESTDIR="$SRC/nestlings/openai-server"
-  [ -d "$NESTDIR" ] || { warn "openai-server source not found at $NESTDIR — skipping"; return 0; }
-
-  if ! command -v pnpm >/dev/null 2>&1; then
-    warn "skipping openai-server build (pnpm missing)."
-    return 0
-  fi
-  log "building openai-server nestling at $NESTDIR"
-  (cd "$SRC" && pnpm install --silent --filter @hum/openai-server >/dev/null 2>&1 || true)
-  (cd "$NESTDIR" && pnpm run build --silent 2>/dev/null || true)
-  log "openai-server built (port $OPENAI_PORT). Start manually for now: node $NESTDIR/dist/index.js"
-  log "  (systemd unit for the nestling is planned in 0.3.1)"
 }
 
 # ─── systemd user unit ──────────────────────────────────────────────────────
@@ -325,31 +266,32 @@ start_daemon() {
   esac
 }
 
-# ─── opencode integration hint ──────────────────────────────────────────────
+# ─── next steps ──────────────────────────────────────────────────────────────
 
-print_opencode_hint() {
-  if ! command -v opencode >/dev/null 2>&1; then
-    log "OpenCode not detected — once installed, point it at hum's openai-server:"
-  else
-    log "OpenCode found. Wire it to hum by adding to $OPENCODE_CONFIG:"
-  fi
-  cat <<JSON
+# humd has no opinion on which nestlings you run. Each nestling is a
+# separate process with its own installer under nestlings/<kind>/install.
+# Pick at least one to give humd an outside-world surface.
+print_next_steps() {
+  log "Next: install one or more nestlings — each lives in its own dir."
+  log ""
+  log "  For opencode + Claude:"
+  log "    nestlings/openai-server/install"
+  log "    then add to $OPENCODE_CONFIG:"
+  cat <<'JSON'
 
   {
     "provider": {
       "hum": {
         "type": "openai-compatible",
-        "baseURL": "http://127.0.0.1:$OPENAI_PORT/v1",
-        "models": {
-          "claude-sonnet-4-5": {},
-          "claude-haiku-4-5":  {}
-        }
+        "baseURL": "http://127.0.0.1:14620/v1",
+        "models": { "claude-sonnet-4-5": {}, "claude-haiku-4-5": {} }
       }
     }
   }
 
 JSON
-  log "Then in opencode, select provider=hum and prompt away."
+  log "  Other nestlings: anthropic-server, ollama-server, twilio-sms,"
+  log "  gsm-modem, bp7-nestling, paid-oracle. Each has its own install."
 }
 
 # ─── status / logs / uninstall ───────────────────────────────────────────────
@@ -406,14 +348,12 @@ do_install() {
   ensure_identity
   ensure_peers_config
   ensure_hum_config
-  ensure_openai_server_config
   install_systemd_unit
-  build_openai_server
   start_daemon
   log ""
-  log "installed. Try: ./install status   /   ./install logs"
+  log "humd installed. Try: ./install status   /   ./install logs"
   log ""
-  print_opencode_hint
+  print_next_steps
 }
 
 case "$CMD" in
