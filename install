@@ -184,14 +184,41 @@ ensure_hum_config() {
   "perches": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
-  },
-  "nestlings": {
-    "openai-server": { "host": "127.0.0.1", "port": $OPENAI_PORT }
   }
 }
 JSON
   log "wrote default hum.json at $CFG"
   log "  edit fs.roots to match where you actually code."
+}
+
+# ─── per-nestling config files ───────────────────────────────────────────────
+
+# Each nestling is a separate process that owns its own config. humd's
+# hum.json carries none of this. We seed one file per nestling kind so
+# the user has somewhere obvious to edit.
+ensure_nestling_config() {
+  local KIND="$1"; shift
+  local DEFAULTS="$1"
+  local DIR="$HUM_CONFIG/nestlings"
+  local FILE="$DIR/$KIND.json"
+  mkdir -p "$DIR"
+  if [ -s "$FILE" ]; then
+    log "nestling config: $FILE ✓"
+    return 0
+  fi
+  printf '%s\n' "$DEFAULTS" > "$FILE"
+  log "wrote default nestling config at $FILE"
+}
+
+ensure_openai_server_config() {
+  ensure_nestling_config "openai-server" "$(cat <<JSON
+{
+  "host": "127.0.0.1",
+  "port": $OPENAI_PORT,
+  "apiKey": ""
+}
+JSON
+)"
 }
 
 # ─── humd binary ─────────────────────────────────────────────────────────────
@@ -379,6 +406,7 @@ do_install() {
   ensure_identity
   ensure_peers_config
   ensure_hum_config
+  ensure_openai_server_config
   install_systemd_unit
   build_openai_server
   start_daemon

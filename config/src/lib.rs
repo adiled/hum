@@ -183,21 +183,6 @@ pub struct PerchBudget {
     pub tool_calls_per_minute: Option<u32>,
 }
 
-// ── nestlings ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct NestlingConfig {
-    #[serde(default)]
-    pub host: Option<String>,
-    #[serde(default)]
-    pub port: Option<u16>,
-    #[serde(default, rename = "apiKey")]
-    pub api_key: Option<String>,
-    /// Anything else the nestling's own deserializer handles.
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
 // ── top-level ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -210,8 +195,6 @@ pub struct HumConfig {
     pub nest: NestSection,
     #[serde(default)]
     pub perches: BTreeMap<String, PerchConfig>,
-    #[serde(default)]
-    pub nestlings: BTreeMap<String, NestlingConfig>,
 }
 
 // ── path resolution ───────────────────────────────────────────────────────
@@ -331,7 +314,6 @@ mod tests {
         assert_eq!(cfg.nest.default, "claude-repl");
         assert_eq!(cfg.humd.permission_dusk_ms, 60_000);
         assert!(cfg.perches.is_empty());
-        assert!(cfg.nestlings.is_empty());
     }
 
     #[test]

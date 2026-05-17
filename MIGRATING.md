@@ -74,17 +74,32 @@ That's it. Start humd (`systemctl --user start hum` or `hum start`), start the n
   "perches": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
-  },
-
-  "nestlings": {
-    "openai-server": { "host": "127.0.0.1", "port": 14620 }
   }
 }
 ```
 
-Six sections, all optional. Missing section = `Default`. Unknown keys
-at the top level are ignored (the schema is the source of truth; the
-loader is tolerant so a stale field doesn't crash startup).
+Five sections, all optional. Missing section = `Default`. Unknown keys
+are ignored (loader is tolerant; a stale field doesn't crash startup).
+
+## Where nestling config lives
+
+Not in `hum.json`. Each nestling is a separate process that owns its
+own config. The install script seeds one file per nestling kind under
+`~/.config/hum/nestlings/<kind>.json` — e.g.:
+
+```jsonc
+// ~/.config/hum/nestlings/openai-server.json
+{
+  "host": "127.0.0.1",
+  "port": 14620,
+  "apiKey": ""
+}
+```
+
+Each nestler reads its own file at startup, plus its own env namespace
+(`OPENAI_SERVER_PORT`, `OPENAI_SERVER_HOST`, …). humd discovers each
+nestler when it sends `chi:"hello"` — there's no preconfigured list
+of nestlings humd needs to know about.
 
 ## Old key → new home
 
@@ -104,6 +119,7 @@ If you had it in 0.2, this is where it lives now (or doesn't):
 | `ccFlags` | `perches.claude-cli.ccFlags` (or `claude-repl`) | per-perch now, not global |
 | `experimental.subpath` | **dropped** | plugin-only feature |
 | `compaction` | **dropped** | manual-compaction is opencode's choice; hum doesn't proxy it |
+| `nestlings.<name>` | **moved** | per-nestling-kind config now at `~/.config/hum/nestlings/<name>.json`. humd does NOT preconfigure nestlings — each nestler reads its own config + sends `chi:"hello"` |
 
 ## fs is new and worth understanding
 
