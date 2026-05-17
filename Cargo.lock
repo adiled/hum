@@ -518,10 +518,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "nest",
+ "nest-common",
  "portable-pty",
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
