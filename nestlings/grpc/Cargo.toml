@@ -1,0 +1,26 @@
+[package]
+name = "grpc-nestling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only nestling."
+
+[dependencies]
+thrum-core = { path = "../../thrum-core" }
+tokio = { workspace = true }
+tokio-stream = "0.1"
+tonic = "0.12"
+prost = "0.13"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-stream = "0.3"
+libc = "0.2"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[[bin]]
+name = "grpc-nestling"
+path = "src/main.rs"

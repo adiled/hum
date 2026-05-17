@@ -18,6 +18,8 @@ members = [
     "penny",
     "ensemble",
     "sim",
+    "nestlings/grpc",
+    "nestlings/paid-oracle",
 ]
 
 [workspace.package]

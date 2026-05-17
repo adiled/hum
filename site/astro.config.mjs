@@ -29,8 +29,6 @@ export default defineConfig({
           label: "Architecture",
           items: [
             { label: "Ensemble (mesh)", link: "/ensemble/" },
-            { label: "Nestlings",       link: "/nestlings/" },
-            { label: "OpenCode plugin", link: "/nestlings/opencode/" },
           ],
         },
         {
@@ -38,6 +36,24 @@ export default defineConfig({
           items: [
             { label: "thrum-core (Rust)", link: "/thrum-core/" },
             { label: "thrum (TS)",        link: "/thrum/" },
+          ],
+        },
+        {
+          label: "Nestlings",
+          collapsed: false,
+          items: [
+            { label: "Typology", link: "/nestlings/" },
+            {
+              label: "Reference",
+              collapsed: false,
+              items: [
+                { label: "opencode",          link: "/nestlings/opencode/" },
+                { label: "openai-server",     link: "/nestlings/openai-server/" },
+                { label: "vercel-ai",         link: "/nestlings/vercel-ai/" },
+                { label: "grpc (Rust)",       link: "/nestlings/grpc/" },
+                { label: "paid-oracle (Rust)", link: "/nestlings/paid-oracle/" },
+              ],
+            },
           ],
         },
         { label: "Scenarios", link: "/scenarios/" },

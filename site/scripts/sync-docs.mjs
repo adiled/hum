@@ -24,13 +24,17 @@ const DEST_ROOT  = path.resolve(__dirname, "../src/content/docs/");
 // model means nestlings live in their own repos anyway; this site
 // reflects what's reference-quality in THIS repo.
 const PAGES = [
-  { src: "README.md",                    slug: "index",              title: "hum",                      description: "The only AI stack nestled on a biodiverse agentic kernel framework." },
-  { src: "ensemble/README.md",           slug: "ensemble/index",     title: "Ensemble — the mesh",      description: "Cross-humd routing, discovery, gossip, Kademlia. Where humds find each other." },
-  { src: "nestlings/README.md",          slug: "nestlings/index",    title: "Nestlings — the typology", description: "Statefulness × richness × wire shape. How to build a new nestling." },
-  { src: "nestlings/opencode/README.md", slug: "nestlings/opencode", title: "OpenCode plugin",          description: "Rich, stateful nestling for OpenCode." },
-  { src: "thrum-core/README.md",         slug: "thrum-core/index",   title: "thrum-core (Rust)",        description: "Wire-protocol primitives for Rust nestlings." },
-  { src: "thrum/README.md",              slug: "thrum/index",        title: "thrum (TS)",               description: "Wire-protocol primitives for TS / JS nestlings." },
-  { src: "scenarios/README.md",          slug: "scenarios/index",    title: "Scenarios",                description: "Five narratives, each mapped 1:1 to a sim test." },
+  { src: "README.md",                       slug: "index",                  title: "hum",                      description: "The only AI stack nestled on a biodiverse agentic kernel framework." },
+  { src: "ensemble/README.md",              slug: "ensemble/index",         title: "Ensemble — the mesh",      description: "Cross-humd routing, discovery, gossip, Kademlia. Where humds find each other." },
+  { src: "thrum-core/README.md",            slug: "thrum-core/index",       title: "thrum-core (Rust)",        description: "Wire-protocol primitives for Rust nestlings." },
+  { src: "thrum/README.md",                 slug: "thrum/index",            title: "thrum (TS)",               description: "Wire-protocol primitives for TS / JS nestlings." },
+  { src: "nestlings/README.md",             slug: "nestlings/index",        title: "Nestlings — the typology", description: "Statefulness × richness × wire shape. How to build a new nestling." },
+  { src: "nestlings/opencode/README.md",    slug: "nestlings/opencode",     title: "opencode",                 description: "Rich, stateful nestling for OpenCode." },
+  { src: "nestlings/openai-server/README.md", slug: "nestlings/openai-server", title: "openai-server",         description: "OpenAI-compatible HTTP/SSE surface for hum." },
+  { src: "nestlings/vercel-ai/README.md",   slug: "nestlings/vercel-ai",    title: "vercel-ai",                description: "Vercel AI SDK provider — drive hum from any `ai` SDK caller." },
+  { src: "nestlings/grpc/README.md",        slug: "nestlings/grpc",         title: "grpc (Rust)",              description: "Transport-only bidi gRPC bridge — every chi flows through." },
+  { src: "nestlings/paid-oracle/README.md", slug: "nestlings/paid-oracle",  title: "paid-oracle (Rust)",       description: "x402-style paid oracle — one price per USDC payment, on-chain verified." },
+  { src: "scenarios/README.md",             slug: "scenarios/index",        title: "Scenarios",                description: "Five narratives, each mapped 1:1 to a sim test." },
 ];
 
 function escapeYaml(s) {
