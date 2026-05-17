@@ -234,6 +234,13 @@ pub struct PeerCapabilities {
     /// whose `free_slots` is `None` or `Some(n) where n > 0`.
     #[serde(default)]
     pub free_slots: Option<usize>,
+    /// Live capacity snapshot — see [`headroom::RoostHeadroom`]. Carries
+    /// the pressure tier (Cool/Warm/Hot/Refuse) + p95 latency so peers
+    /// can route away from saturated nodes without waiting for hard
+    /// failure. Empty default = no nest / not yet measured; treat as
+    /// available unless explicitly Refuse.
+    #[serde(default)]
+    pub headroom: headroom::RoostHeadroom,
 }
 
 /// First tone over a fresh connection — each side names itself and what
@@ -1237,7 +1244,14 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(HumdId, PeerCapabilities)> {
                 v.as_u64().map(|n| n as usize)
             }
         });
-    Some((claimed_id, PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots }))
+    let headroom = tone
+        .get("headroom")
+        .and_then(|v| serde_json::from_value::<headroom::RoostHeadroom>(v.clone()).ok())
+        .unwrap_or_default();
+    Some((
+        claimed_id,
+        PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots, headroom },
+    ))
 }
 
 /// Three-way parse of a `chi:"hello"` tone — signed/verified, unsigned
@@ -1284,9 +1298,13 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let free_slots = tone
             .get("free_slots")
             .and_then(|v| if v.is_null() { None } else { v.as_u64().map(|n| n as usize) });
+        let headroom = tone
+            .get("headroom")
+            .and_then(|v| serde_json::from_value::<headroom::RoostHeadroom>(v.clone()).ok())
+            .unwrap_or_default();
         HelloParse::Unsigned(
             claimed_id,
-            PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots },
+            PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots, headroom },
         )
     }
 }

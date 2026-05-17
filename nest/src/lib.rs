@@ -62,6 +62,10 @@ pub struct SpawnSpec {
     pub allowed_tools: Vec<String>,
     /// Extra env overrides spread onto the spawn (after defaults).
     pub env: HashMap<String, String>,
+    /// OS-level caps the Perch impl applies to the spawned child via
+    /// `Command::pre_exec` (Linux) or no-op (other platforms).
+    /// Default: empty — child inherits the parent's limits.
+    pub resource_limits: limits::ResourceLimits,
 }
 
 impl SpawnSpec {
@@ -78,6 +82,7 @@ impl SpawnSpec {
             permissions: Vec::new(),
             allowed_tools: Vec::new(),
             env: HashMap::new(),
+            resource_limits: limits::ResourceLimits::default(),
         }
     }
 }
