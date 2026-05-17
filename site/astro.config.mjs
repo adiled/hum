@@ -22,60 +22,14 @@ export default defineConfig({
       components: {
         // Use Starlight's built-in head; spacecraft CSS handles the rest.
       },
+      // Sidebar is generated from the synced content tree. Add a
+      // README.md anywhere in the repo (outside `docs/` and the by-name
+      // exclusions) and it shows up here automatically. See
+      // `site/scripts/sync-docs.mjs` for the discovery rules.
       sidebar: [
         { label: "Overview",   link: "/" },
         { label: "Vocabulary", link: "/vocabulary/" },
-        {
-          label: "Architecture",
-          items: [
-            { label: "Ensemble (mesh)", link: "/ensemble/" },
-          ],
-        },
-        {
-          label: "Build a nestling",
-          items: [
-            { label: "Wire spec", link: "/thrum/wire/" },
-            {
-              label: "Client libraries",
-              collapsed: false,
-              items: [
-                { label: "thrum-core (Rust)", link: "/thrum-core/" },
-                { label: "thrum (TS)",        link: "/thrum/" },
-                { label: "thrum (Python)",    link: "/clients/python/" },
-                { label: "thrum (Go)",        link: "/clients/go/" },
-              ],
-            },
-          ],
-        },
-        {
-          label: "On-chain",
-          items: [
-            { label: "Contracts (Solidity)", link: "/contracts/" },
-          ],
-        },
-        {
-          label: "Nestlings",
-          collapsed: false,
-          items: [
-            { label: "Typology", link: "/nestlings/" },
-            {
-              label: "Reference",
-              collapsed: false,
-              items: [
-                { label: "opencode",            link: "/nestlings/opencode/" },
-                { label: "openai-server",       link: "/nestlings/openai-server/" },
-                { label: "anthropic-server",    link: "/nestlings/anthropic-server/" },
-                { label: "vercel-ai",           link: "/nestlings/vercel-ai/" },
-                { label: "grpc (Rust)",         link: "/nestlings/grpc/" },
-                { label: "paid-oracle (Rust)",  link: "/nestlings/paid-oracle/" },
-                { label: "ollama-server (Rust)", link: "/nestlings/ollama-server/" },
-                { label: "gsm-modem (Rust)",    link: "/nestlings/gsm-modem/" },
-                { label: "twilio-sms (Go)",     link: "/nestlings/twilio-sms/" },
-              ],
-            },
-          ],
-        },
-        { label: "Scenarios", link: "/scenarios/" },
+        { label: "Docs", autogenerate: { directory: "." }, collapsed: false },
       ],
     }),
   ],

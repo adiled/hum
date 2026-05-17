@@ -2,11 +2,8 @@ node_modules/
 dist/
 *.tgz
 .claude/
-*.md
-!README.md
-!reports/*.md
-!thrum/*.md
-!contracts/*.md
 docs/
 dev
 target/
+AGENTS.md
+CLAUDE.md
