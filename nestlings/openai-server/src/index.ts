@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ interface NestlingConfig {
   host?: string;
   port?: number;
   apiKey?: string;
+  models?: string[];
 }
 
 function readConfigFile(): NestlingConfig {
@@ -24,6 +25,12 @@ function readConfigFile(): NestlingConfig {
 }
 
 const fileConfig = readConfigFile();
+// Model IDs advertised on /v1/models come from the nestling's per-kind
+// config (~/.config/hum/nestlings/openai-server.json). When unset, the
+// list is empty — /v1/models returns an empty array. The recipe that
+// installs this nestling is responsible for seeding the model id-set
+// it wants exposed; the nestling itself stays model-agnostic.
+const MODEL_IDS: string[] = Array.isArray(fileConfig.models) ? fileConfig.models : [];
 
 // Precedence: env > config file > built-in defaults.
 const PORT = process.env.OPENAI_SERVER_PORT !== undefined
@@ -106,17 +113,50 @@ function flatten(content: OpenAIMessage["content"]): string {
   return "";
 }
 
+// The OpenAI chat-completions wire is stateless: every request carries
+// the full conversation. Whatever perch humd picks behind the prompt
+// may or may not retain state — that's the perch's propensity, not
+// this nestling's concern. The neutral, always-correct move is to
+// forward the entire transcript every call; perches that are stateful
+// will see a redundant prefix and respond just fine, perches that are
+// stateless will get the context they need.
+//
+// (A future revision can opt in to delta-mode when humd's hello-ack
+//  announces a stateful propensity for the target nest. Until that
+//  wire piece lands, neutrality wins.)
 function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; userPrompt: string } {
   const systemPieces: string[] = [];
-  let userPrompt = "";
+  const turns: string[] = [];
   for (const msg of messages) {
-    if (msg.role === "system") systemPieces.push(flatten(msg.content));
-    else if (msg.role === "user") userPrompt = flatten(msg.content); // last user wins
+    if (msg.role === "system") {
+      systemPieces.push(flatten(msg.content));
+    } else if (msg.role === "user") {
+      turns.push(`User: ${flatten(msg.content)}`);
+    } else if (msg.role === "assistant") {
+      const text = flatten(msg.content);
+      if (text) turns.push(`Assistant: ${text}`);
+    }
+    // role:"tool" handled separately via trailingToolReturns.
   }
+  // Single user turn — emit verbatim; the "User:" label only helps
+  // disambiguate when there's prior history.
+  const userTurnCount = messages.filter(m => m.role === "user").length;
+  const assistantTurnCount = messages.filter(m => m.role === "assistant").length;
+  const single = userTurnCount === 1 && assistantTurnCount === 0;
   return {
     systemPrompt: systemPieces.length > 0 ? systemPieces.join("\n\n") : undefined,
-    userPrompt,
+    userPrompt: single ? (turns[0]?.replace(/^User: /, "") ?? "") : turns.join("\n\n"),
   };
+}
+
+// Stable sid keyed on the conversation anchor — same OC chat lands
+// on the same hum sid across turns. Lets stateful perches reuse a
+// roost when humd's pool keeps one warm; stateless perches just ignore
+// the repeat. Either way the sid is meaningful, not random.
+function sessionKey(messages: OpenAIMessage[]): string {
+  const firstUser = messages.find(m => m.role === "user");
+  const anchor = firstUser ? flatten(firstUser.content) : `none-${Date.now()}`;
+  return createHash("sha1").update(anchor).digest("hex").slice(0, 16);
 }
 
 interface ToolReturn { tool_call_id: string; result: string; }
@@ -156,11 +196,7 @@ async function start(): Promise<void> {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         object: "list",
-        data: [
-          { id: "claude-opus-4-7",    object: "model", created: 0, owned_by: "hum" },
-          { id: "claude-sonnet-4-6",  object: "model", created: 0, owned_by: "hum" },
-          { id: "claude-haiku-4-5",   object: "model", created: 0, owned_by: "hum" },
-        ],
+        data: MODEL_IDS.map(id => ({ id, object: "model", created: 0, owned_by: "hum" })),
       }));
       return;
     }
@@ -173,8 +209,13 @@ async function start(): Promise<void> {
       if (messages.length === 0) return bad(res, "messages required");
 
       const stream = body.stream !== false; // default to streaming
-      const model = body.model ?? "claude-sonnet-4-6";
-      const sid = body.user ?? `oai-${randomUUID()}`;
+      // body.model is the only correct source — the client picks. If
+      // absent, fall back to the first advertised id; if none, use a
+      // pass-through tag humd will reject loudly rather than guess.
+      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
+      // body.user wins when the client supplies a session id; otherwise
+      // derive a stable one from the conversation anchor.
+      const sid = body.user ?? `oai-${sessionKey(messages)}`;
       const { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
 
@@ -221,7 +262,6 @@ async function start(): Promise<void> {
           chi: "prompt",
           sid,
           nestling: "openai-server",
-          nest: "claude-cli",
           modelId: model,
           content: userPrompt,
           ...(systemPrompt ? { systemPrompt } : {}),

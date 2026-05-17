@@ -100,11 +100,11 @@ pub struct DaemonConfig {
 impl DaemonConfig {
     pub fn from_env() -> Self {
         let runtime_dir = runtime_dir();
-        let base = socket_base(&runtime_dir);
-        let mut thrum_path = base.clone().into_os_string();
-        thrum_path.push(".thrum");
-        let mut http_path = base.into_os_string();
-        http_path.push(".http");
+        // Canonical thrum socket path — honors HUM_THRUM_SOCK (and the
+        // legacy HUM_SOCKET fallback). thrumd owns the source of truth;
+        // humd just reuses it so binary + protocol agree.
+        let thrum_path = thrumd::default_socket_path();
+        let http_path = runtime_dir.join("hum.sock.http");
         let mcp_port: u16 = std::env::var("HUM_MCP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -120,8 +120,8 @@ impl DaemonConfig {
         };
         let bootstrap_peers = peers::load();
         Self {
-            thrum_path: PathBuf::from(thrum_path),
-            http_path: PathBuf::from(http_path),
+            thrum_path,
+            http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
             penny_path: runtime_dir.join("penny.json"),
             hum_cfg: config::load(),
@@ -146,12 +146,6 @@ fn runtime_dir() -> PathBuf {
     base.join("hum")
 }
 
-fn socket_base(runtime: &std::path::Path) -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    runtime.join("hum.sock")
-}
 
 // ── Public entry point ─────────────────────────────────────────────────────
 
@@ -161,7 +155,7 @@ fn socket_base(runtime: &std::path::Path) -> PathBuf {
 /// while the simulator can plug an in-memory cancel token. The function
 /// returns once the shutdown future resolves AND best-effort state has
 /// been flushed.
-pub async fn run<F>(cfg: DaemonConfig, shutdown: F) -> Result<()>
+pub async fn run<F>(mut cfg: DaemonConfig, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send,
 {
@@ -243,11 +237,30 @@ where
 
     // Caller-owned Thrum (sim) vs daemon-owned (production). When the
     // caller owns it, we install our sink onto theirs and never bind.
-    let (thrum, bind_thrum) = match cfg.thrum_override {
+    let is_embedded = cfg.thrum_override.is_some();
+    let (thrum, bind_thrum) = match cfg.thrum_override.take() {
         Some(t) => (t, false),
         None => (Thrum::new(), true),
     };
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
+    // MCP registry has to outlive its serve task because HumdSink also
+    // pokes it (sets per-session nestler_tools when chi:"prompt" carries
+    // body.tools). Build it once, share via clone.
+    let mcp_registry = McpRegistry::new();
+    // Pending nestler-tool dispatches keyed by callId. The NestlerHook
+    // installs a oneshot Sender on each call; the chi:"tool-result"
+    // handler resolves it. Lives on the sink so both halves can reach it.
+    let tool_pending: ToolPending = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    // Install the bridge: any nestler-tool MCP call humd's MCP server
+    // dispatches gets translated into a chi:"tool-call" tone routed to
+    // the originating client. The thrum sigil claim made at chi:"prompt"
+    // time guarantees the tone lands on the right consumer.
+    let perch_tag = cfg.hum_cfg.nest.default.clone();
+    mcp_registry.set_nestler_hook(Arc::new(NestlerBridge {
+        thrum: thrum.clone(),
+        pending: tool_pending.clone(),
+        perch_tag: perch_tag.clone(),
+    }));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -257,6 +270,9 @@ where
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
+        mcp_registry: mcp_registry.clone(),
+        tool_pending: tool_pending.clone(),
+        perch_tag: perch_tag.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -273,7 +289,7 @@ where
 
     if cfg.bind_mcp {
         let mcp_addr = cfg.mcp_addr;
-        let registry = McpRegistry::new();
+        let registry = mcp_registry.clone();
         tokio::spawn(async move {
             if let Err(e) = mcp_serve(mcp_addr, registry).await {
                 warn!(err = %e, "mcp.exit");
@@ -306,6 +322,15 @@ where
         });
     }
 
+    // Auto-update — in-process daily check. Skipped under sim/test
+    // (caller-owned thrum means we're embedded in someone else's
+    // runtime, not a real boot). The job shells to curl + the
+    // canonical installer; the installer rebuilds humd and bounces the
+    // service, which kills this task naturally.
+    if !is_embedded {
+        tokio::spawn(autoupdate_loop());
+    }
+
     info!("humd.ready");
     shutdown.await;
     info!("humd.shutting-down");
@@ -314,6 +339,75 @@ where
     }
     info!("humd.exit");
     Ok(())
+}
+
+/// Daily self-update — once every 24h, compare the running version to
+/// the upstream release and re-run the canonical installer if newer.
+///
+/// Single retry on transient network failure (15-min retry, then back
+/// to the daily cadence). Errors are logged but never fatal — a humd
+/// that can't reach github should keep humming.
+async fn autoupdate_loop() {
+    // Initial sleep — avoid update storm at boot if the user just
+    // ran `./install` (which already pulled the latest).
+    tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+    let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        match autoupdate_check_once().await {
+            Ok(true) => info!("autoupdate.applied"),
+            Ok(false) => trace!("autoupdate.up-to-date"),
+            Err(e) => {
+                warn!(err = %e, "autoupdate.failed");
+                tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+            }
+        }
+    }
+}
+
+/// One iteration of the auto-update check. Returns Ok(true) if the
+/// installer ran, Ok(false) if we're already up to date.
+async fn autoupdate_check_once() -> Result<bool> {
+    let local = env!("CARGO_PKG_VERSION").to_string();
+    let body = tokio::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H", "Accept: application/vnd.github+json",
+            "https://api.github.com/repos/adiled/hum/releases/latest",
+        ])
+        .output()
+        .await?;
+    if !body.status.success() {
+        anyhow::bail!("github releases fetch failed: {}", body.status);
+    }
+    let body = String::from_utf8(body.stdout)?;
+    // Inline `"tag_name":"vX.Y.Z"` lookup — avoids dragging a JSON
+    // parser into this hot path for one field.
+    let upstream = parse_tag_name(&body).ok_or_else(|| anyhow::anyhow!("no tag_name in response"))?;
+    let upstream_trim = upstream.trim_start_matches('v');
+    if upstream_trim == local {
+        return Ok(false);
+    }
+    info!(local = %local, upstream = %upstream_trim, "autoupdate.newer.found");
+    let status = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg("curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash")
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("installer exited with {status}");
+    }
+    Ok(true)
+}
+
+fn parse_tag_name(body: &str) -> Option<String> {
+    let needle = "\"tag_name\":";
+    let start = body.find(needle)? + needle.len();
+    let rest = &body[start..];
+    let q1 = rest.find('"')? + 1;
+    let q2 = rest[q1..].find('"')?;
+    Some(rest[q1..q1 + q2].to_string())
 }
 
 // ── ToneSink — the big chi dispatch ────────────────────────────────────────
@@ -335,6 +429,82 @@ struct HumdSink {
     /// prompt arm — local prompts get forwarded to a peer with spare
     /// capacity instead of awakening here. `None` = unbounded.
     capacity_override: Option<usize>,
+    /// MCP registry — populated per-session with nestler-declared tools
+    /// extracted from chi:"prompt".tools so the perch's MCP client sees
+    /// them advertised alongside humd's native tools.
+    mcp_registry: McpRegistry,
+    /// Pending dispatches of nestler-declared tool calls, keyed by the
+    /// callId we minted when issuing chi:"tool-call". Resolved when the
+    /// matching chi:"tool-result" lands.
+    tool_pending: ToolPending,
+    /// Routing tag used in thrum_broadcast + sigil for all reply tones.
+    /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
+    /// a specific perch name; whichever perch is configured is the tag.
+    perch_tag: String,
+}
+
+/// Map of in-flight nestler-tool call ids → oneshot senders waiting
+/// for the result content. Shared between the NestlerBridge (writer
+/// on dispatch) and the chi:"tool-result" handler (resolver).
+type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
+
+/// MCP NestlerHook impl that round-trips nestler-declared tool calls
+/// back to the originator over thrum. The perch's MCP client (whatever
+/// perch is running) sees these tools advertised alongside humd's
+/// native ones; when the model invokes one, the call lands here.
+/// Hum-native MCP tools resolve in-process without leaving humd.
+///
+/// 1. perch calls tool with args → MCP server dispatches → us.
+/// 2. We mint a callId, store a oneshot tx in `pending`, and emit
+///    `chi:"tool-call" {sid, callId, name, args}`. The thrum sigil
+///    claim placed at chi:"prompt" time routes the tone to the
+///    originating client.
+/// 3. Originator executes externally, replies with
+///    `chi:"tool-result" {sid, callId, result}`. humd's
+///    chi:"tool-result" arm pops the sender and forwards the result.
+/// 4. dispatch() returns; MCP packages the result; perch continues.
+struct NestlerBridge {
+    thrum: Thrum,
+    pending: ToolPending,
+    /// Nest name used as the broadcast tag for the chi:"tool-call"
+    /// tone. Comes from cfg.hum_cfg.nest.default so the routing tag
+    /// matches whatever perch humd is running, not a hardcoded name.
+    perch_tag: String,
+}
+
+#[async_trait::async_trait]
+impl mcp::NestlerHook for NestlerBridge {
+    async fn dispatch(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: Value,
+    ) -> anyhow::Result<String> {
+        let call_id = format!("call-{}", thrum_core::rid());
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        self.pending.lock().insert(call_id.clone(), tx);
+        let tone = serde_json::json!({
+            "chi": "tool-call",
+            "sid": session_id,
+            "callId": call_id,
+            "name": tool,
+            "args": args,
+        });
+        // sigil claim made at chi:"prompt" time gets this back to the
+        // originator. Broadcast tag is the configured nest name.
+        self.thrum.thrum_broadcast(session_id, &self.perch_tag, tone);
+        match tokio::time::timeout(Duration::from_secs(300), rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => {
+                self.pending.lock().remove(&call_id);
+                anyhow::bail!("nestler tool-result channel closed")
+            }
+            Err(_) => {
+                self.pending.lock().remove(&call_id);
+                anyhow::bail!("nestler tool-result timed out (300s)")
+            }
+        }
+    }
 }
 
 struct NestListener {
@@ -350,6 +520,9 @@ struct NestListener {
     /// Shared with HumdSink — every reply tone fans out to whichever
     /// peer humds have registered themselves as observers of this sid.
     observers: Observers,
+    /// Routing tag — cfg.hum_cfg.nest.default, carried in so the
+    /// listener doesn't hardcode a perch name.
+    perch_tag: String,
 }
 
 impl NestListener {
@@ -393,7 +566,7 @@ impl NestListener {
             }
         }
         // Local broadcast — no-op if no local clients claim the sigil.
-        self.thrum.thrum_broadcast(&self.sid, "claude", value);
+        self.thrum.thrum_broadcast(&self.sid, &self.perch_tag, value);
     }
 }
 
@@ -463,7 +636,7 @@ impl ToneSink for HumdSink {
         if matches!(chi, Some(Chi::Attach)) && client_id != "ensemble" {
             if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
                 if !sid.is_empty() {
-                    self.thrum.claim_sigil(client_id, thrum_core::sigil(sid, "claude"));
+                    self.thrum.claim_sigil(client_id, thrum_core::sigil(sid, &self.perch_tag));
                     self.thrum.claim_sigil(client_id, sid.to_string());
                     let hear_only = tone.get("hearOnly").and_then(Value::as_bool).unwrap_or(false);
                     trace!(client_id, sid, hear_only, "attach.local.claimed");
@@ -507,7 +680,7 @@ impl ToneSink for HumdSink {
                 let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
                 if let Some(sid) = sid_opt {
                     trace!(client_id, %chi_str, %sid, "thrum.recv.peer-reply.forward");
-                    self.thrum.thrum_broadcast(&sid, "claude", tone);
+                    self.thrum.thrum_broadcast(&sid, &self.perch_tag, tone);
                     return;
                 }
             }
@@ -597,12 +770,12 @@ impl ToneSink for HumdSink {
                     && self.capacity_override.map(|c| c == 0).unwrap_or(false)
                 {
                     if let Some(ensemble) = &self.ensemble {
-                        let target = pick_overflow_peer(ensemble, "claude-cli");
+                        let target = pick_overflow_peer(ensemble, &self.perch_tag);
                         if let Some(peer) = target {
                             // Claim the sid so reply tones (chunks +
                             // finish) routed back via the ensemble pump
                             // reach this client's queue.
-                            self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
+                            self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
                             self.thrum.claim_sigil(client_id, &sid);
                             if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                                 self.thrum.thrum_to(client_id, thrumd::echo_tone(rid, true, None));
@@ -633,7 +806,7 @@ impl ToneSink for HumdSink {
                 if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                     self.thrum.thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                 }
-                self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
+                self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
                 self.thrum.claim_sigil(client_id, &sid);
                 // Origin detection: if the prompt arrived from a peer
                 // (we received it via the ensemble pump, whose synthetic
@@ -660,11 +833,45 @@ impl ToneSink for HumdSink {
                     origin,
                     ensemble: self.ensemble.clone(),
                     observers: self.observers.clone(),
+                    perch_tag: self.perch_tag.clone(),
                 });
                 let mut spec = nest::SpawnSpec::new(sid.clone(), model.clone(), cwd.clone());
                 spec.system_prompt = system_prompt;
                 spec.mcp_url = Some(self.mcp_url.clone());
                 spec.cli_path = Some(self.cli_path.clone());
+                // Nestler opt-in: read tool gates verbatim from the prompt
+                // tone. humd invents no policy — the nestler decides which
+                // built-ins to ban (e.g. to delegate all fs to hum's MCP).
+                spec.allowed_tools = tone.get("allowedTools")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                spec.disallowed_tools = tone.get("disallowedTools")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                // Nestler-declared tools — body.tools[] from the OpenAI
+                // contract. Register on the MCP session so the perch's
+                // MCP client (claude with --mcp-config) sees them
+                // alongside humd's native MCP tools. Dispatch routes
+                // through NestlerBridge → thrum → originator.
+                if let Some(nestler_tools) = tone.get("tools").and_then(Value::as_array) {
+                    let parsed: Vec<mcp::ToolDef> = nestler_tools.iter().filter_map(|t| {
+                        let name = t.get("name").and_then(Value::as_str)?.to_string();
+                        let description = t.get("description")
+                            .and_then(Value::as_str).unwrap_or("").to_string();
+                        let input_schema = t.get("parameters")
+                            .or_else(|| t.get("inputSchema"))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({"type":"object","properties":{}}));
+                        Some(mcp::ToolDef { name, description, input_schema })
+                    }).collect();
+                    if !parsed.is_empty() {
+                        let session = self.mcp_registry.session(&sid);
+                        session.lock().nestler_tools = parsed;
+                        trace!(sid, count = nestler_tools.len(), "mcp.nestler_tools.registered");
+                    }
+                }
                 if let Err(e) = self.nest.awaken(&sid, listener, spec, false).await {
                     warn!(sid, err = %e, "nest.awaken.failed");
                     return;
@@ -714,7 +921,7 @@ impl ToneSink for HumdSink {
                     // tones (which arrive via the ensemble pump and get
                     // broadcast on the sid) land in this client's queue,
                     // then forward the attach to the host humd.
-                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, "claude"));
+                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
                     self.thrum.claim_sigil(client_id, &sid);
                     if let Some(ensemble) = &self.ensemble {
                         if let Some(to) = tone.get("to").and_then(Value::as_str) {
@@ -808,10 +1015,28 @@ impl ToneSink for HumdSink {
                     "thrum.recv.wane-sync"
                 );
             }
+            Some(Chi::ToolResult) => {
+                // Resolves a pending nestler-tool dispatch. NestlerBridge
+                // is parked on a oneshot keyed by callId; pop it and
+                // forward the result content. Missing callId means the
+                // nestler echoed after timeout — silent drop.
+                let call_id = tone.get("callId").and_then(Value::as_str);
+                let result = tone.get("result").and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| tone.get("content").and_then(Value::as_str).map(str::to_string))
+                    .unwrap_or_default();
+                if let Some(call_id) = call_id {
+                    if let Some(tx) = self.tool_pending.lock().remove(call_id) {
+                        let _ = tx.send(result);
+                        trace!(call_id, "tool_result.resolved");
+                    } else {
+                        trace!(call_id, "tool_result.no_pending");
+                    }
+                }
+            }
             Some(Chi::Curate)
             | Some(Chi::ReleasePermit)
             | Some(Chi::TendrilResult)
-            | Some(Chi::ToolResult)
             | Some(Chi::PetalCell)
             | Some(Chi::Echo)
             | Some(Chi::PerfMark)

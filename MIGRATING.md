@@ -101,7 +101,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
     "roots": [{ "path": "~/code", "mode": "rw" }, { "path": "/tmp", "mode": "rw" }],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
-  "nest": { "maxProcs": 4, "idleThresholdMs": 300000, "default": "claude-repl" },
+  "nest": { "maxProcs": 4, "idleThresholdMs": 300000, "default": "claude-cli" },
   "perches": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }

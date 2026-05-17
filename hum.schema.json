@@ -80,7 +80,7 @@
         },
         "default": {
           "type": "string",
-          "default": "claude-repl",
+          "default": "claude-cli",
           "description": "Perch name to spawn into when a chi:prompt doesn't pin one. Must appear in `perches`."
         }
       }

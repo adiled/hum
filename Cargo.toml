@@ -8,6 +8,7 @@ members = [
     "codegen",
     "drift",
     "humd",
+    "hum",
     "mcp",
     "nest",
     "perches/common",

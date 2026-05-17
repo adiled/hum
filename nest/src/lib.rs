@@ -60,6 +60,11 @@ pub struct SpawnSpec {
     pub permissions: Vec<String>,
     /// Allowed tool names — narrows what the harness advertises.
     pub allowed_tools: Vec<String>,
+    /// Tool names the harness must refuse. Populated by humd from the
+    /// nestler's hello (e.g. when the nestler opts into mcp-exclusive
+    /// fs control by listing Claude's built-ins here). The Perch passes
+    /// it through verbatim; it does not invent the list.
+    pub disallowed_tools: Vec<String>,
     /// Extra env overrides spread onto the spawn (after defaults).
     pub env: HashMap<String, String>,
     /// OS-level caps the Perch impl applies to the spawned child via
@@ -81,6 +86,7 @@ impl SpawnSpec {
             plan_mode: false,
             permissions: Vec::new(),
             allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
             env: HashMap::new(),
             resource_limits: limits::ResourceLimits::default(),
         }
@@ -106,9 +112,39 @@ pub struct Roost {
     pub kill: Arc<dyn Fn() + Send + Sync>,
 }
 
+/// Statefulness propensity of a perch — the same axis nestlings carry
+/// (see `nestlings/README.md`), declared from the perch side so
+/// nestlings can adapt prompt assembly.
+///
+/// - `StatefulSession` — the perch process retains conversation state
+///   in its own memory across multiple prompts that share a sid (e.g.
+///   `claude -p` stream-json, REPL pty). Nestlings should derive a
+///   stable sid per OC/external conversation and send only the *new*
+///   user turn each request; the perch keeps prior history.
+/// - `StatelessPerCall` — the perch treats every call as a fresh
+///   self-contained request (e.g. direct Anthropic-API perches, paid
+///   oracles). Nestlings should send full transcript every time;
+///   pooling buys nothing.
+/// - `EphemeralPerCall` — like Stateless but the perch process exits
+///   after a single result. Eviction is automatic; sid stability is
+///   irrelevant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Propensity {
+    StatefulSession,
+    StatelessPerCall,
+    EphemeralPerCall,
+}
+
 #[async_trait]
 pub trait Perch: Send + Sync {
     fn ephemeral(&self) -> bool;
+    /// What kind of state machine does this perch run? Default
+    /// implementation is conservative (`EphemeralPerCall`) so any new
+    /// perch that forgets to override gets correct full-history
+    /// behavior at the cost of perf, not the other way around.
+    fn propensity(&self) -> Propensity {
+        if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
+    }
     async fn spawn(&self, spec: SpawnSpec) -> Result<Roost>;
 }
 

@@ -8,7 +8,7 @@ HUM_SRC="$(eval echo ~$HUM_USER)/.local/share/hum/src"
 # ─── Sync test files to hum user ──────────────────────────────────────────
 
 echo "Syncing test files to $HUM_USER..."
-for f in tests/e2e-serve.test.ts tests/e2e-human.test.ts; do
+for f in recipes/opencode/tests/e2e-serve.test.ts tests/e2e-human.test.ts; do
   cp "$f" "$HUM_SRC/$f"
   chown "$HUM_USER:$HUM_USER" "$HUM_SRC/$f"
 done
@@ -48,7 +48,7 @@ echo "opencode: ${OPENCODE_VERSION}"
 echo "node: ${NODE_VERSION}"
 
 echo "Running e2e-serve tests..."
-E2E_SERVE=$(run_as_hum "vitest run ./tests/e2e-serve.test.ts")
+E2E_SERVE=$(run_as_hum "vitest run ./recipes/opencode/tests/e2e-serve.test.ts")
 
 echo "Running e2e-human tests..."
 E2E_HUMAN=$(run_as_hum "vitest run ./tests/e2e-human.test.ts")

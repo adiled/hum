@@ -17,7 +17,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Perch, Roost, SpawnSpec};
+use nest::{Perch, Propensity, Roost, SpawnSpec};
 
 pub struct ClaudeCliPerch;
 
@@ -49,6 +49,16 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
         argv.push("--mcp-config".into());
         argv.push(mcp_config);
         argv.push("--strict-mcp-config".into());
+    }
+    // Pure pass-through. Perch invents no policy; humd populates these
+    // from the nestler's hello (opt-in). Empty vec = no flag.
+    if !spec.allowed_tools.is_empty() {
+        argv.push("--allowed-tools".into());
+        argv.push(spec.allowed_tools.join(" "));
+    }
+    if !spec.disallowed_tools.is_empty() {
+        argv.push("--disallowed-tools".into());
+        argv.push(spec.disallowed_tools.join(" "));
     }
     if let Some(sp) = spec.system_prompt.as_deref() {
         argv.push("--system-prompt".into());
@@ -91,6 +101,7 @@ pub fn build_env(spec: &SpawnSpec) -> Vec<(String, String)> {
 #[async_trait]
 impl Perch for ClaudeCliPerch {
     fn ephemeral(&self) -> bool { false }
+    fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
     async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
         let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());

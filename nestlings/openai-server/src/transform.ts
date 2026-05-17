@@ -126,11 +126,17 @@ export class OpenAITranslator {
       return out;
     }
 
-    // tool_input_start / tool_input_delta / tool_call chunks come from
-    // Claude's stream as the model constructs a tool call. Tool dispatch
-    // for nestler-declared tools is signaled by the daemon's chi:"tool-call"
-    // tone (handled above) — that's the moment the OpenAI client needs to
-    // execute. Chunk-level tool events are internal; suppress them.
+    // Chunk-level tool events (tool_input_start / tool_input_delta /
+    // tool_call) come from the perch executing an in-process tool —
+    // humd's MCP server, brokered FS/bash, etc. We deliberately
+    // suppress them. Emitting `tool_calls` deltas here tells the
+    // OpenAI client to execute the tool itself, but the perch already
+    // did. OC's session run-loop responds by firing a continuation
+    // request that has nothing to say, producing an "empty response"
+    // and stalling the next user turn. Externally-declared tools (the
+    // ones the client sent on body.tools) flow through chi:"tool-call"
+    // above; that path is what should actually trigger client-side
+    // tool execution.
     //
     // text_start / reasoning_start / reasoning_end / content_block_stop /
     // tool_result / stream_start — no SSE frame needed either.

@@ -8,7 +8,59 @@ permissions:
   contents: write
 
 jobs:
+  # ─── per-platform binary builds ─────────────────────────────────────────
+  # Builds humd + hum on the matrix, tars them, uploads as workflow
+  # artifacts. The `publish` job below collects everything and attaches
+  # to the GitHub release.
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build binaries
+        run: cargo build --release --locked -p humd -p hum --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../dist/hum-${{ matrix.target }}.tar.gz humd hum
+          cd -
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hum-${{ matrix.target }}
+          path: dist/hum-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  # ─── publish the GitHub release ─────────────────────────────────────────
   publish:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,35 +68,38 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-node@v4
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          path: artifacts
+          merge-multiple: true
 
-      - name: Install dependencies
-        run: npm install -g pnpm && pnpm install
+      - name: List artifacts
+        run: ls -la artifacts/
 
-      - name: Build plugin
-        run: pnpm -r run build
-
-      - name: Publish @clwnd/opencode
-        working-directory: plugins/opencode
-        run: |
-          test -f dist/index.js || { echo "::error::dist/index.js missing — build did not produce output"; exit 1; }
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub Release
+      - name: Compose release notes
+        id: notes
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          # Prefer an annotated-tag message; else fall back to changelog
+          # since the previous tag.
           BODY=$(git for-each-ref "refs/tags/$TAG" --format='%(contents)' 2>/dev/null)
           if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
             PREV=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
             BODY=$(git log --pretty=format:"- %s" ${PREV}..${TAG} 2>/dev/null || echo "Release $TAG")
           fi
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "$BODY"
+          {
+            echo "tag=$TAG"
+            echo 'body<<EOF'
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release with assets
+        run: |
+          gh release create "${{ steps.notes.outputs.tag }}" \
+            --title "${{ steps.notes.outputs.tag }}" \
+            --notes "${{ steps.notes.outputs.body }}" \
+            artifacts/hum-*.tar.gz
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

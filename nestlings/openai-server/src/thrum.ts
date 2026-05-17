@@ -1,6 +1,6 @@
 import { createConnection, type Socket } from "node:net";
 
-export const THRUM_VERSION = "0.2.0";
+export const THRUM_VERSION = "0.7.0";
 export const NESTLING_NAME = "openai-server";
 
 // Minimal thrum client. Connects to hum's NDJSON socket, sends framed
@@ -16,10 +16,14 @@ export interface BindInfo {
 }
 
 function defaultThrumPath(): string {
-  const runtime = process.env.XDG_RUNTIME_DIR;
-  const base = runtime ? `${runtime}/hum/hum.sock`
-                       : `/tmp/hum-${process.getuid?.() ?? 0}/hum.sock`;
-  return base + ".thrum";
+  // Canonical resolution mirrors thrumd::default_socket_path() in Rust.
+  // HUM_THRUM_SOCK wins; HUM_SOCKET is the legacy fallback so an
+  // in-flight upgrade doesn't strand nestlings.
+  const explicit = process.env.HUM_THRUM_SOCK ?? process.env.HUM_SOCKET;
+  if (explicit) return explicit;
+  const runtime = process.env.XDG_RUNTIME_DIR
+    ?? `/tmp/hum-${process.getuid?.() ?? 0}`;
+  return `${runtime}/hum/thrum.sock`;
 }
 
 export class ThrumClient {
@@ -31,7 +35,7 @@ export class ThrumClient {
   private pending: string[] = [];
 
   constructor(path?: string) {
-    this.path = path ?? process.env.HUM_THRUM_PATH ?? defaultThrumPath();
+    this.path = path ?? defaultThrumPath();
   }
 
   async connect(bind?: BindInfo): Promise<void> {

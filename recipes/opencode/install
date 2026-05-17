@@ -1,0 +1,143 @@
+#!/bin/bash
+# recipes/opencode/install — local-dev hum + opencode loop.
+#
+# Idempotent. Run repeatedly. After this lands, you open `opencode`,
+# pick provider `hum`, pick a claude model, type, and it works.
+#
+# Pipeline:
+#   1. invoke ./dev/deploy if present (gets humd live for HUM_DEV_USER)
+#   2. build the openai-server nestling
+#   3. seed ~/.config/hum/nestlings/openai-server.json (target user)
+#   4. seed/patch ~/.config/opencode/opencode.json with provider.hum
+#   5. install hum-openai-server systemd unit + bounce
+#
+# Env:
+#   HUM_DEV_USER       target user (default: clwnd; same as deploy)
+#   HUM_OPENAI_PORT    port the openai-server binds (default: 14620)
+#   HUM_OC_CLI         opencode CLI (default: opencode); used only to
+#                      print a "now run" line at the end
+set -e
+# Repo root — this script lives at recipes/opencode/install.
+cd "$(dirname "$0")/../.."
+
+TARGET="${HUM_DEV_USER:-clwnd}"
+TARGET_HOME="$(eval echo ~$TARGET)"
+TARGET_UID="$(id -u "$TARGET")"
+TARGET_RUNTIME="/run/user/$TARGET_UID"
+PORT="${HUM_OPENAI_PORT:-14620}"
+
+# Step 1 — bring humd up via the env-specific deploy script.
+if [ -x "./dev/deploy" ]; then
+  echo "[opencode] running dev/deploy …"
+  ./dev/deploy
+else
+  echo "[opencode] no dev/deploy found — assuming humd is already live."
+  echo "                  (paradigm 0: cargo run -p humd from another terminal)"
+fi
+
+# Step 2 — build the openai-server nestling. Each nestling is a
+# standalone TS project (no root workspace).
+if command -v pnpm >/dev/null 2>&1; then
+  echo "[opencode] building openai-server …"
+  (cd nestlings/openai-server && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
+else
+  echo "[opencode] pnpm missing; cannot build openai-server" >&2
+  exit 1
+fi
+
+# Step 3 — seed the per-kind config. Always (re)write: the recipe owns
+# the model id-set, derived from recipes/opencode/models.json (the
+# authoritative OC-flavored catalogue).
+NESTLING_CFG="$TARGET_HOME/.config/hum/nestlings/openai-server.json"
+RECIPE_MODELS="./recipes/opencode/models.json"
+if [ -s "$RECIPE_MODELS" ]; then
+  MODEL_IDS="$(jq -c 'keys' "$RECIPE_MODELS")"
+else
+  MODEL_IDS='["claude-opus-4-7","claude-sonnet-4-6","claude-haiku-4-5"]'
+fi
+su -l "$TARGET" -c "mkdir -p ~/.config/hum/nestlings"
+echo "[opencode] seeding $NESTLING_CFG …"
+su -l "$TARGET" -c "cat > $NESTLING_CFG" <<EOF
+{
+  "port": $PORT,
+  "models": $MODEL_IDS
+}
+EOF
+
+# Step 4 — seed/patch opencode.json with the provider.hum block.
+# Strategy: if opencode.json absent, write fresh; else patch with jq
+# only when provider.hum is missing.
+OC_CFG="$TARGET_HOME/.config/opencode/opencode.json"
+su -l "$TARGET" -c "mkdir -p ~/.config/opencode"
+# OC's openai-compatible provider reads baseURL / apiKey from
+# `options`. Mirror what the AI SDK actually wants; top-level baseURL
+# alone produces "undefined/chat/completions" URL parse failures.
+# Model list is OC-provider-shape metadata, so it lives next to the
+# recipe (./recipes/opencode/models.json). The recipe project the
+# bare id-set into OC's `models` map; the rich metadata (cost, family,
+# limit) is OC-flavored and isn't published anywhere else.
+RECIPE_MODELS="./recipes/opencode/models.json"
+if [ -s "$RECIPE_MODELS" ]; then
+  MODELS_JSON="$(jq '[keys[]] | map({(.): {}}) | add' "$RECIPE_MODELS")"
+else
+  echo "[opencode] no $RECIPE_MODELS — using narrow fallback (3 models)" >&2
+  MODELS_JSON='{"claude-opus-4-7":{},"claude-sonnet-4-6":{},"claude-haiku-4-5":{}}'
+fi
+HUM_BLOCK=$(jq -n --argjson models "$MODELS_JSON" '{
+  type: "openai-compatible",
+  options: { baseURL: "http://127.0.0.1:'"$PORT"'/v1", apiKey: "hum-dev" },
+  models: $models
+}')
+if ! su -l "$TARGET" -c "test -f $OC_CFG"; then
+  echo "[opencode] seeding $OC_CFG …"
+  su -l "$TARGET" -c "cat > $OC_CFG" <<EOF
+{
+  "provider": { "hum": $HUM_BLOCK }
+}
+EOF
+elif command -v jq >/dev/null 2>&1; then
+  # Always overwrite the hum block — old shape (top-level baseURL,
+  # no options) silently breaks OC, so reseeding is safer than
+  # leaving stale config in place. Also strip the 0.2 opencode plugin
+  # entry (`plugin[]` pointing at the hum src tree) — it tries to
+  # connect to the legacy thrum socket and fails after 5s, blocking
+  # every prompt. The 0.3 native openai-compatible provider replaces it.
+  echo "[opencode] (re)writing provider.hum + pruning legacy plugin in $OC_CFG …"
+  su -l "$TARGET" -c "
+    tmp=\$(mktemp) && jq --argjson hum '$HUM_BLOCK' '
+      .provider.hum = \$hum
+      | if .plugin then .plugin |= map(select(test(\"/hum/\") | not)) else . end
+      | if .plugin == [] then del(.plugin) else . end
+      | del(.provider.\"opencode-hum\")
+    ' $OC_CFG > \$tmp && mv \$tmp $OC_CFG
+  "
+else
+  echo "[opencode] WARN: jq missing, can't patch $OC_CFG safely."
+  echo "                  Add provider.hum manually — see MIGRATING.md."
+fi
+
+# Step 5 — install the openai-server service unit (Linux systemd or
+# macOS launchd via scripts/svc.sh) and bounce.
+echo "[opencode] (re)installing hum-openai-server service …"
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/nestlings/openai-server && ./install" >/dev/null
+# Health check via the svc helper — sourced from the rsynced source tree.
+SVC_PATH="$TARGET_HOME/.local/share/hum/src/scripts/svc.sh"
+if su -l "$TARGET" -c "test -f $SVC_PATH"; then
+  if su -l "$TARGET" -c ". $SVC_PATH && XDG_RUNTIME_DIR=$TARGET_RUNTIME svc_is_active hum-openai-server"; then
+    echo "[opencode] hum-openai-server service active ✓"
+  else
+    echo "[opencode] hum-openai-server did NOT start cleanly"
+    echo "           Linux:  journalctl --user -u hum-openai-server"
+    echo "           macOS:  tail ~/Library/Logs/sh.hum.hum-openai-server.err.log"
+  fi
+else
+  echo "[opencode] WARN: $SVC_PATH missing; can't health-check"
+fi
+
+echo
+echo "[opencode] done."
+echo "  humd:          $TARGET_RUNTIME/hum/thrum.sock"
+echo "  openai-server: http://127.0.0.1:$PORT/v1"
+echo "  opencode cfg:  $OC_CFG"
+echo
+echo "Now: su -l $TARGET -c '${HUM_OC_CLI:-opencode}'  →  pick provider \"hum\""

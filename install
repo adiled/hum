@@ -85,7 +85,16 @@ ensure_min_version() {
 ensure_prereqs() {
   ensure_min_version "claude CLI" "claude" "$MIN_CLAUDE"
   if ! command -v cargo >/dev/null 2>&1; then
-    fail "cargo (rustup) not found. Install rustup: https://rustup.rs"
+    # Dev paradigm: if a pre-built humd is already at $HUM_BIN (e.g.
+    # placed by ./dev/deploy from a root user), allow proceeding so the
+    # installer can still write the systemd unit + hum.json. Otherwise
+    # building from source is required.
+    if [ -x "$HUM_BIN" ]; then
+      warn "cargo not found; using pre-built humd at $HUM_BIN"
+      SKIP_BUILD=1
+    else
+      fail "cargo (rustup) not found. Install rustup: https://rustup.rs"
+    fi
   fi
 }
 
@@ -171,7 +180,7 @@ ensure_hum_config() {
   "nest": {
     "maxProcs": 4,
     "idleThresholdMs": 300000,
-    "default": "claude-repl"
+    "default": "claude-cli"
   },
   "perches": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
@@ -184,6 +193,8 @@ JSON
 }
 
 # ─── humd binary ─────────────────────────────────────────────────────────────
+
+HUM_CLI_BIN="$HUM_BIN_ROOT/bin/hum"
 
 build_humd() {
   local SRC
@@ -200,70 +211,63 @@ build_humd() {
     fi
     SRC="$HUM_SRC"
   fi
-  log "building Rust humd via cargo install (may take a few minutes)"
+  log "building Rust binaries via cargo install (may take a few minutes)"
   cargo install --quiet --locked --path "$SRC/humd" --root "$HUM_BIN_ROOT" --force
-  [ -x "$HUM_BIN" ] || fail "humd binary not at $HUM_BIN after build"
+  cargo install --quiet --locked --path "$SRC/hum"  --root "$HUM_BIN_ROOT" --force
+  [ -x "$HUM_BIN" ]     || fail "humd binary not at $HUM_BIN after build"
+  [ -x "$HUM_CLI_BIN" ] || fail "hum binary not at $HUM_CLI_BIN after build"
   log "humd installed at $HUM_BIN"
-  log "  version: $($HUM_BIN --version 2>&1 || echo 'unknown')"
+  log "hum  installed at $HUM_CLI_BIN"
 }
 
-# ─── systemd user unit ──────────────────────────────────────────────────────
+# ─── service unit (Linux systemd / macOS launchd via scripts/svc.sh) ───────
 
-install_systemd_unit() {
-  case "$OS" in
-    Linux) ;;
-    *) warn "skipping systemd: not Linux. Run \`$HUM_BIN\` manually."; return 0 ;;
+# Resolve and source the cross-platform svc helper.
+SVC_HELPER="$(dirname "$0")/scripts/svc.sh"
+if [ -f "$SVC_HELPER" ]; then
+  # shellcheck source=/dev/null
+  . "$SVC_HELPER"
+elif [ -f "$HUM_DATA/src/scripts/svc.sh" ]; then
+  . "$HUM_DATA/src/scripts/svc.sh"
+else
+  warn "scripts/svc.sh not found; service management will be skipped"
+fi
+
+install_service_unit() {
+  if ! command -v svc_install >/dev/null 2>&1; then
+    warn "svc helper unavailable — run '$HUM_BIN' manually"
+    return 0
+  fi
+  case "$SVC_OS" in
+    Linux|Darwin) ;;
+    *) warn "service install not supported on $SVC_OS — run '$HUM_BIN' manually"; return 0 ;;
   esac
-
-  local UNIT_DIR="$XDG_CONFIG_HOME/systemd/user"
-  local UNIT="$UNIT_DIR/hum.service"
-  mkdir -p "$UNIT_DIR"
-
-  cat > "$UNIT" <<EOF
-[Unit]
-Description=hum daemon (v0.3, Rust + ensemble mesh)
-After=network.target
-
-[Service]
-Type=simple
-Environment=HUM_LOG_LEVEL=info
-Environment=XDG_CONFIG_HOME=$XDG_CONFIG_HOME
-Environment=XDG_DATA_HOME=$XDG_DATA_HOME
-Environment=XDG_STATE_HOME=$XDG_STATE_HOME
-Environment=XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-Environment=HUM_THRUM_SOCK=$THRUM_SOCK
-Environment=CLAUDE_CLI_PATH=$(command -v claude || echo claude)
-Environment=PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$HUM_BIN
-Restart=on-failure
-RestartSec=2s
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=hum
-
-[Install]
-WantedBy=default.target
-EOF
-  systemctl --user daemon-reload
-  systemctl --user enable hum 2>/dev/null || true
-  log "systemd unit installed at $UNIT"
+  svc_install hum "$HUM_BIN" \
+    --env "HUM_LOG_LEVEL=info" \
+    --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
+    --env "XDG_DATA_HOME=$XDG_DATA_HOME" \
+    --env "XDG_STATE_HOME=$XDG_STATE_HOME" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
+    --env "CLAUDE_CLI_PATH=$(command -v claude || echo claude)" \
+    --env "PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
+  log "service unit installed for hum ($SVC_OS)"
+  # humd does its own daily auto-update check in-process — no separate
+  # timer / cron / launchd interval to maintain.
 }
 
 start_daemon() {
-  case "$OS" in
-    Linux)
-      systemctl --user restart hum
-      sleep 1
-      if systemctl --user is-active --quiet hum; then
-        log "hum.service running ✓"
-      else
-        warn "hum.service did not start cleanly — \`./install logs\` to inspect."
-      fi
-      ;;
-    *)
-      warn "auto-start unavailable on $OS. Launch manually: $HUM_BIN"
-      ;;
-  esac
+  if ! command -v svc_restart >/dev/null 2>&1; then
+    warn "svc helper unavailable — start '$HUM_BIN' manually"
+    return 0
+  fi
+  svc_restart hum 2>/dev/null || svc_start hum 2>/dev/null || true
+  sleep 1
+  if svc_is_active hum; then
+    log "hum service running ✓"
+  else
+    warn "hum service did not start — \`./install logs\` to inspect."
+  fi
 }
 
 # ─── next steps ──────────────────────────────────────────────────────────────
@@ -272,26 +276,20 @@ start_daemon() {
 # separate process with its own installer under nestlings/<kind>/install.
 # Pick at least one to give humd an outside-world surface.
 print_next_steps() {
-  log "Next: install one or more nestlings — each lives in its own dir."
   log ""
-  log "  For opencode + Claude:"
-  log "    nestlings/openai-server/install"
-  log "    then add to $OPENCODE_CONFIG:"
-  cat <<'JSON'
-
-  {
-    "provider": {
-      "hum": {
-        "type": "openai-compatible",
-        "baseURL": "http://127.0.0.1:14620/v1",
-        "models": { "claude-sonnet-4-5": {}, "claude-haiku-4-5": {} }
-      }
-    }
-  }
-
-JSON
-  log "  Other nestlings: anthropic-server, ollama-server, twilio-sms,"
-  log "  gsm-modem, bp7-nestling, paid-oracle. Each has its own install."
+  log "humd is up. Pick a recipe to give it an outside-world surface:"
+  log ""
+  log "  hum + opencode (chat from the opencode TUI/CLI):"
+  log "    ./recipes/opencode/install"
+  log ""
+  log "  Other nestlings — each is a standalone install:"
+  log "    nestlings/openai-server/install     (OpenAI-shape HTTP)"
+  log "    nestlings/anthropic-server/install  (Anthropic-shape HTTP)"
+  log "    nestlings/ollama-server/install     (Ollama-shape HTTP)"
+  log ""
+  log "Health checks:"
+  log "    ./install status                    (is humd alive)"
+  log "    ./install logs                      (recent humd journal)"
 }
 
 # ─── status / logs / uninstall ───────────────────────────────────────────────
@@ -303,31 +301,26 @@ show_status() {
   echo "peers.json:   $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
   echo "hum.json:     $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
   echo "thrum socket: $THRUM_SOCK $([ -S "$THRUM_SOCK" ] && echo ✓ || echo absent)"
-  case "$OS" in
-    Linux)
-      echo "systemd:"
-      systemctl --user status hum --no-pager 2>&1 | head -6 || true
-      ;;
-  esac
+  if command -v svc_status >/dev/null 2>&1; then
+    echo "service ($SVC_OS):"
+    svc_status hum 2>&1 | head -6 || true
+  fi
 }
 
 show_logs() {
-  case "$OS" in
-    Linux) journalctl --user -u hum --no-pager -n 200 ;;
-    *) warn "logs command requires systemd (Linux)" ;;
+  case "$SVC_OS" in
+    Linux)  journalctl --user -u hum --no-pager -n 200 ;;
+    Darwin) tail -n 200 "$HOME/Library/Logs/sh.hum.hum.out.log" "$HOME/Library/Logs/sh.hum.hum.err.log" 2>/dev/null ;;
+    *) warn "logs command unavailable on $SVC_OS" ;;
   esac
 }
 
 uninstall() {
-  case "$OS" in
-    Linux)
-      systemctl --user stop hum 2>/dev/null || true
-      systemctl --user disable hum 2>/dev/null || true
-      rm -f "$XDG_CONFIG_HOME/systemd/user/hum.service"
-      systemctl --user daemon-reload 2>/dev/null || true
-      ;;
-  esac
-  rm -f "$HUM_BIN"
+  if command -v svc_uninstall >/dev/null 2>&1; then
+    svc_uninstall hum-update || true
+    svc_uninstall hum || true
+  fi
+  rm -f "$HUM_BIN" "$HUM_CLI_BIN"
   log "uninstalled. State preserved in $HUM_STATE + $HUM_CONFIG."
   log "  run \`./install purge\` to remove state too."
 }
@@ -344,11 +337,11 @@ do_install() {
   log "hum installer — v0.3"
   flag_0_2_install
   ensure_prereqs
-  build_humd
+  if [ "${SKIP_BUILD:-0}" != "1" ]; then build_humd; fi
   ensure_identity
   ensure_peers_config
   ensure_hum_config
-  install_systemd_unit
+  install_service_unit
   start_daemon
   log ""
   log "humd installed. Try: ./install status   /   ./install logs"

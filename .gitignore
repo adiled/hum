@@ -1,9 +1,12 @@
-node_modules/
+node_modules
+__pycache__
+*.pyc
 dist/
 *.tgz
 .claude/
 docs/
-dev
+dev/deploy
+dev/deploy.*
 target/
 AGENTS.md
 CLAUDE.md

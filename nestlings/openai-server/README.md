@@ -50,10 +50,10 @@ client                           openai-server                       humd
 | `OPENAI_SERVER_PORT` | `14620` | HTTP listen port |
 | `OPENAI_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
 | `OPENAI_SERVER_API_KEY` | _(unset → no auth)_ | bearer token required on requests |
-| `HUM_THRUM_PATH` | `$XDG_RUNTIME_DIR/hum/hum.sock.thrum` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
 
 The nestling's own kind (`openai-server`) is its env namespace —
-`HUM_*` is reserved for hum-side knobs like `HUM_THRUM_PATH`.
+`HUM_*` is reserved for hum-side knobs like `HUM_THRUM_SOCK`.
 
 ### Config file (optional)
 

@@ -1,0 +1,17 @@
+[package]
+name = "hum"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "hum"
+path = "src/main.rs"
+
+[dependencies]
+humd = { path = "../humd" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thrum-core = { path = "../thrum-core" }

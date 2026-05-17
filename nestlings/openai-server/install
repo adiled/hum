@@ -43,13 +43,39 @@ fail() { printf '\033[1;31m[%s]\033[0m %s\n' "$KIND" "$*" >&2; exit 1; }
 CMD="${1:-install}"
 
 build() {
+  local DIST="$NESTDIR/dist/index.js"
+  # Pre-built dist (e.g. produced upstream by `./dev/deploy`) is honored
+  # so machines without pnpm can still install the systemd unit.
+  if [ -s "$DIST" ] && ! command -v pnpm >/dev/null 2>&1; then
+    log "pnpm absent; using pre-built $DIST"
+    return 0
+  fi
   command -v pnpm >/dev/null 2>&1 || fail "pnpm required. https://pnpm.io/installation"
   log "building (pnpm install + build) in $NESTDIR"
   (cd "$NESTDIR" && pnpm install --silent >/dev/null 2>&1)
   (cd "$NESTDIR" && pnpm run build --silent)
-  local DIST="$NESTDIR/dist/index.js"
   [ -s "$DIST" ] || fail "build did not produce $DIST"
   log "built: $DIST"
+}
+
+# Locate node binary. Prefers $PATH; falls back to fnm's default
+# installation so people whose login shell doesn't source fnm still
+# get a working systemd unit.
+find_node() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+  local FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"
+  if [ -d "$FNM_DIR/node-versions" ]; then
+    local CANDIDATE
+    CANDIDATE="$(ls -1 "$FNM_DIR/node-versions" 2>/dev/null | sort -V | tail -1)"
+    if [ -x "$FNM_DIR/node-versions/$CANDIDATE/installation/bin/node" ]; then
+      echo "$FNM_DIR/node-versions/$CANDIDATE/installation/bin/node"
+      return 0
+    fi
+  fi
+  return 1
 }
 
 seed_config() {
@@ -68,57 +94,54 @@ JSON
   log "wrote default config: $CFG"
 }
 
+# Resolve svc.sh — try sibling repo first (running from a clone),
+# then the rsynced source tree (paradigm 2 installer flow).
+_load_svc() {
+  for cand in \
+    "$NESTDIR/../../scripts/svc.sh" \
+    "$HOME/.local/share/hum/src/scripts/svc.sh" \
+  ; do
+    if [ -f "$cand" ]; then
+      # shellcheck source=/dev/null
+      . "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_unit() {
-  case "$OS" in
-    Linux) ;;
-    *) warn "skipping systemd: not Linux. Run \`node $NESTDIR/dist/index.js\` manually."; return 0 ;;
+  if ! _load_svc; then
+    warn "scripts/svc.sh not found — run 'node $NESTDIR/dist/index.js' manually"
+    return 0
+  fi
+  case "$SVC_OS" in
+    Linux|Darwin) ;;
+    *) warn "service install unsupported on $SVC_OS. Run 'node $NESTDIR/dist/index.js' manually."; return 0 ;;
   esac
   local NODE_BIN
-  NODE_BIN="$(command -v node || true)"
+  NODE_BIN="$(find_node || true)"
   [ -n "$NODE_BIN" ] || fail "node missing. Install node ≥ 18."
+  log "node: $NODE_BIN"
 
-  mkdir -p "$(dirname "$UNIT")"
-  cat > "$UNIT" <<EOF
-[Unit]
-Description=hum openai-server nestling (translates OpenAI HTTP/SSE to thrum)
-After=hum.service
-Wants=hum.service
-
-[Service]
-Type=simple
-Environment=XDG_CONFIG_HOME=$XDG_CONFIG_HOME
-Environment=XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-Environment=HUM_THRUM_SOCK=$THRUM_SOCK
-ExecStart=$NODE_BIN $NESTDIR/dist/index.js
-Restart=on-failure
-RestartSec=2s
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=$UNIT_NAME
-
-[Install]
-WantedBy=default.target
-EOF
-  systemctl --user daemon-reload
-  systemctl --user enable --now "$UNIT_NAME" 2>/dev/null || true
+  svc_install "$UNIT_NAME" "$NODE_BIN $NESTDIR/dist/index.js" \
+    --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "HUM_THRUM_SOCK=$THRUM_SOCK"
+  svc_restart "$UNIT_NAME" 2>/dev/null || svc_start "$UNIT_NAME" 2>/dev/null || true
   sleep 1
-  if systemctl --user is-active --quiet "$UNIT_NAME"; then
+  if svc_is_active "$UNIT_NAME"; then
     log "$UNIT_NAME running on :$PORT ✓"
     log "  test: curl http://$HOST:$PORT/v1/models"
   else
-    warn "$UNIT_NAME did not start cleanly — journalctl --user -u $UNIT_NAME"
+    warn "$UNIT_NAME did not start cleanly"
   fi
 }
 
 uninstall() {
-  case "$OS" in
-    Linux)
-      systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
-      systemctl --user disable "$UNIT_NAME" 2>/dev/null || true
-      rm -f "$UNIT"
-      systemctl --user daemon-reload 2>/dev/null || true
-      ;;
-  esac
+  if _load_svc; then
+    svc_uninstall "$UNIT_NAME" 2>/dev/null || true
+  fi
   log "uninstalled. Config at $CFG preserved."
 }
 
