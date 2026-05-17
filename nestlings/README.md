@@ -45,8 +45,13 @@ and which are dropped.
 |---|---|---|---|---|
 | **opencode** | stateful | rich | OC plugin (events + provider + tools) | almost nothing — speaks every chi |
 | **openai-server** | convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
+| **anthropic-server** | convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
 | **vercel-ai** | stateless per-call | lean | Vercel AI SDK `LanguageModelV3` | same as openai-server + session-ready, log, echo |
-| **grpc** | transport-only | opaque | bidi `Stream(stream Tone)` RPC | nothing — every chi flows through |
+| **ollama-server** | convention-stateful | medium | Ollama `/api/chat` + `/api/generate` NDJSON | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
+| **paid-oracle** | stateless per-call | lean | x402-over-tool-call | everything except hello/tool-call/tool-result/error |
+| **grpc** | transport-only | opaque | gRPC bidi `Stream(stream Tone)` | nothing — every chi flows through |
+| **twilio-sms** | stateful (per-phone sid) | lean | Twilio Messaging webhook | tools, system, perf, drone, breath |
+| **gsm-modem** | stateful (per-phone sid) | lean | GSM AT-command serial | tools, system, perf, drone, breath |
 
 ## The chi cheatsheet
 
@@ -85,6 +90,8 @@ on every humd that's subscribed.
 2. **Import the contract.**
    - Rust: `cargo add thrum-core` (today: `{ git = "https://github.com/adiled/hum.git" }`)
    - TS: `npm install thrum` (today: `"thrum": "git+https://github.com/adiled/hum.git#main"`)
+   - Python: `pip install thrum` (today: `pip install "git+https://github.com/adiled/hum.git#subdirectory=clients/python"`)
+   - Go: `go get github.com/adiled/hum/clients/go/thrum`
 3. **Add a thrum client** — see any existing `src/thrum.ts`; ~90 LoC.
    Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`,
    send NDJSON, dispatch incoming tones to per-sid handlers.
@@ -118,9 +125,20 @@ discover path including Kademlia lookup of unknown HumdAddrs.
 
 ### Want your nestling listed in this repo as reference?
 
-Open a PR adding a row to the **Current catalogue** table above and a
-sentence pointing at your repo. The registry stays on-mesh — this
-table is editorial.
+The real registry is on-mesh: humd gossips a `NestlingManifest` on
+`hum/nestlings/announce` for every nestling that handshakes against
+its local thrum socket with `chi:"hello"` and a `nestling` name.
+Anyone importing `thrum-core` (Rust), `thrum` (TS), `clients/python`,
+or `clients/go` is auto-advertised by their local humd the moment
+they connect. No PR needed for the on-mesh side.
+
+Listing in **this** repo's catalogue table is editorial — for
+nestlings the maintainers consider exemplars. A PR is optional, not
+required.
+
+For humds that want a censorship-resistant alternative to the gossip
+layer, on-chain identity is available via `HumdRegistry.sol` — see
+[`contracts/`](../contracts/).
 
 ## Versioning
 

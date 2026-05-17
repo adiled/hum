@@ -39,6 +39,10 @@ const PAGES = [
   { src: "nestlings/vercel-ai/README.md",   slug: "nestlings/vercel-ai",    title: "vercel-ai",                description: "Vercel AI SDK provider — drive hum from any `ai` SDK caller." },
   { src: "nestlings/grpc/README.md",        slug: "nestlings/grpc",         title: "grpc (Rust)",              description: "Transport-only bidi gRPC bridge — every chi flows through." },
   { src: "nestlings/paid-oracle/README.md", slug: "nestlings/paid-oracle",  title: "paid-oracle (Rust)",       description: "x402-style paid oracle — one price per USDC payment, on-chain verified." },
+  { src: "nestlings/ollama-server/README.md", slug: "nestlings/ollama-server", title: "ollama-server (Rust)",  description: "Ollama-compatible HTTP surface for hum — drop-in for local Ollama clients." },
+  { src: "nestlings/twilio-sms/README.md",  slug: "nestlings/twilio-sms",   title: "twilio-sms (Go)",          description: "Twilio SMS webhook nestling — text messages in, hum replies out." },
+  { src: "nestlings/gsm-modem/README.md",   slug: "nestlings/gsm-modem",    title: "gsm-modem (Rust)",         description: "GSM modem nestling — SMS over a serial-attached cellular modem." },
+  { src: "contracts/README.md",             slug: "contracts/index",        title: "Contracts (Solidity)",     description: "On-chain commitments for hum — HumdRegistry, escrow primitives, future settlement." },
   { src: "scenarios/README.md",             slug: "scenarios/index",        title: "Scenarios",                description: "Five narratives, each mapped 1:1 to a sim test." },
 ];
 

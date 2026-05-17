@@ -48,6 +48,12 @@ export default defineConfig({
           ],
         },
         {
+          label: "On-chain",
+          items: [
+            { label: "Contracts (Solidity)", link: "/contracts/" },
+          ],
+        },
+        {
           label: "Nestlings",
           collapsed: false,
           items: [
@@ -56,12 +62,15 @@ export default defineConfig({
               label: "Reference",
               collapsed: false,
               items: [
-                { label: "opencode",           link: "/nestlings/opencode/" },
-                { label: "openai-server",      link: "/nestlings/openai-server/" },
-                { label: "anthropic-server",   link: "/nestlings/anthropic-server/" },
-                { label: "vercel-ai",          link: "/nestlings/vercel-ai/" },
-                { label: "grpc (Rust)",        link: "/nestlings/grpc/" },
-                { label: "paid-oracle (Rust)", link: "/nestlings/paid-oracle/" },
+                { label: "opencode",            link: "/nestlings/opencode/" },
+                { label: "openai-server",       link: "/nestlings/openai-server/" },
+                { label: "anthropic-server",    link: "/nestlings/anthropic-server/" },
+                { label: "vercel-ai",           link: "/nestlings/vercel-ai/" },
+                { label: "grpc (Rust)",         link: "/nestlings/grpc/" },
+                { label: "paid-oracle (Rust)",  link: "/nestlings/paid-oracle/" },
+                { label: "ollama-server (Rust)", link: "/nestlings/ollama-server/" },
+                { label: "gsm-modem (Rust)",    link: "/nestlings/gsm-modem/" },
+                { label: "twilio-sms (Go)",     link: "/nestlings/twilio-sms/" },
               ],
             },
           ],
