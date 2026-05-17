@@ -34,11 +34,13 @@ export class OpenAITranslator {
   private nextToolIndex = 0;
   private sawToolCalls = false;
   private firstChunk = true;
+  private includeUsage: boolean;
 
-  constructor(chunkId: string, model: string) {
+  constructor(chunkId: string, model: string, includeUsage = true) {
     this.chunkId = chunkId;
     this.model = model;
     this.created = Math.floor(Date.now() / 1000);
+    this.includeUsage = includeUsage;
   }
 
   private frame(delta: Record<string, unknown>, finish?: string | null): string {
@@ -102,7 +104,7 @@ export class OpenAITranslator {
       const usage = msg.usage as Record<string, number> | undefined;
       const finalDelta: Record<string, unknown> = {};
       out.push(this.frame(finalDelta, finishReason));
-      if (usage) {
+      if (usage && this.includeUsage) {
         const u = {
           prompt_tokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
           completion_tokens: usage.output_tokens ?? 0,

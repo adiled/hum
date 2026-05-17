@@ -240,14 +240,54 @@ async function start(): Promise<void> {
       return;
     }
 
+    // /v1/models/{id} — single-model GET. Returns 404 when the id
+    // isn't in our advertised set.
+    if (req.method === "GET" && url.pathname.startsWith("/v1/models/")) {
+      if (!checkAuth(req)) return unauthorized(res);
+      const id = decodeURIComponent(url.pathname.slice("/v1/models/".length));
+      if (!MODEL_IDS.includes(id)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: `model '${id}' not found`, type: "invalid_request_error" } }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id, object: "model", created: 0, owned_by: "hum" }));
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
       if (!checkAuth(req)) return unauthorized(res);
-      let body: { messages?: OpenAIMessage[]; model?: string; stream?: boolean; user?: string; tools?: OpenAITool[] };
+      let body: {
+        messages?: OpenAIMessage[];
+        model?: string;
+        stream?: boolean;
+        user?: string;
+        tools?: OpenAITool[];
+        // Pass-through sampling knobs. nest doesn't act on them; perches
+        // that honor them (future native-API perches) read from the
+        // chi:"prompt" tone they're forwarded on.
+        temperature?: number;
+        top_p?: number;
+        max_completion_tokens?: number;
+        max_tokens?: number;
+        stop?: string | string[];
+        seed?: number;
+        n?: number;
+        stream_options?: { include_usage?: boolean };
+      };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
       const messages = body.messages ?? [];
       if (messages.length === 0) return bad(res, "messages required");
 
+      // OpenAI's `n` requests multiple completions per call — we serve
+      // one perch session per prompt, so reject explicitly instead of
+      // silently returning n=1.
+      if (typeof body.n === "number" && body.n > 1) {
+        return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
+      }
+
       const stream = body.stream !== false; // default to streaming
+      const includeUsage = body.stream_options?.include_usage !== false;
       // body.model is the only correct source — the client picks. If
       // absent, fall back to the first advertised id; if none, use a
       // pass-through tag humd will reject loudly rather than guess.
@@ -258,9 +298,19 @@ async function start(): Promise<void> {
       const { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
       const attachments = allAttachments(messages);
+      // Sampling/limit knobs — pass to humd via a sampling block so
+      // perches that honor them (anthropic-native, ollama, etc.) can.
+      // claude-cli today ignores them; that's fine, they're optional.
+      const sampling: Record<string, unknown> = {};
+      if (typeof body.temperature === "number") sampling.temperature = body.temperature;
+      if (typeof body.top_p === "number") sampling.topP = body.top_p;
+      const maxTokens = body.max_completion_tokens ?? body.max_tokens;
+      if (typeof maxTokens === "number") sampling.maxTokens = maxTokens;
+      if (body.stop !== undefined) sampling.stop = body.stop;
+      if (typeof body.seed === "number") sampling.seed = body.seed;
 
       const chunkId = `chatcmpl-${randomUUID()}`;
-      const translator = new OpenAITranslator(chunkId, model);
+      const translator = new OpenAITranslator(chunkId, model, includeUsage);
 
       if (stream) {
         res.writeHead(200, {
@@ -382,6 +432,7 @@ async function start(): Promise<void> {
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(tools ? { tools } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
+          ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
         });
       }
       return;
