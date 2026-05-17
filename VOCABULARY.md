@@ -51,15 +51,17 @@ like the thing — readers and writers share the same mental model.
 - **nestling** — the *kind*. A typology slot. Doesn't run; doesn't send anything.
   The conformance an actor must match to be allowed to nestle. `openai-server`
   is a nestling; `market-maker` is a nestling.
-- **nestler** — the *instance*. The live process. Sends `chi:"hello"`,
-  nestles into a humd. Always the asker direction: produces `chi:"prompt"`,
-  consumes `chi:"chunk"`/`chi:"finish"`. One running OC plugin = one nestler.
-- **nestled** — the *state*. What a nestler is called once its handshake has
-  been accepted and its connection is registered. A nestled has a nestledId.
+- **nestler** — the *instance, pre-acceptance*. The live process sending its
+  first ask: `chi:"hello"`. Awaits the breath that confirms handshake.
+- **nestled** — the *instance, post-acceptance*. Same actor, registered. Has a
+  nestledId. **Keeps asking throughout the connection** — `chi:"prompt"`,
+  `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
+  `chi:"curate"`. Hello is the first ask; nestled is what asks the rest.
 
-The three are not synonyms. Nestling describes; nestler runs; nestled is the
-condition after acceptance. A nestler nestles into a humd's nest. Once
-nestled, it shares that nest with the roosts that live there.
+The three are not synonyms. Nestling describes; nestler arrives; nestled
+inhabits. The transition nestler → nestled is one of *state*, not function:
+the actor is an asker through both. A nestled shares the nest with the roosts
+that live there, and continues sending chi at it until disconnect.
 
 ## Observation
 

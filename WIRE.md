@@ -106,18 +106,24 @@ A **nest** is the place inside humd where nestlers nestle and **roosts**
 (live LLM subprocesses) live. The wire never sees the nest as a thing
 of its own — it only sees the chi traffic that flows through it.
 
-Direction is sacred:
+Direction is sacred. Two ends of the same connection, two roles:
 
 | who | sends | receives |
 |---|---|---|
-| **nestler** (asker) | `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"` | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` |
-| **roost** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"` | `chi:"prompt"`, `chi:"tool-result"` |
+| **asker side** (a nestler when pre-handshake, a nestled after) | `chi:"hello"` (first ask), then `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"` — keeps asking the whole lifetime | `chi:"breath"` (accepting the handshake), `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"`, `chi:"session-ready"`, `chi:"pulse"` |
+| **roost side** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cancel"` |
 
-A nestler is always asker. A roost is always answerer. **Nobody is
-both on the same connection.** A process that wanted to "also offer
-compute" would not do so by inverting its nestler connection — it
-would do so by being a roost inside *some humd's nest*, addressable
-via that humd's ensemble advertise.
+The asker is the same actor throughout — a **nestler** before its
+hello is accepted, a **nestled** after. The role doesn't flip when
+the state changes; "hello" is just the first of many asks the
+connection will carry. Cancels, prompts, tool-results, cleanups all
+flow from the nestled state, not just hello from the nestler.
+
+A roost is always answerer. **Nobody is both on the same connection.**
+A process that wanted to "also offer compute" would not do so by
+inverting its nestler connection — it would do so by being a roost
+inside *some humd's nest*, addressable via that humd's ensemble
+advertise.
 
 The wire is **opaque to the roost's implementation.** A roost might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an

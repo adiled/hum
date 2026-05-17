@@ -44,12 +44,13 @@ And the cohabitants from the other side of the thrum:
 
 | word | what it is |
 |---|---|
-| **nestling** | the kind/typology a nestler conforms to (defined in [`nestlings/`](../nestlings)) |
-| **nestler** | the running instance of a nestling. Sends `chi:"hello"`, nestles into the humd's nest |
-| **nestled** | a nestler whose handshake has been accepted. Has a nestledId. Lives inside the nest alongside roosts. |
+| **nestling** | the kind/typology a nestler conforms to (defined in [`nestlings/`](../nestlings)). Doesn't run; doesn't send anything. |
+| **nestler** | the running instance, *pre-acceptance*. The live process sending its first ask (`chi:"hello"`). Awaits the breath. |
+| **nestled** | the running instance, *post-acceptance*. Same actor, registered, has a nestledId. **Keeps asking throughout the connection** — prompts, cancels, tool-results, release-permits, cleanups. Hello is the first ask; everything else flows from the nestled state. |
 
 Six words, six different referents. Nest is one of them. Roost is
-another. They are not interchangeable.
+another. They are not interchangeable. nestler → nestled is a state
+transition (one actor, two lifecycle stages); both are askers.
 
 ## Where the nest fits
 
