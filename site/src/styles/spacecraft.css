@@ -1,0 +1,278 @@
+/* spacecraft theme — overrides Starlight's defaults.
+ * Aesthetic: dark void + thin instrument-panel chrome + faint starfield.
+ * Reading body stays warm + monospace-leaning; navigation panels feel HUD-like.
+ */
+
+@import url("https://fonts.bunny.net/css?family=jetbrains-mono:400,500,700|inter:400,500,600");
+
+:root {
+  /* Palette — deep void to instrument-amber. */
+  --sl-color-bg:                  #07090e;
+  --sl-color-bg-nav:              #0a0d14;
+  --sl-color-bg-sidebar:          #0a0d14;
+  --sl-color-bg-inline-code:      #11161f;
+  --sl-color-bg-accent:           #15212f;
+
+  --sl-color-text:                #c8d3e3;
+  --sl-color-text-accent:         #ffd28e;        /* instrument amber */
+  --sl-color-text-invert:         #07090e;
+
+  --sl-color-accent:              #ffb347;
+  --sl-color-accent-high:         #ffd28e;
+  --sl-color-accent-low:          #2a2010;
+
+  --sl-color-hairline:            #1e2735;
+  --sl-color-hairline-light:      #2a3548;
+  --sl-color-hairline-shade:      #131923;
+
+  --sl-color-white:               #e8eef8;
+  --sl-color-gray-1:              #c8d3e3;
+  --sl-color-gray-2:              #98a3b3;
+  --sl-color-gray-3:              #6b7585;
+  --sl-color-gray-4:              #4a5566;
+  --sl-color-gray-5:              #2a3140;
+  --sl-color-gray-6:              #181d27;
+  --sl-color-gray-7:              #0e131c;
+
+  --sl-font:                      "Inter", system-ui, sans-serif;
+  --sl-font-mono:                 "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+[data-theme="light"] {
+  /* No light theme — hum is a spacecraft. The void doesn't flip. */
+  color-scheme: dark;
+  --sl-color-bg:                  #07090e;
+  --sl-color-text:                #c8d3e3;
+}
+
+html, body {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 179, 71, 0.04), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 110%, rgba(124, 158, 255, 0.03), transparent 60%),
+    var(--sl-color-bg);
+  background-attachment: fixed;
+}
+
+/* Faint starfield via a repeating SVG dot pattern. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgba(232, 238, 248, 0.15) 1px, transparent 1px),
+    radial-gradient(circle, rgba(232, 238, 248, 0.08) 1px, transparent 1px);
+  background-size: 120px 120px, 200px 200px;
+  background-position: 0 0, 60px 60px;
+  z-index: 0;
+}
+
+main, .sl-container, .content-panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* HUD-style header — thin amber underline, monospace branding. */
+header.header {
+  background: rgba(10, 13, 20, 0.85);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  box-shadow: inset 0 -1px 0 rgba(255, 179, 71, 0.06);
+}
+
+.site-title, .site-title *, [class*="SiteTitle"] {
+  font-family: var(--sl-font-mono) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+  color: var(--sl-color-text-accent) !important;
+}
+
+/* Sidebar — panel rivets, faint border. */
+.sidebar-pane {
+  background: linear-gradient(180deg, #0a0d14 0%, #0c1018 100%);
+  border-right: 1px solid var(--sl-color-hairline);
+}
+
+.sidebar a[aria-current="page"] {
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.08), transparent 70%);
+  border-left: 2px solid var(--sl-color-accent);
+  color: var(--sl-color-text-accent);
+}
+
+.sidebar a:hover {
+  background: rgba(255, 179, 71, 0.04);
+  color: var(--sl-color-text-accent);
+}
+
+/* Page chrome — section panels with monospace headers. */
+h1, h2, h3, h4 {
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--sl-color-white);
+}
+
+h1 {
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  padding-bottom: 0.6rem;
+  text-shadow: 0 0 24px rgba(255, 179, 71, 0.12);
+}
+
+h2 {
+  margin-top: 2.5rem;
+  color: var(--sl-color-text-accent);
+}
+
+h2::before {
+  content: "◇ ";
+  color: var(--sl-color-accent);
+  opacity: 0.6;
+  margin-right: 0.2em;
+}
+
+h3 {
+  color: var(--sl-color-white);
+}
+
+/* Links — amber underline that lights up. */
+a {
+  color: var(--sl-color-text-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 179, 71, 0.3);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s, color 0.15s;
+}
+
+a:hover {
+  color: #ffe1b4;
+  text-decoration-color: var(--sl-color-accent);
+}
+
+/* Code — slightly recessed panel feel. */
+:not(pre) > code {
+  background: var(--sl-color-bg-inline-code);
+  border: 1px solid var(--sl-color-hairline);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  color: #e8eef8;
+}
+
+pre.expressive-code, pre {
+  background: linear-gradient(180deg, #0c1018 0%, #090c12 100%) !important;
+  border: 1px solid var(--sl-color-hairline) !important;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 179, 71, 0.02);
+}
+
+/* Tables — instrument panels with thin amber separators. */
+table {
+  border-collapse: collapse;
+  border: 1px solid var(--sl-color-hairline);
+  background: var(--sl-color-bg-inline-code);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+thead {
+  background: linear-gradient(180deg, #15212f 0%, #11192a 100%);
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+}
+
+th {
+  text-align: left;
+  font-family: var(--sl-font-mono);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sl-color-text-accent);
+  padding: 0.6rem 0.8rem;
+}
+
+td {
+  border-top: 1px solid var(--sl-color-hairline);
+  padding: 0.55rem 0.8rem;
+}
+
+tr:hover td {
+  background: rgba(255, 179, 71, 0.02);
+}
+
+/* Blockquotes — manifest-style. */
+blockquote {
+  border-left: 2px solid var(--sl-color-accent);
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.04), transparent 80%);
+  padding: 0.8rem 1.2rem;
+  font-style: italic;
+  color: var(--sl-color-gray-1);
+}
+
+/* HR — sector separator. */
+hr {
+  border: none;
+  border-top: 1px solid var(--sl-color-hairline);
+  margin: 2.5rem 0;
+  position: relative;
+}
+
+hr::after {
+  content: "◯";
+  position: absolute;
+  top: -0.7em;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--sl-color-bg);
+  padding: 0 0.6em;
+  color: var(--sl-color-gray-3);
+  font-size: 0.7em;
+}
+
+/* Selection — soft amber. */
+::selection {
+  background: rgba(255, 179, 71, 0.25);
+  color: var(--sl-color-white);
+}
+
+/* Focus rings — visible but not garish. */
+:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Sidebar group labels — instrument-cluster headings. */
+.sidebar-pane .group-label, .sidebar-pane h2 {
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--sl-color-gray-3);
+  margin-top: 1.4rem;
+}
+
+/* TOC right rail — softer instrument feel. */
+nav.right-sidebar {
+  background: transparent;
+  border-left: 1px solid var(--sl-color-hairline-shade);
+}
+
+/* Search bar — recessed. */
+site-search dialog, search-input {
+  background: var(--sl-color-bg-inline-code) !important;
+  border: 1px solid var(--sl-color-hairline) !important;
+}
+
+/* Markdown details / accordion — panel. */
+details {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 4px;
+  padding: 0.8rem 1rem;
+  margin: 1rem 0;
+  background: var(--sl-color-bg-inline-code);
+}
+
+details summary {
+  cursor: pointer;
+  font-family: var(--sl-font-mono);
+  color: var(--sl-color-text-accent);
+}
