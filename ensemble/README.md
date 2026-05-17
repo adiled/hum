@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
             "richness": "medium",
             "wire": "custom/mm-v0"
         },
-        "chi": ["hello", "gossip-publish", "tool-call", "tool-result"],
+        "chis": ["hello", "gossip-publish", "tool-call", "tool-result"],
         "source": "https://github.com/your-org/mm-nestling"
     });
     wr.write_all(format!("{hello}\n").as_bytes()).await?;

@@ -58,7 +58,7 @@ async fn advertise_percolates_and_discover_filters_by_name() {
             richness: Some("medium".into()),
             wire: Some("custom/mm-v0".into()),
         })
-        .with_chi(["hello", "gossip-publish", "tool-call", "tool-result"]);
+        .with_chis(["hello", "gossip-publish", "tool-call", "tool-result"]);
     ens_a.nestling_advertise(manifest.clone()).await;
 
     let (got_id, got_manifest) = timeout(Duration::from_millis(300), discover.recv())
@@ -68,7 +68,7 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     assert_eq!(got_id, a_id, "advertise came from the wrong humd");
     assert_eq!(got_manifest.name, "market-maker");
     assert_eq!(got_manifest.version, "0.1.0");
-    assert_eq!(got_manifest.chi.len(), 4);
+    assert_eq!(got_manifest.chis.len(), 4);
 
     // Retract on the raw stream.
     ens_a.nestling_retract("market-maker").await;

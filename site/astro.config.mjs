@@ -34,8 +34,17 @@ export default defineConfig({
         {
           label: "Build a nestling",
           items: [
-            { label: "thrum-core (Rust)", link: "/thrum-core/" },
-            { label: "thrum (TS)",        link: "/thrum/" },
+            { label: "Wire spec", link: "/thrum/wire/" },
+            {
+              label: "Client libraries",
+              collapsed: false,
+              items: [
+                { label: "thrum-core (Rust)", link: "/thrum-core/" },
+                { label: "thrum (TS)",        link: "/thrum/" },
+                { label: "thrum (Python)",    link: "/clients/python/" },
+                { label: "thrum (Go)",        link: "/clients/go/" },
+              ],
+            },
           ],
         },
         {
@@ -47,10 +56,11 @@ export default defineConfig({
               label: "Reference",
               collapsed: false,
               items: [
-                { label: "opencode",          link: "/nestlings/opencode/" },
-                { label: "openai-server",     link: "/nestlings/openai-server/" },
-                { label: "vercel-ai",         link: "/nestlings/vercel-ai/" },
-                { label: "grpc (Rust)",       link: "/nestlings/grpc/" },
+                { label: "opencode",           link: "/nestlings/opencode/" },
+                { label: "openai-server",      link: "/nestlings/openai-server/" },
+                { label: "anthropic-server",   link: "/nestlings/anthropic-server/" },
+                { label: "vercel-ai",          link: "/nestlings/vercel-ai/" },
+                { label: "grpc (Rust)",        link: "/nestlings/grpc/" },
                 { label: "paid-oracle (Rust)", link: "/nestlings/paid-oracle/" },
               ],
             },

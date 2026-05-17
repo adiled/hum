@@ -5,6 +5,7 @@ dist/
 *.md
 !README.md
 !reports/*.md
+!thrum/*.md
 docs/
 dev
 target/

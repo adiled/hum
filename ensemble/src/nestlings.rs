@@ -47,8 +47,13 @@ pub struct NestlingManifest {
     /// Chi values the nestling sends or expects to receive. Kebab-case,
     /// matches the wire form of [`thrum_core::Chi`]. Empty = unspecified
     /// (assume only the universal handshake subset).
-    #[serde(default)]
-    pub chi: Vec<String>,
+    ///
+    /// Plural intentionally: `chi` is the sacred discriminator on every
+    /// tone (one chi per tone). `chis` is the **list** a nestling
+    /// advertises — what kinds of tones it speaks. Different concepts,
+    /// different names.
+    #[serde(default, alias = "chi")]
+    pub chis: Vec<String>,
     /// Free-form pointer to the nestling's docs/source. Untrusted —
     /// readers MUST NOT auto-fetch; surface to humans only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,7 +89,7 @@ impl NestlingManifest {
             version: version.into(),
             proto_version: proto_version.into(),
             propensity: Propensity::default(),
-            chi: Vec::new(),
+            chis: Vec::new(),
             source: None,
         }
     }
@@ -94,12 +99,12 @@ impl NestlingManifest {
         self
     }
 
-    pub fn with_chi<I, S>(mut self, chi: I) -> Self
+    pub fn with_chis<I, S>(mut self, chis: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.chi = chi.into_iter().map(Into::into).collect();
+        self.chis = chis.into_iter().map(Into::into).collect();
         self
     }
 
@@ -135,7 +140,7 @@ mod tests {
         let back: NestlingManifest = serde_json::from_value(j).unwrap();
         assert_eq!(back.name, "market-maker");
         assert_eq!(back.proto_version, "0.7.0");
-        assert!(back.chi.is_empty());
+        assert!(back.chis.is_empty());
         assert!(back.source.is_none());
     }
 
@@ -147,11 +152,11 @@ mod tests {
                 richness: Some("medium".into()),
                 wire: Some("custom/mm-v0".into()),
             })
-            .with_chi(["hello", "gossip-publish", "tool-call", "tool-result"])
+            .with_chis(["hello", "gossip-publish", "tool-call", "tool-result"])
             .with_source("https://github.com/example/mm-nestling");
         let j = serde_json::to_value(&m).unwrap();
         let back: NestlingManifest = serde_json::from_value(j).unwrap();
-        assert_eq!(back.chi.len(), 4);
+        assert_eq!(back.chis.len(), 4);
         assert_eq!(back.propensity.statefulness.as_deref(), Some("stateless"));
         assert_eq!(back.source.as_deref(), Some("https://github.com/example/mm-nestling"));
     }

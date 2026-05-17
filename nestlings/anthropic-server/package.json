@@ -1,0 +1,19 @@
+{
+  "name": "@hum/anthropic-server",
+  "version": "0.0.0",
+  "description": "Anthropic-compatible HTTP surface for hum (POST /v1/messages, SSE streaming)",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "hum-anthropic-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "@types/node": "^22.19.17"
+  }
+}

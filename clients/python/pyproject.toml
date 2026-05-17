@@ -1,0 +1,26 @@
+[project]
+name = "thrum"
+version = "0.7.0"
+description = "Wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "hum contributors" }]
+requires-python = ">=3.10"
+keywords = ["thrum", "hum", "p2p", "agents", "ndjson"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Communications",
+]
+
+[project.urls]
+Homepage   = "https://adiled.github.io/hum/"
+Repository = "https://github.com/adiled/hum"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["thrum"]

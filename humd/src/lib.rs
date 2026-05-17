@@ -542,14 +542,19 @@ impl ToneSink for HumdSink {
                         let propensity = tone.get("propensity")
                             .and_then(|v| serde_json::from_value(v.clone()).ok())
                             .unwrap_or_default();
-                        let chi = tone.get("chi")
-                            .and_then(Value::as_array)
+                        // Hello tone has `chi: "hello"` (the discriminator),
+                        // so the manifest's vocabulary list lives under
+                        // `chis` (plural). Tolerate legacy `chi:[...]` form
+                        // for back-compat with pre-rename hellos.
+                        let chis: Vec<String> = tone.get("chis")
+                            .or_else(|| tone.get("chi"))
+                            .and_then(|v| v.as_array())
                             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                             .unwrap_or_default();
                         let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
                         let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
                         manifest.propensity = propensity;
-                        manifest.chi = chi;
+                        manifest.chis = chis;
                         manifest.source = source;
                         let ens = ensemble.clone();
                         tokio::spawn(async move {

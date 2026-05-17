@@ -159,7 +159,7 @@ fn hello(cfg: &Config) -> Value {
             "richness": "lean",
             "wire": "x402/tool-call"
         },
-        "chi": ["hello", "tool-call", "tool-result", "error"],
+        "chis": ["hello", "tool-call", "tool-result", "error"],
         "source": "https://github.com/adiled/hum/tree/main/nestlings/paid-oracle",
         "x402": {
             "chain": cfg.chain,

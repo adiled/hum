@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         "nestling": "my-nestling",
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
-        "chi": ["hello", "prompt", "chunk", "finish"],
+        "chis": ["hello", "prompt", "chunk", "finish"],
     });
     wr.write_all(format!("{hello}\n").as_bytes()).await?;
 

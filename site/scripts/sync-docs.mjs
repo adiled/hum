@@ -18,7 +18,8 @@ const DEST_ROOT  = path.resolve(__dirname, "../src/content/docs/");
  *   title      — Starlight page title
  *   description — short tagline shown in TOC + meta
  */
-// Only README.md files. Other markdown in the repo (scenarios/*.md,
+// README.md files plus a small explicit allowlist of other reference
+// docs (WIRE spec, etc.). Other markdown in the repo (scenarios/*.md,
 // docs/*.md) is local-only — included earlier, generated 404s on the
 // deployed site because subpages weren't routed cleanly. The on-mesh
 // model means nestlings live in their own repos anyway; this site
@@ -26,11 +27,15 @@ const DEST_ROOT  = path.resolve(__dirname, "../src/content/docs/");
 const PAGES = [
   { src: "README.md",                       slug: "index",                  title: "hum",                      description: "The only AI stack nestled on a biodiverse agentic kernel framework." },
   { src: "ensemble/README.md",              slug: "ensemble/index",         title: "Ensemble — the mesh",      description: "Cross-humd routing, discovery, gossip, Kademlia. Where humds find each other." },
+  { src: "thrum/WIRE.md",                   slug: "thrum/wire",             title: "Wire spec",                description: "Language-neutral protocol spec — implementable in any language with NDJSON + Unix sockets." },
   { src: "thrum-core/README.md",            slug: "thrum-core/index",       title: "thrum-core (Rust)",        description: "Wire-protocol primitives for Rust nestlings." },
   { src: "thrum/README.md",                 slug: "thrum/index",            title: "thrum (TS)",               description: "Wire-protocol primitives for TS / JS nestlings." },
+  { src: "clients/python/README.md",        slug: "clients/python",         title: "thrum (Python)",           description: "Python reference client — generated from the same Rust source of truth." },
+  { src: "clients/go/README.md",            slug: "clients/go",             title: "thrum (Go)",               description: "Go reference client — generated from the same Rust source of truth." },
   { src: "nestlings/README.md",             slug: "nestlings/index",        title: "Nestlings — the typology", description: "Statefulness × richness × wire shape. How to build a new nestling." },
   { src: "nestlings/opencode/README.md",    slug: "nestlings/opencode",     title: "opencode",                 description: "Rich, stateful nestling for OpenCode." },
-  { src: "nestlings/openai-server/README.md", slug: "nestlings/openai-server", title: "openai-server",         description: "OpenAI-compatible HTTP/SSE surface for hum." },
+  { src: "nestlings/openai-server/README.md",    slug: "nestlings/openai-server",    title: "openai-server",    description: "OpenAI-compatible HTTP/SSE surface for hum." },
+  { src: "nestlings/anthropic-server/README.md", slug: "nestlings/anthropic-server", title: "anthropic-server", description: "Anthropic Messages API surface for hum — drop-in for @anthropic-ai/sdk." },
   { src: "nestlings/vercel-ai/README.md",   slug: "nestlings/vercel-ai",    title: "vercel-ai",                description: "Vercel AI SDK provider — drive hum from any `ai` SDK caller." },
   { src: "nestlings/grpc/README.md",        slug: "nestlings/grpc",         title: "grpc (Rust)",              description: "Transport-only bidi gRPC bridge — every chi flows through." },
   { src: "nestlings/paid-oracle/README.md", slug: "nestlings/paid-oracle",  title: "paid-oracle (Rust)",       description: "x402-style paid oracle — one price per USDC payment, on-chain verified." },

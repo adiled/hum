@@ -63,7 +63,7 @@ sock.on("connect", () => {
     nestling: "my-nestling",
     version: "0.1.0",
     protoVersion: THRUM_VERSION,
-    chi: [Chi.hello, Chi.prompt, Chi.chunk, Chi.finish],
+    chis: [Chi.hello, Chi.prompt, Chi.chunk, Chi.finish],
   }) + "\n");
 });
 
