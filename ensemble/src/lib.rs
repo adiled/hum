@@ -65,6 +65,9 @@ pub use kad::{
 pub mod nestlings;
 pub use nestlings::{NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
 
+#[cfg(feature = "onchain")]
+pub mod onchain;
+
 /// Domain-separation tag binds a signature to the ensemble handshake.
 /// Bump the version suffix if the canonical message shape changes.
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";

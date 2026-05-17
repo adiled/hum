@@ -33,6 +33,13 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"
 # Bounded seen-set for the gossip fan-out layer. See gossip.rs header
 # for the choice rationale (homegrown vs libp2p-gossipsub).
 lru = "0.12"
+# Optional: on-chain HumdRegistry client. Plain JSON-RPC, no alloy /
+# ethers-rs dep tree. Gate behind `onchain` so default builds stay slim.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[features]
+default = []
+onchain = ["dep:reqwest"]
 
 [dev-dependencies]
 # Self-signed cert generation for the TLS integration test. Pinned to
