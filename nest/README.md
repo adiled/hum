@@ -1,109 +1,84 @@
 ---
 title: "nest"
-description: "the model-process pool — `Perch` trait, `Roost` runtime, and the `Nest` that manages them"
+description: "the place inside humd where nestlers nestle and roosts live — defines the Perch trait, the Roost runtime, and the Nest pool"
 ---
 
 # nest
 
-> _the model-process pool — `Perch` trait, `Roost` runtime, and the `Nest` that manages them_
+> _the place inside humd where nestlers nestle and roosts live — defines the `Perch` trait, the `Roost` runtime, and the `Nest` pool_
 
-`nest` is the seam where humd meets an LLM process. It defines the
-trait every model harness must implement (`Perch`), the shape of one
-live model subprocess (`Roost`), the callback shape a daemon hooks
-into a roost (`Listener`), and the pool runtime that owns it all
-(`Nest`). Concrete nest implementations — `claude-cli`,
-`claude-repl`, and any future kinds — live under
-[`nests/`](../nests) and implement this trait.
+A **nest** is the space inside a humd where two kinds of inhabitants
+meet: **nestlers** (the askers, connected over thrum) and **roosts**
+(the live LLM subprocesses, spawned by humd). The nest itself
+isn't a process or a model — it's the meeting place. One humd, one
+nest.
 
-The daemon (`humd`) holds an `Arc<dyn Perch>` and an
-`Arc<Nest>`. It doesn't know what an LLM is. It just calls
-`nest.spawn(spec)` when a new conversation starts and reads `Petal`
-events off the roost's event channel.
+This crate defines what lives in the nest and how:
 
-## Where it fits
+- **`Perch`** trait — defines a *kind* of roost. Owns the spawn,
+  the stdin pipe, the parsed-event stream, and the lifecycle.
+- **`Roost`** struct — one live LLM subprocess. The compute itself.
+- **`Listener`** trait — what humd binds to a roost to receive parsed
+  events for a particular sid.
+- **`Nest`** struct — the pool runtime. Owns the roosts keyed by
+  pool_key, dispatches stdin writes, evicts on idle, enforces
+  `max_procs`.
+
+The daemon (`humd`) holds an `Arc<Nest>` and one or more `Arc<dyn
+Perch>`. It doesn't know what an LLM is. It just calls
+`nest.spawn(spec)` when a new conversation starts and reads events
+off the resulting roost.
+
+## The three things — clearly
+
+There are exactly three things this crate is about. They get confused
+constantly. The README will spell them out and then never let them blur:
+
+| word | what it is | example |
+|---|---|---|
+| **nest** | the space inside humd. Not a process, not a model. Where nestlers and roosts coexist. | one per humd |
+| **roost** | one live LLM subprocess that lives in the nest. The actual compute. | the claude-cli child process |
+| **Perch** (Rust trait) | defines a *kind* of roost — how to spawn it, what it speaks, when it's ephemeral. Implementation. | `claude-cli`, `claude-repl`, future `openai-api` |
+
+And the cohabitants from the other side of the thrum:
+
+| word | what it is |
+|---|---|
+| **nestling** | the kind/typology a nestler conforms to (defined in [`nestlings/`](../nestlings)) |
+| **nestler** | the running instance of a nestling. Sends `chi:"hello"`, nestles into the humd's nest |
+| **nestled** | a nestler whose handshake has been accepted. Has a nestledId. Lives inside the nest alongside roosts. |
+
+Six words, six different referents. Nest is one of them. Roost is
+another. They are not interchangeable.
+
+## Where the nest fits
 
 ```
-nestlers              ← humans, agents, plugins, HTTP frontends
+nestlers (outside)
    │   thrum tones (NDJSON over Unix socket)
    ▼
-humd                  ← per-machine daemon: hums, MCP, drone
+humd
    │
-   ├── ensemble       ← cross-humd routing (above)
+   ├── ensemble        ← cross-humd routing
    │
-   └── nest           ← model-process pool  (this crate)
-       │              │
-       │              └── nest_common — shared building blocks
-       │
-       └── perches: claude-cli, claude-repl, future kinds
-              │
-              ▼
-           the actual LLM process
+   └── nest            ← THE SPACE (this crate)
+        │
+        ├── nestled<1>  ← nestlers, post-handshake
+        ├── nestled<2>
+        │
+        └── roosts      ← live LLM subprocesses
+             │
+             ├── roost<A> spawned by claude-cli Perch
+             ├── roost<B> spawned by claude-repl Perch
+             └── roost<C> spawned by openai-api Perch (hypothetical future)
 ```
 
-**Nest sits BELOW ensemble, INSIDE humd.** Ensemble routes prompts
-between humds; nest spawns the model that answers them. Two layers,
-fully decoupled — neither imports the other. The daemon orchestrates
-them both.
+The nest is BELOW ensemble (ensemble routes between humds; nest is
+local to one humd) and INSIDE humd. Nestleds and roosts share it.
+chi traffic crosses between them: a nestled's `chi:"prompt"` is routed
+to a roost; that roost's chunks flow back to the nestled.
 
-## How ensemble uses nest (and doesn't)
-
-Ensemble doesn't import the `nest` crate. The mesh layer routes
-*tones*; it has zero opinion about whether the tone's destination is
-backed by a real model, a mock, or a different kind of agent entirely.
-A humd without a nest is still a valid ensemble peer — it can
-forward `chi:"prompt"` tones, run `kad_find`, gossip, advertise
-nestlings. It just can't *answer* a prompt locally.
-
-That's the actual value nest brings to ensemble: it makes a humd a
-useful **destination**. Without nest, a mesh of humds is just a
-post office relaying envelopes nobody opens. With nest, every humd
-becomes a place a prompt can land and produce a real answer.
-
-Three concrete scenarios where this layer separation matters:
-
-| scenario | what nest does | what ensemble does |
-|---|---|---|
-| [overflow-inference](../scenarios/overflow-inference.md) | humd-A's nest reports its `max_procs` is full | ensemble routes the prompt to humd-B which still has a free roost |
-| [phone-laptop-roam](../scenarios/phone-laptop-roam.md) | the new humd's nest resumes the conversation from its own transcript store (via the sigil) | ensemble carries the `chi:"prompt"` across devices and routes replies back |
-| [federation-handoff](../scenarios/federation-handoff.md) | org-A's humd has a `claude-cli` perch; org-B's humd has a different perch (maybe a private model) | ensemble passes prompts cross-org without either side needing to know what model the other runs |
-
-In every case, ensemble carries the *envelope*; nest produces the
-*reply*. The interface between them is the chi vocabulary
-(`chi:"prompt"` in, `chi:"chunk"`/`chi:"finish"` out) — nothing
-model-shaped crosses the seam.
-
-## Capability advertising
-
-When humd negotiates with peer humds in the ensemble, it advertises
-what its local nest can do via `PeerCapabilities.nests`. A humd
-with a `claude-cli` perch installed advertises
-`nests: ["claude-cli"]`. The overflow scenario uses this to find a
-peer that can actually run the requested model:
-
-```rust
-let target = ensemble.pick_peer_with_nest("claude-cli");
-ensemble.route(prompt.to_humd(target)).await?;
-```
-
-Without nest's advertise, ensemble would have no idea which peer can
-serve which prompt. Without ensemble's routing, nest would be
-single-machine only. Together they make the four-tier (T1 own-devices
-→ T4 open mesh) story work end-to-end.
-
-## Concepts
-
-| word | what it means |
-|---|---|
-| **nest** | the *kind* of model harness — a `Perch` impl (claude-cli, claude-repl, future) |
-| **Perch** | the trait. Tells the daemon "give me a `SpawnSpec`, I'll hand back a live `Roost`" |
-| **Roost** | one live model subprocess. Has stdin / event-stream / kill / exit-code |
-| **Listener** | callback shape the daemon binds to a roost — receives parsed petals |
-| **petal** | one parsed event off the model's stdout (text chunk, tool_use, finish, etc) |
-| **Nest** | the pool. Owns roosts keyed by `pool_key`, dispatches stdin writes, evicts on idle, enforces `max_procs` |
-| **SpawnSpec** | the high-level recipe the daemon hands a perch (sid, model, cwd, system prompt, MCP url, …) |
-| **pool_key** | typically `sid` — the key under which a roost lives in the nest. One roost per key. |
-
-## The trait
+## The `Perch` trait
 
 ```rust
 #[async_trait]
@@ -113,24 +88,38 @@ pub trait Perch: Send + Sync {
 }
 ```
 
-That's it. Two methods. `ephemeral()` flags whether the pool should
-evict the roost after each `result` (PTY/REPL-style harnesses); the
-spawn method turns a `SpawnSpec` into a running process.
+A `Perch` is a *recipe* for a kind of roost. Two methods:
 
-The `Roost` returned by `spawn` exposes:
-- `stdin: mpsc::Sender<String>` — push raw NDJSON lines into the
-  child's stdin
-- `events: Arc<Mutex<mpsc::Receiver<Value>>>` — pull parsed JSON
-  events off the child's stdout
-- `exited` — a oneshot that resolves with the child's exit code
-- `kill` — best-effort kill the child
+- `ephemeral()` — does the pool evict this roost after each `result`?
+  (PTY/REPL-style harnesses say yes; pipe-mode say no.)
+- `spawn(spec)` — turn a high-level `SpawnSpec` (sid, modelId, cwd,
+  system prompt, MCP url, …) into a running `Roost`.
 
-Stream parsing lives in `pool.rs`. The pool watches `events`,
-classifies each frame, and dispatches typed callbacks
-(`on_petal`/`on_roost`/`on_wilt`/`on_thorn`) to whichever
-`Listener` is registered for that roost's active sid.
+The trait says nothing about *what* the roost is. A Perch impl might
+fork a local Claude binary, open an HTTPS connection to OpenAI's API,
+load a llama.cpp model into the same address space, or return a
+canned-response mock for tests. The wire never sees the difference —
+all the Perch has to do is produce a `Roost` whose `stdin → events`
+behaves correctly.
 
-## The pool
+### Roost
+
+```rust
+pub struct Roost {
+    pub pid: Option<u32>,
+    pub stdin: mpsc::Sender<String>,            // push raw NDJSON to the roost
+    pub events: Arc<Mutex<mpsc::Receiver<Value>>>,  // pull parsed JSON back
+    pub exited: tokio::sync::oneshot::Receiver<i32>,
+    pub ephemeral: bool,
+    pub kill: Arc<dyn Fn() + Send + Sync>,
+}
+```
+
+One live LLM subprocess seen from the humd side. The `stdin` and
+`events` channels are the only contract — whatever's behind them is
+the Perch impl's business.
+
+## The `Nest` pool
 
 ```rust
 let nest = Nest::new(
@@ -140,121 +129,97 @@ let nest = Nest::new(
 );
 ```
 
-Two perches by convention: one for **pipe-mode** roosts (long-lived,
-stream-json over stdin/stdout — the canonical Claude CLI shape) and
-one for **PTY-mode** roosts (ephemeral, evicted on each turn —
-REPL-style harnesses). The daemon picks which to spawn into based on
-the conversation's needs.
+Two perches by convention: a pipe-mode one and a PTY-mode one.
+humd's prompt router picks which to spawn into based on the conversation.
 
 Operations the daemon calls on the pool:
 
 | call | what happens |
 |---|---|
-| `nest.murmur(spec, prompt, listener)` | spawn-if-needed + write a `chi:"prompt"` to stdin + bind the listener for the sid |
+| `nest.murmur(spec, prompt, listener)` | spawn-if-needed + write `chi:"prompt"` to stdin + bind listener for the sid |
 | `nest.reply(sid, tool_use_id, result)` | route a `chi:"tool-result"` reply to the right roost's stdin |
 | `nest.interrupt(sid, request_id)` | inject `control_cancel_request` mid-turn |
 | `nest.evict(sid)` | tear the roost down — host called `chi:"cleanup"` |
 
-## Why a trait, not a hard-coded Claude path
+## Why a trait, not a hard-coded path
 
 hum is LLM-agnostic by design. The protocol (thrum), the mesh
 (ensemble), the drone, the nestlings — none of them know which
-model is behind the nest. `Perch` is where that decision lives, and
-where it gets swapped:
+model is behind the nest. `Perch` is the seam where that decision
+lives, and where it gets swapped.
 
-| nest kind | what it spawns | when to use |
+| kind of roost | what its Perch spawns | when to use |
 |---|---|---|
 | `claude-cli` | `claude -p` with `stream-json` over pipe | normal model-CLI usage |
 | `claude-repl` | claude-cli in interactive REPL mode over a PTY | non-stream-json fallbacks, debugging |
-| (future) `gemini-cli` | `gemini` CLI similarly | swap LLM vendor |
-| (future) `ollama-local` | local LLM through Ollama's CLI | local-LLM-only setups |
+| (future) `openai-api` | HTTPS to OpenAI's API; chunks streamed via SSE | use GPT-4 from your humd |
+| (future) `ollama-local` | local LLM via Ollama's CLI or HTTP | run open-weights models on a laptop |
 
 A new model harness adds one `Perch` impl and registers it with the
-daemon. No code in `humd`, `thrum-core`, `ensemble`, or `drone`
-needs to change.
+daemon. No code in `humd`, `thrum-core`, `ensemble`, `drone`, or
+the wire needs to change.
 
-## SpawnSpec
+## How the mesh learns what nests humds have
 
-The recipe the daemon hands a perch. Harness-agnostic — the perch
-translates these into whatever its underlying tool needs (claude CLI
-flags, ollama args, env vars, etc).
+The wire doesn't advertise nests directly. The **humd** advertises its
+configured nests in `PeerCapabilities.nests` (a `Vec<String>` of Perch
+names), which the ensemble layer gossips to peers. A peer humd looking
+to route a `chi:"prompt"` with `modelId: "gpt-4"` consults the
+capability gossip, finds a humd that advertises `openai-api`, and
+routes there.
 
-```rust
-pub struct SpawnSpec {
-    pub sid: String,                 // hum session id; usually the pool_key
-    pub model_id: String,            // "claude-sonnet-4-6", "gemini-pro", ...
-    pub cwd: String,                 // working directory for the spawned process
-    pub system_prompt: Option<String>,
-    pub mcp_url: Option<String>,     // hum's MCP HTTP base — wires tool surface in
-    pub cli_path: Option<String>,    // override the binary location
-    pub resume_id: Option<String>,   // pick up an existing transcript
-    pub plan_mode: bool,
-    pub permissions: Vec<String>,    // tool allowlist by name
-    pub allowed_tools: Vec<String>,  // narrower allowlist the harness advertises
-    pub env: HashMap<String, String>,
-}
-```
+This is the existing mechanism — nothing new needed for "non-repo-bounded
+nests." Anyone who wants to add a new kind of compute:
 
-The fields are generic *enough* — `model_id` is a string, `env` is
-free-form. Different harnesses pick which fields are meaningful.
-Ollama probably ignores `plan_mode`. Claude CLI uses everything.
+1. Writes a `Perch` impl in their own Rust crate.
+2. Builds it into their humd (or, future: dynamic plugin loading).
+3. Runs the humd with that Perch registered.
+4. The humd's existing capability gossip advertises the new nest name.
+5. Other humds on the mesh discover and route to it.
 
-## Listener
+The wire stays unchanged. The Perch lives in any repo. The mesh
+sees one more capable peer.
 
-```rust
-#[async_trait]
-pub trait Listener: Send + Sync {
-    fn session_id(&self) -> &str;
-    async fn on_petal(&self, kind: &str, payload: Value);
-    async fn on_roost(&self, nest_id: &str, model: &str, tools: Vec<String>);
-    async fn on_wilt(&self, finish_reason: &str, usage: Option<Value>, provider_meta: Value);
-    async fn on_thorn(&self, wound: &str);
-}
-```
+## How ensemble uses the nest (and doesn't)
 
-humd's binary registers a `Listener` on the roost when it accepts a
-`chi:"prompt"`. The listener turns parsed petals into `chi:"chunk"`
-tones on the thrum side. The mapping is:
+Ensemble doesn't import this crate. The mesh layer routes tones; it
+has no opinion on whether a humd's nest is empty, full, local-only,
+or pointed at a remote API. A humd with no nest is still a valid
+ensemble peer — it can forward tones, gossip, run kad lookups — it
+just can't *answer* a `chi:"prompt"` locally.
 
-| listener callback | thrum chi |
-|---|---|
-| `on_petal("text", …)` | `chi:"chunk"` (text part) |
-| `on_petal("tool_use", …)` | `chi:"tool-call"` |
-| `on_roost(...)` | `chi:"session-ready"` |
-| `on_wilt(...)` | `chi:"finish"` |
-| `on_thorn(...)` | `chi:"error"` |
+That's the value the nest brings to ensemble: it makes a humd a useful
+**destination**. Without a nest, a humd is a relay. With one, it's a
+correspondent.
 
-## Encoding helpers
+Three concrete scenarios where the nest/ensemble separation pays off:
 
-Three small helpers convert higher-level intents into the
-stream-json frames Claude CLI expects on stdin. They live here
-because every pipe-mode perch uses them, but the daemon can call
-them directly:
+| scenario | what the nest does | what ensemble does |
+|---|---|---|
+| [overflow-inference](../scenarios/overflow-inference.md) | humd-A's nest reports its `max_procs` is full | ensemble routes the prompt to humd-B whose nest has a free slot |
+| [phone-laptop-roam](../scenarios/phone-laptop-roam.md) | the new humd's nest resumes the conversation from its own transcript store | ensemble carries `chi:"prompt"` across devices and routes replies back |
+| [federation-handoff](../scenarios/federation-handoff.md) | org-A's humd has a `claude-cli` perch; org-B's has a different one | ensemble passes prompts cross-org without either side needing to know what the other's nest looks like |
 
-```rust
-nest::encode_prompt("hello")             // user message frame
-nest::encode_tool_result(call_id, body)  // tool_result frame
-nest::encode_cancel(request_id)          // control_cancel_request frame
-```
-
-Future non-Claude harnesses with different stdin formats will
-provide their own encoders.
+In every case: ensemble carries the *envelope*; the nest's roost
+produces the *reply*. The interface between them is the chi vocabulary.
+Nothing model-shaped crosses the seam.
 
 ## What this crate is NOT
 
-- **Not a thrum endpoint.** Roosts don't speak thrum directly —
-  humd reads petals via `Listener` and writes the thrum side.
-- **Not a router.** `Nest` picks the right roost for a sid; it
-  doesn't decide which humd handles which conversation. Ensemble owns
-  that.
-- **Not a transcript store.** PipePerch hands events to the
-  listener; persistence is the harness's problem (claude-cli's graft
-  module writes JSONL).
+- **Not "compute" by itself.** The compute is the **roost**. This
+  crate is the *space* the roost lives in and the *trait* that defines
+  what kind of roost it is. Same word, distinct referents — nest is
+  the room, roost is who lives there.
+- **Not a thrum endpoint.** Roosts don't speak thrum directly. humd
+  reads roost events via `Listener` and writes the thrum side.
+- **Not a router.** `Nest` picks the right roost for a sid; it doesn't
+  decide which humd handles which conversation. Ensemble owns that.
+- **Not a transcript store.** PipePerch hands events to the listener;
+  persistence is the harness's problem (claude-cli's graft module
+  writes JSONL).
 - **Not a permissions enforcer.** The daemon's permit handler runs
-  before a `chi:"tool-call"` ever lands here. nest just sees what
+  before a `chi:"tool-call"` ever lands here. Nest just sees what
   the model produced.
-- **Not opinionated about content.** A `Petal` is just `Value`. The
-  daemon (or the drone) decides whether text in it looks suspicious.
 
 ## Layout
 
@@ -272,11 +237,14 @@ Concrete `Perch` impls live under [`nests/`](../nests):
 - [`nests/claude-cli/`](../nests/claude-cli) — `claude -p` stream-json over pipe
 - [`nests/claude-repl/`](../nests/claude-repl) — PTY-mode interactive fallback
 - [`nests/common/`](../nests/common) — shared building blocks across nest impls
+  (e.g. the regex `Classifier` for drone's context-loss detection)
 
 ## See also
 
-- [WIRE.md](../WIRE.md) — the thrum protocol the listener emits into.
-- [`drone/`](../drone) — the sentinel that observes petals and
-  scores channel health.
+- [WIRE.md](../WIRE.md) — the thrum protocol; see "The nest model" section
+  for what the wire sees (and what it doesn't) about nests and roosts.
+- [`drone/`](../drone) — the sentinel that observes the chunks coming
+  out of a roost and scores channel health.
 - [`humd/`](../humd) — the daemon that owns the `Nest` instance.
-- [vocabulary](../VOCABULARY.md) — words this crate uses load-bearingly.
+- [VOCABULARY](../VOCABULARY.md) — the canonical glossary; entries for
+  nest, roost, Perch, nestler, nestled, nestling.

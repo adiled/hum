@@ -24,9 +24,14 @@ like the thing — readers and writers share the same mental model.
 - **humd** — the daemon process. One per machine install.
 - **HumdId** — sha256 of the humd's Ed25519 public key.
 - **hum** — one conversation. Has a hum_id, lives on a humd.
-- **nest** — a class of model harness (claude-cli, claude-repl, future kinds).
-- **roost** — one live nest process (one Claude subprocess, say).
-- **perch** — the strategy that spawns a roost.
+- **nest** — the *place* inside humd where nestlers nestle and roosts live.
+  Not a process. Not a model. The meeting space. One humd, one nest.
+- **roost** — one live LLM subprocess living in the nest. The compute itself —
+  what turns a `chi:"prompt"` into `chi:"chunk"` + `chi:"finish"`. Fungible:
+  spawn, kill, respawn.
+- **Perch** — the Rust trait. Defines a *kind* of roost
+  (`claude-cli`, `claude-repl`, future `openai-api`, future `ollama-local`).
+  A Perch impl owns its roost's lifecycle. Loaded into humd at build time.
 - **brood** — the state machine that walks a roost from cold to ready (PTY-only).
 
 ## Conversation
@@ -43,10 +48,18 @@ like the thing — readers and writers share the same mental model.
 ## Ensemble
 
 - **ensemble** — the mesh of cooperating humds.
-- **nestling** — the kind a nestler conforms to. The OC plugin is one; the
-  market-maker agent is another.
-- **nestler** — one running instance of a nestling.
-- **nestled** — a nestler post-handshake. After it has nestled.
+- **nestling** — the *kind*. A typology slot. Doesn't run; doesn't send anything.
+  The conformance an actor must match to be allowed to nestle. `openai-server`
+  is a nestling; `market-maker` is a nestling.
+- **nestler** — the *instance*. The live process. Sends `chi:"hello"`,
+  nestles into a humd. Always the asker direction: produces `chi:"prompt"`,
+  consumes `chi:"chunk"`/`chi:"finish"`. One running OC plugin = one nestler.
+- **nestled** — the *state*. What a nestler is called once its handshake has
+  been accepted and its connection is registered. A nestled has a nestledId.
+
+The three are not synonyms. Nestling describes; nestler runs; nestled is the
+condition after acceptance. A nestler nestles into a humd's nest. Once
+nestled, it shares that nest with the roosts that live there.
 
 ## Observation
 
