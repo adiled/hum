@@ -19,7 +19,8 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-# T3 transport: iroh QUIC + Noise + NAT hole-punching. v0 scaffold —
-# IrohEndpoint accepts a pre-built iroh::Endpoint; identity unification
-# with HumdKey is a follow-up.
+# T3 transport: iroh QUIC + TLS + NAT hole-punching. IrohEndpoint /
+# IrohTransport plug into the Transport + PeerConnection traits. ALPN
+# is bound to `hum/<major>.<minor>` so wire-protocol bumps surface as
+# clean handshake rejections instead of silent corruption.
 iroh = "1.0.0-rc.0"
