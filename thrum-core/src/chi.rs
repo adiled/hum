@@ -97,6 +97,20 @@ pub enum Chi {
     /// targets ONE humd) — gossip is mesh-wide announcements: hum
     /// relocation, humd overload, drone alerts.
     GossipPublish,
+    /// Kademlia DHT FIND_NODE query —
+    /// `{ query_id, target: <HumdId hex>, from: <HumdId hex> }`. The
+    /// receiver answers with `kad-find-node-resp` carrying up to K
+    /// HumdAddrs from its routing table closest in XOR distance to
+    /// `target`. Sent during `Ensemble::kad_find` iterative lookups
+    /// when a peer's HumdAddr isn't already known locally.
+    KadFindNode,
+    /// Kademlia DHT FIND_NODE response —
+    /// `{ query_id, from: <HumdId hex>, closest: [<HumdAddr JSON>, ...] }`.
+    /// Matched to the originating `kad-find-node` by `query_id`. The
+    /// lookup driver inserts every advertised HumdAddr into its routing
+    /// table and re-queries the α closest unqueried peers until no
+    /// closer node is returned.
+    KadFindNodeResp,
 }
 
 /// `pulse.kind` — its own enum within `chi:"pulse"` tones.

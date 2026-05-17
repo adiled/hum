@@ -535,6 +535,8 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::Detach => "detach",
         Chi::WaneSync => "wane-sync",
         Chi::GossipPublish => "gossip-publish",
+        Chi::KadFindNode => "kad-find-node",
+        Chi::KadFindNodeResp => "kad-find-node-resp",
     }
 }
 

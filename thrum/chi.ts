@@ -4,7 +4,7 @@
 // the file is regenerated on every cargo build of thrum-core (build.rs).
 // Manual regen: `cargo run -p codegen`.
 
-export const THRUM_VERSION = "0.6.0" as const;
+export const THRUM_VERSION = "0.7.0" as const;
 
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
@@ -69,6 +69,10 @@ export const Chi = {
   waneSync: "wane-sync",
   /** ensemble-wide gossip pub-sub message — `{ topic, payload, from, msg_id }`. Fan-out broadcast above the Transport seam: every PeerConnection is a gossip neighbor. The receiver dedups on `msg_id` (sha256("topic:rid:from:payload")[..16]) using a bounded LRU, dispatches to per-topic subscribers, and re-fans the tone to every OTHER installed peer so the message percolates across the mesh. Distinct from unicast `route` (which targets ONE humd) — gossip is mesh-wide announcements: hum relocation, humd overload, drone alerts. */
   gossipPublish: "gossip-publish",
+  /** Kademlia DHT FIND_NODE query — `{ query_id, target: <HumdId hex>, from: <HumdId hex> }`. The receiver answers with `kad-find-node-resp` carrying up to K HumdAddrs from its routing table closest in XOR distance to `target`. Sent during `Ensemble::kad_find` iterative lookups when a peer's HumdAddr isn't already known locally. */
+  kadFindNode: "kad-find-node",
+  /** Kademlia DHT FIND_NODE response — `{ query_id, from: <HumdId hex>, closest: [<HumdAddr JSON>, ...] }`. Matched to the originating `kad-find-node` by `query_id`. The lookup driver inserts every advertised HumdAddr into its routing table and re-queries the α closest unqueried peers until no closer node is returned. */
+  kadFindNodeResp: "kad-find-node-resp",
 } as const;
 export type ChiKind = typeof Chi[keyof typeof Chi];
 

@@ -28,6 +28,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -37,6 +38,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinSet;
 
 pub mod tcp;
 pub use tcp::{TcpEndpoint, TcpListener, TcpTransport};
@@ -52,6 +54,13 @@ pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
 
 pub mod gossip;
 pub use gossip::{gossip_tone, mint_msg_id, GossipState, GOSSIP_CHI, GOSSIP_SEEN_CAP};
+
+pub mod kad;
+pub use kad::{
+    find_node_resp_tone, find_node_tone, mint_query_id, parse_find_node, parse_find_node_resp,
+    KBucket, KadFindOutcome, KadState, RoutingTable, XorDistance, KAD_ALPHA,
+    KAD_FIND_NODE_CHI, KAD_FIND_NODE_RESP_CHI, KAD_K, KAD_MAX_ROUNDS,
+};
 
 /// Domain-separation tag binds a signature to the ensemble handshake.
 /// Bump the version suffix if the canonical message shape changes.
@@ -477,6 +486,12 @@ pub struct Ensemble {
     /// ensemble; cloned into every install() drainer task so the dedup
     /// + topic dispatch happens without locking the main peer map.
     gossip: Arc<GossipState>,
+    /// Kademlia routing table + pending FIND_NODE queries. Built up
+    /// from `install()`'s bootstrap (each newly-connected peer's
+    /// HumdAddr is stashed) and from advertised peers in incoming
+    /// `kad-find-node-resp` tones. Drives `kad_find` lookups for
+    /// HumdIds we haven't yet connected to directly.
+    kad: Arc<KadState>,
     /// When true, peers whose `chi:"hello"` is missing or fails
     /// verification are ejected (T3+ federation semantics). When false
     /// (default, T1), unsigned hellos are tolerated — caps are learned
@@ -507,6 +522,7 @@ impl Ensemble {
             peers: Arc::new(RwLock::new(HashMap::new())),
             inbox,
             gossip: GossipState::new(),
+            kad: KadState::new(me),
             strict_auth: false,
         }
     }
@@ -553,6 +569,11 @@ impl Ensemble {
             id,
             Peer { conn: conn.clone(), learned_caps: None },
         );
+        // Bootstrap the kad routing table with the peer we just wired.
+        // The HumdAddr from the transport carries whatever dial hints
+        // that transport produced (e.g. iroh: prefix); kad reuses them
+        // verbatim when advertising this peer to remote FIND_NODE callers.
+        self.kad.note_peer(conn.peer().clone());
 
         if let Some(mut rx) = rx {
             let peers = self.peers.clone();
@@ -560,6 +581,8 @@ impl Ensemble {
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
+            let kad = self.kad.clone();
+            let my_id = self.me;
             tokio::spawn(async move {
                 // Only the FIRST chi:"hello" off this connection is the
                 // peer handshake — we absorb it to learn caps. Any
@@ -633,6 +656,19 @@ impl Ensemble {
                             continue;
                         }
                     }
+                    // Kademlia DHT: FIND_NODE queries / responses are
+                    // absorbed by the kad layer (responses notify a
+                    // pending lookup; queries are answered with the
+                    // routing table's K closest to target). Malformed
+                    // tones fall through to the regular inbox fan-out.
+                    let chi_val = tone.get("chi").and_then(|v| v.as_str());
+                    if chi_val == Some(KAD_FIND_NODE_CHI)
+                        || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
+                    {
+                        if handle_kad(&kad, &peers, &id, &my_id, &tone).await {
+                            continue;
+                        }
+                    }
                     // Everything else (including subsequent hellos) fans
                     // out. Receivers may be absent — broadcast drops.
                     let _ = inbox.send(tone);
@@ -678,6 +714,8 @@ impl Ensemble {
             id,
             Peer { conn: conn.clone(), learned_caps: None },
         );
+        // Bootstrap the kad routing table — same as `install`.
+        self.kad.note_peer(conn.peer().clone());
 
         if let Some(mut rx) = rx {
             let peers = self.peers.clone();
@@ -685,6 +723,8 @@ impl Ensemble {
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
+            let kad = self.kad.clone();
+            let my_id = self.me;
             tokio::spawn(async move {
                 let mut handshake_seen = false;
                 while let Some(tone) = rx.recv().await {
@@ -730,6 +770,14 @@ impl Ensemble {
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
                         if handle_gossip(&gossip, &peers, &id, &tone).await {
+                            continue;
+                        }
+                    }
+                    let chi_val = tone.get("chi").and_then(|v| v.as_str());
+                    if chi_val == Some(KAD_FIND_NODE_CHI)
+                        || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
+                    {
+                        if handle_kad(&kad, &peers, &id, &my_id, &tone).await {
                             continue;
                         }
                     }
@@ -809,6 +857,148 @@ impl Ensemble {
     /// to the same topic.
     pub fn subscribe_topic(&self, topic: &str) -> broadcast::Receiver<serde_json::Value> {
         self.gossip.subscribe(topic)
+    }
+
+    /// Iterative Kademlia FIND_NODE lookup for `target`. Returns the
+    /// HumdAddr matching `target` if any peer's routing table knew it,
+    /// otherwise `None`.
+    ///
+    /// Procedure:
+    ///   1. Seed the routing table with every currently-installed peer
+    ///      (idempotent — `install` already does this, this is belt
+    ///      and braces).
+    ///   2. Take the α=3 closest unqueried addresses from local table.
+    ///   3. Send `chi:"kad-find-node"` to each in parallel via the
+    ///      peer's [`PeerConnection::send`] — same wire as gossip.
+    ///   4. Merge every advertised peer from incoming responses back
+    ///      into the routing table. Round-by-round, re-query the α
+    ///      closest unqueried until no closer node is returned.
+    ///   5. Terminate when no round produces a strictly-closer entry,
+    ///      after `KAD_MAX_ROUNDS`, or on `timeout` — whichever first.
+    ///
+    /// We trust returned HumdAddrs from peers — no signature on the
+    /// resp yet. A hostile peer can return arbitrary addresses; the
+    /// caller's job is to attempt to dial and verify the handshake.
+    pub async fn kad_find(&self, target: HumdId, timeout: Duration) -> Option<HumdAddr> {
+        // Quick check: target already in our routing table (we
+        // installed a connection to it directly).
+        if let Some(addr) = self.kad.get(&target) {
+            return Some(addr);
+        }
+
+        // Belt-and-braces: ensure every installed peer is in the
+        // routing table. install() already does this, but this keeps
+        // kad_find honest if a peer's HumdAddr was somehow missed.
+        {
+            let peer_addrs: Vec<HumdAddr> = {
+                let peers = self.peers.read();
+                peers.values().map(|p| p.conn.peer().clone()).collect()
+            };
+            for addr in peer_addrs {
+                self.kad.note_peer(addr);
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        // Per-query timeout: a fraction of the wall budget so a slow
+        // peer can't starve the whole lookup. Min 50ms — much shorter
+        // than that and InMemoryEndpoint setup races eat the budget.
+        let per_query_timeout = std::cmp::max(timeout / 4, Duration::from_millis(50));
+
+        let seed = self.kad.closest_to(&target, KAD_K);
+        if seed.is_empty() {
+            return None;
+        }
+        let mut shortlist = kad::LookupShortlist::new(target, seed);
+
+        for _round in 0..KAD_MAX_ROUNDS {
+            if tokio::time::Instant::now() >= deadline {
+                return self.kad.get(&target);
+            }
+            let batch = shortlist.next_unqueried(KAD_ALPHA);
+            if batch.is_empty() {
+                // No more peers to query — converged.
+                break;
+            }
+            let before = shortlist.closest_distance();
+
+            // Resolve each batch entry to a live connection. We can
+            // only query peers we already have a PeerConnection for.
+            // Advertised-but-not-installed peers come back as routing
+            // hints but can't be dialed without a transport (T4 dial
+            // path is a follow-up).
+            let mut joinset: JoinSet<Vec<HumdAddr>> = JoinSet::new();
+            for addr in &batch {
+                shortlist.mark_queried(addr.id);
+                let conn = {
+                    let peers = self.peers.read();
+                    peers.get(&addr.id).map(|p| p.conn.clone())
+                };
+                if let Some(conn) = conn {
+                    let kad = self.kad.clone();
+                    let me = self.me;
+                    let tgt = target;
+                    joinset.spawn(async move {
+                        kad::query_peer(&kad, &conn, &me, &tgt, per_query_timeout).await
+                    });
+                }
+            }
+            if joinset.is_empty() {
+                // Every closest unqueried peer is uninstalled — can't
+                // make progress. Mark them queried (already done above)
+                // and continue; next round will pick the next α.
+                continue;
+            }
+            while let Some(res) = joinset.join_next().await {
+                let advertised_list = match res {
+                    Ok(list) => list,
+                    Err(_) => continue,
+                };
+                for advertised in advertised_list {
+                    // Note into routing table AND shortlist.
+                    self.kad.note_peer(advertised.clone());
+                    if advertised.id == self.me {
+                        continue;
+                    }
+                    shortlist.insert(advertised);
+                }
+            }
+
+            // Found it directly in this round's resp?
+            if let Some(addr) = self.kad.get(&target) {
+                return Some(addr);
+            }
+            let after = shortlist.closest_distance();
+            if after >= before {
+                // No closer node returned this round — Kademlia
+                // termination condition.
+                break;
+            }
+        }
+
+        // Final check: maybe a stale resp filled the table after the
+        // loop terminated.
+        if let Some(addr) = self.kad.get(&target) {
+            return Some(addr);
+        }
+        // No exact match. Caller treats None as "not found"; the
+        // shortlist's closest may still be useful for diagnostics.
+        let _ = shortlist.closest();
+        None
+    }
+
+    /// Snapshot of the routing table size — useful for tests and
+    /// diagnostics that want to assert the table grew during a lookup.
+    pub fn kad_routing_table_len(&self) -> usize {
+        self.kad.table.lock().len()
+    }
+
+    /// Snapshot the routing table's `count` peers closest to `target`
+    /// in XOR space. Exposed for callers that want to drive their own
+    /// dial-after-lookup loop (the in-memory test fixture, primarily;
+    /// real transports will hide this behind a `kad_find_and_dial`).
+    pub fn kad_closest(&self, target: &HumdId, count: usize) -> Vec<HumdAddr> {
+        self.kad.closest_to(target, count)
     }
 
     /// Send a tone to the peer named in `tone.to` (must be present and
@@ -997,6 +1187,75 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
 ///
 /// Send failures during re-fan are logged but don't stop the loop:
 /// gossip is best-effort; one dead link can't deafen the mesh.
+/// Drainer-side handling for `chi:"kad-find-node"` and
+/// `chi:"kad-find-node-resp"` tones.
+///
+/// Returns `true` if the tone was consumed by the kad layer (don't fan
+/// into the regular inbox), `false` if malformed (fall back to the
+/// inbox so callers see the raw tone).
+///
+/// Semantics:
+///   - `kad-find-node`: parse, look up K closest HumdAddrs to the
+///     advertised `target` in our routing table, send a
+///     `kad-find-node-resp` back over the same peer connection.
+///   - `kad-find-node-resp`: insert every advertised HumdAddr into the
+///     routing table, then deliver to the pending oneshot keyed by
+///     `query_id`. If no waiter is registered (timeout already fired,
+///     or this is a duplicate resp) we still keep the new routing
+///     info — a stale resp is still useful peer-discovery signal.
+async fn handle_kad(
+    kad: &Arc<KadState>,
+    peers: &Arc<RwLock<HashMap<HumdId, Peer>>>,
+    arrived_from: &HumdId,
+    me: &HumdId,
+    tone: &Tone,
+) -> bool {
+    let chi_val = tone.get("chi").and_then(|v| v.as_str());
+    if chi_val == Some(kad::KAD_FIND_NODE_CHI) {
+        let parsed = match kad::parse_find_node(tone) {
+            Some(p) => p,
+            None => return false,
+        };
+        // Reply to the peer that asked. We send K closest from our
+        // routing table — they may include `arrived_from` itself, which
+        // is harmless (the caller filters self / already-queried).
+        let closest = kad.closest_to(&parsed.target, KAD_K);
+        let resp_rid = format!("kad-resp-{}", &parsed.query_id[..8.min(parsed.query_id.len())]);
+        let resp = kad::find_node_resp_tone(&resp_rid, &parsed.query_id, me, &closest);
+        let conn = {
+            let peers = peers.read();
+            peers.get(arrived_from).map(|p| p.conn.clone())
+        };
+        if let Some(conn) = conn {
+            if let Err(e) = conn.send(resp).await {
+                tracing::debug!(
+                    target: "ensemble.kad",
+                    peer = %arrived_from.short(),
+                    error = %e,
+                    "find-node response send failed"
+                );
+            }
+        }
+        true
+    } else if chi_val == Some(kad::KAD_FIND_NODE_RESP_CHI) {
+        let parsed = match kad::parse_find_node_resp(tone) {
+            Some(p) => p,
+            None => return false,
+        };
+        // Note every advertised peer into the routing table — useful
+        // even if no waiter is registered (drives passive discovery).
+        for addr in &parsed.closest {
+            kad.note_peer(addr.clone());
+        }
+        // Deliver to a pending lookup, if any. False return just means
+        // "no live waiter" — not an error.
+        let _ = kad.deliver_response(&parsed.query_id, parsed.closest);
+        true
+    } else {
+        false
+    }
+}
+
 async fn handle_gossip(
     gossip: &Arc<gossip::GossipState>,
     peers: &Arc<RwLock<HashMap<HumdId, Peer>>>,
