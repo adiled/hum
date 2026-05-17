@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {HumdRegistry} from "../src/HumdRegistry.sol";
+import {IHumdRegistry} from "../src/IHumdRegistry.sol";
 
 contract HumdRegistryTest is Test {
     HumdRegistry r;
@@ -17,7 +18,7 @@ contract HumdRegistryTest is Test {
 
     function test_advertise_first_writes_owner() public {
         r.advertise(PUBKEY, HASH1, "ipfs://abc");
-        HumdRegistry.Record memory rec = r.get(PUBKEY);
+        IHumdRegistry.Record memory rec = r.get(PUBKEY);
         assertEq(rec.owner, address(this));
         assertEq(rec.manifestHash, HASH1);
         assertEq(rec.manifestURI, "ipfs://abc");
@@ -30,7 +31,7 @@ contract HumdRegistryTest is Test {
         uint64 firstAt = r.get(PUBKEY).updatedAt;
         vm.warp(block.timestamp + 60);
         r.advertise(PUBKEY, HASH2, "ipfs://xyz");
-        HumdRegistry.Record memory rec = r.get(PUBKEY);
+        IHumdRegistry.Record memory rec = r.get(PUBKEY);
         assertEq(rec.owner, address(this));
         assertEq(rec.manifestHash, HASH2);
         assertEq(rec.manifestURI, "ipfs://xyz");
@@ -47,7 +48,7 @@ contract HumdRegistryTest is Test {
 
     function test_event_emitted_on_advertise() public {
         vm.expectEmit(true, true, false, true);
-        emit HumdRegistry.Advertised(PUBKEY, address(this), HASH1, "ipfs://abc", uint64(block.timestamp));
+        emit IHumdRegistry.Advertised(PUBKEY, address(this), HASH1, "ipfs://abc", uint64(block.timestamp));
         r.advertise(PUBKEY, HASH1, "ipfs://abc");
     }
 

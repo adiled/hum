@@ -1,8 +1,11 @@
 //! On-chain HumdRegistry client.
 //!
-//! Reads a deployed [`HumdRegistry`](../../contracts/src/HumdRegistry.sol)
-//! contract via plain JSON-RPC `eth_call`. No alloy / ethers-rs
-//! dependency — just `reqwest` + a tiny hand-rolled ABI decoder.
+//! Reads any contract implementing
+//! [`IHumdRegistry`](../../contracts/src/IHumdRegistry.sol) via plain
+//! JSON-RPC `eth_call`. The interface is the standard; the deployed
+//! contract is whichever implementation the subnet chose. No alloy /
+//! ethers-rs dependency — just `reqwest` + a tiny hand-rolled ABI
+//! decoder for the `records(bytes32)` selector.
 //!
 //! Feature-gated behind the `onchain` cargo feature so default builds
 //! don't pull HTTP. Enable with:
