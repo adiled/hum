@@ -74,14 +74,24 @@ of it.
 ## Adding a new nestling
 
 The `nestlings/` directory in this repo is a catalogue of reference
-implementations — **not** the registry. The registry is on the mesh:
-every humd gossips its locally-running nestlings on
-`hum/nestlings/announce`, and other humds subscribe.
+implementations. **Adding a new nestling has nothing to do with this
+directory.** A nestling is just a process that handshakes with a
+humd over thrum. The handshake itself **is** the registration —
+humd now knows your nestling exists, what chi values it speaks, and
+can route tones to it.
 
-That means a new nestling does NOT need a PR to this repo. Build it
-in your own codebase, import the contract (`thrum-core` crate or
-`thrum` npm package), handshake with humd, and you're discoverable
-on every humd that's subscribed.
+What happens beyond that depends on which humd features you've
+turned on. The three layers stack additively:
+
+| layer | when it matters | who learns about your nestling |
+|---|---|---|
+| **local humd (thrum)** | always — happens on every `chi:"hello"` | the humd you handshook with (and any other nestler connected to that same humd) |
+| **ensemble (mesh)** | only when the humd is wired to peer humds | every peer humd that subscribes to `hum/nestlings/announce` |
+| **on-chain** | only when you advertise to a `HumdRegistry` deployment | anyone reading that registry on whatever chain it lives on |
+
+You get the first for free by handshaking. The other two are
+opt-ins, useful only when you want distributed discovery or
+censorship-resistant identity.
 
 ### Steps
 
@@ -95,11 +105,12 @@ on every humd that's subscribed.
 3. **Add a thrum client** — see any existing `src/thrum.ts`; ~90 LoC.
    Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`,
    send NDJSON, dispatch incoming tones to per-sid handlers.
-4. **Announce yourself** — emit `chi:"hello"` on connect with
-   `nestling`, `protoVersion`, your own `version`, and optionally
-   `propensity`, `chi` (the array of chi values you speak), and
-   `source` (URL pointing at your nestling's repo). Humd builds a
-   `NestlingManifest` from these fields and gossips it to the mesh.
+4. **Handshake** — emit `chi:"hello"` on connect with `nestling`,
+   `protoVersion`, your own `version`, and optionally `propensity`,
+   `chis` (the array of chi values you speak), and `source` (URL to
+   your nestling's repo). Humd records you locally as soon as this
+   tone lands. **You are now registered with that humd.** Nothing
+   else is required for solo / single-machine use.
 5. **Translate or transport.** Translators map thrum chunks into the
    outside contract's shape (see `vercel-ai/src/transform.ts`).
    Transports just forward bytes (see `grpc/src/index.ts`).
@@ -108,9 +119,14 @@ on every humd that's subscribed.
    as `chi:"tool-result"` with the same `callId`. The daemon will
    resume the parked model.
 
-### Get discovered
+That's the whole baseline. Single-machine nestlings stop here.
 
-Once a humd has heard your advertise, any other humd can:
+### Want peer humds to discover you?
+
+Turn on ensemble in the humd that hosts you (it's already on by
+default in shipped configs; nothing to do per-nestling). humd then
+gossips a `NestlingManifest` built from your hello on
+`hum/nestlings/announce`. Any humd subscribed to that topic learns:
 
 ```rust
 use ensemble::Ensemble;
@@ -123,22 +139,21 @@ while let Some((humd_id, manifest)) = found.recv().await {
 See [`ensemble/README.md`](../ensemble/README.md) for the full
 discover path including Kademlia lookup of unknown HumdAddrs.
 
+### Want on-chain identity?
+
+For humds that want a censorship-resistant alternative to gossip,
+publish the manifest hash to a `HumdRegistry` deployment — see
+[`contracts/`](../contracts/) and
+[`contracts/DEPLOYMENTS.md`](../contracts/DEPLOYMENTS.md). This is
+independent of ensemble: a solo humd can publish to an on-chain
+registry without ever meshing.
+
 ### Want your nestling listed in this repo as reference?
 
-The real registry is on-mesh: humd gossips a `NestlingManifest` on
-`hum/nestlings/announce` for every nestling that handshakes against
-its local thrum socket with `chi:"hello"` and a `nestling` name.
-Anyone importing `thrum-core` (Rust), `thrum` (TS), `clients/python`,
-or `clients/go` is auto-advertised by their local humd the moment
-they connect. No PR needed for the on-mesh side.
-
 Listing in **this** repo's catalogue table is editorial — for
-nestlings the maintainers consider exemplars. A PR is optional, not
-required.
-
-For humds that want a censorship-resistant alternative to the gossip
-layer, on-chain identity is available via `HumdRegistry.sol` — see
-[`contracts/`](../contracts/).
+nestlings the maintainers consider exemplars. A PR is optional and
+unrelated to registration; your nestling is registered with humd
+regardless.
 
 ## Versioning
 

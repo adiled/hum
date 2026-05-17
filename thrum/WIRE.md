@@ -53,7 +53,12 @@ bridge, gossip relay) so future chi extensions are backward-compatible.
 
 ## Handshake
 
-The first tone a nestler sends after `connect()` MUST be `chi:"hello"`:
+The first tone a nestler sends after `connect()` MUST be `chi:"hello"`.
+**This tone is the registration**: the humd that receives it now knows
+your nestling exists, what chi values you speak, and can route tones
+to you. Nothing else is required for a single-machine nestling. The
+ensemble layer (peer humds, gossip) and the on-chain layer
+(`HumdRegistry`) are additive opt-ins on top.
 
 ```json
 {

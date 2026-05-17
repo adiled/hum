@@ -2,11 +2,15 @@
 
 > *what humds make together when they cooperate*
 
-`ensemble` is the mesh layer of hum. One humd hosts many hums; the
-ensemble is the network of humds. This crate owns the daemon-native
-shape that survives across every trust tier — from your two laptops
-on the same LAN to autonomous agents finding each other on the
-open internet.
+`ensemble` is the **optional mesh layer** of hum. One humd hosts many
+hums; the ensemble is the network of humds that have chosen to
+cooperate. This crate owns the daemon-native shape that survives
+across every trust tier — from your two laptops on the same LAN to
+autonomous agents finding each other on the open internet.
+
+A single humd works without ever loading ensemble. Solo nestlings,
+single-machine agents, and local development don't need any of
+this. ensemble matters only when two or more humds need to talk.
 
 It sits in a tight three-layer stack:
 
