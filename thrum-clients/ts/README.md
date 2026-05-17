@@ -107,5 +107,5 @@ package version. Nestlings warn on mismatch.
   themselves and discover each other on the
   `hum/nestlings/announce` gossip topic.
 - [`nestlings/`](../nestlings) — reference implementations:
-  `openai-server`, `vercel-ai`, `opencode`, `grpc`.
+  the catalogue is at [`nestlings/`](../../nestlings).
 - [adiled.github.io/hum/](https://adiled.github.io/hum/) — docs site.

@@ -98,6 +98,6 @@ a wire-protocol event. Nestlings warn on `THRUM_VERSION` mismatch.
 - `ensemble/` — the mesh of humds. Nestlings discover each other
   through `nestling_advertise` / `nestling_discover` on the
   `hum/nestlings/announce` gossip topic.
-- `nestlings/` — reference implementations: `openai-server`,
-  `vercel-ai`, `opencode`, `grpc`.
+- [`nestlings/`](../nestlings) — reference implementations. One
+  canonical catalogue; don't enumerate them here.
 - [adiled.github.io/hum/](https://adiled.github.io/hum/) — docs site.

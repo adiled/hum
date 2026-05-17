@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# hum installer — v0.3 (Rust daemon, ensemble mesh).
+# hum installer — v0.3 (Rust daemon, ensemble mesh, openai-server door).
 #
 # What this does, in order:
-#   1. Detect v0.2 install. If present, hand off to scripts/migrate-from-0-2.sh.
-#   2. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo (for build).
-#   3. Build the Rust humd from source — `cargo install --path humd --root $HUM_BIN_ROOT`.
-#   4. Mint Ed25519 identity at $HUM_STATE/humd.key if missing.
-#   5. Seed an empty peers.json at $HUM_CONFIG/peers.json if missing.
+#   1. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo, pnpm (for nestlings).
+#   2. Build the Rust humd from source — `cargo install --path humd --root $HUM_BIN_ROOT`.
+#   3. Mint Ed25519 identity at $HUM_STATE/humd.key if missing.
+#   4. Seed an empty peers.json at $HUM_CONFIG/peers.json if missing.
+#   5. Seed a minimal hum.json at $HUM_CONFIG/hum.json if missing.
 #   6. Install systemd --user unit pointing at the Rust binary.
-#   7. Install the OpenCode nestling into ~/.config/opencode/opencode.json.
+#   7. Build and install the openai-server nestling (the 0.3 front door).
 #   8. Start the daemon.
+#
+# 0.2 → 0.3 is a config-shape change; there is no migration script. Read
+# MIGRATING.md for the old-key → new-home table. Re-run this installer
+# after editing $HUM_CONFIG/hum.json into the new shape.
 #
 # Idempotent — re-running upgrades in place.
 #
 # Usage:
-#   curl -fsSL https://hum.sh/install | sh
-#   ./install                                # from a cloned repo
-#   ./install status                         # daemon health
-#   ./install logs                           # journalctl tail
-#   ./install uninstall                      # remove everything (keeps state)
-#   ./install purge                          # remove everything INCLUDING state
+#   ./install              # from a cloned repo
+#   ./install status       # daemon health
+#   ./install logs         # journalctl tail
+#   ./install uninstall    # remove binary + unit (keeps state)
+#   ./install purge        # remove everything INCLUDING state
 #
 set -euo pipefail
 
@@ -38,7 +41,9 @@ if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
 else
   HUM_RUNTIME="/tmp/hum-$(id -u)"
 fi
-SOCK_BASE="$HUM_RUNTIME/hum.sock"
+# Canonical per WIRE.md. All clients (thrum-core / thrum-clients/{ts,python,go})
+# resolve here. Override at runtime via HUM_THRUM_SOCK env if you must.
+THRUM_SOCK="$HUM_RUNTIME/thrum.sock"
 
 OPENCODE_CONFIG="$XDG_CONFIG_HOME/opencode/opencode.json"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
@@ -47,9 +52,12 @@ HUM_SRC="$HUM_DATA/src"
 MIN_CLAUDE="2.1.86"
 MIN_OPENCODE="1.4.3"
 
+# openai-server nestling defaults — port matches its README + the
+# provider.hum baseURL hint we print at the end.
+OPENAI_PORT="${HUM_OPENAI_PORT:-14620}"
+
 CMD="${1:-install}"
 OS="$(uname -s)"
-IS_ROOT=$([ "$(id -u)" = "0" ] && echo true || echo false)
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -84,30 +92,32 @@ ensure_prereqs() {
   if ! command -v cargo >/dev/null 2>&1; then
     fail "cargo (rustup) not found. Install rustup: https://rustup.rs"
   fi
+  if ! command -v pnpm >/dev/null 2>&1; then
+    warn "pnpm not on PATH — openai-server nestling won't build. Install: https://pnpm.io/installation"
+  fi
 }
 
-# ─── v0.2 detection + migration handoff ──────────────────────────────────────
+# ─── 0.2 detection — guide, don't migrate ───────────────────────────────────
 
-needs_migration() {
-  # v0.2 left these landmarks:
-  [ -f "$HUM_DATA/src/humd/humd.ts" ] && return 0
-  if systemctl --user list-unit-files 2>/dev/null | grep -q '^hum\.service'; then
-    local EXEC; EXEC="$(systemctl --user cat hum 2>/dev/null | grep -E '^ExecStart=' | head -1 || true)"
-    case "$EXEC" in *humd.ts*|*tsx*) return 0 ;; esac
-  fi
-  return 1
-}
+flag_0_2_install() {
+  local LANDMARK_TS="$HUM_DATA/src/humd/humd.ts"
+  local LANDMARK_UNIT
+  LANDMARK_UNIT="$(systemctl --user cat hum 2>/dev/null | grep -E '^ExecStart=' | head -1 || true)"
+  local IS_OLD=false
+  [ -f "$LANDMARK_TS" ] && IS_OLD=true
+  case "$LANDMARK_UNIT" in *humd.ts*|*tsx*) IS_OLD=true ;; esac
+  $IS_OLD || return 0
 
-maybe_migrate() {
-  if needs_migration; then
-    log "v0.2 install detected — running migrate-from-0-2.sh."
-    local SCRIPT; SCRIPT="$(dirname "$0")/scripts/migrate-from-0-2.sh"
-    if [ ! -f "$SCRIPT" ]; then
-      warn "migrate script not found at $SCRIPT — skipping. State may be stale."
-      return 0
-    fi
-    bash "$SCRIPT"
-  fi
+  warn "v0.2 install detected (TS daemon landmarks present)."
+  warn ""
+  warn "  0.3 has no migration script — config shape changed too much."
+  warn "  Read MIGRATING.md for the old-key → new-home table."
+  warn ""
+  warn "  Quick path: stop the old service, remove $HUM_DATA/src, edit"
+  warn "  $HUM_CONFIG/hum.json into the namespaced 0.3 shape, re-run this script."
+  warn ""
+  warn "  Continuing the install will overwrite the systemd unit and"
+  warn "  binary; your hum.json stays untouched."
 }
 
 # ─── identity ────────────────────────────────────────────────────────────────
@@ -119,17 +129,12 @@ ensure_identity() {
     log "humd identity: $KEY ✓"
     return 0
   fi
-  # humd mints on first boot if missing. Pre-mint here so users see the
-  # HumdId before the daemon starts.
   log "minting humd identity at $KEY (Ed25519, 32 bytes)"
   if command -v openssl >/dev/null 2>&1; then
     openssl genpkey -algorithm Ed25519 -outform DER -out "$KEY.tmp" 2>/dev/null
-    # Strip the DER prefix to get raw 32-byte seed — humd's identity.rs
-    # reads either format, but raw is the canonical shape it persists.
     tail -c 32 "$KEY.tmp" > "$KEY"
     rm -f "$KEY.tmp"
   else
-    # Fallback: 32 random bytes. humd's identity.rs accepts this.
     dd if=/dev/urandom of="$KEY" bs=32 count=1 2>/dev/null
   fi
   chmod 600 "$KEY"
@@ -141,21 +146,57 @@ ensure_peers_config() {
   mkdir -p "$HUM_CONFIG"
   local PEERS="$HUM_CONFIG/peers.json"
   if [ -s "$PEERS" ]; then
-    log "peers.json: $PEERS ✓ ($(jq 'length' < "$PEERS" 2>/dev/null || echo "?") entries)"
+    log "peers.json: $PEERS ✓"
     return 0
   fi
-  cat > "$PEERS" <<'JSON'
-[]
-JSON
+  echo "[]" > "$PEERS"
   log "wrote empty peers.json at $PEERS"
-  log "  add peers with: hum peer add <humd_id_hex> <transport-hint>"
+}
+
+# ─── hum.json (0.3 namespaced) ──────────────────────────────────────────────
+
+ensure_hum_config() {
+  mkdir -p "$HUM_CONFIG"
+  local CFG="$HUM_CONFIG/hum.json"
+  if [ -s "$CFG" ]; then
+    log "hum.json: $CFG ✓"
+    return 0
+  fi
+  cat > "$CFG" <<JSON
+{
+  "\$schema": "https://adiled.github.io/hum/hum.schema.json",
+  "humd": {
+    "permissionDuskMs": 60000,
+    "driftRetentionDays": 30
+  },
+  "fs": {
+    "roots": [
+      { "path": "~/code", "mode": "rw" },
+      { "path": "/tmp", "mode": "rw" }
+    ],
+    "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
+  },
+  "nest": {
+    "maxProcs": 4,
+    "idleThresholdMs": 300000,
+    "default": "claude-repl"
+  },
+  "perches": {
+    "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
+    "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
+  },
+  "nestlings": {
+    "openai-server": { "host": "127.0.0.1", "port": $OPENAI_PORT }
+  }
+}
+JSON
+  log "wrote default hum.json at $CFG"
+  log "  edit fs.roots to match where you actually code."
 }
 
 # ─── humd binary ─────────────────────────────────────────────────────────────
 
 build_humd() {
-  # If we're in a clone, build from there. Otherwise clone fresh into
-  # $HUM_SRC and build.
   local SRC
   if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
     SRC="$(dirname "$0")"
@@ -177,7 +218,28 @@ build_humd() {
   log "  version: $($HUM_BIN --version 2>&1 || echo 'unknown')"
 }
 
-# ─── systemd unit (linux) / launchd plist (macos) ────────────────────────────
+# ─── openai-server nestling — the 0.3 front door ────────────────────────────
+
+build_openai_server() {
+  local SRC="$(dirname "$0")"
+  if [ ! -d "$SRC/nestlings/openai-server" ]; then
+    SRC="$HUM_SRC"
+  fi
+  local NESTDIR="$SRC/nestlings/openai-server"
+  [ -d "$NESTDIR" ] || { warn "openai-server source not found at $NESTDIR — skipping"; return 0; }
+
+  if ! command -v pnpm >/dev/null 2>&1; then
+    warn "skipping openai-server build (pnpm missing)."
+    return 0
+  fi
+  log "building openai-server nestling at $NESTDIR"
+  (cd "$SRC" && pnpm install --silent --filter @hum/openai-server >/dev/null 2>&1 || true)
+  (cd "$NESTDIR" && pnpm run build --silent 2>/dev/null || true)
+  log "openai-server built (port $OPENAI_PORT). Start manually for now: node $NESTDIR/dist/index.js"
+  log "  (systemd unit for the nestling is planned in 0.3.1)"
+}
+
+# ─── systemd user unit ──────────────────────────────────────────────────────
 
 install_systemd_unit() {
   case "$OS" in
@@ -200,8 +262,8 @@ Environment=HUM_LOG_LEVEL=info
 Environment=XDG_CONFIG_HOME=$XDG_CONFIG_HOME
 Environment=XDG_DATA_HOME=$XDG_DATA_HOME
 Environment=XDG_STATE_HOME=$XDG_STATE_HOME
-Environment=XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR
-Environment=HUM_SOCKET=$SOCK_BASE
+Environment=XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+Environment=HUM_THRUM_SOCK=$THRUM_SOCK
 Environment=CLAUDE_CLI_PATH=$(command -v claude || echo claude)
 Environment=PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=$HUM_BIN
@@ -227,7 +289,7 @@ start_daemon() {
       if systemctl --user is-active --quiet hum; then
         log "hum.service running ✓"
       else
-        warn "hum.service did not start cleanly — \`hum logs\` to inspect."
+        warn "hum.service did not start cleanly — \`./install logs\` to inspect."
       fi
       ;;
     *)
@@ -236,26 +298,31 @@ start_daemon() {
   esac
 }
 
-# ─── OpenCode nestling ───────────────────────────────────────────────────────
+# ─── opencode integration hint ──────────────────────────────────────────────
 
-install_opencode_nestling() {
+print_opencode_hint() {
   if ! command -v opencode >/dev/null 2>&1; then
-    log "OpenCode not detected — skipping nestling install."
-    return 0
+    log "OpenCode not detected — once installed, point it at hum's openai-server:"
+  else
+    log "OpenCode found. Wire it to hum by adding to $OPENCODE_CONFIG:"
   fi
-  ensure_min_version "OpenCode" "opencode" "$MIN_OPENCODE" || return 0
-  mkdir -p "$(dirname "$OPENCODE_CONFIG")"
-  if [ -f "$OPENCODE_CONFIG" ] && grep -q '"opencode-hum"' "$OPENCODE_CONFIG"; then
-    log "OpenCode nestling already registered in $OPENCODE_CONFIG"
-    return 0
-  fi
-  # Point OC at the source-tree nestling. Users running the released
-  # binary should follow nestlings/opencode/README.md for npm install.
-  local PLUGIN_PATH="$HUM_SRC/nestlings/opencode"
-  [ -d "$PLUGIN_PATH" ] || PLUGIN_PATH="$(dirname "$0")/nestlings/opencode"
-  log "OpenCode nestling source: $PLUGIN_PATH"
-  log "  finish setup: cd $PLUGIN_PATH && pnpm install && pnpm build"
-  log "  then add the plugin path to $OPENCODE_CONFIG manually."
+  cat <<JSON
+
+  {
+    "provider": {
+      "hum": {
+        "type": "openai-compatible",
+        "baseURL": "http://127.0.0.1:$OPENAI_PORT/v1",
+        "models": {
+          "claude-sonnet-4-5": {},
+          "claude-haiku-4-5":  {}
+        }
+      }
+    }
+  }
+
+JSON
+  log "Then in opencode, select provider=hum and prompt away."
 }
 
 # ─── status / logs / uninstall ───────────────────────────────────────────────
@@ -265,7 +332,8 @@ show_status() {
   echo "  version:    $($HUM_BIN --version 2>&1 || echo 'not installed')"
   echo "identity:     $HUM_STATE/humd.key $([ -s "$HUM_STATE/humd.key" ] && echo ✓ || echo MISSING)"
   echo "peers.json:   $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
-  echo "thrum socket: $SOCK_BASE.thrum $([ -S "$SOCK_BASE.thrum" ] && echo ✓ || echo absent)"
+  echo "hum.json:     $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
+  echo "thrum socket: $THRUM_SOCK $([ -S "$THRUM_SOCK" ] && echo ✓ || echo absent)"
   case "$OS" in
     Linux)
       echo "systemd:"
@@ -292,7 +360,7 @@ uninstall() {
   esac
   rm -f "$HUM_BIN"
   log "uninstalled. State preserved in $HUM_STATE + $HUM_CONFIG."
-  log "  run \`hum purge\` to remove state too."
+  log "  run \`./install purge\` to remove state too."
 }
 
 purge() {
@@ -305,16 +373,19 @@ purge() {
 
 do_install() {
   log "hum installer — v0.3"
-  maybe_migrate
+  flag_0_2_install
   ensure_prereqs
   build_humd
   ensure_identity
   ensure_peers_config
+  ensure_hum_config
   install_systemd_unit
-  install_opencode_nestling
+  build_openai_server
   start_daemon
   log ""
-  log "installed. Try: hum status   /   hum logs"
+  log "installed. Try: ./install status   /   ./install logs"
+  log ""
+  print_opencode_hint
 }
 
 case "$CMD" in

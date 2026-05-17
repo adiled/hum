@@ -24,7 +24,8 @@ Both humds share the same operator pubkey (T1 fingerprint), so their
 nestler until the operator picks up the phone.
 
 A single nestler on the laptop drives the hum during the first leg:
-`opencode` plugin, rich, stateful. It speaks every chi.
+opencode pointing at hum's openai-server over `provider.hum`, rich,
+stateful. It speaks every chi the openai-shape preserves.
 
 ## The happy path
 

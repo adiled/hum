@@ -14,8 +14,9 @@ See `sim/tests/co_pilot.rs` for the executable form.
 Trust tier **T2** — known-circle. Two operators on two humds, paired
 by manual key exchange:
 
-- **humd-A** (driver) — hosts the hum. An `opencode` nestler attaches
-  in normal stateful-rich mode, full keyboard, full bloom.
+- **humd-A** (driver) — hosts the hum. A nestler attaches in normal
+  stateful-rich mode (e.g. opencode pointing at hum's openai-server),
+  full keyboard, full bloom.
 - **humd-B** (observer) — attaches a nestler with the **`hearOnly`**
   propensity. It is allowed to receive every chi but cannot emit
   `chi:"prompt"`, `chi:"tool-result"`, `chi:"permission-response"`, or

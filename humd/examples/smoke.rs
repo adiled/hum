@@ -6,8 +6,8 @@
 //!
 //! Run: `cargo run --example smoke -p humd-bin`
 //!
-//! Socket path: `$HUM_SOCKET` if set, else `$XDG_RUNTIME_DIR/hum/hum.sock.thrum`,
-//! else `/tmp/hum/hum.sock.thrum`.
+//! Socket path: `$HUM_THRUM_SOCK` if set, else `$XDG_RUNTIME_DIR/hum/thrum.sock`,
+//! else `/tmp/hum/thrum.sock`. Legacy `HUM_SOCKET` also accepted.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,13 +23,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
+        return PathBuf::from(p);
+    }
     if let Ok(p) = std::env::var("HUM_SOCKET") {
         return PathBuf::from(p);
     }
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum").join("hum.sock.thrum")
+    base.join("hum").join("thrum.sock")
 }
 
 #[tokio::main(flavor = "current_thread")]

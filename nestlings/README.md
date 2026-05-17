@@ -48,7 +48,6 @@ and which are dropped.
 
 | nestling | statefulness | richness | wire shape | hides |
 |---|---|---|---|---|
-| **opencode** | stateful | rich | OC plugin (events + provider + tools) | almost nothing — speaks every chi |
 | **openai-server** | convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
 | **anthropic-server** | convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
 | **vercel-ai** | stateless per-call | lean | Vercel AI SDK `LanguageModelV3` | same as openai-server + session-ready, log, echo |

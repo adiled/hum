@@ -13,10 +13,10 @@ export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
 
 function defaultThrumPath(): string {
-  const runtime = process.env.XDG_RUNTIME_DIR;
-  const base = runtime ? `${runtime}/hum/hum.sock`
-                       : `/tmp/hum-${process.getuid?.() ?? 0}/hum.sock`;
-  return base + ".thrum";
+  const sock = process.env.HUM_THRUM_SOCK ?? process.env.HUM_THRUM_PATH;
+  if (sock) return sock;
+  const runtime = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`;
+  return `${runtime}/hum/thrum.sock`;
 }
 
 export class ThrumClient {
