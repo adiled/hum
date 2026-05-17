@@ -47,29 +47,40 @@ counterparty  ──── chi:tool-call { name:"quote", args:{ pair:"ETH/USDC" 
 | env | required | default | what |
 |---|---|---|---|
 | `PAID_ORACLE_PAY_TO` | yes | — | your EVM address — where USDC must land |
-| `PAID_ORACLE_RPC` | no | `https://mainnet.base.org` | JSON-RPC endpoint for verify |
-| `PAID_ORACLE_CHAIN` | no | `base-mainnet` | human label, echoed in challenges |
-| `PAID_ORACLE_USDC` | no | `0x8335…2913` (Base mainnet USDC) | ERC-20 contract |
+| `PAID_ORACLE_RPC` | no | `https://rpc.testnet.arc.network` | JSON-RPC endpoint |
+| `PAID_ORACLE_CHAIN` | no | `arc-testnet` | human label echoed in challenges |
+| `PAID_ORACLE_PAY_KIND` | no | `native` | `native` for Arc (USDC = gas token); `erc20` for Base / Eth mainnet |
+| `PAID_ORACLE_USDC` | no | `0x000…` (native) / `0x833…2913` (erc20) | ERC-20 contract address (only used when `pay_kind=erc20`) |
+| `PAID_ORACLE_DECIMALS` | no | `18` (native) / `6` (erc20) | USDC decimals on this chain |
 | `PAID_ORACLE_PRICE_URL` | no | CoinGecko ETH/USD | where to fetch the underlying |
 | `HUM_THRUM_SOCK` | no | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
 
-Price is hardcoded at $0.05 atomic USDC. Edit `QUOTE_PRICE_ATOMIC` in
-`src/main.rs` to change.
+Quote is hardcoded at $0.05 (5 cents). The atomic amount scales with
+`PAID_ORACLE_DECIMALS` automatically — same $0.05 quote works whether
+USDC has 6 decimals (ERC-20 chains) or 18 (Arc native). Edit
+`QUOTE_PRICE_CENTS` in `src/main.rs` to change the price.
+
+### Arc note
+
+USDC is **the native gas token** on Arc (and has 18 decimals there,
+not the 6 you'd expect from Ethereum/Base). Payment is a plain
+`tx.value` transfer; the ERC-20 contract address `0x3600…0000` exists
+for compatibility but day-to-day transfers go native. Default config
+matches this — no flags needed.
 
 ## Run
 
 ```bash
-# From the workspace root.
-cargo run -p paid-oracle
-
-# Set your address (required):
+# From the workspace root. Defaults to Arc testnet — just set your address:
 PAID_ORACLE_PAY_TO=0xYourAddr cargo run -p paid-oracle
 
-# Point at Arc instead of Base mainnet:
+# Switch to Base mainnet (ERC-20 USDC):
 PAID_ORACLE_PAY_TO=0xYourAddr \
-PAID_ORACLE_RPC=https://rpc.arc.network \
-PAID_ORACLE_CHAIN=arc-mainnet \
-PAID_ORACLE_USDC=0x...USDCOnArc \
+PAID_ORACLE_RPC=https://mainnet.base.org \
+PAID_ORACLE_CHAIN=base-mainnet \
+PAID_ORACLE_PAY_KIND=erc20 \
+PAID_ORACLE_USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+PAID_ORACLE_DECIMALS=6 \
   cargo run -p paid-oracle
 ```
 

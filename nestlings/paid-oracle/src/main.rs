@@ -35,7 +35,26 @@ const NESTLING_NAME: &str = "paid-oracle";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 const QUOTE_TOOL: &str = "quote";
 /// Quote price in atomic USDC (6 decimals). `50_000` = $0.05.
-const QUOTE_PRICE_ATOMIC: u64 = 50_000;
+/// Display price in cents (0.01 USD units). Atomic amount is computed
+/// at runtime from the configured chain's USDC decimals so the same
+/// $0.05 quote works on chains where USDC has 6 decimals (Base, Eth
+/// mainnet) and on Arc where USDC is the native gas token with 18.
+const QUOTE_PRICE_CENTS: u64 = 5;
+
+/// How payment lands on-chain.
+///
+/// - `Native`: USDC is the chain's native gas token (Arc). Payment is
+///   a plain transfer where `tx.value` carries the atomic amount and
+///   `tx.to` is the recipient. The nonce must appear in `tx.input`.
+/// - `Erc20`: USDC is an ERC-20 contract (Base, Eth mainnet). The
+///   transfer hits the contract; we decode the `transfer(addr,uint)`
+///   selector + args to find recipient + amount. Nonce must appear in
+///   `tx.input` (after the standard selector + args).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PayKind {
+    Native,
+    Erc20,
+}
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -47,8 +66,12 @@ struct Config {
     rpc_url: String,
     /// Human label for the chain (returned in challenges + manifest).
     chain: String,
-    /// USDC contract address on the chain (Base mainnet default).
+    /// USDC contract address on the chain (or zero address for native).
     usdc_contract: String,
+    /// Decimals USDC uses on this chain. Base/Eth: 6. Arc: 18.
+    decimals: u32,
+    /// Whether payment is a native transfer (Arc) or an ERC-20 call.
+    pay_kind: PayKind,
     /// Where to fetch underlying price from. Free / no-API-key by default.
     price_url: String,
 }
@@ -59,20 +82,49 @@ impl Config {
             format!("/run/user/{}", unsafe { libc::geteuid() })
         });
         let default_sock = format!("{runtime}/hum/thrum.sock");
+        let pay_kind = match std::env::var("PAID_ORACLE_PAY_KIND")
+            .unwrap_or_else(|_| "native".into())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "native" => PayKind::Native,
+            "erc20" | "erc-20" => PayKind::Erc20,
+            other => anyhow::bail!("PAID_ORACLE_PAY_KIND must be 'native' or 'erc20' (got '{}')", other),
+        };
+        let decimals: u32 = std::env::var("PAID_ORACLE_DECIMALS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(match pay_kind {
+                // Arc-native USDC is 18 decimals; Base/Eth USDC ERC-20 is 6.
+                PayKind::Native => 18,
+                PayKind::Erc20 => 6,
+            });
         Ok(Self {
             sock_path: std::env::var("HUM_THRUM_SOCK").unwrap_or(default_sock),
             pay_to: std::env::var("PAID_ORACLE_PAY_TO")
                 .context("PAID_ORACLE_PAY_TO (your EVM address) is required")?,
             rpc_url: std::env::var("PAID_ORACLE_RPC")
-                .unwrap_or_else(|_| "https://mainnet.base.org".into()),
+                .unwrap_or_else(|_| "https://rpc.testnet.arc.network".into()),
             chain: std::env::var("PAID_ORACLE_CHAIN")
-                .unwrap_or_else(|_| "base-mainnet".into()),
+                .unwrap_or_else(|_| "arc-testnet".into()),
             usdc_contract: std::env::var("PAID_ORACLE_USDC")
-                .unwrap_or_else(|_| "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into()),
+                .unwrap_or_else(|_| match pay_kind {
+                    PayKind::Native => "0x0000000000000000000000000000000000000000".into(),
+                    PayKind::Erc20 => "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+                }),
+            decimals,
+            pay_kind,
             price_url: std::env::var("PAID_ORACLE_PRICE_URL").unwrap_or_else(|_| {
                 "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd".into()
             }),
         })
+    }
+
+    /// Atomic USDC amount for the quote at this chain's decimals.
+    /// $0.05 × 10^decimals / 100.
+    fn quote_atomic(&self) -> u128 {
+        let scale = 10u128.checked_pow(self.decimals).unwrap_or(u128::MAX);
+        (QUOTE_PRICE_CENTS as u128).saturating_mul(scale) / 100
     }
 }
 
@@ -165,7 +217,12 @@ fn hello(cfg: &Config) -> Value {
             "chain": cfg.chain,
             "pay_to": cfg.pay_to,
             "usdc_contract": cfg.usdc_contract,
-            "price_atomic_usdc": QUOTE_PRICE_ATOMIC.to_string(),
+            "decimals": cfg.decimals,
+            "pay_kind": match cfg.pay_kind {
+                PayKind::Native => "native",
+                PayKind::Erc20 => "erc20",
+            },
+            "price_atomic_usdc": cfg.quote_atomic().to_string(),
         }
     })
 }
@@ -263,8 +320,12 @@ async fn handle_tool_call(
             "chain": cfg.chain,
             "pay_to": cfg.pay_to,
             "asset": cfg.usdc_contract,
-            "asset_kind": "erc20",
-            "price_atomic": QUOTE_PRICE_ATOMIC.to_string(),
+            "asset_kind": match cfg.pay_kind {
+                PayKind::Native => "native",
+                PayKind::Erc20 => "erc20",
+            },
+            "decimals": cfg.decimals,
+            "price_atomic": cfg.quote_atomic().to_string(),
             "nonce": nonce,
             "memo": format!("Encode this nonce ({}) in the transfer's input data so we can bind your payment to this quote.", &nonce[..8]),
         }
@@ -324,18 +385,29 @@ async fn verify_payment(
         .filter(|v| !v.is_null())
         .ok_or_else(|| anyhow!("tx not found"))?;
 
-    // ERC-20 transfer: `to` is the USDC contract, `input` encodes
-    // (selector, recipient, amount). Native transfer: `to` is the
-    // recipient directly. We accept either shape; the recipient field
-    // is the source of truth.
+    // Two shapes:
+    //   - Native (Arc): `to` is the recipient directly; `tx.value`
+    //     carries the atomic amount. USDC is the native gas token.
+    //   - ERC-20 (Base, Eth mainnet): `to` is the USDC contract; the
+    //     `input` field encodes `transfer(address,uint256)` —
+    //     selector 0xa9059cbb + 32-byte recipient + 32-byte amount.
     let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_lowercase();
     let input = tx.get("input").and_then(Value::as_str).unwrap_or("");
     let value_hex = tx.get("value").and_then(Value::as_str).unwrap_or("0x0");
 
-    let (paid_recipient, paid_amount): (String, u128) =
-        if to.eq_ignore_ascii_case(&cfg.usdc_contract.to_lowercase()) {
-            // ERC-20 transfer(address,uint256) — selector 0xa9059cbb (4 bytes)
-            // followed by 32-byte recipient (left-padded) + 32-byte amount.
+    let (paid_recipient, paid_amount): (String, u128) = match cfg.pay_kind {
+        PayKind::Native => {
+            let stripped = value_hex.strip_prefix("0x").unwrap_or(value_hex);
+            let amount = u128::from_str_radix(stripped, 16).unwrap_or(0);
+            (to, amount)
+        }
+        PayKind::Erc20 => {
+            if !to.eq_ignore_ascii_case(&cfg.usdc_contract.to_lowercase()) {
+                return Err(anyhow!(
+                    "tx.to {} doesn't match expected USDC contract {}",
+                    to, cfg.usdc_contract
+                ));
+            }
             let stripped = input.strip_prefix("0x").unwrap_or(input);
             if !stripped.to_lowercase().starts_with("a9059cbb") || stripped.len() < 8 + 64 + 64 {
                 return Err(anyhow!("not an ERC-20 transfer call"));
@@ -344,11 +416,8 @@ async fn verify_payment(
             let amount = u128::from_str_radix(&stripped[8 + 64..8 + 64 + 64], 16)
                 .map_err(|_| anyhow!("bad ERC-20 amount"))?;
             (recipient, amount)
-        } else {
-            let stripped = value_hex.strip_prefix("0x").unwrap_or(value_hex);
-            let amount = u128::from_str_radix(stripped, 16).unwrap_or(0);
-            (to, amount)
-        };
+        }
+    };
 
     if !paid_recipient.eq_ignore_ascii_case(&cfg.pay_to.to_lowercase()) {
         return Err(anyhow!(
@@ -356,10 +425,11 @@ async fn verify_payment(
             paid_recipient, cfg.pay_to
         ));
     }
-    if paid_amount < QUOTE_PRICE_ATOMIC as u128 {
+    let expected = cfg.quote_atomic();
+    if paid_amount < expected {
         return Err(anyhow!(
             "underpaid: {} < {} atomic USDC",
-            paid_amount, QUOTE_PRICE_ATOMIC
+            paid_amount, expected
         ));
     }
     // Nonce binding: counterparty MUST append the nonce bytes to tx.input.
