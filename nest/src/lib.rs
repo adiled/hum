@@ -160,14 +160,76 @@ pub trait Listener: Send + Sync {
     async fn on_thorn(&self, wound: &str);
 }
 
-/// Encode a user prompt for stream-json stdin (TS `encodePrompt`).
+/// A non-text addition to a prompt — image, audio, pdf, etc. Carried
+/// alongside the text content so perches can hand the model both at
+/// once. `data` is base64 for inline; `url` is the alternative (perch
+/// dereferences). Exactly one of `data` / `url` should be set.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    /// Content category. "image" / "audio" / "pdf" / "video" / "file".
+    /// Perches decide which kinds they can route to the model.
+    pub kind: String,
+    /// IANA media type — "image/png", "audio/wav", "application/pdf".
+    pub media_type: String,
+    /// Inline base64 payload.
+    pub data: Option<String>,
+    /// URL the perch can dereference. Either http(s) or a data: URI.
+    pub url: Option<String>,
+}
+
+/// Encode a user prompt for stream-json stdin. Wraps the text in the
+/// content-block shape stream-json perches expect. Use
+/// `encode_prompt_with_attachments` for multimodal prompts.
 pub fn encode_prompt(text: &str) -> String {
+    encode_prompt_with_attachments(text, &[])
+}
+
+/// Encode a user prompt with non-text attachments alongside. Image
+/// attachments translate to a base64 / url image block; other kinds
+/// (audio, pdf, video) pass the media_type through so receiving
+/// perches can opt-in as their model surface grows. Unknown kinds
+/// without a known encoding fall back to a text annotation so the
+/// model at least sees that an attachment was present.
+pub fn encode_prompt_with_attachments(text: &str, attachments: &[Attachment]) -> String {
+    let mut content: Vec<Value> = vec![serde_json::json!({"type": "text", "text": text})];
+    for att in attachments {
+        match att.kind.as_str() {
+            "image" => {
+                if let Some(data) = att.data.as_ref() {
+                    content.push(serde_json::json!({
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": att.media_type, "data": data }
+                    }));
+                } else if let Some(url) = att.url.as_ref() {
+                    content.push(serde_json::json!({
+                        "type": "image",
+                        "source": { "type": "url", "url": url }
+                    }));
+                }
+            }
+            other => {
+                // Unknown attachment kind — surface its presence in
+                // text so the model can at least acknowledge it,
+                // rather than silently dropping. Perches that learn
+                // to handle new kinds (audio, pdf) take over the
+                // proper translation later.
+                let where_clause = att.url.as_deref()
+                    .map(|u| format!(" ({u})"))
+                    .unwrap_or_default();
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("[attachment: kind={other} media_type={}{where_clause}]", att.media_type)
+                }));
+            }
+        }
+    }
     serde_json::json!({
         "type": "user",
-        "message": { "role": "user", "content": [{"type": "text", "text": text}] }
+        "message": { "role": "user", "content": content }
     })
     .to_string()
 }
+
 
 /// Encode a tool_result reply for stream-json stdin (TS `encodeToolResult`).
 pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {

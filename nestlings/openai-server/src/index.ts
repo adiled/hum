@@ -113,6 +113,45 @@ function flatten(content: OpenAIMessage["content"]): string {
   return "";
 }
 
+interface ThrumAttachment {
+  kind: string;
+  mediaType: string;
+  data?: string;
+  url?: string;
+}
+
+// Pull non-text parts out of a content array and translate them to
+// thrum-shape attachments. Today: image_url (both data: URIs and
+// http(s) URLs). Future: input_audio, file refs.
+function attachmentsFromContent(content: OpenAIMessage["content"]): ThrumAttachment[] {
+  if (!Array.isArray(content)) return [];
+  const out: ThrumAttachment[] = [];
+  for (const part of content) {
+    if (part.type === "image_url") {
+      const url = (part as { image_url?: { url?: string } }).image_url?.url;
+      if (!url) continue;
+      if (url.startsWith("data:")) {
+        // data:<media-type>;base64,<payload>
+        const m = url.match(/^data:([^;]+);base64,(.+)$/);
+        if (m) out.push({ kind: "image", mediaType: m[1], data: m[2] });
+      } else {
+        out.push({ kind: "image", mediaType: "image/*", url });
+      }
+    }
+  }
+  return out;
+}
+
+// Collect attachments from every message in the conversation (not
+// just the last). hum's perch sees the union; multi-turn vision is
+// then a perch-side concern (whichever perch knows how to interleave
+// image blocks with text turns).
+function allAttachments(messages: OpenAIMessage[]): ThrumAttachment[] {
+  const out: ThrumAttachment[] = [];
+  for (const m of messages) out.push(...attachmentsFromContent(m.content));
+  return out;
+}
+
 // The OpenAI chat-completions wire is stateless: every request carries
 // the full conversation. Whatever perch humd picks behind the prompt
 // may or may not retain state — that's the perch's propensity, not
@@ -218,6 +257,7 @@ async function start(): Promise<void> {
       const sid = body.user ?? `oai-${sessionKey(messages)}`;
       const { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
+      const attachments = allAttachments(messages);
 
       const chunkId = `chatcmpl-${randomUUID()}`;
       const translator = new OpenAITranslator(chunkId, model);
@@ -341,6 +381,7 @@ async function start(): Promise<void> {
           content: userPrompt,
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(tools ? { tools } : {}),
+          ...(attachments.length > 0 ? { attachments } : {}),
         });
       }
       return;

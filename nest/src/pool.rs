@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Listener, Perch, SpawnSpec, Roost};
+use crate::{encode_cancel, encode_prompt, encode_prompt_with_attachments, encode_tool_result, Attachment, Listener, Perch, SpawnSpec, Roost};
 
 pub struct NestConfig {
     pub max_procs: usize,
@@ -141,17 +141,39 @@ impl Nest {
         Ok(())
     }
 
-    /// Send a user prompt to the active roost (TS `murmur`).
+    /// Send a user prompt to the active roost (TS `murmur`). Text-only
+    /// shortcut; multimodal callers use `murmur_with_attachments`.
     pub async fn murmur(&self, session_id: &str, pool_key: &str, content: &str) -> Result<()> {
+        self.murmur_with_attachments(session_id, pool_key, content, &[]).await
+    }
+
+    /// Send a user prompt that may carry image / audio / pdf
+    /// attachments alongside the text. nest stays format-neutral
+    /// (no perch-specific knowledge); the underlying encoding maps
+    /// known attachment kinds into content blocks the receiving
+    /// stdin shape expects and surfaces unknown kinds as text
+    /// annotations.
+    pub async fn murmur_with_attachments(
+        &self,
+        session_id: &str,
+        pool_key: &str,
+        content: &str,
+        attachments: &[Attachment],
+    ) -> Result<()> {
         let slots = self.slots.read().await;
         let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no roost"))?;
         *slot.active_sid.lock().await = Some(session_id.to_string());
+        let encoded = if attachments.is_empty() {
+            encode_prompt(content)
+        } else {
+            encode_prompt_with_attachments(content, attachments)
+        };
         slot.roost
             .stdin
-            .send(encode_prompt(content))
+            .send(encoded)
             .await
             .map_err(|e| anyhow!("stdin closed: {e}"))?;
-        trace!(target: "nest", %pool_key, sid = %session_id, "nest.murmured");
+        trace!(target: "nest", %pool_key, sid = %session_id, attachments = attachments.len(), "nest.murmured");
         Ok(())
     }
 

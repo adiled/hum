@@ -876,7 +876,21 @@ impl ToneSink for HumdSink {
                     warn!(sid, err = %e, "nest.awaken.failed");
                     return;
                 }
-                if let Err(e) = self.nest.murmur(&sid, &sid, &text).await {
+                // Pass through attachments — perch-agnostic. nest does
+                // the format translation for kinds it knows.
+                let attachments: Vec<nest::Attachment> = tone.get("attachments")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(|a| {
+                        let kind = a.get("kind").and_then(Value::as_str)?.to_string();
+                        let media_type = a.get("mediaType").and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream").to_string();
+                        let data = a.get("data").and_then(Value::as_str).map(str::to_string);
+                        let url = a.get("url").and_then(Value::as_str).map(str::to_string);
+                        if data.is_none() && url.is_none() { return None; }
+                        Some(nest::Attachment { kind, media_type, data, url })
+                    }).collect())
+                    .unwrap_or_default();
+                if let Err(e) = self.nest.murmur_with_attachments(&sid, &sid, &text, &attachments).await {
                     warn!(sid, err = %e, "nest.murmur.failed");
                 }
                 self.waneman.tick(&sid);
