@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# claude-cli perch installer — builds the standalone binary, installs
-# a user systemd / launchd unit, and starts it. Pairs with whatever
-# humd is on the machine via the canonical thrum socket. humd never
-# learns about claude-cli at compile time; this installer registers
-# the perch at runtime via thrum role:"perch".
+# claude-cli worker-bee installer — builds the standalone binary,
+# installs a user systemd / launchd unit, and starts it. Pairs with
+# whatever humd is on the machine via the canonical thrum socket. humd
+# never learns about claude-cli at compile time; this installer
+# registers the worker at runtime via thrum bee:["worker"].
 #
 # Usage:
 #   perches/claude-cli/install            # build + install unit + start
@@ -12,18 +12,18 @@
 # Env:
 #   HUM_THRUM_SOCK     default $XDG_RUNTIME_DIR/hum/thrum.sock
 #   CLAUDE_CLI_PATH    default $(command -v claude)
-#   CLAUDE_MODELS      comma-separated model ids the perch advertises
+#   CLAUDE_MODELS      comma-separated model ids the worker advertises
 #                       (default — claude-opus-4-7, sonnet-4-6, haiku-4-5,
 #                        sonnet-4-5, haiku-4-5-20251001)
 set -euo pipefail
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 HUM_CONFIG="$XDG_CONFIG_HOME/hum"
-PERCH_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$PERCH_DIR/../.." && pwd)"
+HIVE_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$HIVE_DIR/../.." && pwd)"
 KIND="claude-cli"
-UNIT_NAME="hum-$KIND-perch"
-PERCH_BIN="$HOME/.local/bin/${KIND}-perch"
+UNIT_NAME="hum-$KIND-worker"
+WORKER_BIN="$HOME/.local/bin/${KIND}-worker"
 
 # Canonical thrum socket — matches WIRE.md + the daemon installer.
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
@@ -34,9 +34,9 @@ fi
 THRUM_SOCK="${HUM_THRUM_SOCK:-$DEFAULT_SOCK}"
 CLAUDE_BIN="${CLAUDE_CLI_PATH:-$(command -v claude || echo claude)}"
 
-log()  { printf '\033[1m[%s-perch]\033[0m %s\n' "$KIND" "$*"; }
-warn() { printf '\033[1;33m[%s-perch]\033[0m %s\n' "$KIND" "$*" >&2; }
-fail() { printf '\033[1;31m[%s-perch]\033[0m %s\n' "$KIND" "$*" >&2; exit 1; }
+log()  { printf '\033[1m[%s-worker]\033[0m %s\n' "$KIND" "$*"; }
+warn() { printf '\033[1;33m[%s-worker]\033[0m %s\n' "$KIND" "$*" >&2; }
+fail() { printf '\033[1;31m[%s-worker]\033[0m %s\n' "$KIND" "$*" >&2; exit 1; }
 
 # Source the cross-platform service helper.
 SVC="$REPO_ROOT/scripts/svc.sh"
@@ -47,25 +47,25 @@ SVC="$REPO_ROOT/scripts/svc.sh"
 build() {
   # Pre-built binary path (dev/deploy or release artifact installed
   # it). cargo build only when no binary exists yet.
-  if [ -x "$PERCH_BIN" ]; then
-    log "binary already present: $PERCH_BIN — skipping cargo"
+  if [ -x "$WORKER_BIN" ]; then
+    log "binary already present: $WORKER_BIN — skipping cargo"
     return 0
   fi
   if ! command -v cargo >/dev/null 2>&1; then
-    fail "no $PERCH_BIN and cargo unavailable — install rustup or have an upstream deploy supply the binary"
+    fail "no $WORKER_BIN and cargo unavailable — install rustup or have an upstream deploy supply the binary"
   fi
-  log "building $KIND-perch (cargo install --path $PERCH_DIR)"
-  cargo install --quiet --locked --path "$PERCH_DIR" --root "$HOME/.local" --force --bin "${KIND}-perch"
-  [ -x "$PERCH_BIN" ] || fail "binary not at $PERCH_BIN after build"
-  log "built: $PERCH_BIN"
+  log "building $KIND-worker (cargo install --path $HIVE_DIR)"
+  cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "${KIND}-worker"
+  [ -x "$WORKER_BIN" ] || fail "binary not at $WORKER_BIN after build"
+  log "built: $WORKER_BIN"
 }
 
 install_unit() {
   case "$SVC_OS" in
     Linux|Darwin) ;;
-    *) warn "service install unsupported on $SVC_OS — run '$PERCH_BIN' manually"; return 0 ;;
+    *) warn "service install unsupported on $SVC_OS — run '$WORKER_BIN' manually"; return 0 ;;
   esac
-  svc_install "$UNIT_NAME" "$PERCH_BIN" \
+  svc_install "$UNIT_NAME" "$WORKER_BIN" \
     --env "HUM_LOG_LEVEL=info" \
     --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \

@@ -24,8 +24,8 @@ the wire.
 
 | crate | binary | what it spawns | propensity |
 |---|---|---|---|
-| [`claude-cli`](claude-cli) | `claude-cli-perch` | `claude -p` with `stream-json` over a pipe | stateful-session |
-| [`claude-repl`](claude-repl) | `claude-repl-perch` | claude in interactive REPL over a PTY | ephemeral-per-call |
+| [`claude-cli`](claude-cli) | `claude-cli-worker` | `claude -p` with `stream-json` over a pipe | stateful-session |
+| [`claude-repl`](claude-repl) | `claude-repl-worker` | claude in interactive REPL over a PTY | ephemeral-per-call |
 | [`common`](common) | — | `serve_perch` helper + `Classifier` regex bank | library |
 
 ## What a Perch impl owns

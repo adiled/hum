@@ -3,10 +3,10 @@ name = "claude-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Concrete nest impl: `claude -p` over a pipe. Builds the CLI command line from a high-level SpawnSpec, parses stream-json stdout."
+description = "Concrete WorkerBee impl: `claude -p` over a pipe. Builds the CLI command line from a high-level SpawnSpec, parses stream-json stdout."
 
 [[bin]]
-name = "claude-cli-perch"
+name = "claude-cli-worker"
 path = "src/main.rs"
 
 [dependencies]

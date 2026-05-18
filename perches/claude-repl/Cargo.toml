@@ -3,10 +3,10 @@ name = "claude-repl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Concrete nest impl: interactive `claude` over a PTY. v0 stub — no classifier."
+description = "Concrete WorkerBee impl: interactive `claude` over a PTY. v0 stub — no classifier."
 
 [[bin]]
-name = "claude-repl-perch"
+name = "claude-repl-worker"
 path = "src/main.rs"
 
 [dependencies]
