@@ -995,6 +995,41 @@ impl ToneSink for HumdSink {
                             obj.insert("systemPrompt".into(), Value::String(sp.clone()));
                         }
                     }
+                    // disallowedTools: union of
+                    //   (a) what the asker already requested
+                    //   (b) every tool name advertised by an attached
+                    //       forager hive (humfs et al.) — workers'
+                    //       built-in fs primitives must defer to the
+                    //       forager surface humd routes
+                    //   (c) the worker harness's built-in fs primitive
+                    //       names (Read/Write/Edit/Bash/Glob/Grep)
+                    //       whenever (b) is non-empty — keeps the
+                    //       harness from shadowing humfs's tools
+                    let mut disallowed: std::collections::BTreeSet<String> =
+                        obj.get("disallowedTools")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                            .unwrap_or_default();
+                    let forager_tool_names: Vec<String> = {
+                        let m = self.manifests.read();
+                        m.values()
+                            .filter(|man| man.bee.iter().any(|b| b == "forager"))
+                            .flat_map(|man| man.tools.iter().map(|t| t.name.clone()))
+                            .collect()
+                    };
+                    let has_forager_tools = !forager_tool_names.is_empty();
+                    for name in forager_tool_names {
+                        disallowed.insert(name);
+                    }
+                    if has_forager_tools {
+                        for name in ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "MultiEdit"] {
+                            disallowed.insert(name.into());
+                        }
+                    }
+                    if !disallowed.is_empty() {
+                        let arr: Vec<Value> = disallowed.into_iter().map(Value::String).collect();
+                        obj.insert("disallowedTools".into(), Value::Array(arr));
+                    }
                 }
                 trace!(sid, model, worker_client = %worker_client, "prompt.forward.to-worker");
                 // Record origin so reply tones from the worker route
