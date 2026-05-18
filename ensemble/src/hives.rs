@@ -82,6 +82,24 @@ pub struct HiveManifest {
     /// `bee.contains("worker")`; foragers may carry an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// Tool definitions this bee handles. Meaningful when
+    /// `bee.contains("forager")` and the forager provides tool-call
+    /// surfaces (e.g. `humfs_*`). humd indexes these for routing
+    /// chi:"tool-call" tones by `toolName`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolEntry>,
+}
+
+/// One advertised tool. Carried verbatim from the forager's hello
+/// (`tools[i]`) into the manifest so MCP shells and other foragers
+/// can render `tools/list` from a single aggregated catalogue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolEntry {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(rename = "inputSchema", default)]
+    pub input_schema: serde_json::Value,
 }
 
 /// Network address a nestler advertises. Optional fields stay optional
@@ -133,6 +151,7 @@ impl HiveManifest {
             bind: None,
             bee: Vec::new(),
             models: Vec::new(),
+            tools: Vec::new(),
             nestler_id: None,
         }
     }

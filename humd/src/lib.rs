@@ -263,6 +263,7 @@ where
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
         sid_origins: sid_origins.clone(),
+        tool_routes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -440,6 +441,12 @@ struct HumdSink {
     /// sid is in this map get stamped `to: <origin>` and routed via
     /// the ensemble back to the originating humd.
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>>,
+    /// Map callId → originator client_id for tool-calls routed to a
+    /// forager hive. Populated when humd intercepts a worker's
+    /// chi:"tool-call" whose toolName matches an advertised tool;
+    /// consumed when the forager's chi:"tool-result" lands so humd
+    /// can return the result to the original worker.
+    tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
 }
 
 /// Map of in-flight nestler-tool call ids → oneshot senders waiting
@@ -594,6 +601,40 @@ impl ToneSink for HumdSink {
                     .unwrap_or(false)
             };
             if is_worker {
+                // tool-call interception — if this worker is calling a
+                // tool advertised by a forager hive (humfs et al.),
+                // route the tone directly to that forager and record
+                // the callId → worker client_id mapping so the result
+                // returns to the right place. Skip the sigil broadcast.
+                if matches!(chi, Some(Chi::ToolCall)) {
+                    let tool_name = tone.get("toolName").and_then(Value::as_str)
+                        .or_else(|| tone.get("name").and_then(Value::as_str))
+                        .map(str::to_string);
+                    if let Some(tool_name) = tool_name {
+                        let forager_cid = {
+                            let m = self.manifests.read();
+                            m.iter().find(|(_, man)| {
+                                man.bee.iter().any(|b| b == "forager")
+                                && man.tools.iter().any(|t| t.name == tool_name)
+                            }).map(|(cid, _)| cid.clone())
+                        };
+                        if let Some(fcid) = forager_cid {
+                            let call_id = tone.get("callId").and_then(Value::as_str)
+                                .unwrap_or("").to_string();
+                            if !call_id.is_empty() {
+                                self.tool_routes.write().insert(
+                                    call_id.clone(), client_id.to_string()
+                                );
+                            }
+                            trace!(
+                                from = client_id, to = %fcid, %tool_name, %call_id,
+                                "tool-call.route.to-forager"
+                            );
+                            self.thrum.thrum_to(&fcid, tone);
+                            return;
+                        }
+                    }
+                }
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
                     if matches!(chi,
                         Some(Chi::Chunk) | Some(Chi::Finish) | Some(Chi::Error)
@@ -758,6 +799,26 @@ impl ToneSink for HumdSink {
                     manifest.nestler_id = Some(nestler_id);
                     manifest.bee = bee.clone();
                     manifest.models = models.clone();
+                    // Forager tool advertisement — fills the manifest's
+                    // tools[] array. humd routes chi:"tool-call" by
+                    // toolName to whichever hive's manifest carries
+                    // that name in tools[].name.
+                    if let Some(arr) = tone.get("tools").and_then(Value::as_array) {
+                        manifest.tools = arr.iter().filter_map(|v| {
+                            let name = v.get("name").and_then(Value::as_str)?.to_string();
+                            let description = v.get("description").and_then(Value::as_str)
+                                .unwrap_or("").to_string();
+                            let input_schema = v.get("inputSchema").cloned().unwrap_or(Value::Null);
+                            Some(ensemble::ToolEntry { name, description, input_schema })
+                        }).collect();
+                        if !manifest.tools.is_empty() {
+                            info!(
+                                client_id,
+                                count = manifest.tools.len(),
+                                "forager.tools.registered"
+                            );
+                        }
+                    }
 
                     // Local store — single source of truth for routing
                     // decisions humd makes (worker lookup, passthrough
@@ -1099,11 +1160,28 @@ impl ToneSink for HumdSink {
                 );
             }
             Some(Chi::ToolResult) => {
-                // Resolves a pending nestler-tool dispatch. NestlerBridge
-                // is parked on a oneshot keyed by callId; pop it and
-                // forward the result content. Missing callId means the
-                // nestler echoed after timeout — silent drop.
+                // Two-arm resolution:
+                //
+                // 1. Forager-hive return path: a humfs (or other
+                //    forager) finished a tool-call humd routed to it.
+                //    callId is in `tool_routes` — forward the
+                //    tool-result tone directly to the originating
+                //    worker client_id.
+                // 2. Broker-tool path: a nestler-declared tool dispatch
+                //    that NestlerBridge parked on a oneshot keyed by
+                //    callId; pop the channel and forward the result
+                //    content.
+                //
+                // Missing callId means the bee echoed after timeout —
+                // silent drop.
                 let call_id = tone.get("callId").and_then(Value::as_str);
+                if let Some(call_id) = call_id {
+                    if let Some(worker_cid) = self.tool_routes.write().remove(call_id) {
+                        trace!(call_id, %worker_cid, "tool_result.route.to-worker");
+                        self.thrum.thrum_to(&worker_cid, tone.clone());
+                        return;
+                    }
+                }
                 let result = tone.get("result").and_then(Value::as_str)
                     .map(str::to_string)
                     .or_else(|| tone.get("content").and_then(Value::as_str).map(str::to_string))
