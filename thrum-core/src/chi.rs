@@ -129,15 +129,15 @@ pub enum Chi {
 #[strum(serialize_all = "kebab-case")]
 pub enum PulseKind {
     /// process created
-    RoostSpawned,
+    CellSpawned,
     /// system init received, accepting input
-    RoostReady,
+    CellReady,
     /// turn complete, no listeners
-    RoostIdle,
+    CellIdle,
     /// process exited
-    RoostDied,
+    CellDied,
     /// killed to make room
-    RoostEvicted,
+    CellEvicted,
 }
 
 #[cfg(test)]
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn pulse_kind_wire_format_is_kebab() {
-        assert_eq!(serde_json::to_string(&PulseKind::RoostEvicted).unwrap(), "\"roost-evicted\"");
-        let parsed: PulseKind = serde_json::from_str("\"roost-ready\"").unwrap();
-        assert_eq!(parsed, PulseKind::RoostReady);
+        assert_eq!(serde_json::to_string(&PulseKind::CellEvicted).unwrap(), "\"cell-evicted\"");
+        let parsed: PulseKind = serde_json::from_str("\"cell-ready\"").unwrap();
+        assert_eq!(parsed, PulseKind::CellReady);
     }
 }

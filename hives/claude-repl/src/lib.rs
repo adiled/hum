@@ -5,7 +5,7 @@
 //! responder, hook FIFO, and JSONL transcript synth into stream-json.
 //!
 //! v0: spawn the PTY, watch stdout, mark PERCHED when the prompt glyph
-//! `❯` shows up. No transcript synth, no hooks, no classifier. The roost
+//! `❯` shows up. No transcript synth, no hooks, no classifier. The cell
 //! compiles and runs — it just can't carry a turn.
 
 use std::io::Read;
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Roost, SpawnSpec, WorkerBee};
+use nest::{Cell, SpawnSpec, WorkerBee};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -76,7 +76,7 @@ impl WorkerBee for ClaudeReplWorker {
         true
     }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
         let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -206,7 +206,7 @@ impl WorkerBee for ClaudeReplWorker {
 
         trace!(target: "nest", "pty.spawned pid={:?}", pid);
 
-        Ok(Roost {
+        Ok(Cell {
             pid,
             stdin: tx_in,
             events: std::sync::Arc::new(Mutex::new(rx_evt)),

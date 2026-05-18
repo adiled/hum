@@ -234,13 +234,13 @@ pub struct PeerCapabilities {
     /// whose `free_slots` is `None` or `Some(n) where n > 0`.
     #[serde(default)]
     pub free_slots: Option<usize>,
-    /// Live capacity snapshot — see [`headroom::RoostHeadroom`]. Carries
+    /// Live capacity snapshot — see [`headroom::CellHeadroom`]. Carries
     /// the pressure tier (Cool/Warm/Hot/Refuse) + p95 latency so peers
     /// can route away from saturated nodes without waiting for hard
     /// failure. Empty default = no nest / not yet measured; treat as
     /// available unless explicitly Refuse.
     #[serde(default)]
-    pub headroom: headroom::RoostHeadroom,
+    pub headroom: headroom::CellHeadroom,
 }
 
 /// First tone over a fresh connection — each side names itself and what
@@ -1246,7 +1246,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(HumdId, PeerCapabilities)> {
         });
     let headroom = tone
         .get("headroom")
-        .and_then(|v| serde_json::from_value::<headroom::RoostHeadroom>(v.clone()).ok())
+        .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
         .unwrap_or_default();
     Some((
         claimed_id,
@@ -1300,7 +1300,7 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
             .and_then(|v| if v.is_null() { None } else { v.as_u64().map(|n| n as usize) });
         let headroom = tone
             .get("headroom")
-            .and_then(|v| serde_json::from_value::<headroom::RoostHeadroom>(v.clone()).ok())
+            .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
             .unwrap_or_default();
         HelloParse::Unsigned(
             claimed_id,
@@ -1525,7 +1525,7 @@ mod tests {
             hosts: vec!["alice".into()],
             can_relay: true,
             free_slots: None,
-            headroom: headroom::RoostHeadroom::default(),
+            headroom: headroom::CellHeadroom::default(),
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
@@ -1533,7 +1533,7 @@ mod tests {
             hosts: vec!["bob".into()],
             can_relay: false,
             free_slots: None,
-            headroom: headroom::RoostHeadroom::default(),
+            headroom: headroom::CellHeadroom::default(),
         };
         let (a_side, b_side) = InMemoryEndpoint::pair(
             a_id, b_caps.clone(),  // a's transport-view of b

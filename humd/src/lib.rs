@@ -1148,7 +1148,7 @@ fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
     let total_slots = cfg.hum_cfg.nest.max_procs;
     // Initial advertise: full free, Cool. Live updates come from the
     // beat path once the pool is wired (see TODO in nest::pool::Nest).
-    let headroom = ensemble::headroom::RoostHeadroom::from_counts(total_slots, total_slots, None);
+    let headroom = ensemble::headroom::CellHeadroom::from_counts(total_slots, total_slots, None);
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.into(),
         nests: vec![nest_name],

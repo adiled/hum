@@ -1,4 +1,4 @@
-//! Per-roost OS-level resource caps — RSS, fds, CPU shares, wall-clock TTL.
+//! Per-cell OS-level resource caps — RSS, fds, CPU shares, wall-clock TTL.
 //!
 //! Defines `ResourceLimits` and an `apply_pre_exec()` helper that wires the
 //! caps into a `std::process::Command` via `CommandExt::pre_exec`. On Linux
@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// OS-level caps for a roost subprocess. All fields optional — `None`
+/// OS-level caps for a cell subprocess. All fields optional — `None`
 /// means "no extra cap" (inherits from parent / system default).
 ///
 /// Applied via rlimit (setrlimit) before exec on Linux. On non-Linux
@@ -31,7 +31,7 @@ pub struct ResourceLimits {
     pub cpu_secs: Option<u32>,
     /// Hard cap on wall-clock execution time in milliseconds. NOT an
     /// rlimit — caller (the WorkerBee) should arm a timer that kills the
-    /// roost when this expires. Stored here so the spec travels together.
+    /// cell when this expires. Stored here so the spec travels together.
     pub wall_clock_ms: Option<u64>,
     /// Nice value adjustment (-20..=19). Skipped if None.
     /// Applied via setpriority(2).

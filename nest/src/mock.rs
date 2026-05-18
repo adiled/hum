@@ -1,7 +1,7 @@
 //! mock — a test-only WorkerBee that emits canned stream-json events.
 //!
 //! Sim tests can't spawn real subprocesses. `MockWorkerBee` returns a
-//! [`Roost`] whose `events` channel emits a deterministic sequence shaped
+//! [`Cell`] whose `events` channel emits a deterministic sequence shaped
 //! exactly like `claude -p --output-format stream-json` would, so the
 //! daemon's listener bridge fires through the same code path.
 
@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::{Roost, SpawnSpec, WorkerBee};
+use crate::{Cell, SpawnSpec, WorkerBee};
 
 /// A WorkerBee that produces canned events instead of running a subprocess.
 pub struct MockWorkerBee {
@@ -39,7 +39,7 @@ impl Default for MockWorkerBee {
 impl WorkerBee for MockWorkerBee {
     fn ephemeral(&self) -> bool { false }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
         let (tx_in, mut rx_in) = mpsc::channel::<String>(64);
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(256);
         let (tx_exit, rx_exit) = oneshot::channel::<i32>();
@@ -118,7 +118,7 @@ impl WorkerBee for MockWorkerBee {
 
         let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
 
-        Ok(Roost {
+        Ok(Cell {
             pid: None,
             stdin: tx_in,
             events: Arc::new(Mutex::new(rx_evt)),
@@ -137,11 +137,11 @@ mod tests {
     async fn emits_canned_sequence_with_default_text() {
         let bee = MockWorkerBee::default();
         let spec = SpawnSpec::new("sid-mock", "claude-haiku-4-5", "/tmp");
-        let roost = bee.spawn(spec).await.unwrap();
+        let cell = bee.spawn(spec).await.unwrap();
 
         let mut events = Vec::new();
         {
-            let mut rx = roost.events.lock().await;
+            let mut rx = cell.events.lock().await;
             while let Some(v) = rx.recv().await {
                 events.push(v);
             }
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(events[4]["type"], "result");
         assert_eq!(events[4]["stop_reason"], "end_turn");
 
-        let code = roost.exited.await.unwrap();
+        let code = cell.exited.await.unwrap();
         assert_eq!(code, 0);
     }
 
@@ -173,8 +173,8 @@ mod tests {
     async fn custom_text_appears_in_delta() {
         let bee = MockWorkerBee { text: "ahoy world".into(), ..Default::default() };
         let spec = SpawnSpec::new("s", "m", "/");
-        let roost = bee.spawn(spec).await.unwrap();
-        let mut rx = roost.events.lock().await;
+        let cell = bee.spawn(spec).await.unwrap();
+        let mut rx = cell.events.lock().await;
         let mut saw_text = None;
         while let Some(v) = rx.recv().await {
             if v["type"] == "content_block_delta" {
@@ -188,8 +188,8 @@ mod tests {
     async fn with_tool_inserts_tool_use_block() {
         let bee = MockWorkerBee { with_tool: true, ..Default::default() };
         let spec = SpawnSpec::new("s", "m", "/");
-        let roost = bee.spawn(spec).await.unwrap();
-        let mut rx = roost.events.lock().await;
+        let cell = bee.spawn(spec).await.unwrap();
+        let mut rx = cell.events.lock().await;
         let mut kinds = Vec::new();
         while let Some(v) = rx.recv().await {
             kinds.push(v["type"].as_str().unwrap_or("").to_string());
@@ -209,10 +209,10 @@ mod tests {
     #[tokio::test]
     async fn stdin_drains_silently() {
         let bee = MockWorkerBee::default();
-        let roost = bee.spawn(SpawnSpec::new("s", "m", "/")).await.unwrap();
+        let cell = bee.spawn(SpawnSpec::new("s", "m", "/")).await.unwrap();
         // Should not panic / block.
-        roost.stdin.send("ignored line".into()).await.unwrap();
-        roost.stdin.send(crate::encode_prompt("hi")).await.unwrap();
+        cell.stdin.send("ignored line".into()).await.unwrap();
+        cell.stdin.send(crate::encode_prompt("hi")).await.unwrap();
     }
 
     /// End-to-end with a Listener — the daemon's bridge sees text-delta + finish.
@@ -233,7 +233,7 @@ mod tests {
             async fn on_petal(&self, kind: &str, payload: Value) {
                 self.petals.lock().unwrap().push((kind.into(), payload));
             }
-            async fn on_roost(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
+            async fn on_cell(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
             async fn on_wilt(&self, finish_reason: &str, _usage: Option<Value>, _meta: Value) {
                 *self.wilted.lock().unwrap() = Some(finish_reason.into());
             }
@@ -248,11 +248,11 @@ mod tests {
         let listener: Arc<dyn Listener> = captor.clone();
 
         let bee = MockWorkerBee::default();
-        let roost = bee.spawn(SpawnSpec::new("sid-bridge", "claude-sonnet-4-6", "/")).await.unwrap();
+        let cell = bee.spawn(SpawnSpec::new("sid-bridge", "claude-sonnet-4-6", "/")).await.unwrap();
 
         // Minimal bridge — mirrors what the daemon binary does: pump events
-        // off the roost, route by `type`, and call the listener.
-        let events_arc = roost.events.clone();
+        // off the cell, route by `type`, and call the listener.
+        let events_arc = cell.events.clone();
         let mut rx = events_arc.lock().await;
         while let Some(v) = rx.recv().await {
             let kind = v["type"].as_str().unwrap_or("").to_string();

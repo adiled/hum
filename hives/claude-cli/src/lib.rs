@@ -2,7 +2,7 @@
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
 //! Takes a [`nest::SpawnSpec`], builds the CLI invocation, runs the
-//! subprocess, exposes stdin/stdout/exit through [`nest::Roost`]. The
+//! subprocess, exposes stdin/stdout/exit through [`nest::Cell`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
 
 pub mod graft;
@@ -17,7 +17,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Propensity, Roost, SpawnSpec, WorkerBee};
+use nest::{Propensity, Cell, SpawnSpec, WorkerBee};
 
 pub struct ClaudeCliWorker;
 
@@ -103,7 +103,7 @@ impl WorkerBee for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
         let cli = spec.cli_path.clone()
             .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
             .unwrap_or_else(|| "claude".into());
@@ -213,7 +213,7 @@ impl WorkerBee for ClaudeCliWorker {
 
         trace!(target: "claude-cli", "spawned pid={:?}", pid);
 
-        Ok(Roost {
+        Ok(Cell {
             pid,
             stdin: tx_in,
             events: std::sync::Arc::new(Mutex::new(rx_evt)),

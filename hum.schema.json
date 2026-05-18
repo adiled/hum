@@ -64,19 +64,19 @@
     "nest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The pool that hosts roosts. One nest per humd.",
+      "description": "The pool that hosts cells. One nest per humd.",
       "properties": {
         "maxProcs": {
           "type": "integer",
           "minimum": 1,
           "default": 4,
-          "description": "Hard cap on concurrent roosts. See nest::NestHealth for the pressure tiers it feeds."
+          "description": "Hard cap on concurrent cells. See nest::NestHealth for the pressure tiers it feeds."
         },
         "idleThresholdMs": {
           "type": "integer",
           "minimum": 0,
           "default": 300000,
-          "description": "Ms after last activity before a roost is considered idle and eligible for eviction."
+          "description": "Ms after last activity before a cell is considered idle and eligible for eviction."
         },
         "default": {
           "type": "string",

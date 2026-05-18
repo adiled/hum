@@ -1,6 +1,6 @@
-//! Per-roost observability — RSS, CPU, fd count, wall-clock age.
+//! Per-cell observability — RSS, CPU, fd count, wall-clock age.
 //!
-//! A `RoostMetrics` is a point-in-time snapshot of one roost's OS-visible
+//! A `CellMetrics` is a point-in-time snapshot of one cell's OS-visible
 //! resource use. `sample(pid, spawned_at_ms)` reads it. On Linux we lift
 //! the numbers out of `/proc/<pid>/{statm,stat,fd}`; on other platforms
 //! we fill in just the fields we can compute without the kernel (age,
@@ -9,7 +9,7 @@
 //!
 //! Sampling is best-effort. A process that exits between the `read_dir`
 //! and the `read_to_string` shows up as a partial snapshot rather than
-//! a panic. That's deliberate: roosts come and go, and a metrics layer
+//! a panic. That's deliberate: cells come and go, and a metrics layer
 //! that crashes its sampler defeats the purpose.
 //!
 //! The optional `spawn_sampler` helper runs a sampler in a tokio task at
@@ -22,9 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-/// Point-in-time snapshot of one roost's OS-visible resource use.
+/// Point-in-time snapshot of one cell's OS-visible resource use.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RoostMetrics {
+pub struct CellMetrics {
     pub pid: Option<u32>,
     /// Resident set size in bytes. None if unavailable on this platform.
     pub rss_bytes: Option<u64>,
@@ -32,7 +32,7 @@ pub struct RoostMetrics {
     pub cpu_ms: Option<u64>,
     /// Open file descriptor count. None if unavailable.
     pub fd_count: Option<u32>,
-    /// Wall-clock age of the roost in milliseconds.
+    /// Wall-clock age of the cell in milliseconds.
     pub age_ms: u64,
     /// Wall-clock timestamp this snapshot was taken (ms since UNIX epoch).
     pub sampled_at_ms: i64,
@@ -42,13 +42,13 @@ pub struct RoostMetrics {
 /// /proc/<pid>/{statm, stat, fd}. On other platforms it returns a
 /// snapshot with most fields set to None; this is deliberate — the
 /// caller logs that the platform doesn't support full sampling.
-pub fn sample(pid: u32, spawned_at_ms: i64) -> RoostMetrics {
+pub fn sample(pid: u32, spawned_at_ms: i64) -> CellMetrics {
     let sampled_at_ms = now_ms();
     let age_ms = sampled_at_ms
         .saturating_sub(spawned_at_ms)
         .max(0) as u64;
 
-    let mut m = RoostMetrics {
+    let mut m = CellMetrics {
         pid: Some(pid),
         rss_bytes: None,
         cpu_ms: None,
@@ -76,7 +76,7 @@ pub fn spawn_sampler(
     pid: u32,
     spawned_at_ms: i64,
     interval: std::time::Duration,
-) -> (mpsc::UnboundedReceiver<RoostMetrics>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::UnboundedReceiver<CellMetrics>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
         let mut tick = tokio::time::interval(interval);

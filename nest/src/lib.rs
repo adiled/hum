@@ -1,8 +1,8 @@
 //! nest — bee crates: traits for WorkerBee (produce compute) and
 //! ForagerBee (translate outside wire ↔ thrum). A `Nest` keyed by
-//! `pool_key` (== sid) holds at most one `Roost` per key. Each roost
+//! `pool_key` (== sid) holds at most one `Cell` per key. Each cell
 //! wraps a child process spawned via a `WorkerBee` impl. The daemon
-//! binary registers `Listener`s on a roost to receive parsed stream
+//! binary registers `Listener`s on a cell to receive parsed stream
 //! events.
 //!
 //! These traits are the Rust SDK for building bees that handshake with
@@ -20,12 +20,12 @@ use tokio::sync::{mpsc, Mutex};
 pub mod mock;
 pub mod pool;
 
-// Resource-oriented primitives for the Roost as a system resource.
+// Resource-oriented primitives for the Cell as a system resource.
 // Filled in by parallel work; declared together so contributors don't race
 // on this file. See each module's docstring for scope.
-pub mod metrics;   // per-roost observability (RSS, CPU, fds)
-pub mod limits;    // per-roost OS-level caps (rlimit, cgroups)
-pub mod budget;    // per-roost soft caps (tokens, tool-call rates)
+pub mod metrics;   // per-cell observability (RSS, CPU, fds)
+pub mod limits;    // per-cell OS-level caps (rlimit, cgroups)
+pub mod budget;    // per-cell soft caps (tokens, tool-call rates)
 pub mod health;    // pool-wide pressure tiers + eviction policy
 
 pub use mock::MockWorkerBee;
@@ -37,7 +37,7 @@ pub use pool::Nest;
 /// The daemon stays harness-agnostic.
 #[derive(Debug, Clone)]
 pub struct SpawnSpec {
-    /// hum session id for this roost.
+    /// hum session id for this cell.
     pub sid: String,
     /// Model id to run on (e.g. "claude-sonnet-4-6", "claude-haiku-4-5").
     pub model_id: String,
@@ -94,9 +94,9 @@ impl SpawnSpec {
     }
 }
 
-/// A Roost is one live subprocess seen from the daemon side. Pipe and
+/// A Cell is one live subprocess seen from the daemon side. Pipe and
 /// PTY worker bees both produce this same shape.
-pub struct Roost {
+pub struct Cell {
     pub pid: Option<u32>,
     /// Send raw NDJSON lines (already serialized, no trailing newline) to the
     /// child's stdin. Pipe-mode workers write them straight through;
@@ -107,7 +107,7 @@ pub struct Roost {
     pub events: Arc<Mutex<mpsc::Receiver<Value>>>,
     /// Resolves with the child's exit code once it terminates.
     pub exited: tokio::sync::oneshot::Receiver<i32>,
-    /// True for PTY/REPL-style roosts the pool evicts on each `result`.
+    /// True for PTY/REPL-style cells the pool evicts on each `result`.
     pub ephemeral: bool,
     /// Kill the child. Best-effort; safe to call multiple times.
     pub kill: Arc<dyn Fn() + Send + Sync>,
@@ -136,7 +136,7 @@ pub enum Propensity {
     EphemeralPerCall,
 }
 
-/// A WorkerBee produces compute — it spawns a roost (subprocess or
+/// A WorkerBee produces compute — it spawns a cell (subprocess or
 /// in-process inference) when handed a `SpawnSpec`. This is the trait
 /// any compute-side bee implements to be commissioned by a hive.
 #[async_trait]
@@ -149,7 +149,7 @@ pub trait WorkerBee: Send + Sync {
     fn propensity(&self) -> Propensity {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
     }
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost>;
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell>;
 }
 
 /// A ForagerBee translates an outside wire (OpenAI, Anthropic, custom
@@ -167,13 +167,13 @@ pub trait ForagerBee: Send + Sync {
 }
 
 /// Listener receives parsed stream events for one session bound to a
-/// roost. The daemon binary is responsible for translating Petals into
+/// cell. The daemon binary is responsible for translating Petals into
 /// thrum chunks.
 #[async_trait]
 pub trait Listener: Send + Sync {
     fn session_id(&self) -> &str;
     async fn on_petal(&self, kind: &str, payload: Value);
-    async fn on_roost(&self, nest_id: &str, model: &str, tools: Vec<String>);
+    async fn on_cell(&self, nest_id: &str, model: &str, tools: Vec<String>);
     async fn on_wilt(&self, finish_reason: &str, usage: Option<Value>, provider_meta: Value);
     async fn on_thorn(&self, wound: &str);
 }

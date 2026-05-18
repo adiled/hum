@@ -1,4 +1,4 @@
-//! Per-roost soft caps — tokens per turn / day, tool-call rate.
+//! Per-cell soft caps — tokens per turn / day, tool-call rate.
 //!
 //! The drone tracks `tokens_burned` per-sigil; this module wraps that
 //! signal into a refuse-prompt gate that emits `chi:"error"` with
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 const DAY_MS: i64 = 86_400_000;
 const MINUTE_MS: i64 = 60_000;
 
-/// Configurable soft limits on a roost's consumption. `None` means
+/// Configurable soft limits on a cell's consumption. `None` means
 /// "no cap for this dimension."
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Budget {

@@ -367,7 +367,7 @@ impl Drone {
                 // cross-process channel state (wane, echoes, missed beats) alone.
                 if tone.chi() == Chi::Pulse {
                     let kind = tone.body.get("kind").and_then(Value::as_str);
-                    if matches!(kind, Some("roost-died" | "roost-evicted" | "roost-idle")) {
+                    if matches!(kind, Some("cell-died" | "cell-evicted" | "cell-idle")) {
                         state.inflight_tools = 0;
                         state.response_text.clear();
                         state.suspicious = Suspicion::None;
@@ -760,7 +760,7 @@ mod tests {
         let mut env = Envelope::new(Chi::Pulse, "rid-p");
         env.sigil = Some("s1".into());
         let mut t = Tone::new(env);
-        t.body.insert("kind".into(), Value::String("roost-died".into()));
+        t.body.insert("kind".into(), Value::String("cell-died".into()));
         d.heard(&t);
         let st = d.inspect("s1").unwrap();
         assert_eq!(st.inflight_tools, 0);

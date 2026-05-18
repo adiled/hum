@@ -213,7 +213,7 @@ impl Hums {
 
     /// Drop hums that have been idle for more than `max_age_ms` and whose
     /// `last_accessed` is set. Returns the number reaped. The TS daemon
-    /// also consults `nest.roost(sid)` to avoid reaping live processes —
+    /// also consults `nest.cell(sid)` to avoid reaping live processes —
     /// that check has to happen at the call site since this crate doesn't
     /// know about the nest.
     pub fn reap_stale(&self, max_age_ms: i64) -> usize {
@@ -229,7 +229,7 @@ impl Hums {
 
     /// Like [`Hums::reap_stale`] but skip any sid for which `is_alive(sid)`
     /// returns true. Mirrors the TS `reapSessions` check against
-    /// `nest.roost(sid)`.
+    /// `nest.cell(sid)`.
     pub fn reap_stale_unless<F: Fn(&str) -> bool>(&self, max_age_ms: i64, is_alive: F) -> usize {
         let now = now_ms();
         let mut guard = self.inner.write();

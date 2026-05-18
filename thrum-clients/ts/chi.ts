@@ -84,15 +84,15 @@ export function isValidChi(s: string): s is ChiKind { return ALL_CHI.has(s as Ch
 // pulse.kind is its own enum within chi:"pulse" tones.
 export const PulseKind = {
   /** process created */
-  roostSpawned: "roost-spawned",
+  cellSpawned: "cell-spawned",
   /** system init received, accepting input */
-  roostReady: "roost-ready",
+  cellReady: "cell-ready",
   /** turn complete, no listeners */
-  roostIdle: "roost-idle",
+  cellIdle: "cell-idle",
   /** process exited */
-  roostDied: "roost-died",
+  cellDied: "cell-died",
   /** killed to make room */
-  roostEvicted: "roost-evicted",
+  cellEvicted: "cell-evicted",
 } as const;
 export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];
 

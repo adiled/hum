@@ -130,7 +130,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 The biggest single addition is the `fs` section — humd's filesystem
 **capability primitive**. Built-in tools (Read/Write/Edit/Glob/Grep/Bash)
 clamp to `fs.roots`; `fs.denied` overrides any root. `mode: "rw" | "ro"`
-per root. The `SpawnSpec.cwd` for any spawned roost must sit inside
+per root. The `SpawnSpec.cwd` for any spawned cell must sit inside
 some root. Empty `roots` = humd has no fs access — useful for
 inference-only nests.
 
@@ -166,7 +166,7 @@ plugin to expose hum tools via MCP: that path is gone. Configure your
 opencode session's MCP servers directly in opencode.json.
 
 humd still has an embedded MCP server for its own tool surface;
-spawned roosts get its URL via `SpawnSpec.mcp_url`. Each worker bee
+spawned cells get its URL via `SpawnSpec.mcp_url`. Each worker bee
 wires it into the LLM's MCP config. The crate isn't gone, it's just
 no longer bridging to a clwnd plugin.
 

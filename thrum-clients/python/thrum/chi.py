@@ -120,13 +120,13 @@ def is_valid_chi(value: str) -> bool:
 class PulseKind:
     """pulse.kind enum within chi:'pulse' tones."""
     # process created
-    ROOST_SPAWNED: str = "roost-spawned"
+    CELL_SPAWNED: str = "cell-spawned"
     # system init received, accepting input
-    ROOST_READY: str = "roost-ready"
+    CELL_READY: str = "cell-ready"
     # turn complete, no listeners
-    ROOST_IDLE: str = "roost-idle"
+    CELL_IDLE: str = "cell-idle"
     # process exited
-    ROOST_DIED: str = "roost-died"
+    CELL_DIED: str = "cell-died"
     # killed to make room
-    ROOST_EVICTED: str = "roost-evicted"
+    CELL_EVICTED: str = "cell-evicted"
 

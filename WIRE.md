@@ -111,7 +111,7 @@ single protocol.
 
 ## The nest model
 
-A **nest** is the place inside humd where nestlers nestle and **roosts**
+A **nest** is the place inside humd where nestlers nestle and **cells**
 (live LLM subprocesses) live. The wire never sees the nest as a thing
 of its own — it only sees the chi traffic that flows through it.
 
@@ -120,7 +120,7 @@ Direction is sacred. Two ends of the same connection, two roles:
 | who | sends | receives |
 |---|---|---|
 | **asker side** (a nestler when pre-handshake, a nestled after) | `chi:"hello"` (first ask), then `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"` — keeps asking the whole lifetime | `chi:"breath"` (accepting the handshake), `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"`, `chi:"session-ready"`, `chi:"pulse"` |
-| **roost side** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cancel"` |
+| **cell side** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cancel"` |
 
 The asker is the same actor throughout — a **nestler** before its
 hello is accepted, a **nestled** after. The role doesn't flip when
@@ -128,17 +128,17 @@ the state changes; "hello" is just the first of many asks the
 connection will carry. Cancels, prompts, tool-results, cleanups all
 flow from the nestled state, not just hello from the nestler.
 
-A roost is always answerer. **Nobody is both on the same connection.**
+A cell is always answerer. **Nobody is both on the same connection.**
 A process that wanted to "also offer compute" would not do so by
-inverting its nestler connection — it would do so by being a roost
+inverting its nestler connection — it would do so by being a cell
 inside *some humd's nest*, addressable via that humd's ensemble
 advertise.
 
-The wire is **opaque to the roost's implementation.** A roost might
+The wire is **opaque to the cell's implementation.** A cell might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
 the wire sees identical chunks coming back either way. The kind of
-roost (`WorkerBee` impl, in Rust terms) is the hive's concern,
+cell (`WorkerBee` impl, in Rust terms) is the hive's concern,
 exposed to the wire only via `hive: "<kind>"` on hello.
 
 What the wire *does* see, at the humd level:
@@ -190,7 +190,7 @@ registry by one bump.
 | `finish` | `sid`, `finishReason`, `usage` | turn complete |
 | `error` | `sid`, `code`, `message`, optional protocol payload | turn aborted / hard error |
 | `session-ready` | `sid`, `claudeSessionId` | nest spawned, ready for prompts |
-| `pulse` | `kind` (RoostSpawned/RoostReady/RoostIdle/RoostDied/RoostEvicted), `roostId` | process lifecycle event |
+| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `cellId` | process lifecycle event |
 | `permission-ask` | `sid`, `permitId`, `question`, `context` | mid-stream permission needed |
 | `tendril-reach` | `sid`, `callId`, `name`, `args` | task subagent dispatch |
 | `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch |

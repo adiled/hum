@@ -9,11 +9,11 @@ description: "catalogue of bee implementations — each subdir is a kind of hive
 > kind/contract that commissions one or more **bees** (workers,
 > foragers, or both)_
 
-A **nest** is the space inside a humd where bees gather and roosts
+A **nest** is the space inside a humd where bees gather and cells
 live. A **hive** is the *kind* — `claude-cli`, `claude-repl`, future
 `ollama-local`, future `openai-server-as-forager`. A **bee** is the
 running participant a hive commissions: a **worker** produces compute
-(`WorkerBee` trait — `spawn(SpawnSpec) → Roost`), a **forager**
+(`WorkerBee` trait — `spawn(SpawnSpec) → Cell`), a **forager**
 translates an outside wire into thrum (`ForagerBee` trait). Hybrid
 bees that are both are perfectly fine.
 
@@ -39,16 +39,16 @@ Just two methods:
 #[async_trait]
 pub trait WorkerBee: Send + Sync {
     fn ephemeral(&self) -> bool;
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost>;
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell>;
 }
 ```
 
-`ephemeral()` declares whether the pool evicts the roost after each
+`ephemeral()` declares whether the pool evicts the cell after each
 `result` (REPL-style: yes; pipe-mode: no). `spawn` turns a high-level
-`SpawnSpec` into a running `Roost` — a struct exposing `stdin`,
+`SpawnSpec` into a running `Cell` — a struct exposing `stdin`,
 `events`, `kill`, and an `exited` oneshot.
 
-The trait says nothing about *what* the roost is. A WorkerBee impl might:
+The trait says nothing about *what* the cell is. A WorkerBee impl might:
 
 - fork a local model binary (the existing claude-cli, claude-repl cases),
 - open an HTTPS connection to a cloud LLM API and bridge it into the
@@ -69,7 +69,7 @@ required, no PR required.
 
 1. **Write your WorkerBee impl.** Implement `nest::WorkerBee` (defined
    in [`nest/`](../nest)) in your own Rust crate. The trait says how
-   to spawn a roost from a `SpawnSpec`; the helper in
+   to spawn a cell from a `SpawnSpec`; the helper in
    [`common/`](common) (`nest_common::serve_worker`) takes care of
    the thrum loop, hello, prompt dispatch, chunk fan-out, and
    reconnect on socket close.
@@ -85,7 +85,7 @@ required, no PR required.
    ensemble's `hum/hives/announce` topic. Peer humds learn you
    exist and can overflow-route their own prompts to your humd.
 
-The `WorkerBee` trait + the `Roost` struct stay as the Rust SDK for
+The `WorkerBee` trait + the `Cell` struct stay as the Rust SDK for
 authors who want to build hives in Rust. Non-Rust authors can
 implement the same wire role with the per-language thrum-client libs
 under [`thrum-clients/`](../thrum-clients) — humd doesn't care which
@@ -101,13 +101,13 @@ runs.
 ## See also
 
 - [`nest/`](../nest) — the trait crate. Defines `WorkerBee`,
-  `ForagerBee`, `Roost`, `Listener`, `Nest`, `SpawnSpec`, the encoding
+  `ForagerBee`, `Cell`, `Listener`, `Nest`, `SpawnSpec`, the encoding
   helpers.
 - [`hives/`](../hives) — forager hives (the kinds that
   translate outside wire ↔ thrum). Will eventually consolidate into
   `hives/` alongside worker hives.
 - [WIRE.md](../WIRE.md) — the "nest model" section explains what
-  the wire sees about nests + roosts (and what it deliberately doesn't).
+  the wire sees about nests + cells (and what it deliberately doesn't).
 - [VOCABULARY](../VOCABULARY.md) — canonical entries for **nest**,
-  **roost**, **hive**, **bee**, **worker**, **forager**, **nestler**,
+  **cell**, **hive**, **bee**, **worker**, **forager**, **nestler**,
   **nestled**.

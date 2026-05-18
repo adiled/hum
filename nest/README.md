@@ -1,31 +1,31 @@
 ---
 title: "nest"
-description: "the place inside humd where bees gather and roosts live — defines the WorkerBee + ForagerBee traits, the Roost runtime, and the Nest pool"
+description: "the place inside humd where bees gather and cells live — defines the WorkerBee + ForagerBee traits, the Cell runtime, and the Nest pool"
 ---
 
 # nest
 
-> _the place inside humd where bees gather and roosts live — defines
-> the `WorkerBee` + `ForagerBee` traits, the `Roost` runtime, and the
+> _the place inside humd where bees gather and cells live — defines
+> the `WorkerBee` + `ForagerBee` traits, the `Cell` runtime, and the
 > `Nest` pool_
 
 A **nest** is the space inside a humd where two kinds of inhabitants
 meet: **bees** (the askers / producers, connected over thrum) and
-**roosts** (the live LLM subprocesses, spawned by worker bees). The
+**cells** (the live LLM subprocesses, spawned by worker bees). The
 nest itself isn't a process or a model — it's the meeting place. One
 humd, one nest.
 
 This crate defines what lives in the nest and how:
 
 - **`WorkerBee`** trait — produces compute. Owns the spawn, the stdin
-  pipe, the parsed-event stream, and the roost lifecycle.
+  pipe, the parsed-event stream, and the cell lifecycle.
 - **`ForagerBee`** trait — translates outside wires (OpenAI, Anthropic,
   custom HTTP) into thrum. Stub-only today; concrete impls live in
   [`hives/`](../hives).
-- **`Roost`** struct — one live LLM subprocess. The compute itself.
-- **`Listener`** trait — what humd binds to a roost to receive parsed
+- **`Cell`** struct — one live LLM subprocess. The compute itself.
+- **`Listener`** trait — what humd binds to a cell to receive parsed
   events for a particular sid.
-- **`Nest`** struct — the pool runtime. Owns the roosts keyed by
+- **`Nest`** struct — the pool runtime. Owns the cells keyed by
   pool_key, dispatches stdin writes, evicts on idle, enforces
   `max_procs`.
 
@@ -43,8 +43,8 @@ constantly. The README will spell them out and then never let them blur:
 
 | word | what it is | example |
 |---|---|---|
-| **nest** | the space inside humd. Not a process, not a model. Where bees and roosts coexist. | one per humd |
-| **roost** | one live LLM subprocess that lives in the nest. The actual compute. | the claude-cli child process |
+| **nest** | the space inside humd. Not a process, not a model. Where bees and cells coexist. | one per humd |
+| **cell** | one live LLM subprocess that lives in the nest. The actual compute. | the claude-cli child process |
 | **WorkerBee** (Rust trait) | the *kind* of compute — how to spawn it, what it speaks, when it's ephemeral. Implementation. | `claude-cli`, `claude-repl`, future `openai-api` |
 
 And the cohabitants from the other side of the thrum:
@@ -74,17 +74,17 @@ humd
         ├── nestled<1>  ← bees, post-handshake
         ├── nestled<2>
         │
-        └── roosts      ← live LLM subprocesses
+        └── cells      ← live LLM subprocesses
              │
-             ├── roost<A> spawned by claude-cli WorkerBee
-             ├── roost<B> spawned by claude-repl WorkerBee
-             └── roost<C> spawned by openai-api WorkerBee (hypothetical future)
+             ├── cell<A> spawned by claude-cli WorkerBee
+             ├── cell<B> spawned by claude-repl WorkerBee
+             └── cell<C> spawned by openai-api WorkerBee (hypothetical future)
 ```
 
 The nest is BELOW ensemble (ensemble routes between humds; nest is
-local to one humd) and INSIDE humd. Nestleds and roosts share it.
+local to one humd) and INSIDE humd. Nestleds and cells share it.
 chi traffic crosses between them: a nestled's `chi:"prompt"` is routed
-to a worker bee's roost; that roost's chunks flow back to the nestled.
+to a worker bee's cell; that cell's chunks flow back to the nestled.
 
 ## The `WorkerBee` trait
 
@@ -92,30 +92,30 @@ to a worker bee's roost; that roost's chunks flow back to the nestled.
 #[async_trait]
 pub trait WorkerBee: Send + Sync {
     fn ephemeral(&self) -> bool;
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Roost>;
+    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell>;
 }
 ```
 
-A `WorkerBee` is a *recipe* for a kind of roost. Two methods:
+A `WorkerBee` is a *recipe* for a kind of cell. Two methods:
 
-- `ephemeral()` — does the pool evict this roost after each `result`?
+- `ephemeral()` — does the pool evict this cell after each `result`?
   (PTY/REPL-style harnesses say yes; pipe-mode say no.)
 - `spawn(spec)` — turn a high-level `SpawnSpec` (sid, modelId, cwd,
-  system prompt, MCP url, …) into a running `Roost`.
+  system prompt, MCP url, …) into a running `Cell`.
 
-The trait says nothing about *what* the roost is. A WorkerBee impl
+The trait says nothing about *what* the cell is. A WorkerBee impl
 might fork a local Claude binary, open an HTTPS connection to OpenAI's
 API, load a llama.cpp model into the same address space, or return a
 canned-response mock for tests. The wire never sees the difference —
-all the worker has to do is produce a `Roost` whose `stdin → events`
+all the worker has to do is produce a `Cell` whose `stdin → events`
 behaves correctly.
 
-### Roost
+### Cell
 
 ```rust
-pub struct Roost {
+pub struct Cell {
     pub pid: Option<u32>,
-    pub stdin: mpsc::Sender<String>,            // push raw NDJSON to the roost
+    pub stdin: mpsc::Sender<String>,            // push raw NDJSON to the cell
     pub events: Arc<Mutex<mpsc::Receiver<Value>>>,  // pull parsed JSON back
     pub exited: tokio::sync::oneshot::Receiver<i32>,
     pub ephemeral: bool,
@@ -132,8 +132,8 @@ the WorkerBee impl's business.
 ```rust
 let nest = Nest::new(
     NestConfig { max_procs: 8, idle_timeout: Duration::from_secs(300) },
-    pipe_worker,  // Arc<dyn WorkerBee> — long-lived pipe-mode roosts
-    pty_worker,   // Arc<dyn WorkerBee> — ephemeral PTY/REPL roosts
+    pipe_worker,  // Arc<dyn WorkerBee> — long-lived pipe-mode cells
+    pty_worker,   // Arc<dyn WorkerBee> — ephemeral PTY/REPL cells
 );
 ```
 
@@ -147,9 +147,9 @@ Operations the daemon calls on the pool when it's in use:
 | call | what happens |
 |---|---|
 | `nest.murmur(spec, prompt, listener)` | spawn-if-needed + write `chi:"prompt"` to stdin + bind listener for the sid |
-| `nest.reply(sid, tool_use_id, result)` | route a `chi:"tool-result"` reply to the right roost's stdin |
+| `nest.reply(sid, tool_use_id, result)` | route a `chi:"tool-result"` reply to the right cell's stdin |
 | `nest.interrupt(sid, request_id)` | inject `control_cancel_request` mid-turn |
-| `nest.fell(sid)` | tear the roost down — host called `chi:"cleanup"` |
+| `nest.fell(sid)` | tear the cell down — host called `chi:"cleanup"` |
 
 ## Why a trait, not a hard-coded path
 
@@ -158,7 +158,7 @@ hum is LLM-agnostic by design. The protocol (thrum), the mesh
 behind the nest. `WorkerBee` is the seam where that decision lives,
 and where it gets swapped.
 
-| kind of roost | what its worker spawns | when to use |
+| kind of cell | what its worker spawns | when to use |
 |---|---|---|
 | `claude-cli` | `claude -p` with `stream-json` over pipe | normal model-CLI usage |
 | `claude-repl` | claude-cli in interactive REPL mode over a PTY | non-stream-json fallbacks, debugging |
@@ -170,15 +170,15 @@ A new model harness adds one `WorkerBee` impl. No code in `humd`,
 
 ## What this crate is NOT
 
-- **Not "compute" by itself.** The compute is the **roost**. This
-  crate is the *space* the roost lives in and the *traits* that define
+- **Not "compute" by itself.** The compute is the **cell**. This
+  crate is the *space* the cell lives in and the *traits* that define
   what kind of bee can produce / translate. Same nest word, distinct
-  referents — nest is the room, roost is who lives there.
-- **Not a thrum endpoint.** Roosts don't speak thrum directly. humd
-  reads roost events via `Listener` and writes the thrum side. Worker
+  referents — nest is the room, cell is who lives there.
+- **Not a thrum endpoint.** Cells don't speak thrum directly. humd
+  reads cell events via `Listener` and writes the thrum side. Worker
   bees running as standalone processes write thrum themselves via
   [`hives/common/serve_worker`](../hives/common).
-- **Not a router.** `Nest` picks the right roost for a sid; it doesn't
+- **Not a router.** `Nest` picks the right cell for a sid; it doesn't
   decide which humd handles which conversation. Ensemble owns that.
 
 ## Layout
@@ -186,9 +186,9 @@ A new model harness adds one `WorkerBee` impl. No code in `humd`,
 ```
 nest/
 ├── src/
-│   ├── lib.rs   # SpawnSpec, Roost, WorkerBee + ForagerBee traits,
+│   ├── lib.rs   # SpawnSpec, Cell, WorkerBee + ForagerBee traits,
 │   │           # Listener trait, encode_* helpers
-│   ├── pool.rs  # Nest — the roost pool runtime
+│   ├── pool.rs  # Nest — the cell pool runtime
 │   └── mock.rs  # MockWorkerBee for sim tests
 └── README.md
 ```
@@ -204,9 +204,9 @@ Concrete `WorkerBee` impls live under [`hives/`](../hives):
 ## See also
 
 - [WIRE.md](../WIRE.md) — the thrum protocol; see "The nest model" section
-  for what the wire sees (and what it doesn't) about nests and roosts.
+  for what the wire sees (and what it doesn't) about nests and cells.
 - [`drone/`](../drone) — the sentinel that observes the chunks coming
-  out of a roost and scores channel health.
+  out of a cell and scores channel health.
 - [`humd/`](../humd) — the daemon that owns the `Nest` instance.
 - [VOCABULARY](../VOCABULARY.md) — the canonical glossary; entries for
-  nest, roost, hive, bee, worker, forager, nestler, nestled.
+  nest, cell, hive, bee, worker, forager, nestler, nestled.

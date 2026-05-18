@@ -1,6 +1,6 @@
 //! Per-humd resource headroom — what peers learn from each other.
 //!
-//! Defines `RoostHeadroom` (free slots, pressure tier, p95 latency) and a
+//! Defines `CellHeadroom` (free slots, pressure tier, p95 latency) and a
 //! serializable representation that lives inside `PeerCapabilities` and
 //! rides on every drone-beat gossip frame. Lets the ensemble route away
 //! from saturated humds without waiting for hard failure.
@@ -55,12 +55,12 @@ impl Pressure {
     }
 }
 
-/// Live snapshot of a humd's roost-pool capacity, gossiped to peer humds.
+/// Live snapshot of a humd's cell-pool capacity, gossiped to peer humds.
 /// Empty values mean "this humd has no nest" (still a valid mesh peer —
 /// it can route but cannot answer).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RoostHeadroom {
-    /// Free roost slots = max_procs - current_roost_count.
+pub struct CellHeadroom {
+    /// Free cell slots = max_procs - current_cell_count.
     pub free_slots: u32,
     /// Total slots (the max_procs config).
     pub total_slots: u32,
@@ -72,7 +72,7 @@ pub struct RoostHeadroom {
     pub pressure: Pressure,
 }
 
-impl RoostHeadroom {
+impl CellHeadroom {
     /// Build from raw pool counts. Computes pressure from occupancy.
     ///
     /// When `total_slots == 0` (no nest), pressure is `Cool` and
@@ -147,30 +147,30 @@ mod tests {
     #[test]
     fn from_counts_computes_pressure() {
         // 5 free of 10 → 50% occupied → Warm.
-        let h = RoostHeadroom::from_counts(5, 10, None);
+        let h = CellHeadroom::from_counts(5, 10, None);
         assert_eq!(h.free_slots, 5);
         assert_eq!(h.total_slots, 10);
         assert_eq!(h.pressure, Pressure::Warm);
         assert_eq!(h.p95_latency_ms, None);
 
         // 9 free of 10 → 10% occupied → Cool.
-        let cool = RoostHeadroom::from_counts(9, 10, Some(120));
+        let cool = CellHeadroom::from_counts(9, 10, Some(120));
         assert_eq!(cool.pressure, Pressure::Cool);
         assert_eq!(cool.p95_latency_ms, Some(120));
 
         // 0 free of 10 → 100% occupied → Refuse.
-        let refuse = RoostHeadroom::from_counts(0, 10, None);
+        let refuse = CellHeadroom::from_counts(0, 10, None);
         assert_eq!(refuse.pressure, Pressure::Refuse);
         assert!(refuse.pressure.is_refusing());
 
         // 1 free of 10 → 90% occupied → Hot.
-        let hot = RoostHeadroom::from_counts(1, 10, None);
+        let hot = CellHeadroom::from_counts(1, 10, None);
         assert_eq!(hot.pressure, Pressure::Hot);
     }
 
     #[test]
     fn empty_humd_is_cool() {
-        let e = RoostHeadroom::empty();
+        let e = CellHeadroom::empty();
         assert_eq!(e.pressure, Pressure::Cool);
         assert_eq!(e.free_slots, 0);
         assert_eq!(e.total_slots, 0);
@@ -178,13 +178,13 @@ mod tests {
         assert!(!e.pressure.is_refusing());
 
         // from_counts with total_slots=0 behaves the same.
-        let zero = RoostHeadroom::from_counts(0, 0, None);
+        let zero = CellHeadroom::from_counts(0, 0, None);
         assert_eq!(zero.pressure, Pressure::Cool);
         assert_eq!(zero.free_slots, 0);
         assert_eq!(zero.total_slots, 0);
 
         // Stale count where free > total=0 is still honest.
-        let stale = RoostHeadroom::from_counts(7, 0, None);
+        let stale = CellHeadroom::from_counts(7, 0, None);
         assert_eq!(stale.free_slots, 0);
         assert_eq!(stale.total_slots, 0);
         assert_eq!(stale.pressure, Pressure::Cool);
@@ -193,15 +193,15 @@ mod tests {
     #[test]
     fn roundtrips_through_json() {
         let cases = vec![
-            RoostHeadroom::empty(),
-            RoostHeadroom::from_counts(5, 10, None),
-            RoostHeadroom::from_counts(2, 16, Some(450)),
-            RoostHeadroom::from_counts(0, 4, Some(9999)),
-            RoostHeadroom::from_counts(64, 64, Some(12)),
+            CellHeadroom::empty(),
+            CellHeadroom::from_counts(5, 10, None),
+            CellHeadroom::from_counts(2, 16, Some(450)),
+            CellHeadroom::from_counts(0, 4, Some(9999)),
+            CellHeadroom::from_counts(64, 64, Some(12)),
         ];
         for original in cases {
             let s = serde_json::to_string(&original).expect("serialize");
-            let back: RoostHeadroom = serde_json::from_str(&s).expect("deserialize");
+            let back: CellHeadroom = serde_json::from_str(&s).expect("deserialize");
             assert_eq!(back.free_slots, original.free_slots);
             assert_eq!(back.total_slots, original.total_slots);
             assert_eq!(back.p95_latency_ms, original.p95_latency_ms);
@@ -209,12 +209,12 @@ mod tests {
         }
 
         // Spot-check kebab-case serialization of the enum.
-        let h = RoostHeadroom::from_counts(0, 10, None);
+        let h = CellHeadroom::from_counts(0, 10, None);
         let s = serde_json::to_string(&h).unwrap();
         assert!(s.contains("\"refuse\""), "expected kebab-case: {}", s);
 
         // skip_serializing_if for None p95.
-        let no_latency = RoostHeadroom::from_counts(5, 10, None);
+        let no_latency = CellHeadroom::from_counts(5, 10, None);
         let s = serde_json::to_string(&no_latency).unwrap();
         assert!(!s.contains("p95_latency_ms"), "None should be skipped: {}", s);
     }

@@ -24,12 +24,12 @@ like the thing — readers and writers share the same mental model.
 - **humd** — the daemon process. One per machine install.
 - **HumdId** — sha256 of the humd's Ed25519 public key.
 - **hum** — one conversation. Has a hum_id, lives on a humd.
-- **nest** — the *place* inside humd where bees gather and roosts live.
+- **nest** — the *place* inside humd where bees gather and cells live.
   Not a process. Not a model. The meeting space. One humd, one nest.
-- **roost** — one live LLM subprocess living in the nest. The compute itself —
+- **cell** — one live LLM subprocess living in the nest. The compute itself —
   what turns a `chi:"prompt"` into `chi:"chunk"` + `chi:"finish"`. Fungible:
   spawn, kill, respawn.
-- **brood** — the state machine that walks a roost from cold to ready (PTY-only).
+- **brood** — the state machine that walks a cell from cold to ready (PTY-only).
 
 ## Conversation
 
@@ -68,7 +68,7 @@ like the thing — readers and writers share the same mental model.
 The four are not synonyms. Hive describes the kind; bee is the running
 participant; nestler arrives; nestled inhabits. The transition nestler →
 nestled is one of *state*, not function: the actor is an asker through
-both. A nestled bee shares the nest with the roosts that live there, and
+both. A nestled bee shares the nest with the cells that live there, and
 continues sending chi at it until disconnect.
 
 ## Observation

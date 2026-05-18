@@ -1,14 +1,14 @@
-//! Nest — the roost pool. Mirrors TS `nest/nest.ts` (Nest class).
+//! Nest — the cell pool. Mirrors TS `nest/nest.ts` (Nest class).
 //!
-//! Owns a map of `pool_key -> Roost`, dispatches stdin writes (`murmur`,
+//! Owns a map of `pool_key -> Cell`, dispatches stdin writes (`murmur`,
 //! `reply`, `interrupt`), evicts on idle, enforces `max_procs`, and routes
-//! events from each roost to a set of `Listener`s. Stream parsing — the
+//! events from each cell to a set of `Listener`s. Stream parsing — the
 //! dispatchLine switch — lives here so listeners get typed petal callbacks.
 //!
 //! v0 simplifications:
 //!   - no `needsRespawn` handling (no Hum table in the rust crate)
 //!   - no permission ask hold (the daemon binary owns permits)
-//!   - no fading-roost coordination
+//!   - no fading-cell coordination
 //!   - drift/drone hooks omitted
 
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
-use crate::{encode_cancel, encode_prompt, encode_prompt_with_attachments, encode_tool_result, Attachment, Listener, Roost, SpawnSpec, WorkerBee};
+use crate::{encode_cancel, encode_prompt, encode_prompt_with_attachments, encode_tool_result, Attachment, Listener, Cell, SpawnSpec, WorkerBee};
 
 pub struct NestConfig {
     pub max_procs: usize,
@@ -37,8 +37,8 @@ impl Default for NestConfig {
     }
 }
 
-struct RoostSlot {
-    roost: Roost,
+struct CellSlot {
+    cell: Cell,
     listeners: Mutex<HashMap<String, Arc<dyn Listener>>>,
     active_sid: Mutex<Option<String>>,
     #[allow(dead_code)]
@@ -52,7 +52,7 @@ pub struct Nest {
     cfg: NestConfig,
     worker_pipe: Arc<dyn WorkerBee>,
     worker_pty: Arc<dyn WorkerBee>,
-    slots: RwLock<HashMap<String, Arc<RoostSlot>>>,
+    slots: RwLock<HashMap<String, Arc<CellSlot>>>,
 }
 
 impl Nest {
@@ -65,7 +65,7 @@ impl Nest {
         }
     }
 
-    /// Subscribe `listener` to the roost at `pool_key`, spawning one if absent.
+    /// Subscribe `listener` to the cell at `pool_key`, spawning one if absent.
     /// `use_pty` picks the worker bee. Mirrors TS `awaken`.
     pub async fn awaken(
         self: &Arc<Self>,
@@ -74,7 +74,7 @@ impl Nest {
         spec: SpawnSpec,
         use_pty: bool,
     ) -> Result<()> {
-        // Fast path: existing roost.
+        // Fast path: existing cell.
         {
             let slots = self.slots.read().await;
             if let Some(slot) = slots.get(pool_key) {
@@ -98,12 +98,12 @@ impl Nest {
         } else {
             self.worker_pipe.clone()
         };
-        let roost = worker.spawn(spec).await?;
-        let ephemeral = roost.ephemeral;
+        let cell = worker.spawn(spec).await?;
+        let ephemeral = cell.ephemeral;
         let pool_key_owned = pool_key.to_string();
 
         // Move the events receiver out for the dispatch task.
-        let events = roost.events.clone();
+        let events = cell.events.clone();
         let slot_pre = SlotInner {
             pool_key: pool_key_owned.clone(),
             listeners: Arc::new(Mutex::new(HashMap::new())),
@@ -118,8 +118,8 @@ impl Nest {
 
         let dispatch = tokio::spawn(dispatch_loop(slot_pre.clone(), events));
 
-        let slot = Arc::new(RoostSlot {
-            roost,
+        let slot = Arc::new(CellSlot {
+            cell,
             listeners: Mutex::new({
                 let mut m = HashMap::new();
                 m.insert(listener.session_id().to_string(), listener.clone());
@@ -141,7 +141,7 @@ impl Nest {
         Ok(())
     }
 
-    /// Send a user prompt to the active roost (TS `murmur`). Text-only
+    /// Send a user prompt to the active cell (TS `murmur`). Text-only
     /// shortcut; multimodal callers use `murmur_with_attachments`.
     pub async fn murmur(&self, session_id: &str, pool_key: &str, content: &str) -> Result<()> {
         self.murmur_with_attachments(session_id, pool_key, content, &[]).await
@@ -161,14 +161,14 @@ impl Nest {
         attachments: &[Attachment],
     ) -> Result<()> {
         let slots = self.slots.read().await;
-        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no roost"))?;
+        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no cell"))?;
         *slot.active_sid.lock().await = Some(session_id.to_string());
         let encoded = if attachments.is_empty() {
             encode_prompt(content)
         } else {
             encode_prompt_with_attachments(content, attachments)
         };
-        slot.roost
+        slot.cell
             .stdin
             .send(encoded)
             .await
@@ -177,7 +177,7 @@ impl Nest {
         Ok(())
     }
 
-    /// Send a tool_result back to the active roost (TS `reply`).
+    /// Send a tool_result back to the active cell (TS `reply`).
     pub async fn reply(
         &self,
         session_id: &str,
@@ -186,9 +186,9 @@ impl Nest {
         result: &str,
     ) -> Result<()> {
         let slots = self.slots.read().await;
-        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no roost"))?;
+        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no cell"))?;
         *slot.active_sid.lock().await = Some(session_id.to_string());
-        slot.roost
+        slot.cell
             .stdin
             .send(encode_tool_result(tool_use_id, result))
             .await
@@ -199,12 +199,12 @@ impl Nest {
     /// Mid-turn interrupt. Pipe-mode only; PTY ignores per TS.
     pub async fn interrupt(&self, pool_key: &str, request_id: &str) -> Result<()> {
         let slots = self.slots.read().await;
-        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no roost"))?;
-        if slot.roost.ephemeral {
+        let slot = slots.get(pool_key).ok_or_else(|| anyhow!("no cell"))?;
+        if slot.cell.ephemeral {
             trace!(target: "nest", %pool_key, "pty.stdin.ignored type=control_cancel_request");
             return Ok(());
         }
-        slot.roost
+        slot.cell
             .stdin
             .send(encode_cancel(request_id))
             .await
@@ -243,7 +243,7 @@ impl Nest {
             if let Some(slot) = slots.get(&pk) {
                 if slot.listeners.lock().await.is_empty() {
                     trace!(target: "nest", pool_key = %pk, "nest.idle");
-                    (slot.roost.kill)();
+                    (slot.cell.kill)();
                     slots.remove(&pk);
                 }
             }
@@ -251,20 +251,20 @@ impl Nest {
         *slot.idle_handle.lock().await = Some(handle);
     }
 
-    /// Force-kill a roost (TS `fell` when last listener gone).
+    /// Force-kill a cell (TS `fell` when last listener gone).
     pub async fn fell(&self, pool_key: &str) {
         let mut slots = self.slots.write().await;
         if let Some(slot) = slots.remove(pool_key) {
             trace!(target: "nest", %pool_key, "nest.felled");
-            (slot.roost.kill)();
+            (slot.cell.kill)();
         }
     }
 
-    /// Kill every roost (TS `silence`).
+    /// Kill every cell (TS `silence`).
     pub async fn silence(&self) {
         let mut slots = self.slots.write().await;
         for (_, slot) in slots.drain() {
-            (slot.roost.kill)();
+            (slot.cell.kill)();
         }
     }
 
@@ -285,14 +285,14 @@ impl Nest {
         if let Some(k) = evict_key {
             if let Some(slot) = slots.remove(&k) {
                 trace!(target: "nest", pool_key = %k, "nest.evicted reason=maxProcs");
-                (slot.roost.kill)();
+                (slot.cell.kill)();
             }
         }
     }
 }
 
 /// Lightweight handle the dispatch task uses to find listeners. Avoids
-/// looping in `RoostSlot` (which holds the JoinHandle of this task — would
+/// looping in `CellSlot` (which holds the JoinHandle of this task — would
 /// be a self-reference).
 #[derive(Clone)]
 struct SlotInner {
@@ -332,7 +332,7 @@ async fn dispatch_loop(slot: SlotInner, events: Arc<Mutex<tokio::sync::mpsc::Rec
                 .unwrap_or_default();
             let listeners = slot.listeners.lock().await.clone();
             for (_, l) in listeners {
-                l.on_roost(&sid, &model, tools.clone()).await;
+                l.on_cell(&sid, &model, tools.clone()).await;
             }
             continue;
         }

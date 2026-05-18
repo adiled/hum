@@ -130,13 +130,13 @@ type PulseKind string
 
 const (
     // process created
-    PulseKindRoostSpawned PulseKind = "roost-spawned"
+    PulseKindCellSpawned PulseKind = "cell-spawned"
     // system init received, accepting input
-    PulseKindRoostReady PulseKind = "roost-ready"
+    PulseKindCellReady PulseKind = "cell-ready"
     // turn complete, no listeners
-    PulseKindRoostIdle PulseKind = "roost-idle"
+    PulseKindCellIdle PulseKind = "cell-idle"
     // process exited
-    PulseKindRoostDied PulseKind = "roost-died"
+    PulseKindCellDied PulseKind = "cell-died"
     // killed to make room
-    PulseKindRoostEvicted PulseKind = "roost-evicted"
+    PulseKindCellEvicted PulseKind = "cell-evicted"
 )

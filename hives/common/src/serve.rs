@@ -9,11 +9,11 @@
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
 //!   `WorkerBee::spawn(spec)`, then murmurs the prompt text on the
-//!   roost's stdin.
-//! - **Chunks out**: each event from `Roost.events` becomes a
+//!   cell's stdin.
+//! - **Chunks out**: each event from `Cell.events` becomes a
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
-//! - **Cancel**: `chi:"cancel"` triggers `Roost.kill()` for the sid.
-//! - **Tool result**: `chi:"tool-result"` feeds into the roost stdin
+//! - **Cancel**: `chi:"cancel"` triggers `Cell.kill()` for the sid.
+//! - **Tool result**: `chi:"tool-result"` feeds into the cell stdin
 //!   via the worker's tool-result encoder (currently
 //!   `nest::encode_tool_result`).
 //!
@@ -125,9 +125,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
     info!(hive = %advert.hive, models = ?advert.models, "worker.hello.sent");
 
-    // Per-sid roost handles + a kill-fn registry so chi:"cancel" can
+    // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
-    let roosts: Arc<Mutex<HashMap<String, RoostBundle>>> = Arc::new(Mutex::new(HashMap::new()));
+    let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
@@ -143,17 +143,17 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             "prompt" => {
                 let worker = worker.clone();
                 let write_half = write_half.clone();
-                let roosts = roosts.clone();
+                let cells = cells.clone();
                 let hive = advert.hive.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(worker, write_half, roosts, hive, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
             }
             "cancel" => {
                 if !sid.is_empty() {
-                    let r = roosts.lock().await;
+                    let r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                             let _ = bundle.stdin.send(encode_cancel(rid)).await;
@@ -164,7 +164,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "tool-result" => {
                 if !sid.is_empty() {
-                    let r = roosts.lock().await;
+                    let r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let (Some(call_id), Some(result)) = (
                             tone.get("callId").and_then(Value::as_str),
@@ -186,7 +186,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     Ok(())
 }
 
-struct RoostBundle {
+struct CellBundle {
     stdin: mpsc::Sender<String>,
     kill: Arc<dyn Fn() + Send + Sync>,
 }
@@ -194,7 +194,7 @@ struct RoostBundle {
 async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    roosts: Arc<Mutex<HashMap<String, RoostBundle>>>,
+    cells: Arc<Mutex<HashMap<String, CellBundle>>>,
     hive: String,
     tone: Value,
 ) -> Result<()> {
@@ -221,22 +221,22 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         spec.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    let roost = worker.spawn(spec).await?;
-    let stdin = roost.stdin.clone();
-    let events = roost.events.clone();
-    let kill = roost.kill.clone();
+    let cell = worker.spawn(spec).await?;
+    let stdin = cell.stdin.clone();
+    let events = cell.events.clone();
+    let kill = cell.kill.clone();
 
-    roosts.lock().await.insert(sid.clone(), RoostBundle { stdin: stdin.clone(), kill: kill.clone() });
+    cells.lock().await.insert(sid.clone(), CellBundle { stdin: stdin.clone(), kill: kill.clone() });
 
     // First user turn — murmur the prompt content as a single user
     // message. Multi-turn continuity arrives as subsequent chi:"prompt"
     // tones with the same sid (the worker's pool decides whether to
     // reuse — but in the serve_worker loop each prompt currently
-    // spawns its own roost; pooling is an optimization for later).
+    // spawns its own cell; pooling is an optimization for later).
     stdin.send(encode_prompt(&content)).await
         .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
 
-    // Dispatch loop — Roost.events → chi:"chunk" tones over thrum.
+    // Dispatch loop — Cell.events → chi:"chunk" tones over thrum.
     // `finish_sent` lets the dispatch path claim the finish emit when
     // it sees claude's `result` event; the post-exit fallback below
     // only fires on crash paths.
@@ -262,8 +262,8 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     // Wait for exit. Don't abort dispatch — let it drain naturally so
     // a trailing `result` event still reaches the listener and emits
     // the canonical finish. Only emit a fallback finish if dispatch
-    // never saw a `result` (e.g. roost crashed mid-stream).
-    let exit_code = roost.exited.await.unwrap_or(1);
+    // never saw a `result` (e.g. cell crashed mid-stream).
+    let exit_code = cell.exited.await.unwrap_or(1);
     let _ = dispatch.await;
     if !finish_sent.load(Ordering::SeqCst) {
         let finish = json!({
@@ -275,7 +275,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         let line = format!("{}\n", finish);
         let _ = write_half.lock().await.write_all(line.as_bytes()).await;
     }
-    roosts.lock().await.remove(&sid);
+    cells.lock().await.remove(&sid);
     Ok(())
 }
 
@@ -398,7 +398,7 @@ impl WireListener {
 impl Listener for WireListener {
     fn session_id(&self) -> &str { &self.sid }
     async fn on_petal(&self, _kind: &str, _payload: Value) {}
-    async fn on_roost(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
+    async fn on_cell(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
     async fn on_wilt(&self, _finish_reason: &str, _usage: Option<Value>, _provider_meta: Value) {}
     async fn on_thorn(&self, _wound: &str) {}
 }

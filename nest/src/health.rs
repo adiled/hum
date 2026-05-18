@@ -89,7 +89,7 @@ pub struct SlotSnapshot {
     pub active: bool,
     /// Last-touched timestamp in ms-since-epoch.
     pub last_touched_ms: i64,
-    /// True if the roost is ephemeral (PTY / REPL) — these evict cheaply.
+    /// True if the cell is ephemeral (PTY / REPL) — these evict cheaply.
     pub ephemeral: bool,
 }
 
