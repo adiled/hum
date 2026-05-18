@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -236,10 +237,15 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
 
     // Dispatch loop — Roost.events → chi:"chunk" tones over thrum.
+    // `finish_sent` lets the dispatch path claim the finish emit when
+    // it sees claude's `result` event; the post-exit fallback below
+    // only fires on crash paths.
+    let finish_sent = Arc::new(AtomicBool::new(false));
     let listener = Arc::new(WireListener {
         sid: sid.clone(),
         hive,
         write_half: write_half.clone(),
+        finish_sent: finish_sent.clone(),
     });
 
     let listener_clone = listener.clone();
@@ -248,26 +254,27 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let dispatch = tokio::spawn(async move {
         let mut guard = events_for_loop.lock().await;
         while let Some(value) = guard.recv().await {
-            let typ = value.get("type").and_then(Value::as_str).unwrap_or("");
-            let _ = typ; // hum events are claude-stream-json shape; let
-                        // listener decide. For minimal viable serve,
-                        // we forward the raw value as a tool-able chunk.
             listener_clone.forward_raw(value).await;
         }
         trace!(sid = %sid_for_loop, "worker.dispatch.exit");
     });
 
-    // Wait for exit, then emit finish + cleanup.
+    // Wait for exit. Don't abort dispatch — let it drain naturally so
+    // a trailing `result` event still reaches the listener and emits
+    // the canonical finish. Only emit a fallback finish if dispatch
+    // never saw a `result` (e.g. roost crashed mid-stream).
     let exit_code = roost.exited.await.unwrap_or(1);
-    let _ = dispatch.abort();
-    let finish = json!({
-        "chi": "finish",
-        "sid": sid,
-        "finishReason": if exit_code == 0 { "stop" } else { "error" },
-        "exitCode": exit_code,
-    });
-    let line = format!("{}\n", finish);
-    let _ = write_half.lock().await.write_all(line.as_bytes()).await;
+    let _ = dispatch.await;
+    if !finish_sent.load(Ordering::SeqCst) {
+        let finish = json!({
+            "chi": "finish",
+            "sid": sid,
+            "finishReason": if exit_code == 0 { "stop" } else { "error" },
+            "exitCode": exit_code,
+        });
+        let line = format!("{}\n", finish);
+        let _ = write_half.lock().await.write_all(line.as_bytes()).await;
+    }
     roosts.lock().await.remove(&sid);
     Ok(())
 }
@@ -278,6 +285,10 @@ struct WireListener {
     sid: String,
     hive: String,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    /// Set once `result` is forwarded as `chi:"finish"`. handle_prompt
+    /// checks this before emitting its fallback finish so consumers
+    /// never see two finishes per prompt.
+    finish_sent: Arc<AtomicBool>,
 }
 
 impl WireListener {
@@ -360,6 +371,7 @@ impl WireListener {
                     obj.insert("usage".into(), usage);
                 }
                 self.send(body).await;
+                self.finish_sent.store(true, Ordering::SeqCst);
             }
             _ => {
                 // Structural / unrecognized — drop. Mirrors humd's
