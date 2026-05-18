@@ -133,7 +133,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         if line.is_empty() { continue; }
         let tone: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
-            Err(e) => { trace!(err = %e, "perch.parse.skip"); continue; }
+            Err(e) => { trace!(err = %e, "worker.parse.skip"); continue; }
         };
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();

@@ -138,26 +138,27 @@ The wire is **opaque to the roost's implementation.** A roost might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
 the wire sees identical chunks coming back either way. The kind of
-roost (`Perch` impl, in Rust terms) is humd-local concern, never wire-visible.
+roost (`WorkerBee` impl, in Rust terms) is the hive's concern,
+exposed to the wire only via `hive: "<kind>"` on hello.
 
 What the wire *does* see, at the humd level:
 
 - Each humd advertises in its `PeerCapabilities.nests` (gossiped via
-  the ensemble) which **kinds** of roost its nest is configured to
-  spawn (e.g. `["claude-cli", "ollama-local"]`).
+  the ensemble) which **kinds** of hive its nest is configured to
+  host (e.g. `["claude-cli", "ollama-local"]`).
 - Each `chi:"prompt"` carries a `modelId` — the asker says which
-  model it wants. humd's routing picks an appropriate roost (local
-  Perch impl, or routes to a peer humd whose advertised nests can
-  serve it).
+  model it wants. humd's routing picks an appropriate worker bee
+  (a local one over thrum, or routes to a peer humd whose advertised
+  hives can serve it).
 
 That's the whole "compute discovery" mechanism. No `provides_nest`
-field on a nestler's hello, no second handshake role, no dual-direction
-connection. **The advertise lives on the humd, not on the nestler.**
+field on a bee's hello — the kind is `hive: "<name>"` + bee role flag.
+**The advertise lives on the humd, not invented per-asker.**
 
 If you want to add a new kind of compute to the mesh, you ship a
-`Perch` impl (Rust crate), load it into a humd at build time, and
-run that humd. The mesh discovers via the existing capability gossip;
-peers route prompts your way. The wire stays exactly the same.
+`WorkerBee` impl (any process speaking thrum), point it at a humd, and
+the mesh discovers via the existing capability gossip; peers route
+prompts your way. The wire stays exactly the same.
 
 ## Chi registry (THRUM_VERSION 0.7.0)
 

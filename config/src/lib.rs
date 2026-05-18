@@ -1,7 +1,7 @@
 //! hum.json loader (0.3).
 //!
-//! Namespaced: humd / fs / nest / perches / nestlings. Each section
-//! deserializes into its own struct so a perch crate can ship its own
+//! Namespaced: humd / fs / nest / hives. Each section deserializes into
+//! its own struct so a hive's worker-bee crate can ship its own
 //! `Default` without humd's crate knowing about it.
 //!
 //! Schema-tolerant: missing sections fill with defaults, parse errors
@@ -121,7 +121,7 @@ pub struct NestSection {
     pub max_procs: u32,
     #[serde(default = "defaults::idle_threshold_ms", rename = "idleThresholdMs")]
     pub idle_threshold_ms: u64,
-    #[serde(default = "defaults::default_perch")]
+    #[serde(default = "defaults::default_hive")]
     pub default: String,
 }
 
@@ -130,18 +130,19 @@ impl Default for NestSection {
         Self {
             max_procs: defaults::max_procs(),
             idle_threshold_ms: defaults::idle_threshold_ms(),
-            default: defaults::default_perch(),
+            default: defaults::default_hive(),
         }
     }
 }
 
-// ── perches ───────────────────────────────────────────────────────────────
+// ── hives ─────────────────────────────────────────────────────────────────
 
-/// Per-perch config. Schema-loose: each perch crate parses the `Value`
-/// against its own `Config` struct. Common fields recognized here so the
-/// top-level loader can validate the shape of the obvious cases.
+/// Per-hive config. Schema-loose: each hive's worker-bee crate parses
+/// the `Value` against its own `Config` struct. Common fields recognized
+/// here so the top-level loader can validate the shape of the obvious
+/// cases.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PerchConfig {
+pub struct HiveConfig {
     #[serde(default, rename = "cliPath")]
     pub cli_path: Option<String>,
     #[serde(default, rename = "defaultModel")]
@@ -149,17 +150,17 @@ pub struct PerchConfig {
     #[serde(default, rename = "ccFlags")]
     pub cc_flags: BTreeMap<String, Value>,
     #[serde(default)]
-    pub limits: Option<PerchLimits>,
+    pub limits: Option<HiveLimits>,
     #[serde(default)]
-    pub budget: Option<PerchBudget>,
-    /// Anything else the perch's own deserializer handles.
+    pub budget: Option<HiveBudget>,
+    /// Anything else the hive's own deserializer handles.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PerchLimits {
+pub struct HiveLimits {
     #[serde(default)]
     pub rss_bytes: Option<u64>,
     #[serde(default)]
@@ -174,7 +175,7 @@ pub struct PerchLimits {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PerchBudget {
+pub struct HiveBudget {
     #[serde(default)]
     pub tokens_per_turn: Option<u64>,
     #[serde(default)]
@@ -194,7 +195,7 @@ pub struct HumConfig {
     #[serde(default)]
     pub nest: NestSection,
     #[serde(default)]
-    pub perches: BTreeMap<String, PerchConfig>,
+    pub hives: BTreeMap<String, HiveConfig>,
 }
 
 // ── path resolution ───────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ mod defaults {
     pub fn idle_threshold_ms() -> u64 {
         300_000
     }
-    pub fn default_perch() -> String {
+    pub fn default_hive() -> String {
         "claude-repl".into()
     }
     pub fn denied() -> Vec<PathBuf> {
@@ -313,7 +314,7 @@ mod tests {
         assert_eq!(cfg.nest.idle_threshold_ms, 300_000);
         assert_eq!(cfg.nest.default, "claude-repl");
         assert_eq!(cfg.humd.permission_dusk_ms, 60_000);
-        assert!(cfg.perches.is_empty());
+        assert!(cfg.hives.is_empty());
     }
 
     #[test]
@@ -326,19 +327,19 @@ mod tests {
     }
 
     #[test]
-    fn perches_each_have_their_own_subobject() {
+    fn hives_each_have_their_own_subobject() {
         let cfg: HumConfig = serde_json::from_str(
             r#"{
-                "perches": {
+                "hives": {
                     "claude-cli":  { "cliPath": "/usr/bin/claude", "defaultModel": "claude-sonnet-4-5" },
                     "claude-repl": { "defaultModel": "claude-haiku-4-5" }
                 }
             }"#,
         )
         .unwrap();
-        assert_eq!(cfg.perches["claude-cli"].cli_path.as_deref(), Some("/usr/bin/claude"));
-        assert_eq!(cfg.perches["claude-cli"].default_model.as_deref(), Some("claude-sonnet-4-5"));
-        assert_eq!(cfg.perches["claude-repl"].default_model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(cfg.hives["claude-cli"].cli_path.as_deref(), Some("/usr/bin/claude"));
+        assert_eq!(cfg.hives["claude-cli"].default_model.as_deref(), Some("claude-sonnet-4-5"));
+        assert_eq!(cfg.hives["claude-repl"].default_model.as_deref(), Some("claude-haiku-4-5"));
     }
 
     #[test]
@@ -383,6 +384,6 @@ mod tests {
         // on each section means we get a default config, not a parse error.
         // (Strict-mode validation lives in the schema, not in serde.)
         let cfg = cfg.unwrap();
-        assert!(!cfg.perches.contains_key("droned"));
+        assert!(!cfg.hives.contains_key("droned"));
     }
 }

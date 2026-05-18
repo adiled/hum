@@ -37,11 +37,11 @@ async fn overflow_inference() {
 
     sim.wire(a.id, b.id).expect("wire humd-A ↔ humd-B");
 
-    // External-perch model: B advertises a perch so A can overflow to
-    // it. A has no perch (capacity 0 forces overflow anyway).
+    // External-worker model: B advertises a worker so A can overflow to
+    // it. A has no worker (capacity 0 forces overflow anyway).
     sim.attach_mock_worker(b.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock perch attaches to humd-B");
+        .expect("mock worker attaches to humd-B");
 
     // Wait for the unsigned-hello handshake to settle so humd-A's
     // `peer_caps(humd-B)` returns the learned caps (nests, free_slots)

@@ -9,7 +9,7 @@
 //! `InMemoryEndpoint::pair` link, humd-A's ensemble drains it into
 //! `subscribe()`. We tap that subscription via `Sim::humd_peer_tap`.
 //!
-//! This test only validates the *transport seam* — no perch, no nest,
+//! This test only validates the *transport seam* — no worker, no nest,
 //! no prompt pipeline. If it fails, ensemble routing is broken.
 
 use std::time::Duration;

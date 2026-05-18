@@ -1,13 +1,13 @@
 //! Single humd serves a prompt end-to-end via MockWorkerBee.
 //!
-//! Narrative: one humd boots in-process with the mock perch. A mock
+//! Narrative: one humd boots in-process with the mock worker. A mock
 //! nestler sends a `chi:prompt` for sid "test-hum-1". The listener
 //! bridge walks the canned MockWorkerBee event sequence (system → text_delta
 //! "HELLO" → result/end_turn) and broadcasts chi:chunk + chi:finish on
 //! the sid. The nestler tap receives a chi:finish within 2s.
 //!
 //! Pure single-humd path. No ensemble routing; if this fails, the in-
-//! process humd boot or the perch→listener bridge is broken.
+//! process humd boot or the worker→listener bridge is broken.
 
 use std::time::Duration;
 
@@ -18,11 +18,11 @@ async fn mock_prompt_yields_finish() {
     let sim = sim::Sim::new();
     let a = sim.spawn_humd(ensemble::HumdId::random()).await;
 
-    // External-perch model: humd no longer hosts perches in-process.
-    // Attach a synthetic mock perch over thrum so chi:"prompt" routes.
+    // External-worker model: humd no longer hosts workers in-process.
+    // Attach a synthetic mock worker over thrum so chi:"prompt" routes.
     sim.attach_mock_worker(a.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock perch attaches");
+        .expect("mock worker attaches");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     sim.nestler_send(

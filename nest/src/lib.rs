@@ -47,7 +47,7 @@ pub struct SpawnSpec {
     /// Optional system prompt to prepend to the conversation.
     pub system_prompt: Option<String>,
     /// Optional MCP HTTP base URL (e.g. "http://127.0.0.1:29147"). The
-    /// perch wires this into its harness's MCP config so the spawned
+    /// worker wires this into its harness's MCP config so the spawned
     /// process can reach hum's tool surface.
     pub mcp_url: Option<String>,
     /// Optional path to the claude CLI binary. None → "claude" on PATH.

@@ -32,7 +32,7 @@ stateful. It speaks every chi the openai-shape preserves.
 1. humd-L mints a hum, sigil resolved, `chi:"hello"` exchanged with the
    OC nestler. Operator types the prompt. Bloom begins; petals flow.
 2. Mid-bloom, operator walks away from the laptop. The nestler on
-   humd-L stays attached; the brood keeps the perch warm; wane keeps
+   humd-L stays attached; the brood keeps the worker warm; wane keeps
    ticking against the local sigil.
 3. Phone wakes. humd-P's chat app opens; its `vercel-ai` nestler asks
    the local humd `peer-add` style: "attach me to hum `<sigil>`."

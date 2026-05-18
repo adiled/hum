@@ -82,7 +82,7 @@ Detection is two-tier when wired:
    The regex-driven implementation tuned for chat-LLM context loss
    ("I don't have any previous context", greeting reset, identity
    reset, formality shift) lives in
-   [`perches/common`](../perches/common) as `RegexClassifier` — not in
+   [`hives/common`](../hives/common) as `RegexClassifier` — not in
    this crate. Other nests can ship their own classifiers without
    touching drone.
 
@@ -122,7 +122,7 @@ use std::sync::Arc;
 // Pure channel-health sentinel — no LLM context-loss detection.
 let drone = Drone::new();
 
-// Or, with a regex classifier from perches/common:
+// Or, with a regex classifier from hives/common:
 // let drone = Drone::with_classifier(Arc::new(nest_common::RegexClassifier));
 
 // Send path

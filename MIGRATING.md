@@ -23,7 +23,7 @@ changed to mechanically translate. Read, edit, restart.
 | opencode plugin in `~/.config/opencode/opencode.json` under `plugin.clwnd` | opencode `provider.hum` block (native `openai-compatible`) |
 | `clwnd` socket — `<runtime>/clwnd/clwnd.sock` (and variants) | `thrum.sock` — `<runtime>/hum/thrum.sock` |
 | projects registry in config | gone — `fs.roots` instead; nestlings own project notions if they need them |
-| drone TS halves (`drone/llm.ts`, `cup.ts`, prompts) | drone is Rust-only; regex bank in `perches/common` |
+| drone TS halves (`drone/llm.ts`, `cup.ts`, prompts) | drone is Rust-only; regex bank in `hives/common` |
 | OC plugin shipped with hum repo | shed entirely; opencode talks to hum via plain openai-compat |
 
 ## Three-step upgrade
@@ -102,7 +102,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
   "nest": { "maxProcs": 4, "idleThresholdMs": 300000, "default": "claude-cli" },
-  "perches": {
+  "hives": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
   }
@@ -114,13 +114,13 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 | `maxProcs` | `nest.maxProcs` |
 | `idleTimeout` | `nest.idleThresholdMs` (same unit, renamed) |
 | `permissionDusk` | `humd.permissionDuskMs` |
-| `nest` (enum `"claude-cli"` / `"claude-repl"`) | `nest.default` (free-form string; must appear in `perches`) |
+| `nest` (enum `"claude-cli"` / `"claude-repl"`) | `nest.default` (free-form string; must appear in `hives`) |
 | `driftRetentionDays` | `humd.driftRetentionDays` |
 | `projects` | **dropped** — filesystem is now `fs.roots`; project IDs are a nestling-side concern |
 | `droned` | **dropped** — drone is always on; the swallow path is internal |
 | `droneModel` | **dropped** — the LLM-judge seam is in code (`drone::Evaluator` trait); no default judge ships |
 | `smallModel` | **dropped** — title generation was a plugin concern; opencode handles it natively |
-| `ccFlags` | `perches.claude-cli.ccFlags` (per-perch, not global) |
+| `ccFlags` | `hives.claude-cli.ccFlags` (per-hive, not global) |
 | `experimental.subpath` | **dropped** — plugin-only feature |
 | `compaction` | **dropped** — manual-compaction is opencode's choice; hum doesn't proxy |
 | `nestlings.<name>` (never shipped) | per-kind config at `~/.config/hum/nestlings/<name>.json`; humd doesn't pre-know nestlings |
@@ -166,9 +166,9 @@ plugin to expose hum tools via MCP: that path is gone. Configure your
 opencode session's MCP servers directly in opencode.json.
 
 humd still has an embedded MCP server for its own tool surface;
-spawned roosts get its URL via `SpawnSpec.mcp_url`. Each perch wires
-it into the LLM's MCP config. The crate isn't gone, it's just no
-longer bridging to a clwnd plugin.
+spawned roosts get its URL via `SpawnSpec.mcp_url`. Each worker bee
+wires it into the LLM's MCP config. The crate isn't gone, it's just
+no longer bridging to a clwnd plugin.
 
 ## drone
 
@@ -178,7 +178,7 @@ inside humd. Drone is **on by default**; no opt-out at the config
 layer.
 
 The regex pattern bank (heuristic gate) lives in
-[`perches/common`](perches/common). Concrete `Perch` impls
+[`hives/common`](hives/common). Concrete `WorkerBee` impls
 (`claude-cli`, `claude-repl`) can register the regex `Classifier` if
 they want context-loss swallow behavior. The
 [`drone::Evaluator`](drone) trait is the seam for a future LLM judge

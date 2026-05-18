@@ -36,11 +36,11 @@ async fn phone_laptop_roam() {
 
     sim.wire(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
-    // External-perch model: laptop hosts the perch; phone is just an
+    // External-worker model: laptop hosts the worker; phone is just an
     // access surface that routes via `to:`.
     sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock perch attaches to laptop");
+        .expect("mock worker attaches to laptop");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Phone's nestler sends a prompt addressed at the laptop. The hum

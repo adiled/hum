@@ -81,24 +81,24 @@
         "default": {
           "type": "string",
           "default": "claude-cli",
-          "description": "Perch name to spawn into when a chi:prompt doesn't pin one. Must appear in `perches`."
+          "description": "Hive name to route to when a chi:prompt doesn't pin one. Must appear in `hives`."
         }
       }
     },
 
-    "perches": {
+    "hives": {
       "type": "object",
       "default": {},
-      "description": "Per-perch config. Key = perch name (claude-cli, claude-repl, future kinds). Value's shape is owned by the perch crate. Missing block = Default.",
+      "description": "Per-hive config. Key = hive name (claude-cli, claude-repl, future kinds). Value's shape is owned by the hive's worker-bee crate. Missing block = Default.",
       "additionalProperties": {
         "type": "object",
         "properties": {
           "cliPath": { "type": "string", "description": "Override the binary location." },
-          "defaultModel": { "type": "string", "description": "Model id this perch spawns when SpawnSpec doesn't override." },
+          "defaultModel": { "type": "string", "description": "Model id this hive's worker spawns when SpawnSpec doesn't override." },
           "ccFlags": {
             "type": "object",
             "additionalProperties": { "type": ["string", "number", "boolean"] },
-            "description": "Env overrides spread onto every spawn AFTER the perch's defaults."
+            "description": "Env overrides spread onto every spawn AFTER the worker's defaults."
           },
           "limits": {
             "type": "object",
