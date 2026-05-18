@@ -1,23 +1,23 @@
-//! `serve_perch` — wraps a Perch impl into a standalone process that
-//! handshakes with humd via thrum and routes prompts over the wire.
+//! `serve_worker` — wraps a WorkerBee impl into a standalone process
+//! that handshakes with humd via thrum and routes prompts over the wire.
 //!
-//! Mirrors the nestling client pattern: the perch process owns its own
+//! Mirrors the forager-bee client pattern: the worker process owns its own
 //! lifecycle, humd is just a router. The wire contract:
 //!
-//! - **Hello**: announce as `role:"perch"`, advertise `models` +
+//! - **Hello**: announce as `bee:["worker"]`, advertise `models` +
 //!   `propensity`. humd registers `{model_id → client_id}` mappings.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
-//!   matches one of the perch's advertised models. The perch calls
-//!   `Perch::spawn(spec)`, then murmurs the prompt text on the roost's
-//!   stdin.
+//!   matches one of the worker's advertised models. The worker calls
+//!   `WorkerBee::spawn(spec)`, then murmurs the prompt text on the
+//!   roost's stdin.
 //! - **Chunks out**: each event from `Roost.events` becomes a
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
 //! - **Cancel**: `chi:"cancel"` triggers `Roost.kill()` for the sid.
 //! - **Tool result**: `chi:"tool-result"` feeds into the roost stdin
-//!   via the perch's tool-result encoder (currently
+//!   via the worker's tool-result encoder (currently
 //!   `nest::encode_tool_result`).
 //!
-//! Reconnect is built in — humd restarts don't strand perches; they
+//! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
 
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, Perch, SpawnSpec};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
 
 /// Resolve the canonical thrum socket path. Mirrors `thrumd::default_socket_path`.
 fn default_socket_path() -> PathBuf {
@@ -56,72 +56,73 @@ fn unsafe_uid() -> u32 {
 }
 
 /// What the host advertises on hello. Drives both routing (humd maps
-/// `model_id → client_id`) and observability (downstream nestlings can
+/// `model_id → client_id`) and observability (downstream foragers can
 /// reason about propensity without inferring).
 #[derive(Debug, Clone)]
-pub struct PerchAdvert {
-    /// Perch kind name, e.g. "claude-cli", "ollama". Used as the
-    /// broadcast tag for sigil routing.
-    pub kind: String,
+pub struct HiveAdvert {
+    /// Hive name, e.g. "claude-cli", "ollama". The bee carries this in
+    /// hello as the kind it's commissioned by. Used as the broadcast
+    /// tag for sigil routing.
+    pub hive: String,
     /// Crate version string (cargo or otherwise). Free-form.
     pub version: String,
-    /// Model ids this perch can serve. humd's prompt arm looks here
-    /// for `modelId → perch` routing.
+    /// Model ids this worker can serve. humd's prompt arm looks here
+    /// for `modelId → worker` routing.
     pub models: Vec<String>,
-    /// Optional source URL the mesh can use to discover the perch's
+    /// Optional source URL the mesh can use to discover the worker's
     /// repo. Carried verbatim into the gossiped manifest.
     pub source: Option<String>,
 }
 
-/// Run the perch service loop. Blocks until shutdown.
-pub async fn serve_perch<P: Perch + 'static>(perch: Arc<P>, advert: PerchAdvert) -> Result<()> {
+/// Run the worker service loop. Blocks until shutdown.
+pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAdvert) -> Result<()> {
     let path = default_socket_path();
     loop {
-        match dial_and_serve(&path, perch.clone(), &advert).await {
+        match dial_and_serve(&path, worker.clone(), &advert).await {
             Ok(()) => {
-                trace!("serve_perch: clean exit, reconnecting");
+                trace!("serve_worker: clean exit, reconnecting");
             }
             Err(e) => {
-                warn!(err = %e, "serve_perch: connection failed, retrying");
+                warn!(err = %e, "serve_worker: connection failed, retrying");
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }
 
-async fn dial_and_serve<P: Perch + 'static>(
+async fn dial_and_serve<W: WorkerBee + 'static>(
     path: &Path,
-    perch: Arc<P>,
-    advert: &PerchAdvert,
+    worker: Arc<W>,
+    advert: &HiveAdvert,
 ) -> Result<()> {
-    info!(socket = %path.display(), kind = %advert.kind, "perch.connecting");
+    info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
     let stream = UnixStream::connect(path).await
         .with_context(|| format!("connect to thrum at {}", path.display()))?;
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(Mutex::new(write_half));
 
-    // Hello — register as `role:"perch"`. humd reads:
-    //   role, nestling (= kind), models, propensity, version,
-    //   protoVersion, source, chis.
-    let propensity_str = match perch.propensity() {
+    // Hello — register as `bee:["worker"]`. humd reads:
+    //   bee, hive (kind), models, propensity, version, protoVersion,
+    //   source, chis.
+    let propensity_str = match worker.propensity() {
         nest::Propensity::StatefulSession => "stateful_session",
         nest::Propensity::StatelessPerCall => "stateless_per_call",
         nest::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
         "chi": "hello",
-        "role": "perch",
-        "from": &advert.kind,
-        "nestling": &advert.kind,
+        "bee": ["worker"],
+        "from": &advert.hive,
+        "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
-        "propensity": { "statefulness": propensity_str, "wire": &advert.kind },
+        "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
         "chis": ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "error", "tool-call"],
         "source": advert.source.clone().unwrap_or_default(),
     });
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
-    info!(kind = %advert.kind, models = ?advert.models, "perch.hello.sent");
+    info!(hive = %advert.hive, models = ?advert.models, "worker.hello.sent");
 
     // Per-sid roost handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
@@ -139,13 +140,13 @@ async fn dial_and_serve<P: Perch + 'static>(
 
         match chi {
             "prompt" => {
-                let perch = perch.clone();
+                let worker = worker.clone();
                 let write_half = write_half.clone();
                 let roosts = roosts.clone();
-                let kind = advert.kind.clone();
+                let hive = advert.hive.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(perch, write_half, roosts, kind, tone).await {
-                        warn!(err = %e, "perch.prompt.handle.failed");
+                    if let Err(e) = handle_prompt(worker, write_half, roosts, hive, tone).await {
+                        warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
             }
@@ -177,7 +178,7 @@ async fn dial_and_serve<P: Perch + 'static>(
                 // Wire keepalive / ack — nothing to do.
             }
             other => {
-                trace!(chi = other, "perch.unknown.chi");
+                trace!(chi = other, "worker.unknown.chi");
             }
         }
     }
@@ -189,11 +190,11 @@ struct RoostBundle {
     kill: Arc<dyn Fn() + Send + Sync>,
 }
 
-async fn handle_prompt<P: Perch + 'static>(
-    perch: Arc<P>,
+async fn handle_prompt<W: WorkerBee + 'static>(
+    worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     roosts: Arc<Mutex<HashMap<String, RoostBundle>>>,
-    kind: String,
+    hive: String,
     tone: Value,
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
@@ -206,9 +207,9 @@ async fn handle_prompt<P: Perch + 'static>(
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
     let mcp_url = tone.get("mcpUrl").and_then(Value::as_str).map(str::to_string);
 
-    // Build SpawnSpec — only the common knobs; perch-specific extras
+    // Build SpawnSpec — only the common knobs; worker-specific extras
     // (sampling block, cli flags) ride along on the tone if the
-    // perch wants them.
+    // worker wants them.
     let mut spec = SpawnSpec::new(sid.clone(), model.clone(), cwd);
     spec.system_prompt = system_prompt;
     spec.mcp_url = mcp_url;
@@ -219,7 +220,7 @@ async fn handle_prompt<P: Perch + 'static>(
         spec.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    let roost = perch.spawn(spec).await?;
+    let roost = worker.spawn(spec).await?;
     let stdin = roost.stdin.clone();
     let events = roost.events.clone();
     let kill = roost.kill.clone();
@@ -228,8 +229,8 @@ async fn handle_prompt<P: Perch + 'static>(
 
     // First user turn — murmur the prompt content as a single user
     // message. Multi-turn continuity arrives as subsequent chi:"prompt"
-    // tones with the same sid (the perch's pool decides whether to
-    // reuse — but in the serve_perch loop each prompt currently
+    // tones with the same sid (the worker's pool decides whether to
+    // reuse — but in the serve_worker loop each prompt currently
     // spawns its own roost; pooling is an optimization for later).
     stdin.send(encode_prompt(&content)).await
         .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
@@ -237,7 +238,7 @@ async fn handle_prompt<P: Perch + 'static>(
     // Dispatch loop — Roost.events → chi:"chunk" tones over thrum.
     let listener = Arc::new(WireListener {
         sid: sid.clone(),
-        kind,
+        hive,
         write_half: write_half.clone(),
     });
 
@@ -253,7 +254,7 @@ async fn handle_prompt<P: Perch + 'static>(
                         // we forward the raw value as a tool-able chunk.
             listener_clone.forward_raw(value).await;
         }
-        trace!(sid = %sid_for_loop, "perch.dispatch.exit");
+        trace!(sid = %sid_for_loop, "worker.dispatch.exit");
     });
 
     // Wait for exit, then emit finish + cleanup.
@@ -272,10 +273,10 @@ async fn handle_prompt<P: Perch + 'static>(
 }
 
 /// Translates raw claude-stream-json events into chi:"chunk" tones.
-/// Lives in the helper so each perch crate doesn't reinvent it.
+/// Lives in the helper so each worker crate doesn't reinvent it.
 struct WireListener {
     sid: String,
-    kind: String,
+    hive: String,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
 }
 
@@ -363,8 +364,8 @@ impl WireListener {
             _ => {
                 // Structural / unrecognized — drop. Mirrors humd's
                 // historical filter; richer chi values can plug in here
-                // (perf-mark, drone, etc.) when perches grow them.
-                let _ = &self.kind;
+                // (perf-mark, drone, etc.) when workers grow them.
+                let _ = &self.hive;
             }
         }
     }

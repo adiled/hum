@@ -1,9 +1,9 @@
-//! claude-cli-perch — standalone perch process.
+//! claude-cli-worker — standalone worker-bee process.
 //!
 //! Runs as its own process, handshakes with humd over thrum, accepts
 //! prompts addressed to claude models, and pipes responses back as
 //! `chi:"chunk"` tones. humd never compiles us in; we register at
-//! runtime via the `role:"perch"` hello.
+//! runtime via the `bee:["worker"]` hello.
 //!
 //! Env knobs:
 //!   HUM_THRUM_SOCK     thrum socket (default `$XDG_RUNTIME_DIR/hum/thrum.sock`)
@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_common::{serve_perch, PerchAdvert};
+use nest_common::{serve_worker, HiveAdvert};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let perch = Arc::new(claude_cli::ClaudeCliPerch);
+    let worker = Arc::new(claude_cli::ClaudeCliWorker);
 
     let models: Vec<String> = std::env::var("CLAUDE_MODELS")
         .ok()
@@ -40,12 +40,12 @@ async fn main() -> Result<()> {
             "claude-haiku-4-5-20251001".to_string(),
         ]);
 
-    let advert = PerchAdvert {
-        kind: "claude-cli".to_string(),
+    let advert = HiveAdvert {
+        hive: "claude-cli".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,
         source: Some("https://github.com/adiled/hum/tree/main/perches/claude-cli".to_string()),
     };
 
-    serve_perch(perch, advert).await
+    serve_worker(worker, advert).await
 }

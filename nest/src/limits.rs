@@ -6,9 +6,9 @@
 //! child. On non-Linux the apply is a no-op so callers compile and degrade
 //! gracefully.
 //!
-//! Wall-clock enforcement does NOT live here; the Perch arms its own timer
-//! and kills the child. `wall_clock_ms` is stored on the spec only so it
-//! travels alongside the rlimit fields.
+//! Wall-clock enforcement does NOT live here; the WorkerBee arms its own
+//! timer and kills the child. `wall_clock_ms` is stored on the spec only so
+//! it travels alongside the rlimit fields.
 //!
 //! cgroups, seccomp, namespaces: out of scope at this tier — rlimit only.
 
@@ -30,7 +30,7 @@ pub struct ResourceLimits {
     /// SIGXCPU at soft limit (= hard here), SIGKILL on overrun.
     pub cpu_secs: Option<u32>,
     /// Hard cap on wall-clock execution time in milliseconds. NOT an
-    /// rlimit — caller (the Perch) should arm a timer that kills the
+    /// rlimit — caller (the WorkerBee) should arm a timer that kills the
     /// roost when this expires. Stored here so the spec travels together.
     pub wall_clock_ms: Option<u64>,
     /// Nice value adjustment (-20..=19). Skipped if None.

@@ -11,5 +11,5 @@
 
 pub mod serve;
 pub mod suspicion_regex;
-pub use serve::{serve_perch, PerchAdvert};
+pub use serve::{serve_worker, HiveAdvert};
 pub use suspicion_regex::RegexClassifier;

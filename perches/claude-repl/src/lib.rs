@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Perch, Roost, SpawnSpec};
+use nest::{Roost, SpawnSpec, WorkerBee};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -32,9 +32,9 @@ enum HarnessState {
     Felled,
 }
 
-pub struct ClaudeReplPerch;
+pub struct ClaudeReplWorker;
 
-impl Default for ClaudeReplPerch {
+impl Default for ClaudeReplWorker {
     fn default() -> Self {
         Self
     }
@@ -71,7 +71,7 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
 }
 
 #[async_trait]
-impl Perch for ClaudeReplPerch {
+impl WorkerBee for ClaudeReplWorker {
     fn ephemeral(&self) -> bool {
         true
     }

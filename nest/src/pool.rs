@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
-use crate::{encode_cancel, encode_prompt, encode_prompt_with_attachments, encode_tool_result, Attachment, Listener, Perch, SpawnSpec, Roost};
+use crate::{encode_cancel, encode_prompt, encode_prompt_with_attachments, encode_tool_result, Attachment, Listener, Roost, SpawnSpec, WorkerBee};
 
 pub struct NestConfig {
     pub max_procs: usize,
@@ -50,23 +50,23 @@ struct RoostSlot {
 
 pub struct Nest {
     cfg: NestConfig,
-    perch_pipe: Arc<dyn Perch>,
-    perch_pty: Arc<dyn Perch>,
+    worker_pipe: Arc<dyn WorkerBee>,
+    worker_pty: Arc<dyn WorkerBee>,
     slots: RwLock<HashMap<String, Arc<RoostSlot>>>,
 }
 
 impl Nest {
-    pub fn new(cfg: NestConfig, pipe: Arc<dyn Perch>, pty: Arc<dyn Perch>) -> Self {
+    pub fn new(cfg: NestConfig, pipe: Arc<dyn WorkerBee>, pty: Arc<dyn WorkerBee>) -> Self {
         Self {
             cfg,
-            perch_pipe: pipe,
-            perch_pty: pty,
+            worker_pipe: pipe,
+            worker_pty: pty,
             slots: RwLock::new(HashMap::new()),
         }
     }
 
     /// Subscribe `listener` to the roost at `pool_key`, spawning one if absent.
-    /// `use_pty` picks the perch. Mirrors TS `awaken`.
+    /// `use_pty` picks the worker bee. Mirrors TS `awaken`.
     pub async fn awaken(
         self: &Arc<Self>,
         pool_key: &str,
@@ -93,12 +93,12 @@ impl Nest {
         // Spawn path. Enforce max_procs; evict an idle slot if needed.
         self.maybe_evict_one().await;
 
-        let perch = if use_pty {
-            self.perch_pty.clone()
+        let worker = if use_pty {
+            self.worker_pty.clone()
         } else {
-            self.perch_pipe.clone()
+            self.worker_pipe.clone()
         };
-        let roost = perch.spawn(spec).await?;
+        let roost = worker.spawn(spec).await?;
         let ephemeral = roost.ephemeral;
         let pool_key_owned = pool_key.to_string();
 
@@ -149,7 +149,7 @@ impl Nest {
 
     /// Send a user prompt that may carry image / audio / pdf
     /// attachments alongside the text. nest stays format-neutral
-    /// (no perch-specific knowledge); the underlying encoding maps
+    /// (no worker-specific knowledge); the underlying encoding maps
     /// known attachment kinds into content blocks the receiving
     /// stdin shape expects and surfaces unknown kinds as text
     /// annotations.

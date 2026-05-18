@@ -1,11 +1,11 @@
-//! claude-repl-perch — standalone perch process for the PTY/REPL
+//! claude-repl-worker — standalone worker-bee process for the PTY/REPL
 //! variant of claude. Runs as its own process, handshakes with humd
 //! over thrum.
 
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_common::{serve_perch, PerchAdvert};
+use nest_common::{serve_worker, HiveAdvert};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let perch = Arc::new(claude_repl::ClaudeReplPerch);
+    let worker = Arc::new(claude_repl::ClaudeReplWorker);
 
     let models: Vec<String> = std::env::var("CLAUDE_MODELS")
         .ok()
@@ -29,12 +29,12 @@ async fn main() -> Result<()> {
             "claude-haiku-4-5".to_string(),
         ]);
 
-    let advert = PerchAdvert {
-        kind: "claude-repl".to_string(),
+    let advert = HiveAdvert {
+        hive: "claude-repl".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,
         source: Some("https://github.com/adiled/hum/tree/main/perches/claude-repl".to_string()),
     };
 
-    serve_perch(perch, advert).await
+    serve_worker(worker, advert).await
 }

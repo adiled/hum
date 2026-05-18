@@ -1,4 +1,4 @@
-//! claude-cli — the pipe-mode nestling for claude.
+//! claude-cli — the pipe-mode WorkerBee for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
 //! Takes a [`nest::SpawnSpec`], builds the CLI invocation, runs the
@@ -17,11 +17,11 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Perch, Propensity, Roost, SpawnSpec};
+use nest::{Propensity, Roost, SpawnSpec, WorkerBee};
 
-pub struct ClaudeCliPerch;
+pub struct ClaudeCliWorker;
 
-impl Default for ClaudeCliPerch {
+impl Default for ClaudeCliWorker {
     fn default() -> Self { Self }
 }
 
@@ -50,7 +50,7 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
         argv.push(mcp_config);
         argv.push("--strict-mcp-config".into());
     }
-    // Pure pass-through. Perch invents no policy; humd populates these
+    // Pure pass-through. Worker invents no policy; humd populates these
     // from the nestler's hello (opt-in). Empty vec = no flag.
     if !spec.allowed_tools.is_empty() {
         argv.push("--allowed-tools".into());
@@ -99,7 +99,7 @@ pub fn build_env(spec: &SpawnSpec) -> Vec<(String, String)> {
 }
 
 #[async_trait]
-impl Perch for ClaudeCliPerch {
+impl WorkerBee for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 

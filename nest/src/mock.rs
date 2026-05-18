@@ -1,6 +1,6 @@
-//! mock — a test-only perch that emits canned stream-json events.
+//! mock — a test-only WorkerBee that emits canned stream-json events.
 //!
-//! Sim tests can't spawn real `claude` processes. `MockPerch` returns a
+//! Sim tests can't spawn real subprocesses. `MockWorkerBee` returns a
 //! [`Roost`] whose `events` channel emits a deterministic sequence shaped
 //! exactly like `claude -p --output-format stream-json` would, so the
 //! daemon's listener bridge fires through the same code path.
@@ -13,10 +13,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::{Perch, Roost, SpawnSpec};
+use crate::{Roost, SpawnSpec, WorkerBee};
 
-/// A perch that produces canned events instead of running a subprocess.
-pub struct MockPerch {
+/// A WorkerBee that produces canned events instead of running a subprocess.
+pub struct MockWorkerBee {
     /// Override the canned output text. Defaults to "HELLO".
     pub text: String,
     /// Optional artificial latency between events (Duration::ZERO default).
@@ -25,7 +25,7 @@ pub struct MockPerch {
     pub with_tool: bool,
 }
 
-impl Default for MockPerch {
+impl Default for MockWorkerBee {
     fn default() -> Self {
         Self {
             text: "HELLO".to_string(),
@@ -36,7 +36,7 @@ impl Default for MockPerch {
 }
 
 #[async_trait]
-impl Perch for MockPerch {
+impl WorkerBee for MockWorkerBee {
     fn ephemeral(&self) -> bool { false }
 
     async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
@@ -44,7 +44,7 @@ impl Perch for MockPerch {
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(256);
         let (tx_exit, rx_exit) = oneshot::channel::<i32>();
 
-        // stdin drain — the perch doesn't care what the daemon writes back.
+        // stdin drain — the worker doesn't care what the daemon writes back.
         tokio::spawn(async move {
             while rx_in.recv().await.is_some() { /* /dev/null */ }
         });
@@ -135,9 +135,9 @@ mod tests {
 
     #[tokio::test]
     async fn emits_canned_sequence_with_default_text() {
-        let perch = MockPerch::default();
+        let bee = MockWorkerBee::default();
         let spec = SpawnSpec::new("sid-mock", "claude-haiku-4-5", "/tmp");
-        let roost = perch.spawn(spec).await.unwrap();
+        let roost = bee.spawn(spec).await.unwrap();
 
         let mut events = Vec::new();
         {
@@ -171,9 +171,9 @@ mod tests {
 
     #[tokio::test]
     async fn custom_text_appears_in_delta() {
-        let perch = MockPerch { text: "ahoy world".into(), ..Default::default() };
+        let bee = MockWorkerBee { text: "ahoy world".into(), ..Default::default() };
         let spec = SpawnSpec::new("s", "m", "/");
-        let roost = perch.spawn(spec).await.unwrap();
+        let roost = bee.spawn(spec).await.unwrap();
         let mut rx = roost.events.lock().await;
         let mut saw_text = None;
         while let Some(v) = rx.recv().await {
@@ -186,9 +186,9 @@ mod tests {
 
     #[tokio::test]
     async fn with_tool_inserts_tool_use_block() {
-        let perch = MockPerch { with_tool: true, ..Default::default() };
+        let bee = MockWorkerBee { with_tool: true, ..Default::default() };
         let spec = SpawnSpec::new("s", "m", "/");
-        let roost = perch.spawn(spec).await.unwrap();
+        let roost = bee.spawn(spec).await.unwrap();
         let mut rx = roost.events.lock().await;
         let mut kinds = Vec::new();
         while let Some(v) = rx.recv().await {
@@ -208,8 +208,8 @@ mod tests {
 
     #[tokio::test]
     async fn stdin_drains_silently() {
-        let perch = MockPerch::default();
-        let roost = perch.spawn(SpawnSpec::new("s", "m", "/")).await.unwrap();
+        let bee = MockWorkerBee::default();
+        let roost = bee.spawn(SpawnSpec::new("s", "m", "/")).await.unwrap();
         // Should not panic / block.
         roost.stdin.send("ignored line".into()).await.unwrap();
         roost.stdin.send(crate::encode_prompt("hi")).await.unwrap();
@@ -247,8 +247,8 @@ mod tests {
         });
         let listener: Arc<dyn Listener> = captor.clone();
 
-        let perch = MockPerch::default();
-        let roost = perch.spawn(SpawnSpec::new("sid-bridge", "claude-sonnet-4-6", "/")).await.unwrap();
+        let bee = MockWorkerBee::default();
+        let roost = bee.spawn(SpawnSpec::new("sid-bridge", "claude-sonnet-4-6", "/")).await.unwrap();
 
         // Minimal bridge — mirrors what the daemon binary does: pump events
         // off the roost, route by `type`, and call the listener.
