@@ -250,6 +250,19 @@ where
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    // Forager-tool bridge: MCP tools/list aggregates every attached
+    // forager hive's advertised tool catalogue; MCP tools/call dispatches
+    // via thrum_to to the forager whose manifest carries the name.
+    // Lives parallel to NestlerBridge; the chi:"tool-result" arm pops
+    // both pending maps so either dispatch path resolves cleanly.
+    mcp_registry.set_forager_provider(Arc::new(ForagerBridge {
+        thrum: thrum.clone(),
+        pending: tool_pending.clone(),
+        manifests: manifests.clone(),
+        tool_routes: tool_routes.clone(),
+    }));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -263,7 +276,7 @@ where
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
         sid_origins: sid_origins.clone(),
-        tool_routes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+        tool_routes,
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -535,6 +548,89 @@ impl mcp::NestlerHook for NestlerBridge {
             Err(_) => {
                 self.pending.lock().remove(&call_id);
                 anyhow::bail!("nestler tool-result timed out (300s)")
+            }
+        }
+    }
+}
+
+/// MCP ForagerToolProvider impl — backs MCP's tools/list and
+/// tools/call with the live forager-hive manifest registry. When a
+/// claude / OC client asks the embedded MCP for tools, the answer is
+/// the union of every attached forager hive's advertised tools (and
+/// nothing else, when at least one forager is present). When the
+/// client invokes one, this dispatches via thrum_to to the forager's
+/// client_id and parks on the same `tool_pending` oneshot the
+/// NestlerBridge uses.
+struct ForagerBridge {
+    thrum: Thrum,
+    pending: ToolPending,
+    manifests: Manifests,
+    /// Routing table shared with HumdSink. We never need to write to
+    /// it from the bridge — the chi:"tool-result" handler resolves
+    /// pending entries directly via `pending`, not via tool_routes.
+    /// Carried only so future routing paths can grow off the bridge.
+    #[allow(dead_code)]
+    tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
+}
+
+#[async_trait::async_trait]
+impl mcp::ForagerToolProvider for ForagerBridge {
+    fn list_tools(&self) -> Vec<mcp::ToolDef> {
+        let m = self.manifests.read();
+        m.values()
+            .filter(|man| man.bee.iter().any(|b| b == "forager"))
+            .flat_map(|man| man.tools.iter().map(|t| mcp::ToolDef {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+            }))
+            .collect()
+    }
+
+    async fn dispatch(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: Value,
+    ) -> anyhow::Result<String> {
+        // Find the forager whose manifest carries this tool name.
+        // Multiple hives may advertise the same name (e.g. two humfs
+        // instances on different roots); pick the first match —
+        // future improvement: round-robin or pin per-session.
+        let forager_cid = {
+            let m = self.manifests.read();
+            m.iter().find(|(_, man)| {
+                man.bee.iter().any(|b| b == "forager")
+                && man.tools.iter().any(|t| t.name == tool)
+            }).map(|(cid, _)| cid.clone())
+        };
+        let Some(forager_cid) = forager_cid else {
+            anyhow::bail!("no forager hive advertises tool '{tool}'");
+        };
+
+        let call_id = format!("call-{}", thrum_core::rid());
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        self.pending.lock().insert(call_id.clone(), tx);
+        let tone = serde_json::json!({
+            "chi": "tool-call",
+            "sid": session_id,
+            "callId": call_id,
+            "toolName": tool,
+            "name": tool,
+            "args": args,
+        });
+        trace!(%forager_cid, tool, call_id, "mcp.tool-call.route.to-forager");
+        self.thrum.thrum_to(&forager_cid, tone);
+
+        match tokio::time::timeout(Duration::from_secs(300), rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => {
+                self.pending.lock().remove(&call_id);
+                anyhow::bail!("forager tool-result channel closed")
+            }
+            Err(_) => {
+                self.pending.lock().remove(&call_id);
+                anyhow::bail!("forager tool-result timed out (300s)")
             }
         }
     }

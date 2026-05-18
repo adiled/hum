@@ -28,6 +28,28 @@ pub trait NestlerHook: Send + Sync {
     ) -> anyhow::Result<String>;
 }
 
+/// Hook for tool calls handled by forager hives attached over thrum.
+/// The provider exposes the tool catalogue it can dispatch (queried
+/// once per `tools/list`) and runs each call via thrum routing.
+///
+/// Installed by humd's daemon boot, backed by the live hive manifest
+/// registry. The MCP shell consults the provider FIRST on every
+/// `tools/call` — when the name is provider-owned, native dispatch
+/// is bypassed entirely.
+#[async_trait]
+pub trait ForagerToolProvider: Send + Sync {
+    /// Tool defs the provider can dispatch. Aggregated across every
+    /// attached forager hive. Empty when no foragers are advertising
+    /// tool surfaces yet.
+    fn list_tools(&self) -> Vec<ToolDef>;
+    async fn dispatch(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: Value,
+    ) -> anyhow::Result<String>;
+}
+
 /// Hook for permission_prompt — Claude CLI's mid-stream permission
 /// callback. Caller decides allow/deny.
 #[async_trait]
@@ -75,6 +97,7 @@ struct Inner {
     sessions: Mutex<HashMap<String, Arc<Mutex<SessionState>>>>,
     default_cwd: PathBuf,
     nestler: Mutex<Option<Arc<dyn NestlerHook>>>,
+    forager: Mutex<Option<Arc<dyn ForagerToolProvider>>>,
     permission: Mutex<Option<Arc<dyn PermissionHook>>>,
     tool_info: Mutex<Option<Arc<dyn ToolInfoHook>>>,
 }
@@ -91,6 +114,7 @@ impl Registry {
                 sessions: Mutex::new(HashMap::new()),
                 default_cwd,
                 nestler: Mutex::new(None),
+                forager: Mutex::new(None),
                 permission: Mutex::new(None),
                 tool_info: Mutex::new(None),
             }),
@@ -115,6 +139,9 @@ impl Registry {
     pub fn set_nestler_hook(&self, h: Arc<dyn NestlerHook>) {
         *self.inner.nestler.lock() = Some(h);
     }
+    pub fn set_forager_provider(&self, h: Arc<dyn ForagerToolProvider>) {
+        *self.inner.forager.lock() = Some(h);
+    }
     pub fn set_permission_hook(&self, h: Arc<dyn PermissionHook>) {
         *self.inner.permission.lock() = Some(h);
     }
@@ -133,22 +160,38 @@ impl Registry {
         self.inner.sessions.lock().remove(session_id);
     }
 
-    /// Tools advertised for `tools/list`. Native tools (gated by
-    /// `allowed_tools`), then nestler-declared, then external (filtered
-    /// by `visible_external`).
+    /// Tools advertised for `tools/list`. Forager-provided tools come
+    /// first when registered — they replace the native fs surface
+    /// (Read / Write / Edit / Bash / Glob / Grep / MultiEdit / Apply
+    /// / TodoWrite). Forager-less builds keep the native fs surface
+    /// as before. Nestler-declared and external tools follow.
     pub fn list_tools(&self, session_id: &str) -> Vec<ToolDef> {
         let sess = self.session(session_id);
         let s = sess.lock();
-        let mut out: Vec<ToolDef> = native_tool_defs()
+
+        let forager_defs: Vec<ToolDef> = self.inner.forager.lock().clone()
+            .map(|p| p.list_tools())
+            .unwrap_or_default();
+
+        let mut out: Vec<ToolDef> = forager_defs.clone();
+
+        let native: Vec<ToolDef> = native_tool_defs()
             .into_iter()
             .filter(|t| {
+                // permission_prompt always lands.
                 if t.name == "permission_prompt" { return true; }
+                // When a forager has taken over the fs surface, drop
+                // native tools with the same kind. Today every native
+                // tool that isn't permission_prompt is fs-related.
+                if !forager_defs.is_empty() { return false; }
                 match &s.allowed_tools {
                     Some(set) => set.contains(&t.name),
                     None => true,
                 }
             })
             .collect();
+        out.extend(native);
+
         out.extend(s.nestler_tools.iter().cloned());
         let ext: Vec<ToolDef> = match &s.visible_external {
             Some(vis) => s.external_tools.iter().filter(|t| vis.contains(&t.name)).cloned().collect(),
@@ -168,7 +211,29 @@ impl Registry {
         name: &str,
         args: Value,
     ) -> ToolResult {
-        // Native first — they're the authoritative surface.
+        // Forager-provided first — when a hive's catalogue contains
+        // this name, route via the provider regardless of native /
+        // nestler shadowing. The provider checks its own catalogue.
+        // Lock-then-clone into a local so the MutexGuard drops
+        // BEFORE the await below (axum handler bound is Send).
+        let forager_provider = self.inner.forager.lock().clone();
+        if let Some(provider) = forager_provider {
+            let in_catalogue = provider.list_tools().iter().any(|t| t.name == name);
+            if in_catalogue {
+                let args_for_hook = args.clone();
+                let result = match provider.dispatch(session_id, name, args).await {
+                    Ok(text) => ToolResult::text(text),
+                    Err(e) => ToolResult::error(format!("forager hive dispatch failed: {e}")),
+                };
+                let info_hook = self.inner.tool_info.lock().clone();
+                if let Some(hook) = info_hook {
+                    hook.record(session_id, name, args_for_hook, &result.output, ToolInfoSource::Native);
+                }
+                return result;
+            }
+        }
+
+        // Native fallback — only when no forager owns the name.
         if NATIVE_TOOL_NAMES.contains(&name) {
             let sess = self.session(session_id);
             let args_for_hook = args.clone();
