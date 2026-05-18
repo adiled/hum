@@ -44,7 +44,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
 
-use crate::{HumdAddr, HumdId, PeerCapabilities, PeerConnection, Tone, Transport};
+use crate::{HumdAddr, Hid, PeerCapabilities, PeerConnection, Tone, Transport};
 
 /// Inbound-channel capacity — matches `InMemoryEndpoint` / `TcpEndpoint`.
 const RECV_CAP: usize = 256;
@@ -240,7 +240,7 @@ impl TlsTcpListener {
             .accept(tcp)
             .await
             .map_err(|e| anyhow!("tls accept: handshake: {e}"))?;
-        let placeholder = HumdAddr::new(HumdId::random());
+        let placeholder = HumdAddr::new(Hid::random_humd());
         Ok(TlsTcpEndpoint::from_stream(
             TlsStream::Server(tls),
             placeholder,

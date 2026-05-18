@@ -39,7 +39,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
-use crate::{HumdId, Tone};
+use crate::{Hid, Tone};
 
 /// Wire-level chi string for gossip-publish tones. Mirrors
 /// `thrum_core::Chi::GossipPublish` — kept as a literal here so the
@@ -124,7 +124,7 @@ impl GossipState {
 /// same input produces the same output). Re-running publish() with the
 /// same (topic, rid, from, payload) yields the same id, which is what
 /// the dedup test relies on.
-pub fn mint_msg_id(topic: &str, rid: &str, from: &HumdId, payload: &Value) -> String {
+pub fn mint_msg_id(topic: &str, rid: &str, from: &Hid, payload: &Value) -> String {
     let payload_canonical = serde_json::to_string(payload).unwrap_or_default();
     let mut h = Sha256::new();
     h.update(topic.as_bytes());
@@ -141,7 +141,7 @@ pub fn mint_msg_id(topic: &str, rid: &str, from: &HumdId, payload: &Value) -> St
 /// Build a `chi:"gossip-publish"` tone with the given fields. Kept here
 /// so `Ensemble::publish` and the install drainer's re-fan path agree
 /// on the wire shape.
-pub fn gossip_tone(topic: &str, rid: &str, from: &HumdId, payload: Value, msg_id: &str) -> Tone {
+pub fn gossip_tone(topic: &str, rid: &str, from: &Hid, payload: Value, msg_id: &str) -> Tone {
     serde_json::json!({
         "chi": GOSSIP_CHI,
         "rid": rid,
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn msg_id_is_stable_and_distinct() {
-        let from = HumdId::random();
+        let from = Hid::random_humd();
         let a = mint_msg_id("t", "r1", &from, &json!({"x": 1}));
         let b = mint_msg_id("t", "r1", &from, &json!({"x": 1}));
         assert_eq!(a, b);
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn parse_gossip_pulls_fields() {
-        let from = HumdId::random();
+        let from = Hid::random_humd();
         let id = mint_msg_id("topic", "r", &from, &json!(1));
         let t = gossip_tone("topic", "r", &from, json!(1), &id);
         let p = parse_gossip(&t).unwrap();

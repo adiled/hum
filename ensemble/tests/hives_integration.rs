@@ -2,7 +2,7 @@
 //!
 //! Three humds in a line (A — B — C). A advertises a `market-maker`
 //! bee; C calls `hive_discover("market-maker")` and must
-//! receive `(A's HumdId, manifest)` within a short timeout. Then A
+//! receive `(A's Hid, manifest)` within a short timeout. Then A
 //! retracts; via the raw `hive_announcements()` stream, C must
 //! see a `Retract` envelope.
 
@@ -19,9 +19,9 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
     let c_key = HumdKey::generate();
-    let a_id = a_key.humd_id();
-    let b_id = b_key.humd_id();
-    let c_id = c_key.humd_id();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
+    let c_id = c_key.hid();
 
     let caps = PeerCapabilities {
         proto_version: "0.7.0".into(),

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use ensemble::{
-    Ensemble, HumdAddr, HumdId, HumdKey, IrohTransport, PeerCapabilities, PeerConnection, Transport,
+    Ensemble, HumdAddr, Hid, HumdKey, IrohTransport, PeerCapabilities, PeerConnection, Transport,
 };
 use serde_json::json;
 
@@ -37,11 +37,11 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     };
 
     // Server's NodeId — the client needs this to dial. Iroh-side
-    // addressing is the public key; HumdId is sha256(pubkey).
+    // addressing is the public key; Hid is sha256(pubkey).
     let server_node_id = server.node_id();
-    let server_humd_id = HumdId::from_pubkey(server_node_id.as_bytes());
+    let server_humd_id = Hid::from_pubkey(ensemble::HidPrefix::Humd, server_node_id.as_bytes());
     let client_node_id = client.node_id();
-    let client_humd_id = HumdId::from_pubkey(client_node_id.as_bytes());
+    let client_humd_id = Hid::from_pubkey(ensemble::HidPrefix::Humd, client_node_id.as_bytes());
     // With relay disabled and no DNS lookup configured, the dialer
     // needs explicit IP/port hints — pull them off the bound sockets.
     let server_sockets: Vec<String> = server
@@ -56,16 +56,16 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     );
 
     // Pin the ensemble's HumdKey to the iroh SecretKey so the signed
-    // hello's pubkey hashes back to the iroh-derived HumdId — the
+    // hello's pubkey hashes back to the iroh-derived Hid — the
     // ensemble drainer checks `sha256(pubkey) == claimed_id` and ejects
     // peers on mismatch. iroh's `SecretKey` is an Ed25519 SigningKey
     // under the hood; just reuse the bytes.
     let server_key = HumdKey(SigningKey::from_bytes(&server.endpoint().secret_key().to_bytes()));
     let client_key = HumdKey(SigningKey::from_bytes(&client.endpoint().secret_key().to_bytes()));
-    // Sanity: the derived HumdId from HumdKey must match the
-    // iroh-derived HumdId, otherwise the handshake check below fails.
-    assert_eq!(server_key.humd_id(), server_humd_id);
-    assert_eq!(client_key.humd_id(), client_humd_id);
+    // Sanity: the derived Hid from HumdKey must match the
+    // iroh-derived Hid, otherwise the handshake check below fails.
+    assert_eq!(server_key.hid(), server_humd_id);
+    assert_eq!(client_key.hid(), client_humd_id);
 
     // Spawn the server-side accept on a task. It pulls one inbound
     // connection, installs it into a fresh ensemble, and watches for
@@ -85,7 +85,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
             Err(e) => return Err(format!("server accept: {e}")),
         };
 
-        // Sanity check: the iroh-derived HumdId on the inbound endpoint
+        // Sanity check: the iroh-derived Hid on the inbound endpoint
         // must match what the outer test thinks the client's id is. If
         // it doesn't, the ensemble drainer will eject the peer when the
         // client's hello arrives and the test will deadlock confusingly.
@@ -104,7 +104,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
             return Err(format!("server: expected perf-mark, got {got:?}"));
         }
 
-        // Reply with a ping addressed to the client's HumdId.
+        // Reply with a ping addressed to the client's Hid.
         let pong = json!({
             "chi": "ping",
             "rid": "iroh-pong-1",
@@ -145,7 +145,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     let mut sub = ensemble.subscribe();
     ensemble.install(conn, PeerCapabilities::default(), &client_key);
 
-    // Route a perf-mark tone to the server (addressed by its HumdId).
+    // Route a perf-mark tone to the server (addressed by its Hid).
     let mark = json!({
         "chi": "perf-mark",
         "rid": "iroh-mark-1",

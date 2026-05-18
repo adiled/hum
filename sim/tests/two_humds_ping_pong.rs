@@ -1,5 +1,5 @@
 //! Minimum routing proof: two humds, wired, one sends a tone targeting
-//! the other's HumdId, the other observes it on the ensemble inbound
+//! the other's Hid, the other observes it on the ensemble inbound
 //! tap.
 //!
 //! Narrative: humd-A and humd-B are peers in the same ensemble. From
@@ -20,8 +20,8 @@ async fn two_humds_ping_pong() {
 
     let sim = sim::Sim::new();
 
-    let a = sim.spawn_humd(ensemble::HumdId::random()).await;
-    let b = sim.spawn_humd(ensemble::HumdId::random()).await;
+    let a = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    let b = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
     sim.wire(a.id, b.id).expect("wire humd-A and humd-B");
 

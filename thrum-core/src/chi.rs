@@ -108,14 +108,14 @@ pub enum Chi {
     /// relocation, humd overload, drone alerts.
     GossipPublish,
     /// Kademlia DHT FIND_NODE query —
-    /// `{ query_id, target: <HumdId hex>, from: <HumdId hex> }`. The
+    /// `{ query_id, target: <Hid hex>, from: <Hid hex> }`. The
     /// receiver answers with `kad-find-node-resp` carrying up to K
     /// HumdAddrs from its routing table closest in XOR distance to
     /// `target`. Sent during `Ensemble::kad_find` iterative lookups
     /// when a peer's HumdAddr isn't already known locally.
     KadFindNode,
     /// Kademlia DHT FIND_NODE response —
-    /// `{ query_id, from: <HumdId hex>, closest: [<HumdAddr JSON>, ...] }`.
+    /// `{ query_id, from: <Hid hex>, closest: [<HumdAddr JSON>, ...] }`.
     /// Matched to the originating `kad-find-node` by `query_id`. The
     /// lookup driver inserts every advertised HumdAddr into its routing
     /// table and re-queries the α closest unqueried peers until no

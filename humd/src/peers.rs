@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use ensemble::HumdId;
+use ensemble::Hid;
 use serde::{Deserialize, Serialize};
 use tracing::{trace, warn};
 
@@ -24,7 +24,7 @@ use tracing::{trace, warn};
 /// for the transport layer to decide which to dial.
 #[derive(Debug, Clone)]
 pub struct PeerConfig {
-    pub humd_id: HumdId,
+    pub humd_id: Hid,
     pub hints: Vec<String>,
 }
 
@@ -101,16 +101,10 @@ pub fn load() -> Vec<PeerConfig> {
     out
 }
 
-/// Parse a 64-hex-char HumdId string back into the typed id. None on bad
-/// length or non-hex characters.
-fn parse_humd_id(s: &str) -> Option<HumdId> {
-    let bytes = hex::decode(s).ok()?;
-    if bytes.len() != 32 {
-        return None;
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Some(HumdId(arr))
+/// Parse a Hid string (either `<prefix>_<hex>` or bare 64-hex
+/// legacy) back into the typed id. None on malformed input.
+fn parse_humd_id(s: &str) -> Option<Hid> {
+    Hid::from_hex(s).ok()
 }
 
 #[cfg(test)]

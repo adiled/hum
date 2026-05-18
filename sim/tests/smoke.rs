@@ -1,14 +1,14 @@
 //! Smoke test — spawn 2 humds, wire them, verify each ensemble sees
 //! the other. No prompts, no tones — just the vital signs.
 
-use ensemble::HumdId;
+use ensemble::Hid;
 use sim::Sim;
 
 #[tokio::test]
 async fn two_humds_wired_see_each_other() {
     let sim = Sim::new();
-    let a = HumdId::random();
-    let b = HumdId::random();
+    let a = Hid::random_humd();
+    let b = Hid::random_humd();
 
     let ha = sim.spawn_humd(a).await;
     let hb = sim.spawn_humd(b).await;

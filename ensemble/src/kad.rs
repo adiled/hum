@@ -1,8 +1,8 @@
-//! `kad` — homegrown Kademlia DHT for HumdId → HumdAddr discovery.
+//! `kad` — homegrown Kademlia DHT for Hid → HumdAddr discovery.
 //!
 //! T4 lookup layer above the [`crate::Transport`] seam, parallel to the
 //! gossip fan-out. Goal is the same one Kademlia solves in the paper:
-//! given a [`HumdId`] you don't already have a connection to, find a
+//! given a [`Hid`] you don't already have a connection to, find a
 //! [`HumdAddr`] for it by iteratively asking peers progressively closer
 //! to the target in XOR space. peers.json gives us the static T1/T2
 //! seed list; this gives us the dynamic T4 dial-the-stranger surface.
@@ -18,7 +18,7 @@
 //! [`crate::gossip`] — two parallel wire abstractions, or a shim that
 //! pretends.
 //!
-//! Instead: ~500 LoC, XOR distance over the 32-byte HumdId, a 256-slot
+//! Instead: ~500 LoC, XOR distance over the 32-byte Hid, a 256-slot
 //! routing table (one [`KBucket`] per leading-zero distance bucket), an
 //! iterative FIND_NODE that fans out α=3 queries in parallel and
 //! terminates when no nearer peer is returned. Two new chi values
@@ -50,7 +50,7 @@ use rand::RngCore;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use crate::{HumdAddr, HumdId, Tone};
+use crate::{HumdAddr, Hid, Tone};
 
 /// Kademlia replication / bucket-size parameter (paper default).
 pub const KAD_K: usize = 20;
@@ -80,7 +80,7 @@ pub struct XorDistance;
 impl XorDistance {
     /// Byte-wise XOR of two HumdIds. The lower the value (treated as a
     /// 256-bit big-endian number), the closer the two ids.
-    pub fn distance(a: &HumdId, b: &HumdId) -> [u8; 32] {
+    pub fn distance(a: &Hid, b: &Hid) -> [u8; 32] {
         let mut out = [0u8; 32];
         for i in 0..32 {
             out[i] = a.as_bytes()[i] ^ b.as_bytes()[i];
@@ -92,7 +92,7 @@ impl XorDistance {
     /// count of leading zero bits in `distance(me, peer)`. Range
     /// `0..=255`. By convention `me == peer` returns `256` (no bucket);
     /// callers filter `me` out before bucket placement.
-    pub fn bucket_index(me: &HumdId, peer: &HumdId) -> usize {
+    pub fn bucket_index(me: &Hid, peer: &Hid) -> usize {
         let d = Self::distance(me, peer);
         for (i, byte) in d.iter().enumerate() {
             if *byte != 0 {
@@ -154,19 +154,19 @@ impl KBucket {
 /// leading zero bits — i.e. peers in a shell `2^(255-i) ≤ d < 2^(256-i)`.
 #[derive(Debug)]
 pub struct RoutingTable {
-    me: HumdId,
+    me: Hid,
     buckets: Vec<KBucket>,
 }
 
 impl RoutingTable {
-    pub fn new(me: HumdId) -> Self {
+    pub fn new(me: Hid) -> Self {
         Self {
             me,
             buckets: (0..256).map(|_| KBucket::new()).collect(),
         }
     }
 
-    pub fn me(&self) -> HumdId { self.me }
+    pub fn me(&self) -> Hid { self.me }
 
     /// Insert `addr` into the appropriate bucket. Inserting the table's
     /// own id is a no-op (returns false). Returns true on insert/refresh.
@@ -185,7 +185,7 @@ impl RoutingTable {
     /// Return up to `count` peers sorted by XOR-distance to `target`
     /// (closest first). Walks every bucket — cheap because the table is
     /// bounded at K × 256 = 5120 entries worst case.
-    pub fn closest_to(&self, target: &HumdId, count: usize) -> Vec<HumdAddr> {
+    pub fn closest_to(&self, target: &Hid, count: usize) -> Vec<HumdAddr> {
         let mut all: Vec<HumdAddr> = self
             .buckets
             .iter()
@@ -206,7 +206,7 @@ impl RoutingTable {
     pub fn is_empty(&self) -> bool { self.len() == 0 }
 
     /// Direct lookup: does the table hold a HumdAddr for `id`?
-    pub fn get(&self, id: &HumdId) -> Option<HumdAddr> {
+    pub fn get(&self, id: &Hid) -> Option<HumdAddr> {
         let idx = XorDistance::bucket_index(&self.me, id);
         if idx >= 256 {
             return None;
@@ -231,7 +231,7 @@ pub struct KadState {
 }
 
 impl KadState {
-    pub fn new(me: HumdId) -> Arc<Self> {
+    pub fn new(me: Hid) -> Arc<Self> {
         Arc::new(Self {
             table: Mutex::new(RoutingTable::new(me)),
             pending: Mutex::new(HashMap::new()),
@@ -273,11 +273,11 @@ impl KadState {
         }
     }
 
-    pub fn closest_to(&self, target: &HumdId, count: usize) -> Vec<HumdAddr> {
+    pub fn closest_to(&self, target: &Hid, count: usize) -> Vec<HumdAddr> {
         self.table.lock().closest_to(target, count)
     }
 
-    pub fn get(&self, id: &HumdId) -> Option<HumdAddr> {
+    pub fn get(&self, id: &Hid) -> Option<HumdAddr> {
         self.table.lock().get(id)
     }
 }
@@ -293,7 +293,7 @@ pub fn mint_query_id() -> String {
 }
 
 /// Build a `chi:"kad-find-node"` tone.
-pub fn find_node_tone(rid: &str, query_id: &str, target: &HumdId, from: &HumdId) -> Tone {
+pub fn find_node_tone(rid: &str, query_id: &str, target: &Hid, from: &Hid) -> Tone {
     serde_json::json!({
         "chi": KAD_FIND_NODE_CHI,
         "rid": rid,
@@ -307,7 +307,7 @@ pub fn find_node_tone(rid: &str, query_id: &str, target: &HumdId, from: &HumdId)
 pub fn find_node_resp_tone(
     rid: &str,
     query_id: &str,
-    from: &HumdId,
+    from: &Hid,
     closest: &[HumdAddr],
 ) -> Tone {
     serde_json::json!({
@@ -322,27 +322,20 @@ pub fn find_node_resp_tone(
 /// Parsed FIND_NODE query. Drainer pulls these to respond.
 pub struct ParsedFindNode {
     pub query_id: String,
-    pub target: HumdId,
-    pub from: HumdId,
+    pub target: Hid,
+    pub from: Hid,
     pub rid: String,
 }
 
 /// Parsed FIND_NODE response. Drainer pulls these to deliver to waiters.
 pub struct ParsedFindNodeResp {
     pub query_id: String,
-    pub from: HumdId,
+    pub from: Hid,
     pub closest: Vec<HumdAddr>,
 }
 
-fn parse_humd_id(v: &Value) -> Option<HumdId> {
-    let s = v.as_str()?;
-    let bytes = hex::decode(s).ok()?;
-    if bytes.len() != 32 {
-        return None;
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Some(HumdId(arr))
+fn parse_humd_id(v: &Value) -> Option<Hid> {
+    Hid::from_hex(v.as_str()?).ok()
 }
 
 /// Pull fields out of a `chi:"kad-find-node"` tone.
@@ -400,12 +393,12 @@ pub(crate) struct LookupShortlist {
     /// Bounded by K to mirror a Kademlia "shortlist."
     shortlist: Vec<HumdAddr>,
     /// Set of HumdIds we've already queried in this lookup — never re-query.
-    queried: std::collections::HashSet<HumdId>,
-    target: HumdId,
+    queried: std::collections::HashSet<Hid>,
+    target: Hid,
 }
 
 impl LookupShortlist {
-    pub fn new(target: HumdId, seed: Vec<HumdAddr>) -> Self {
+    pub fn new(target: Hid, seed: Vec<HumdAddr>) -> Self {
         let mut s = Self {
             shortlist: Vec::new(),
             queried: std::collections::HashSet::new(),
@@ -439,7 +432,7 @@ impl LookupShortlist {
             .collect()
     }
 
-    pub fn mark_queried(&mut self, id: HumdId) {
+    pub fn mark_queried(&mut self, id: Hid) {
         self.queried.insert(id);
     }
 
@@ -462,8 +455,8 @@ impl LookupShortlist {
 pub(crate) async fn query_peer(
     kad: &Arc<KadState>,
     conn: &Arc<dyn crate::PeerConnection>,
-    me: &HumdId,
-    target: &HumdId,
+    me: &Hid,
+    target: &Hid,
     per_query_timeout: Duration,
 ) -> Vec<HumdAddr> {
     let query_id = mint_query_id();
@@ -489,15 +482,15 @@ mod tests {
 
     #[test]
     fn xor_distance_is_symmetric() {
-        let a = HumdId::random();
-        let b = HumdId::random();
+        let a = Hid::random_humd();
+        let b = Hid::random_humd();
         assert_eq!(XorDistance::distance(&a, &b), XorDistance::distance(&b, &a));
         assert_eq!(XorDistance::distance(&a, &a), [0u8; 32]);
     }
 
     #[test]
     fn bucket_index_zero_for_self() {
-        let me = HumdId::random();
+        let me = Hid::random_humd();
         assert_eq!(XorDistance::bucket_index(&me, &me), 256);
     }
 
@@ -506,8 +499,8 @@ mod tests {
         // Flip the very last bit — distance = 0x00..01 → 255 leading zeros.
         let mut bytes = [0u8; 32];
         bytes[31] = 0x01;
-        let me = HumdId([0u8; 32]);
-        let other = HumdId(bytes);
+        let me = Hid::from([0u8; 32]);
+        let other = Hid::from(bytes);
         assert_eq!(XorDistance::bucket_index(&me, &other), 255);
     }
 
@@ -516,15 +509,15 @@ mod tests {
         // Flip the top bit — distance = 0x80..00 → 0 leading zeros.
         let mut bytes = [0u8; 32];
         bytes[0] = 0x80;
-        let me = HumdId([0u8; 32]);
-        let other = HumdId(bytes);
+        let me = Hid::from([0u8; 32]);
+        let other = Hid::from(bytes);
         assert_eq!(XorDistance::bucket_index(&me, &other), 0);
     }
 
     #[test]
     fn kbucket_lru_evicts_oldest_when_full() {
         let mut b = KBucket::new();
-        let ids: Vec<HumdId> = (0..KAD_K + 1).map(|_| HumdId::random()).collect();
+        let ids: Vec<Hid> = (0..KAD_K + 1).map(|_| Hid::random_humd()).collect();
         for id in &ids {
             b.insert(HumdAddr::new(*id));
         }
@@ -537,19 +530,19 @@ mod tests {
     #[test]
     fn kbucket_refresh_moves_to_back() {
         let mut b = KBucket::new();
-        let a_id = HumdId::random();
-        let b_id = HumdId::random();
+        let a_id = Hid::random_humd();
+        let b_id = Hid::random_humd();
         b.insert(HumdAddr::new(a_id));
         b.insert(HumdAddr::new(b_id));
         // Re-insert a — should move to back (most-recent slot).
         b.insert(HumdAddr::new(a_id));
-        let order: Vec<HumdId> = b.iter().map(|x| x.id).collect();
+        let order: Vec<Hid> = b.iter().map(|x| x.id).collect();
         assert_eq!(order, vec![b_id, a_id]);
     }
 
     #[test]
     fn routing_table_closest_orders_by_distance() {
-        let me = HumdId([0u8; 32]);
+        let me = Hid::from([0u8; 32]);
         let mut t = RoutingTable::new(me);
         // Three peers at varying distances.
         let mut near = [0u8; 32];
@@ -559,20 +552,20 @@ mod tests {
         let mut far = [0u8; 32];
         far[0] = 0x80;
 
-        t.insert(HumdAddr::new(HumdId(far)));
-        t.insert(HumdAddr::new(HumdId(near)));
-        t.insert(HumdAddr::new(HumdId(mid)));
+        t.insert(HumdAddr::new(Hid::from(far)));
+        t.insert(HumdAddr::new(Hid::from(near)));
+        t.insert(HumdAddr::new(Hid::from(mid)));
 
         let closest = t.closest_to(&me, 3);
         assert_eq!(closest.len(), 3);
-        assert_eq!(closest[0].id, HumdId(near));
-        assert_eq!(closest[1].id, HumdId(mid));
-        assert_eq!(closest[2].id, HumdId(far));
+        assert_eq!(closest[0].id, Hid::from(near));
+        assert_eq!(closest[1].id, Hid::from(mid));
+        assert_eq!(closest[2].id, Hid::from(far));
     }
 
     #[test]
     fn routing_table_drops_self_inserts() {
-        let me = HumdId::random();
+        let me = Hid::random_humd();
         let mut t = RoutingTable::new(me);
         assert!(!t.insert(HumdAddr::new(me)));
         assert!(t.is_empty());
@@ -580,8 +573,8 @@ mod tests {
 
     #[test]
     fn parse_find_node_round_trip() {
-        let me = HumdId::random();
-        let target = HumdId::random();
+        let me = Hid::random_humd();
+        let target = Hid::random_humd();
         let q = mint_query_id();
         let tone = find_node_tone("rid-1", &q, &target, &me);
         let parsed = parse_find_node(&tone).expect("parse");
@@ -592,8 +585,8 @@ mod tests {
 
     #[test]
     fn parse_find_node_resp_round_trip() {
-        let me = HumdId::random();
-        let peer = HumdAddr::new(HumdId::random()).with_hint("tcp:1.2.3.4:9000");
+        let me = Hid::random_humd();
+        let peer = HumdAddr::new(Hid::random_humd()).with_hint("tcp:1.2.3.4:9000");
         let tone = find_node_resp_tone("rid-1", "qid-1", &me, &[peer.clone()]);
         let parsed = parse_find_node_resp(&tone).expect("parse");
         assert_eq!(parsed.query_id, "qid-1");

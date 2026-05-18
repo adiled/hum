@@ -29,7 +29,7 @@ struct TapTranscript {
 /// Records whether a text_delta "HELLO" appeared along the way.
 async fn drain_until_finish(
     sim: &sim::Sim,
-    humd: ensemble::HumdId,
+    humd: ensemble::Hid,
     sid: &str,
     deadline: std::time::Instant,
 ) -> TapTranscript {
@@ -57,8 +57,8 @@ async fn co_pilot_fanout() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = sim::Sim::new();
-    let laptop = sim.spawn_humd(ensemble::HumdId::random()).await;
-    let phone = sim.spawn_humd(ensemble::HumdId::random()).await;
+    let laptop = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    let phone = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     sim.wire(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
     // External-worker model: humd's a router. Attach a synthetic mock

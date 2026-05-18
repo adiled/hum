@@ -1,6 +1,6 @@
 //! Persistent humd identity.
 //!
-//! A humd's [`HumdId`] is derived from an Ed25519 public key; the
+//! A humd's [`Hid`] is derived from an Ed25519 public key; the
 //! corresponding signing key has to survive restarts or the humd's
 //! identity churns every boot. This module pins the key to a single file
 //! under `$XDG_STATE_HOME/hum/humd.key` (32 raw bytes, mode 0o600).
@@ -65,7 +65,7 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
         arr.copy_from_slice(&bytes);
         let signing = SigningKey::from_bytes(&arr);
         let key = HumdKey(signing);
-        trace!(path = %path.display(), humd_id = %key.humd_id().short(), "identity.loaded");
+        trace!(path = %path.display(), humd_id = %key.hid().short(), "identity.loaded");
         return Ok(key);
     }
 
@@ -75,7 +75,7 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
     let signing = SigningKey::from_bytes(&seed);
     let key = HumdKey(signing);
     persist_key(&path, &seed)?;
-    info!(path = %path.display(), humd_id = %key.humd_id().short(), "identity.minted");
+    info!(path = %path.display(), humd_id = %key.hid().short(), "identity.minted");
     Ok(key)
 }
 
@@ -128,7 +128,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Mint a key, drop it, reload from the same path — same HumdId.
+    /// Mint a key, drop it, reload from the same path — same Hid.
     /// Also checks file perms are 0o600.
     #[test]
     fn round_trip_through_tempdir() {
@@ -136,7 +136,7 @@ mod tests {
         std::env::set_var("XDG_STATE_HOME", tmp.path());
 
         let first = load_or_mint_key().expect("mint");
-        let id1 = first.humd_id();
+        let id1 = first.hid();
         let path = key_path();
         assert!(path.exists(), "key file persisted");
 
@@ -150,7 +150,7 @@ mod tests {
 
         // Reload — same identity.
         let second = load_or_mint_key().expect("reload");
-        assert_eq!(id1, second.humd_id(), "humd_id stable across reloads");
+        assert_eq!(id1, second.hid(), "humd_id stable across reloads");
 
         std::env::remove_var("XDG_STATE_HOME");
     }

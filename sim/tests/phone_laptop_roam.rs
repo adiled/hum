@@ -3,7 +3,7 @@
 //! Narrative: two humds — `laptop` and `phone` — wired into one
 //! ensemble. Each knows the other as a peer. The user is on their
 //! phone but the active hum ("hum-X") lives on the laptop. Phone's
-//! mock nestler sends a chi:prompt addressed at the laptop's HumdId.
+//! mock nestler sends a chi:prompt addressed at the laptop's Hid.
 //!
 //! Expected flow:
 //!   1. phone humd's ToneSink sees `to: laptop` → ensemble route → wire
@@ -31,8 +31,8 @@ async fn phone_laptop_roam() {
 
     let sim = sim::Sim::new();
 
-    let laptop = sim.spawn_humd(ensemble::HumdId::random()).await;
-    let phone = sim.spawn_humd(ensemble::HumdId::random()).await;
+    let laptop = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    let phone = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
     sim.wire(laptop.id, phone.id).expect("wire laptop ↔ phone");
 

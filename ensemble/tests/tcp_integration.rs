@@ -16,8 +16,8 @@ async fn tcp_endpoint_routes_tone_across_wire() {
     // Random keypairs for the two humds.
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
-    let a_id = a_key.humd_id();
-    let b_id = b_key.humd_id();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
 
     // Listener on the loopback, OS-assigned port.
     let listener = TcpListener::bind("127.0.0.1:0")

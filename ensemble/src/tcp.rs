@@ -29,7 +29,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::{HumdAddr, HumdId, PeerCapabilities, PeerConnection, Tone, Transport};
+use crate::{HumdAddr, Hid, PeerCapabilities, PeerConnection, Tone, Transport};
 
 /// Inbound-channel capacity — matches `InMemoryEndpoint`.
 const RECV_CAP: usize = 256;
@@ -175,7 +175,7 @@ impl TcpListener {
     /// peer's real id via its `chi:"hello"`.
     pub async fn accept(&self) -> Result<Arc<TcpEndpoint>> {
         let (stream, _remote) = self.inner.accept().await?;
-        let placeholder = HumdAddr::new(HumdId::random());
+        let placeholder = HumdAddr::new(Hid::random_humd());
         Ok(TcpEndpoint::from_stream(
             stream,
             placeholder,

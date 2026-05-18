@@ -8,7 +8,7 @@
 //!   2. A sends `chi:"kad-find-node"` to B; B's drainer responds with
 //!      B's routing table closest to E — which contains C (B knows A
 //!      and C directly, but C is closer to E in XOR space because
-//!      the test seeds C with a HumdId close to E).
+//!      the test seeds C with a Hid close to E).
 //!   3. A inserts C into its routing table, re-queries C.
 //!   4. C answers with D, A queries D, D answers with E. Either E
 //!      is returned to A directly OR A's table now has E because D
@@ -52,7 +52,7 @@
 
 use std::time::Duration;
 
-use ensemble::{Ensemble, HumdAddr, HumdId, HumdKey, InMemoryEndpoint, PeerCapabilities};
+use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
 
 /// Install an `InMemoryEndpoint` pair into both ensembles. Caps default
 /// to a fixed proto version so the signed hello round-trips cleanly.
@@ -79,11 +79,11 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
     let c_key = HumdKey::generate();
     let d_key = HumdKey::generate();
     let e_key = HumdKey::generate();
-    let a_id = a_key.humd_id();
-    let b_id = b_key.humd_id();
-    let c_id = c_key.humd_id();
-    let d_id = d_key.humd_id();
-    let e_id = e_key.humd_id();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
+    let c_id = c_key.hid();
+    let d_id = d_key.hid();
+    let e_id = e_key.hid();
 
     let ens_a = Ensemble::new(a_id);
     let ens_b = Ensemble::new(b_id);
@@ -151,7 +151,7 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
         (d_id, &ens_d, &d_key),
         (e_id, &ens_e, &e_key),
     ];
-    let resolve_ensemble = |id: HumdId| -> Option<(&Ensemble, &HumdKey)> {
+    let resolve_ensemble = |id: Hid| -> Option<(&Ensemble, &HumdKey)> {
         ensembles_by_id
             .iter()
             .find(|(pid, _, _)| *pid == id)
@@ -177,7 +177,7 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
         }
         // Expand: install a link to the closest known peer toward E
         // that A hasn't already wired.
-        let installed: std::collections::HashSet<HumdId> =
+        let installed: std::collections::HashSet<Hid> =
             ens_a.peers().into_iter().collect();
         // Pull all entries from A's routing table closest to E.
         // We don't have a public getter for "all entries" so we use
@@ -202,5 +202,5 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
     }
 
     let addr = found.expect("kad_find should have located E via iterative FIND_NODE");
-    assert_eq!(addr.id, e_id, "kad_find returned the wrong HumdId");
+    assert_eq!(addr.id, e_id, "kad_find returned the wrong Hid");
 }

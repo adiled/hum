@@ -16,7 +16,7 @@ async fn mock_prompt_yields_finish() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = sim::Sim::new();
-    let a = sim.spawn_humd(ensemble::HumdId::random()).await;
+    let a = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
     // External-worker model: humd no longer hosts workers in-process.
     // Attach a synthetic mock worker over thrum so chi:"prompt" routes.

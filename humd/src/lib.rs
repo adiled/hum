@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ensemble::{Ensemble, HumdAddr, HumdId, HumdKey, PeerCapabilities};
+use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
 use mcp::{serve as mcp_serve, Registry as McpRegistry};
 use parking_lot::RwLock;
 use serde_json::Value;
@@ -32,7 +32,7 @@ pub use peers::{peers_path, PeerConfig};
 /// outbound reply tone. Shared between the HumdSink (writer on attach /
 /// detach) and every NestListener serving that sid (reader on each
 /// reply).
-type Observers = Arc<RwLock<HashMap<String, Vec<HumdId>>>>;
+type Observers = Arc<RwLock<HashMap<String, Vec<Hid>>>>;
 
 // ── Public config ──────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ where
     let ensemble_opt: Option<Arc<Ensemble>> = match cfg.ensemble.clone() {
         Some(e) => Some(e),
         None => cfg.humd_key.as_ref().map(|k| {
-            let me = k.humd_id();
+            let me = k.hid();
             info!(humd_id = %me, "ensemble.boot");
             Arc::new(Ensemble::new(me))
         }),
@@ -248,7 +248,7 @@ where
         hive_tag: hive_tag.clone(),
     }));
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
-    let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>> =
+    let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -453,7 +453,7 @@ struct HumdSink {
     /// in the passthrough block: chi:"chunk"/"finish" tones whose
     /// sid is in this map get stamped `to: <origin>` and routed via
     /// the ensemble back to the originating humd.
-    sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>>,
+    sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     /// Map callId → originator client_id for tool-calls routed to a
     /// forager hive. Populated when humd intercepts a worker's
     /// chi:"tool-call" whose toolName matches an advertised tool;
@@ -1261,7 +1261,7 @@ impl ToneSink for HumdSink {
                         if bytes.len() == 32 {
                             let mut id = [0u8; 32];
                             id.copy_from_slice(&bytes);
-                            ensemble.remove_peer(&ensemble::HumdId(id));
+                            ensemble.remove_peer(&ensemble::Hid::from(id));
                         }
                     }
                 }
@@ -1372,10 +1372,10 @@ fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
 /// Prefers peers that advertise the requested nest kind AND claim a
 /// non-zero `free_slots`. Falls back to any peer with the nest kind.
 /// Returns `None` if no peer in the ensemble is eligible.
-fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<HumdId> {
+fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
     let peers = ensemble.peers();
     // First pass: peer with the right nest kind AND advertised slots.
-    let mut fallback: Option<HumdId> = None;
+    let mut fallback: Option<Hid> = None;
     for id in peers {
         let Some(caps) = ensemble.peer_caps(&id) else { continue };
         let has_nest = caps.nests.iter().any(|n| n == nest_kind);
@@ -1392,12 +1392,9 @@ fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<HumdId> {
     fallback
 }
 
-/// Parse a hex HumdId string back into the typed [`ensemble::HumdId`].
-/// Returns None on bad length or non-hex characters.
-fn parse_humd_id(s: &str) -> Option<ensemble::HumdId> {
-    let bytes = hex::decode(s).ok()?;
-    if bytes.len() != 32 { return None; }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Some(ensemble::HumdId(arr))
+/// Parse a Hid string (either `<prefix>_<hex>` or bare 64-hex
+/// legacy) back into the typed [`ensemble::Hid`]. Returns None on
+/// malformed input.
+fn parse_humd_id(s: &str) -> Option<ensemble::Hid> {
+    ensemble::Hid::from_hex(s).ok()
 }

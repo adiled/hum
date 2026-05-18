@@ -11,7 +11,7 @@
 //!   [`ANNOUNCE_TOPIC`]. Called by humd whenever a local nestler completes
 //!   handshake (and on a slow re-advertise heartbeat).
 //! - [`Ensemble::hive_discover`]: subscribe to [`ANNOUNCE_TOPIC`] and
-//!   filter by name. Returns `(HumdId, HiveManifest)` pairs.
+//!   filter by name. Returns `(Hid, HiveManifest)` pairs.
 //!
 //! The wire envelope is a plain `gossip-publish` tone with a structured
 //! payload — no new `chi` value needed. Manifests are loose JSON so a

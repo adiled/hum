@@ -27,9 +27,9 @@ async fn gossip_percolates_one_hop_and_dedupes_duplicates() {
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
     let c_key = HumdKey::generate();
-    let a_id = a_key.humd_id();
-    let b_id = b_key.humd_id();
-    let c_id = c_key.humd_id();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
+    let c_id = c_key.hid();
 
     let caps = PeerCapabilities {
         proto_version: "0.6.0".into(),
@@ -82,7 +82,7 @@ async fn gossip_percolates_one_hop_and_dedupes_duplicates() {
     // it on first arrival, drops the second copy at the seen check.
     // C should observe the payload exactly once.
     let x_key = HumdKey::generate();
-    let x_id = x_key.humd_id();
+    let x_id = x_key.hid();
     let (x_to_b, b_to_x) = InMemoryEndpoint::pair(
         x_id, caps.clone(),
         b_id, caps.clone(),

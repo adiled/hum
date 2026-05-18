@@ -4,14 +4,14 @@
 //! cooperating. This crate owns the daemon-native shape that survives
 //! across trust tiers (T1 own-devices → T4 open p2p):
 //!
-//! - [`HumdId`] — content-addressable identity, `hash(pubkey)`.
+//! - [`Hid`] — content-addressable identity, `hash(pubkey)`.
 //! - [`HumdAddr`] — id plus optional contact hints (transport-shaped).
 //! - [`PeerCapabilities`] — what a peer claims to do at handshake.
 //! - [`PeerConnection`] — opaque link to one peer; send/recv tones.
 //! - [`Transport`] — the seam: connect / accept implementations
 //!   (in-memory for the sim, TCP+TLS / libp2p / Tor later as
 //!   bees).
-//! - [`Ensemble`] — local registry: peers by [`HumdId`], `route` for
+//! - [`Ensemble`] — local registry: peers by [`Hid`], `route` for
 //!   tones with a `to:` field, capability lookup.
 //!
 //! Cribbed in shape from libp2p's `Transport` + `PeerId` and Iroh's
@@ -88,60 +88,174 @@ pub type Tone = serde_json::Value;
 
 // ── Identity ───────────────────────────────────────────────────────────────
 
-/// Content-addressable identity of one humd in the ensemble.
+/// Universal identity primitive for everything addressable on the
+/// hum wire: humds, worker bees, forager bees, future kinds. 32-byte
+/// SHA-256 of a public key (Ed25519); wire form is `<prefix>_<hex>`
+/// where prefix discriminates the role.
 ///
-/// Today: 32-byte SHA-256 of a public key (Ed25519 once T2+ wires real
-/// crypto; random until then). Encoded as 64-char lowercase hex on the
-/// wire. Stable per machine install; persists across restarts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct HumdId(#[serde(with = "hex::serde")] pub [u8; 32]);
+/// Short form keeps the prefix: `humd_a4f2b8c19d3e` (12 hex chars
+/// after the underscore). Long form is the full 64-hex tail. Both
+/// parse via [`Hid::from_str`].
+///
+/// Prefixes locked in v0:
+/// - `humd_` — daemon
+/// - `wbee_` — worker bee
+/// - `fbee_` — forager bee
+///
+/// Stable per install (each binary persists its own key). The hex is
+/// content-addressable — no registry, no central naming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Hid {
+    pub prefix: HidPrefix,
+    pub bytes: [u8; 32],
+}
 
-impl HumdId {
-    /// Mint a fresh id from a public key fingerprint.
-    pub fn from_pubkey(pubkey: &[u8]) -> Self {
-        let mut h = Sha256::new();
-        h.update(pubkey);
-        let digest = h.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest[..32]);
-        Self(out)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HidPrefix {
+    Humd,
+    Wbee,
+    Fbee,
+}
 
-    /// Mint a random id. Use only for tests / pre-crypto bring-up.
-    pub fn random() -> Self {
-        let mut out = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut out);
-        Self(out)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
-    pub fn to_hex(&self) -> String { hex::encode(self.0) }
-    /// First 8 hex chars — for human-readable logs.
-    pub fn short(&self) -> String { hex::encode(&self.0[..4]) }
-
-    /// Parse a 64-char lowercase-hex id (the on-wire form). Accepts
-    /// upper or mixed case too; rejects anything that isn't exactly
-    /// 32 bytes once decoded.
-    pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
-        let bytes = hex::decode(s)?;
-        if bytes.len() != 32 {
-            return Err(hex::FromHexError::InvalidStringLength);
+impl HidPrefix {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HidPrefix::Humd => "humd",
+            HidPrefix::Wbee => "wbee",
+            HidPrefix::Fbee => "fbee",
         }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
-        Ok(Self(out))
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "humd" => Some(HidPrefix::Humd),
+            "wbee" => Some(HidPrefix::Wbee),
+            "fbee" => Some(HidPrefix::Fbee),
+            _ => None,
+        }
     }
 }
 
-impl fmt::Display for HumdId {
+impl Hid {
+    /// Hash a pubkey to its content-addressable bytes; tag with the
+    /// role prefix.
+    pub fn from_pubkey(prefix: HidPrefix, pubkey: &[u8]) -> Self {
+        let mut h = Sha256::new();
+        h.update(pubkey);
+        let digest = h.finalize();
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&digest[..32]);
+        Self { prefix, bytes }
+    }
+
+    /// Mint a random hid for the given role. Tests / pre-crypto only.
+    pub fn random(prefix: HidPrefix) -> Self {
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        Self { prefix, bytes }
+    }
+
+    /// Convenience: random hid tagged as a humd. Matches the legacy
+    /// `Hid::random_humd()` shape; preferred call sites use
+    /// [`Hid::random`] directly.
+    pub fn random_humd() -> Self { Self::random(HidPrefix::Humd) }
+
+    pub fn as_bytes(&self) -> &[u8; 32] { &self.bytes }
+
+    /// Full wire form: `<prefix>_<64 hex>`.
+    pub fn to_hex(&self) -> String {
+        format!("{}_{}", self.prefix.as_str(), hex::encode(self.bytes))
+    }
+
+    /// Log-friendly short form: `<prefix>_<12 hex>`.
+    pub fn short(&self) -> String {
+        format!("{}_{}", self.prefix.as_str(), hex::encode(&self.bytes[..6]))
+    }
+
+    /// Parse `<prefix>_<hex>`. Accepts either the 12-char short or
+    /// 64-char full form. Also accepts a bare 64-hex string as a
+    /// humd-prefixed legacy value so old peers.json keeps loading.
+    pub fn from_hex(s: &str) -> Result<Self, HidParseError> {
+        if let Some((p, h)) = s.split_once('_') {
+            let prefix = HidPrefix::parse(p).ok_or(HidParseError::UnknownPrefix)?;
+            let tail = hex::decode(h).map_err(|_| HidParseError::BadHex)?;
+            if tail.len() == 32 {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&tail);
+                return Ok(Hid { prefix, bytes });
+            }
+            // 12-char short form: 6 bytes; widen with zeros so the
+            // short can still round-trip through serializers (used in
+            // logs + sigils, not for security-bearing addresses).
+            if tail.len() == 6 {
+                let mut bytes = [0u8; 32];
+                bytes[..6].copy_from_slice(&tail);
+                return Ok(Hid { prefix, bytes });
+            }
+            return Err(HidParseError::WrongLength(tail.len()));
+        }
+        // Legacy fallback: bare 64-hex was the daemon's old wire form.
+        // Auto-prefix as `humd_` so older peers.json keeps parsing.
+        let bytes_vec = hex::decode(s).map_err(|_| HidParseError::BadHex)?;
+        if bytes_vec.len() != 32 {
+            return Err(HidParseError::WrongLength(bytes_vec.len()));
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&bytes_vec);
+        Ok(Hid { prefix: HidPrefix::Humd, bytes })
+    }
+}
+
+#[derive(Debug)]
+pub enum HidParseError {
+    UnknownPrefix,
+    BadHex,
+    WrongLength(usize),
+}
+
+impl fmt::Display for HidParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HidParseError::UnknownPrefix => write!(f, "unknown hid prefix"),
+            HidParseError::BadHex => write!(f, "bad hex"),
+            HidParseError::WrongLength(n) => write!(f, "wrong hid length ({n} bytes)"),
+        }
+    }
+}
+
+impl std::error::Error for HidParseError {}
+
+impl fmt::Display for Hid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_hex())
     }
 }
 
+impl Serialize for Hid {
+    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
+    where S: serde::Serializer {
+        ser.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Hid {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        let s = String::deserialize(de)?;
+        Hid::from_hex(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<[u8; 32]> for Hid {
+    /// Legacy: bare 32-byte construction defaults to `humd_` prefix.
+    /// Migrate to `Hid { prefix, bytes }` directly when the role is
+    /// known.
+    fn from(bytes: [u8; 32]) -> Self {
+        Self { prefix: HidPrefix::Humd, bytes }
+    }
+}
+
 /// Ed25519 signing key for a humd. The pubkey's SHA-256 is the
-/// [`HumdId`] — identity is content-addressable, no separate registry.
+/// [`Hid`] — identity is content-addressable, no separate registry.
 ///
 /// v0 sim: each humd mints one at spawn and signs every hello with it.
 /// Real key management (persistence, rotation, cert chains) lives at
@@ -155,15 +269,15 @@ impl HumdKey {
         Self(SigningKey::generate(&mut rand::thread_rng()))
     }
 
-    /// Public key bytes — the input to [`HumdId::from_pubkey`] and the
+    /// Public key bytes — the input to [`Hid::from_pubkey`] and the
     /// `pubkey` field carried in the hello.
     pub fn pubkey_bytes(&self) -> [u8; 32] {
         self.0.verifying_key().to_bytes()
     }
 
-    /// Derive the humd's content-addressable id from its pubkey.
-    pub fn humd_id(&self) -> HumdId {
-        HumdId::from_pubkey(&self.pubkey_bytes())
+    /// Derive the humd's content-addressable hid from its pubkey.
+    pub fn hid(&self) -> Hid {
+        Hid::from_pubkey(HidPrefix::Humd, &self.pubkey_bytes())
     }
 }
 
@@ -178,7 +292,7 @@ impl fmt::Debug for HumdKey {
 /// Canonical message a humd signs to prove it owns the pubkey claiming
 /// the named id at the named time. Domain-separated so a signature
 /// over arbitrary bytes can never be replayed as a handshake.
-fn handshake_message(humd_id: &HumdId, signed_at_ms: i64) -> Vec<u8> {
+fn handshake_message(humd_id: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", HANDSHAKE_DOMAIN, humd_id.to_hex(), signed_at_ms).into_bytes()
 }
 
@@ -190,19 +304,19 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// HumdId plus optional contact hints — a peer's "where" alongside its
+/// Hid plus optional contact hints — a peer's "where" alongside its
 /// "who." Sketched like a slim multiaddr: a list of transport-specific
 /// strings the dialer can try. T1 might list `["tcp:host:port"]`; T4
 /// might list multiple addresses for NAT punching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumdAddr {
-    pub id: HumdId,
+    pub id: Hid,
     #[serde(default)]
     pub hints: Vec<String>,
 }
 
 impl HumdAddr {
-    pub fn new(id: HumdId) -> Self { Self { id, hints: Vec::new() } }
+    pub fn new(id: Hid) -> Self { Self { id, hints: Vec::new() } }
     pub fn with_hint(mut self, h: impl Into<String>) -> Self {
         self.hints.push(h.into());
         self
@@ -248,7 +362,7 @@ pub struct PeerCapabilities {
 /// struct is the typed mirror for callers who want to deserialize.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnsembleHello {
-    pub humd_id: HumdId,
+    pub humd_id: Hid,
     pub caps: PeerCapabilities,
 }
 
@@ -262,15 +376,15 @@ pub struct EnsembleHello {
 /// — the sender tried to authenticate and failed, which is hostile.
 #[derive(Debug, Clone)]
 pub enum HelloParse {
-    Verified(HumdId, PeerCapabilities),
-    Unsigned(HumdId, PeerCapabilities),
+    Verified(Hid, PeerCapabilities),
+    Unsigned(Hid, PeerCapabilities),
     Invalid,
 }
 
 /// Build an unsigned `chi:"hello"` — the T1 back-compat shape. The peer
 /// names itself and lists caps but provides no proof of ownership.
 /// Strict-auth ensembles reject this; lax ones learn caps and proceed.
-pub fn hello_tone_unsigned(me: &HumdId, caps: &PeerCapabilities) -> Tone {
+pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
         "rid": format!("hello-{}", me.short()),
@@ -292,7 +406,7 @@ pub fn hello_tone_unsigned(me: &HumdId, caps: &PeerCapabilities) -> Tone {
 /// `humd_id` is derived from `key`'s pubkey; the parameter is kept so
 /// callers can pin a specific id (sim test fixtures, primarily) and
 /// have the verifier catch any inconsistency.
-pub fn hello_tone(me: &HumdId, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
+pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let signed_at = now_ms();
     let msg = handshake_message(me, signed_at);
     let sig: Signature = key.0.sign(&msg);
@@ -382,9 +496,9 @@ impl InMemoryEndpoint {
     /// receiver; `b.send(t)` flows to a's receiver. Each endpoint
     /// claims the other's id + caps.
     pub fn pair(
-        a_id: HumdId,
+        a_id: Hid,
         a_caps: PeerCapabilities,
-        b_id: HumdId,
+        b_id: Hid,
         b_caps: PeerCapabilities,
     ) -> (Arc<dyn PeerConnection>, Arc<dyn PeerConnection>) {
         let (a, b) = Self::pair_concrete(a_id, a_caps, b_id, b_caps);
@@ -394,9 +508,9 @@ impl InMemoryEndpoint {
     /// Like `pair`, but returns concrete `Arc<InMemoryEndpoint>`s so
     /// callers (the sim) can drive `set_partitioned` on each side.
     pub fn pair_concrete(
-        a_id: HumdId,
+        a_id: Hid,
         a_caps: PeerCapabilities,
-        b_id: HumdId,
+        b_id: Hid,
         b_caps: PeerCapabilities,
     ) -> (Arc<InMemoryEndpoint>, Arc<InMemoryEndpoint>) {
         let (tx_ab, rx_ab) = mpsc::channel::<Tone>(256);
@@ -510,8 +624,8 @@ struct Peer {
 /// them. The `chi:"hello"` tones are absorbed here (they update
 /// `learned_caps`) and not rebroadcast; everything else passes through.
 pub struct Ensemble {
-    me: HumdId,
-    peers: Arc<RwLock<HashMap<HumdId, Peer>>>,
+    me: Hid,
+    peers: Arc<RwLock<HashMap<Hid, Peer>>>,
     inbox: broadcast::Sender<Tone>,
     /// Shared gossip seen-set + per-topic broadcast senders. One Arc per
     /// ensemble; cloned into every install() drainer task so the dedup
@@ -536,7 +650,7 @@ pub struct Ensemble {
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
     #[error("no peer with id {0}")]
-    UnknownPeer(HumdId),
+    UnknownPeer(Hid),
     #[error("tone has no `to` humd_id")]
     Untargeted,
     #[error("send failed: {0}")]
@@ -544,7 +658,7 @@ pub enum RouteError {
 }
 
 impl Ensemble {
-    pub fn new(me: HumdId) -> Self {
+    pub fn new(me: Hid) -> Self {
         // 256 keeps recent tones available for slow subscribers without
         // unbounded memory; lagging consumers see Lagged and resync.
         let (inbox, _) = broadcast::channel(256);
@@ -561,13 +675,13 @@ impl Ensemble {
     /// Build an ensemble that rejects peers whose hellos aren't
     /// cryptographically verified. Federation (T3+) wants this on;
     /// own-devices (T1) leaves it off and tolerates unsigned T1 hellos.
-    pub fn with_strict_auth(me: HumdId, strict: bool) -> Self {
+    pub fn with_strict_auth(me: Hid, strict: bool) -> Self {
         let mut e = Self::new(me);
         e.strict_auth = strict;
         e
     }
 
-    pub fn me(&self) -> HumdId { self.me }
+    pub fn me(&self) -> Hid { self.me }
 
     pub fn strict_auth(&self) -> bool { self.strict_auth }
 
@@ -818,19 +932,19 @@ impl Ensemble {
         }
     }
 
-    pub fn remove_peer(&self, id: &HumdId) {
+    pub fn remove_peer(&self, id: &Hid) {
         if let Some(p) = self.peers.write().remove(id) {
             p.conn.close();
         }
     }
 
-    pub fn peers(&self) -> Vec<HumdId> {
+    pub fn peers(&self) -> Vec<Hid> {
         self.peers.read().keys().copied().collect()
     }
 
     /// Capabilities the peer announced via `chi:"hello"`. Falls back to
     /// the transport-supplied caps if no hello has arrived yet.
-    pub fn peer_caps(&self, id: &HumdId) -> Option<PeerCapabilities> {
+    pub fn peer_caps(&self, id: &Hid) -> Option<PeerCapabilities> {
         self.peers.read().get(id).map(|p| {
             p.learned_caps
                 .clone()
@@ -952,11 +1066,11 @@ impl Ensemble {
     }
 
     /// Discover humds advertising a bee with the given `name`.
-    /// Returns an mpsc receiver of `(HumdId, HiveManifest)` pairs
+    /// Returns an mpsc receiver of `(Hid, HiveManifest)` pairs
     /// for matching `Advertise` envelopes. Retract envelopes are
     /// dropped (caller should track their own roster of seen humds and
     /// expire entries on retract — surfaced via [`Self::hive_announcements`]).
-    pub fn hive_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(HumdId, hives::HiveManifest)> {
+    pub fn hive_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
         let needle = name.into();
         let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
@@ -970,7 +1084,7 @@ impl Ensemble {
                             if manifest.name != needle {
                                 continue;
                             }
-                            if let Ok(id) = HumdId::from_hex(&humd_id) {
+                            if let Ok(id) = Hid::from_hex(&humd_id) {
                                 if tx.send((id, manifest)).await.is_err() {
                                     break;
                                 }
@@ -1005,7 +1119,7 @@ impl Ensemble {
     /// We trust returned HumdAddrs from peers — no signature on the
     /// resp yet. A hostile peer can return arbitrary addresses; the
     /// caller's job is to attempt to dial and verify the handshake.
-    pub async fn kad_find(&self, target: HumdId, timeout: Duration) -> Option<HumdAddr> {
+    pub async fn kad_find(&self, target: Hid, timeout: Duration) -> Option<HumdAddr> {
         // Quick check: target already in our routing table (we
         // installed a connection to it directly).
         if let Some(addr) = self.kad.get(&target) {
@@ -1123,23 +1237,19 @@ impl Ensemble {
     /// in XOR space. Exposed for callers that want to drive their own
     /// dial-after-lookup loop (the in-memory test fixture, primarily;
     /// real transports will hide this behind a `kad_find_and_dial`).
-    pub fn kad_closest(&self, target: &HumdId, count: usize) -> Vec<HumdAddr> {
+    pub fn kad_closest(&self, target: &Hid, count: usize) -> Vec<HumdAddr> {
         self.kad.closest_to(target, count)
     }
 
     /// Send a tone to the peer named in `tone.to` (must be present and
-    /// a valid hex HumdId). Tone is `serde_json::Value` per thrum-core's
+    /// a valid hex Hid). Tone is `serde_json::Value` per thrum-core's
     /// loose shape.
     pub async fn route(&self, tone: Tone) -> Result<(), RouteError> {
         let to_hex = tone
             .get("to")
             .and_then(|v| v.as_str())
             .ok_or(RouteError::Untargeted)?;
-        let bytes = hex::decode(to_hex).map_err(|_| RouteError::Untargeted)?;
-        if bytes.len() != 32 { return Err(RouteError::Untargeted); }
-        let mut id = [0u8; 32];
-        id.copy_from_slice(&bytes);
-        let target = HumdId(id);
+        let target = Hid::from_hex(to_hex).map_err(|_| RouteError::Untargeted)?;
         let conn = {
             let peers = self.peers.read();
             peers.get(&target).map(|p| p.conn.clone())
@@ -1160,18 +1270,17 @@ impl Ensemble {
 /// Returns `None` on any failure — the drainer interprets that as
 /// "close the connection, don't admit the peer." A `tracing::warn!`
 /// names the specific failure so operators can debug.
-pub fn parse_hello_caps(tone: &Tone) -> Option<(HumdId, PeerCapabilities)> {
+pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
     let proto_version = tone.get("proto_version")?.as_str()?.to_string();
 
     let claimed_humd_id_hex = tone.get("humd_id")?.as_str()?;
-    let claimed_humd_id_bytes = hex::decode(claimed_humd_id_hex).ok()?;
-    if claimed_humd_id_bytes.len() != 32 {
-        tracing::warn!(target: "ensemble", "hello.rejected: humd_id wrong length");
-        return None;
-    }
-    let mut claimed_id_arr = [0u8; 32];
-    claimed_id_arr.copy_from_slice(&claimed_humd_id_bytes);
-    let claimed_id = HumdId(claimed_id_arr);
+    let claimed_id = match Hid::from_hex(claimed_humd_id_hex) {
+        Ok(h) => h,
+        Err(_) => {
+            tracing::warn!(target: "ensemble", "hello.rejected: humd_id unparseable");
+            return None;
+        }
+    };
 
     let pubkey_hex = tone.get("pubkey").and_then(|v| v.as_str())?;
     let pubkey_bytes = hex::decode(pubkey_hex).ok()?;
@@ -1182,7 +1291,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(HumdId, PeerCapabilities)> {
     let mut pubkey_arr = [0u8; 32];
     pubkey_arr.copy_from_slice(&pubkey_bytes);
 
-    if HumdId::from_pubkey(&pubkey_arr) != claimed_id {
+    if Hid::from_pubkey(HidPrefix::Humd, &pubkey_arr) != claimed_id {
         tracing::warn!(
             target: "ensemble",
             humd_id = %claimed_id.short(),
@@ -1275,15 +1384,9 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let Some(humd_hex) = tone.get("humd_id").and_then(|v| v.as_str()) else {
             return HelloParse::Invalid;
         };
-        let Ok(bytes) = hex::decode(humd_hex) else {
+        let Ok(claimed_id) = Hid::from_hex(humd_hex) else {
             return HelloParse::Invalid;
         };
-        if bytes.len() != 32 {
-            return HelloParse::Invalid;
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        let claimed_id = HumdId(arr);
         let nests = tone
             .get("nests")
             .and_then(|v| v.as_array())
@@ -1342,9 +1445,9 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
 ///     info — a stale resp is still useful peer-discovery signal.
 async fn handle_kad(
     kad: &Arc<KadState>,
-    peers: &Arc<RwLock<HashMap<HumdId, Peer>>>,
-    arrived_from: &HumdId,
-    me: &HumdId,
+    peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
+    arrived_from: &Hid,
+    me: &Hid,
     tone: &Tone,
 ) -> bool {
     let chi_val = tone.get("chi").and_then(|v| v.as_str());
@@ -1395,8 +1498,8 @@ async fn handle_kad(
 
 async fn handle_gossip(
     gossip: &Arc<gossip::GossipState>,
-    peers: &Arc<RwLock<HashMap<HumdId, Peer>>>,
-    arrived_from: &HumdId,
+    peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
+    arrived_from: &Hid,
     tone: &Tone,
 ) -> bool {
     let parsed = match gossip::parse_gossip(tone) {
@@ -1443,28 +1546,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn humd_id_hex_round_trips() {
-        let id = HumdId::random();
+    fn hid_hex_round_trips() {
+        let id = Hid::random_humd();
         let hex = id.to_hex();
-        let parsed: HumdId = serde_json::from_str(&format!("\"{}\"", hex)).unwrap();
+        let parsed: Hid = serde_json::from_str(&format!("\"{}\"", hex)).unwrap();
         assert_eq!(id, parsed);
-        assert_eq!(hex.len(), 64);
+        // `humd_` prefix (5 chars) + `_` (already in prefix) + 64 hex tail.
+        assert_eq!(hex.len(), "humd_".len() + 64);
+        assert!(hex.starts_with("humd_"));
+    }
+
+    #[test]
+    fn hid_legacy_bare_hex_parses_as_humd() {
+        // peers.json files written before the rename carry bare 64-hex.
+        let bare = "a4f2b8c19d3e0c5a7f00112233445566778899aabbccddeeff00112233445566";
+        let parsed: Hid = serde_json::from_str(&format!("\"{}\"", bare)).unwrap();
+        assert_eq!(parsed.prefix, HidPrefix::Humd);
+    }
+
+    #[test]
+    fn hid_wbee_prefix_parses() {
+        let id = Hid::random(HidPrefix::Wbee);
+        let hex = id.to_hex();
+        assert!(hex.starts_with("wbee_"));
+        let parsed: Hid = serde_json::from_str(&format!("\"{}\"", hex)).unwrap();
+        assert_eq!(id, parsed);
     }
 
     #[test]
     fn pubkey_hash_is_deterministic() {
         let pk = b"test-pubkey";
-        let a = HumdId::from_pubkey(pk);
-        let b = HumdId::from_pubkey(pk);
+        let a = Hid::from_pubkey(HidPrefix::Humd, pk);
+        let b = Hid::from_pubkey(HidPrefix::Humd, pk);
         assert_eq!(a, b);
-        let c = HumdId::from_pubkey(b"other");
+        let c = Hid::from_pubkey(HidPrefix::Humd, b"other");
         assert_ne!(a, c);
     }
 
     #[tokio::test]
     async fn in_memory_pair_ping_pong() {
-        let a_id = HumdId::random();
-        let b_id = HumdId::random();
+        let a_id = Hid::random_humd();
+        let b_id = Hid::random_humd();
         let (a, b) = InMemoryEndpoint::pair(
             a_id, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() },
             b_id, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() },
@@ -1477,9 +1599,9 @@ mod tests {
 
     #[tokio::test]
     async fn ensemble_routes_by_humd_id() {
-        let me = HumdId::random();
-        let peer_id = HumdId::random();
-        let other_id = HumdId::random();
+        let me = Hid::random_humd();
+        let peer_id = Hid::random_humd();
+        let other_id = Hid::random_humd();
 
         let ensemble = Ensemble::new(me);
         let (mine, theirs) = InMemoryEndpoint::pair(
@@ -1512,13 +1634,13 @@ mod tests {
     }
 
     /// Two ensembles wired by an InMemoryEndpoint pair should each
-    /// learn the other's HumdId + caps via the install handshake.
+    /// learn the other's Hid + caps via the install handshake.
     #[tokio::test]
     async fn install_exchanges_hellos_and_learns_caps() {
         let a_key = HumdKey::generate();
         let b_key = HumdKey::generate();
-        let a_id = a_key.humd_id();
-        let b_id = b_key.humd_id();
+        let a_id = a_key.hid();
+        let b_id = b_key.hid();
         let a_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
             nests: vec!["claude-cli".into()],
@@ -1587,8 +1709,8 @@ mod tests {
     async fn second_hello_on_same_peer_passes_through() {
         let me_key = HumdKey::generate();
         let peer_key = HumdKey::generate();
-        let me = me_key.humd_id();
-        let peer_id = peer_key.humd_id();
+        let me = me_key.hid();
+        let peer_id = peer_key.hid();
         let (mine, theirs) = InMemoryEndpoint::pair(
             me, PeerCapabilities::default(),
             peer_id, PeerCapabilities::default(),
@@ -1629,8 +1751,8 @@ mod tests {
     async fn subscribe_forwards_remote_tones_but_swallows_hello() {
         let me_key = HumdKey::generate();
         let peer_key = HumdKey::generate();
-        let me = me_key.humd_id();
-        let peer_id = peer_key.humd_id();
+        let me = me_key.hid();
+        let peer_id = peer_key.hid();
         let (mine, theirs) = InMemoryEndpoint::pair(
             me, PeerCapabilities::default(),
             peer_id, PeerCapabilities::default(),

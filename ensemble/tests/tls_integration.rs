@@ -53,8 +53,8 @@ async fn tls_endpoint_routes_tone_across_pinned_wire() {
     // Random keypairs for the two humds.
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
-    let a_id = a_key.humd_id();
-    let b_id = b_key.humd_id();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
 
     // Generate B's self-signed cert. A pins this fingerprint.
     let (cert, key, fingerprint) = fresh_self_signed();
@@ -129,7 +129,7 @@ async fn tls_connect_rejects_wrong_fingerprint() {
     let mut wrong = real_fingerprint;
     wrong[0] ^= 0xFF;
 
-    let b_id = HumdKey::generate().humd_id();
+    let b_id = HumdKey::generate().hid();
     let result: anyhow::Result<Arc<TlsTcpEndpoint>> = TlsTcpEndpoint::connect(
         &local.to_string(),
         HumdAddr::new(b_id),

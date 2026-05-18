@@ -37,9 +37,9 @@ async fn eggs_on_the_hum() {
 
     let sim = sim::Sim::new();
 
-    let laptop = sim.spawn_humd(ensemble::HumdId::random()).await;
-    let server = sim.spawn_humd(ensemble::HumdId::random()).await;
-    let phone  = sim.spawn_humd(ensemble::HumdId::random()).await;
+    let laptop = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    let server = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    let phone  = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
     sim.wire(laptop.id, server.id).expect("laptop ↔ server");
     sim.wire(server.id, phone.id).expect("server ↔ phone");

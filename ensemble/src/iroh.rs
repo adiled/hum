@@ -6,11 +6,11 @@
 //! stream — same wire shape as [`crate::tcp`], different socket. Auth
 //! at the QUIC layer means a connection is already cryptographically
 //! bound to the remote NodeId by the time the ensemble handshake runs;
-//! we still send the `chi:"hello"` so the ensemble's HumdId/cap layer
+//! we still send the `chi:"hello"` so the ensemble's Hid/cap layer
 //! stays transport-agnostic.
 //!
-//! HumdId mapping: iroh's NodeId *is* an Ed25519 verifying key. Our
-//! `HumdId = sha256(pubkey)`. The IrohEndpoint stores both — `peer()`
+//! Hid mapping: iroh's NodeId *is* an Ed25519 verifying key. Our
+//! `Hid = sha256(pubkey)`. The IrohEndpoint stores both — `peer()`
 //! returns the [`HumdAddr`] derived from the NodeId.
 //!
 //! Shape:
@@ -35,7 +35,7 @@ use tokio::sync::{mpsc, Mutex};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, PublicKey, TransportAddr};
 
-use crate::{HumdAddr, HumdId, PeerCapabilities, PeerConnection, Tone, Transport};
+use crate::{HumdAddr, Hid, PeerCapabilities, PeerConnection, Tone, Transport};
 
 /// QUIC ALPN advertised by both sides. Pinned to the thrum protocol's
 /// major.minor — if the on-wire framing or handshake shape changes
@@ -57,14 +57,14 @@ pub const IROH_HINT: &str = "iroh:";
 pub const IROH_IP_HINT: &str = "iroh-ip:";
 
 /// Convert an iroh [`EndpointId`] (Ed25519 verifying key) into our
-/// content-addressable [`HumdId`]. `HumdId = sha256(pubkey)`.
-pub fn humd_id_from_node_id(node_id: &EndpointId) -> HumdId {
+/// content-addressable [`Hid`]. `Hid = sha256(pubkey)`.
+pub fn humd_id_from_node_id(node_id: &EndpointId) -> Hid {
     let mut h = Sha256::new();
     h.update(node_id.as_bytes());
     let digest = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
-    HumdId(out)
+    Hid::from(out)
 }
 
 /// One iroh-backed peer link. A bi-directional QUIC stream carries

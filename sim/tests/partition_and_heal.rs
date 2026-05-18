@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use ensemble::HumdId;
+use ensemble::Hid;
 use sim::Sim;
 
 const SIGIL: &str = "test-sigil";
@@ -29,8 +29,8 @@ async fn partition_then_heal_converges_wane() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = Sim::new();
-    let a_id = HumdId::random();
-    let b_id = HumdId::random();
+    let a_id = Hid::random_humd();
+    let b_id = Hid::random_humd();
     let a = sim.spawn_humd(a_id).await;
     let b = sim.spawn_humd(b_id).await;
 

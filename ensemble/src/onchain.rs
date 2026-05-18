@@ -41,7 +41,7 @@ use serde_json::json;
 pub struct HumdRecord {
     /// EVM address that controls this entry. `[0;20]` means "no record".
     pub owner: [u8; 20],
-    /// ed25519 pubkey. The off-chain HumdId is `sha256(pubkey)`; here
+    /// ed25519 pubkey. The off-chain Hid is `sha256(pubkey)`; here
     /// we store the pubkey itself so the contract can derive it.
     pub pubkey: [u8; 32],
     /// keccak256 of the full manifest JSON bytes. Readers MUST verify
