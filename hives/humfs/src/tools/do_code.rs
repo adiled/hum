@@ -222,45 +222,20 @@ fn op_delete(path: &Path, lang: LangSpec, symbol: Option<&str>) -> ToolResult {
 
 // ── symbol resolution ───────────────────────────────────────────────────
 
-/// Locate the named symbol in `source`. Handles dot-nested
-/// ("Class.method") and the synthetic 'imports' symbol.
+/// Locate the named symbol in `source`. Supports plain names,
+/// dot-nested ("Class.method"), sub-symbol alias walks
+/// ("alpha.body", "alpha.when.otherwise"), and the synthetic
+/// `imports` symbol.
 fn locate_symbol(source: &str, lang: LangSpec, name: &str) -> Option<Symbol> {
     if name == "imports" {
         return synthesize_imports(source, lang);
     }
-    let syms = ast::file_symbols(source, lang);
-    let segs: Vec<&str> = name.split('.').collect();
-    walk_dotted(&syms, &segs).into_iter().next().cloned()
-}
-
-fn walk_dotted<'a>(syms: &'a [Symbol], segs: &[&str]) -> Vec<&'a Symbol> {
-    if segs.is_empty() { return vec![]; }
-    let mut out = Vec::new();
-    for parent in syms.iter().filter(|s| s.name == segs[0]) {
-        if segs.len() == 1 { out.push(parent); continue; }
-        let inner: Vec<&Symbol> = syms.iter()
-            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
-            .collect();
-        for matched in walk_dotted_inner(&inner, &segs[1..]) {
-            out.push(matched);
-        }
-    }
-    out
-}
-
-fn walk_dotted_inner<'a>(syms: &[&'a Symbol], segs: &[&str]) -> Vec<&'a Symbol> {
-    if segs.is_empty() { return vec![]; }
-    let mut out = Vec::new();
-    for parent in syms.iter().filter(|s| s.name == segs[0]) {
-        if segs.len() == 1 { out.push(*parent); continue; }
-        let inner: Vec<&Symbol> = syms.iter().copied()
-            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
-            .collect();
-        for matched in walk_dotted_inner(&inner, &segs[1..]) {
-            out.push(matched);
-        }
-    }
-    out
+    let (start_byte, end_byte, start_row, end_row) = ast::resolve_path(source, lang, name)?;
+    Some(Symbol {
+        name: name.to_string(),
+        kind: SymbolKind::Other,
+        start_byte, end_byte, start_row, end_row,
+    })
 }
 
 /// Synthetic `imports` symbol: the leading contiguous run of
@@ -471,6 +446,27 @@ mod tests {
         })).await;
         assert!(res.is_error);
         assert!(res.output.contains("humfs_do_noncode"), "wrong rejection: {}", res.output);
+        let _ = fs::remove_file(&p);
+    }
+
+    #[tokio::test]
+    async fn replace_sub_symbol_body() {
+        // Replace the body of `alpha` via the sub-symbol path
+        // "alpha.body". Without that, the caller would have to know
+        // alpha's exact byte range.
+        let p = tmp("rs");
+        fs::write(&p, "fn alpha() {\n    let x = 1;\n}\nfn beta() {}\n").unwrap();
+        let res = run(json!({
+            "file_path": p.display().to_string(),
+            "operation": "replace",
+            "symbol": "alpha.body",
+            "new_source": "{ let y = 42; }",
+        })).await;
+        assert!(!res.is_error, "sub-symbol replace failed: {}", res.output);
+        let updated = fs::read_to_string(&p).unwrap();
+        assert!(updated.contains("y = 42"), "didn't replace body: {updated}");
+        assert!(updated.contains("fn alpha"), "lost alpha signature: {updated}");
+        assert!(updated.contains("fn beta"), "lost beta: {updated}");
         let _ = fs::remove_file(&p);
     }
 

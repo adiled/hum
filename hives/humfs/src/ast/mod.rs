@@ -18,6 +18,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator}
 
 pub mod outline;
 pub mod query;
+pub mod subwalk;
 pub mod symbol;
 
 pub use symbol::{Symbol, SymbolKind};
@@ -129,6 +130,63 @@ pub fn file_symbols(source: &str, lang: LangSpec) -> Vec<Symbol> {
     }
     out.sort_by_key(|s| s.start_byte);
     out
+}
+
+/// Resolve a full path string ("foo", "Class.method",
+/// "alpha.when.otherwise", "alpha.loop#2.body") to a byte range
+/// over the source. Walks named-symbol segments first (by
+/// containment of the previously-matched Symbol's byte range),
+/// then alias segments (via `subwalk`) under the resulting AST
+/// node. Returns `(start_byte, end_byte, start_row, end_row)` on
+/// match.
+pub fn resolve_path(
+    source: &str,
+    lang: LangSpec,
+    path: &str,
+) -> Option<(usize, usize, usize, usize)> {
+    let segs: Vec<&str> = path.split('.').collect();
+    // Index of the first alias segment, if any.
+    let first_alias_idx = segs.iter().position(|s| subwalk::parse_segment(s).is_some());
+    let (name_segs, alias_segs_raw): (Vec<&str>, Vec<&str>) = match first_alias_idx {
+        Some(i) => (segs[..i].to_vec(), segs[i..].to_vec()),
+        None => (segs.clone(), vec![]),
+    };
+    if name_segs.is_empty() { return None; }
+
+    let symbols = file_symbols(source, lang);
+    let named = resolve_named(&symbols, &name_segs)?;
+
+    if alias_segs_raw.is_empty() {
+        return Some((named.start_byte, named.end_byte, named.start_row, named.end_row));
+    }
+
+    let alias_segs: Vec<subwalk::AliasSegment> = alias_segs_raw.iter()
+        .filter_map(|s| subwalk::parse_segment(s))
+        .collect();
+    if alias_segs.len() != alias_segs_raw.len() { return None; }
+
+    let tree = parse(source, lang)?;
+    let root = tree.root_node();
+    let target_node = root.descendant_for_byte_range(named.start_byte, named.end_byte)?;
+    let final_node = subwalk::resolve_subpath(target_node, &alias_segs, lang)?;
+    let start_byte = final_node.start_byte();
+    let end_byte = final_node.end_byte();
+    let start_row = final_node.start_position().row + 1;
+    let end_row = final_node.end_position().row + 1;
+    Some((start_byte, end_byte, start_row, end_row))
+}
+
+fn resolve_named<'a>(symbols: &'a [Symbol], segs: &[&str]) -> Option<&'a Symbol> {
+    if segs.is_empty() { return None; }
+    let mut current: Option<&Symbol> = symbols.iter().find(|s| s.name == segs[0]);
+    for &seg in &segs[1..] {
+        let parent = current?;
+        let inner = symbols.iter().find(|s| {
+            s.name == seg && s.start_byte > parent.start_byte && s.end_byte <= parent.end_byte
+        });
+        current = inner;
+    }
+    current
 }
 
 /// Find the smallest symbol enclosing the given byte offset.

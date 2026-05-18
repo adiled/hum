@@ -378,77 +378,33 @@ fn read_by_pattern(targets: &[PathBuf], pattern: &str) -> ToolResult {
 
 // ── symbol / query ──────────────────────────────────────────────────────
 
-/// Find an exact-name symbol. Dot-nested names ("Class.method")
-/// walk the symbol tree by byte-containment: each segment after
-/// the first must sit inside the previous match's range.
+/// Find a symbol by path. Supports plain names, dot-nested
+/// ("Class.method"), and sub-symbol alias walks ("alpha.body",
+/// "alpha.when.otherwise", "alpha.loop#2.body").
 fn read_by_symbol(targets: &[PathBuf], symbol: &str) -> ToolResult {
     let mut out = String::new();
     let mut matches = 0usize;
-    let segs: Vec<&str> = symbol.split('.').collect();
     for path in targets {
         let lang = match ast::detect_language(path) { Some(l) => l, None => continue };
         let content = match fs::read_to_string(path) { Ok(s) => s, Err(_) => continue };
-        let syms = ast::file_symbols(&content, lang);
-        for sym in resolve_dotted(&syms, &segs) {
+        if let Some((start, end, start_row, end_row)) = ast::resolve_path(&content, lang, symbol) {
             matches += 1;
-            out.push_str(&format!("=== {} — {} {} (L{}-L{}) ===\n",
-                path.display(), sym.kind.tag(), sym.name, sym.start_row, sym.end_row));
-            let slice = content.get(sym.start_byte..sym.end_byte).unwrap_or("");
+            out.push_str(&format!("=== {} — '{symbol}' (L{start_row}-L{end_row}) ===\n",
+                path.display()));
+            let slice = content.get(start..end).unwrap_or("");
             for (i, line) in slice.lines().enumerate() {
-                out.push_str(&format!("{:>6}\t{line}\n", sym.start_row + i));
+                out.push_str(&format!("{:>6}\t{line}\n", start_row + i));
             }
             out.push('\n');
             if out.len() > MAX_READ_OUTPUT { break; }
         }
-        if out.len() > MAX_READ_OUTPUT { break; }
     }
     if matches == 0 {
         return ToolResult::error(format!(
-            "no symbol named '{symbol}' across {} target(s)", targets.len()
+            "no symbol path '{symbol}' across {} target(s)", targets.len()
         ));
     }
     cap_output(out, Some(&PathBuf::from(format!("symbol:{symbol}"))))
-}
-
-/// Walk a flat symbol list as if it were a tree, returning every
-/// symbol that matches the full dotted path. Segment 1 must be a
-/// top-level symbol by that name; segments 2+ must sit inside the
-/// previous match's byte range.
-fn resolve_dotted<'a>(syms: &'a [ast::Symbol], segs: &[&str]) -> Vec<&'a ast::Symbol> {
-    if segs.is_empty() { return vec![]; }
-    let mut out = Vec::new();
-    for parent in syms.iter().filter(|s| s.name == segs[0]) {
-        if segs.len() == 1 {
-            out.push(parent);
-            continue;
-        }
-        // Descend by byte containment.
-        let candidates: Vec<&ast::Symbol> = syms.iter()
-            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
-            .collect();
-        for matched in resolve_dotted_inner(&candidates, &segs[1..]) {
-            out.push(matched);
-        }
-    }
-    out
-}
-
-fn resolve_dotted_inner<'a>(syms: &[&'a ast::Symbol], segs: &[&str]) -> Vec<&'a ast::Symbol> {
-    if segs.is_empty() { return vec![]; }
-    let mut out = Vec::new();
-    for parent in syms.iter().filter(|s| s.name == segs[0]) {
-        if segs.len() == 1 {
-            out.push(*parent);
-            continue;
-        }
-        let inner: Vec<&ast::Symbol> = syms.iter().copied()
-            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
-            .collect();
-        for matched in resolve_dotted_inner(&inner, &segs[1..]) {
-            out.push(matched);
-        }
-    }
-    out
 }
 
 /// Fuzzy case-insensitive substring match on symbol names. Returns
