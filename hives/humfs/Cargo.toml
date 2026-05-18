@@ -1,0 +1,36 @@
+[package]
+name = "humfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "humfs — hum's native filesystem forager hive. Symbol-aware code surface (read/do_code/do_noncode/bash/task), AST-grounded via tree-sitter. Translates chi:tool-call ↔ filesystem ops; humd routes other foragers' tool-calls here."
+
+[dependencies]
+nest-common = { path = "../common" }
+thrum-core = { path = "../../thrum-core" }
+nest = { path = "../../nest" }
+config = { path = "../../config" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+regex = "1"
+base64 = "0.22"
+mime_guess = "2"
+
+# AST infra — added incrementally as phases land.
+# tree-sitter = "0.22"
+# tree-sitter-typescript = "0.21"
+# tree-sitter-javascript = "0.21"
+# tree-sitter-python = "0.21"
+# tree-sitter-go = "0.21"
+# tree-sitter-rust = "0.21"
+
+[[bin]]
+name = "humfs-forager"
+path = "src/main.rs"

@@ -9,7 +9,9 @@
 //! Future additions: shared spawn glue, PTY brood helpers, common
 //! Chi handlers, etc. — anything more than one nest crate needs.
 
+pub mod forager;
 pub mod serve;
 pub mod suspicion_regex;
+pub use forager::{serve_forager, ForagerAdvert, ToolDef, ToolDispatcher, ToolResult};
 pub use serve::{serve_worker, HiveAdvert};
 pub use suspicion_regex::RegexClassifier;

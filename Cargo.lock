@@ -1717,6 +1717,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "humfs"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "config",
+ "mime_guess",
+ "nest",
+ "nest-common",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hums"
 version = "0.30.0"
 dependencies = [
