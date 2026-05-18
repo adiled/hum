@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 pub fn def() -> ToolDef {
     ToolDef {
         name: "humfs_do_code".into(),
-        description: "Author code — AST-grounded, symbol-scoped. Ops: create | replace (symbol OR whole-file) | insert_before | insert_after | delete. Refuses non-code extensions (use humfs_do_noncode). Synthetic 'imports' symbol for top-of-file import blocks. Sub-symbol walks: body/when/otherwise/loop/try/return/call, composable with dots, disambiguated with #N. Languages: ts/tsx/js/jsx/mjs/cjs/py/pyi/go/rs/java/c/cpp/rb/php/cs/sh/vue (AST-backed); kt/swift/scala/lua/svelte/sql (text-only).".into(),
+        description: "Author code — AST-grounded, symbol-scoped. Operations: create | replace (symbol OR whole-file) | insert_before | insert_after | delete. The top-of-file import block is addressable as the synthetic 'imports' symbol. Sub-symbol walks (body/when/otherwise/loop/try/return/call) compose with dots and disambiguate with #N. Languages: ts/tsx/js/jsx/mjs/cjs/py/pyi/go/rs/java/c/cpp/rb/php/cs/sh/vue (AST-backed); kt/swift/scala/lua/svelte/sql (text-only). Non-code files route to humfs_do_noncode.".into(),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 pub fn def() -> ToolDef {
     ToolDef {
         name: "humfs_do_noncode".into(),
-        description: "Edit non-code files using linguistic scope. Four scopes (pass exactly one): word (single token, format-agnostic), phrase (structural name OR exact text — JSON/YAML key, env var, markdown heading, TOML section), sentence (smallest independent unit), paragraph (full block). Omit 'replace' to delete the scope. No scope param = whole-file create/overwrite. Accepts: configs, docs, markup, stylesheets, data, plain text. Refuses code files (use humfs_do_code).".into(),
+        description: "Author non-code files using linguistic scope. Four scopes (pass exactly one): word (format-agnostic token swap), phrase (structural name — JSON/YAML key, env var, markdown heading, TOML section — or exact text), sentence (smallest independent unit), paragraph (full block). Omit 'replace' to delete the scope; no scope param creates/overwrites the whole file. Handles configs, docs, markup, stylesheets, data, plain text. Code files route to humfs_do_code.".into(),
         input_schema: json!({
             "type": "object",
             "properties": {

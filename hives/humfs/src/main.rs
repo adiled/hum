@@ -20,6 +20,7 @@ use anyhow::Result;
 use nest_common::{serve_forager, ForagerAdvert};
 use tracing_subscriber::EnvFilter;
 
+mod ast;
 mod dispatch;
 mod tools;
 

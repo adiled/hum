@@ -23,13 +23,15 @@ regex = "1"
 base64 = "0.22"
 mime_guess = "2"
 
-# AST infra — added incrementally as phases land.
-# tree-sitter = "0.22"
-# tree-sitter-typescript = "0.21"
-# tree-sitter-javascript = "0.21"
-# tree-sitter-python = "0.21"
-# tree-sitter-go = "0.21"
-# tree-sitter-rust = "0.21"
+# AST infra — tree-sitter parsers per language. Versions kept loose
+# (^minor) so security patches roll in; the parser ABI version is
+# what matters and we pin to tree-sitter 0.26 family.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
 
 [[bin]]
 name = "humfs-forager"
