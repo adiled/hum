@@ -683,6 +683,81 @@ impl Sim {
         result
     }
 
+    /// Attach a mock forager-hive bee that advertises a set of tool
+    /// names and dispatches each `chi:"tool-call"` it receives back
+    /// to humd as a `chi:"tool-result"` carrying the response text
+    /// produced by the supplied closure.
+    ///
+    /// Mirrors `attach_mock_worker` but on the forager side — bee
+    /// declares `bee: ["forager"]`, hive name `hive`, and a `tools[]`
+    /// array of `{name, description, inputSchema}` so humd's hello
+    /// parser populates the manifest. After this method returns,
+    /// the forager is registered and humd's `chi:"tool-call"` router
+    /// will route by `toolName` here.
+    pub async fn attach_mock_forager<F>(
+        &self,
+        humd: HumdId,
+        hive: &str,
+        tool_names: Vec<String>,
+        responder: F,
+    ) -> Result<String>
+    where
+        F: Fn(&str, Value) -> String + Send + Sync + 'static,
+    {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        for _ in 0..200 {
+            if h.thrum.has_sink() { break; }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let client_id = format!("sim-forager-{}", uuid::Uuid::new_v4());
+        let mut rx = h.thrum.register_synthetic(client_id.clone());
+        let tools: Vec<Value> = tool_names.iter().map(|name| serde_json::json!({
+            "name": name,
+            "description": format!("mock {name}"),
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        })).collect();
+        let hello = serde_json::json!({
+            "chi": "hello",
+            "bee": ["forager"],
+            "hive": hive,
+            "version": "0.0.0",
+            "protoVersion": thrum_core::THRUM_VERSION,
+            "tools": tools,
+            "chis": ["hello", "tool-call", "tool-result", "cancel"],
+        });
+        h.thrum.inject_tone(&client_id, hello).await;
+        let thrum = h.thrum.clone();
+        let cid_for_pump = client_id.clone();
+        let responder = std::sync::Arc::new(responder);
+        tokio::spawn(async move {
+            while let Some(tone) = rx.recv().await {
+                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if chi != "tool-call" { continue; }
+                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let call_id = tone.get("callId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let tool_name = tone.get("toolName").and_then(|v| v.as_str())
+                    .or_else(|| tone.get("name").and_then(|v| v.as_str()))
+                    .unwrap_or("").to_string();
+                let args = tone.get("args").cloned().unwrap_or(Value::Null);
+                let result = responder(&tool_name, args);
+                let reply = serde_json::json!({
+                    "chi": "tool-result",
+                    "sid": sid,
+                    "callId": call_id,
+                    "toolName": tool_name,
+                    "result": result,
+                });
+                thrum.inject_tone(&cid_for_pump, reply).await;
+            }
+        });
+        Ok(client_id)
+    }
+
     /// Mock-attach a hearOnly observer nestler on `observer_humd` to
     /// the hum `sid` hosted on `host_humd`. Returns the synthetic client
     /// id so the caller can drain replies via `nestler_recv`. Sends a
