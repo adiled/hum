@@ -30,6 +30,8 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::ast;
+
 const MAX_RESOLVED_TARGETS: usize = 200;
 const MAX_READ_OUTPUT: usize = 7500;
 const MAX_READ_BYTES: usize = 256 * 1024;
@@ -83,15 +85,6 @@ pub async fn run(args: Value) -> ToolResult {
         return ToolResult::error("file_path is required");
     }
 
-    // P4-deferred modifiers — stubbed so callers see a precise error
-    // and don't fall back to a guess that succeeds with wrong shape.
-    if args.symbol.is_some() {
-        return ToolResult::error("humfs_read: `symbol` modifier needs AST infra (lands in P4)");
-    }
-    if args.query.is_some() {
-        return ToolResult::error("humfs_read: `query` modifier needs AST infra (lands in P4)");
-    }
-
     let targets = resolve_targets(&args.file_path);
     if targets.is_empty() {
         return ToolResult::error(format!(
@@ -100,6 +93,12 @@ pub async fn run(args: Value) -> ToolResult {
         ));
     }
 
+    if let Some(sym) = args.symbol.as_deref() {
+        return read_by_symbol(&targets, sym);
+    }
+    if let Some(q) = args.query.as_deref() {
+        return read_by_query(&targets, q);
+    }
     if let Some(pat) = args.pattern.as_deref() {
         return read_by_pattern(&targets, pat);
     }
@@ -280,15 +279,29 @@ fn study_single(path: &Path) -> ToolResult {
     let mut out = String::new();
     out.push_str(&format!("=== {} ===\n", path.display()));
     out.push_str(&format!("[{size} bytes, {total} lines]\n"));
-    if is_code_file(path) {
-        out.push_str("[code file — symbol outline pending P4 (tree-sitter AST infra)]\n");
+
+    // AST-aware section: outline first (so callers know what
+    // symbols to drill into), then the preamble lines for context.
+    let outline = ast::detect_language(path).map(|lang| {
+        let syms = ast::file_symbols(&content, lang);
+        (lang, syms)
+    });
+    if let Some((lang, syms)) = &outline {
+        out.push_str(&format!("[{} — {} symbol(s)]\n\n", lang.name(), syms.len()));
+        out.push_str("outline:\n");
+        out.push_str(&ast::outline::format_symbols(syms));
+        out.push('\n');
     }
-    out.push('\n');
+
+    out.push_str("preamble:\n");
     for (i, line) in lines.iter().take(preamble_n).enumerate() {
         out.push_str(&format!("{:>6}\t{line}\n", i + 1));
     }
     if total > preamble_n {
-        out.push_str(&format!("…\n[{} more lines — use pattern='regex' to search content, or symbol='Name' once P4 lands]\n", total - preamble_n));
+        out.push_str(&format!(
+            "…\n[{} more lines — pass symbol='Name' for a specific symbol, pattern='regex' for content search, or query='sub' for a fuzzy name match]\n",
+            total - preamble_n
+        ));
     }
     if trunc {
         out.push_str(&format!("[humfs: truncated at {} KB — file is larger]\n", MAX_READ_BYTES / 1024));
@@ -323,14 +336,29 @@ fn read_by_pattern(targets: &[PathBuf], pattern: &str) -> ToolResult {
             Ok(s) => s,
             Err(_) => continue,
         };
+        // For code files, build the symbol index once so each hit
+        // can carry the enclosing function/class name.
+        let lang_syms = ast::detect_language(path)
+            .map(|lang| ast::file_symbols(&content, lang));
         let mut file_hits = 0usize;
+        let mut byte_cursor = 0usize;
         for (lineno, line) in content.lines().enumerate() {
             if re.is_match(line) {
                 hits += 1;
                 file_hits += 1;
-                out.push_str(&format!("{}:{}\t{}\n", path.display(), lineno + 1, line));
+                let enclosing = lang_syms.as_ref()
+                    .and_then(|syms| ast::enclosing_symbol(syms, byte_cursor));
+                if let Some(sym) = enclosing {
+                    out.push_str(&format!(
+                        "{}:{} [{} {}]\t{}\n",
+                        path.display(), lineno + 1, sym.kind.tag(), sym.name, line
+                    ));
+                } else {
+                    out.push_str(&format!("{}:{}\t{}\n", path.display(), lineno + 1, line));
+                }
                 if out.len() > MAX_READ_OUTPUT { break; }
             }
+            byte_cursor += line.len() + 1; // +1 for the '\n'
         }
         if file_hits > 0 { files_with_hits += 1; }
         if out.len() > MAX_READ_OUTPUT { break; }
@@ -343,9 +371,115 @@ fn read_by_pattern(targets: &[PathBuf], pattern: &str) -> ToolResult {
             is_error: false,
         };
     }
-    let mut header = format!("[{hits} match(es) across {files_with_hits} file(s); enclosing-symbol annotation arrives in P4]\n\n");
+    let mut header = format!("[{hits} match(es) across {files_with_hits} file(s)]\n\n");
     header.push_str(&out);
     cap_output(header, Some(&PathBuf::from(format!("pattern:{pattern}"))))
+}
+
+// ── symbol / query ──────────────────────────────────────────────────────
+
+/// Find an exact-name symbol. Dot-nested names ("Class.method")
+/// walk the symbol tree by byte-containment: each segment after
+/// the first must sit inside the previous match's range.
+fn read_by_symbol(targets: &[PathBuf], symbol: &str) -> ToolResult {
+    let mut out = String::new();
+    let mut matches = 0usize;
+    let segs: Vec<&str> = symbol.split('.').collect();
+    for path in targets {
+        let lang = match ast::detect_language(path) { Some(l) => l, None => continue };
+        let content = match fs::read_to_string(path) { Ok(s) => s, Err(_) => continue };
+        let syms = ast::file_symbols(&content, lang);
+        for sym in resolve_dotted(&syms, &segs) {
+            matches += 1;
+            out.push_str(&format!("=== {} — {} {} (L{}-L{}) ===\n",
+                path.display(), sym.kind.tag(), sym.name, sym.start_row, sym.end_row));
+            let slice = content.get(sym.start_byte..sym.end_byte).unwrap_or("");
+            for (i, line) in slice.lines().enumerate() {
+                out.push_str(&format!("{:>6}\t{line}\n", sym.start_row + i));
+            }
+            out.push('\n');
+            if out.len() > MAX_READ_OUTPUT { break; }
+        }
+        if out.len() > MAX_READ_OUTPUT { break; }
+    }
+    if matches == 0 {
+        return ToolResult::error(format!(
+            "no symbol named '{symbol}' across {} target(s)", targets.len()
+        ));
+    }
+    cap_output(out, Some(&PathBuf::from(format!("symbol:{symbol}"))))
+}
+
+/// Walk a flat symbol list as if it were a tree, returning every
+/// symbol that matches the full dotted path. Segment 1 must be a
+/// top-level symbol by that name; segments 2+ must sit inside the
+/// previous match's byte range.
+fn resolve_dotted<'a>(syms: &'a [ast::Symbol], segs: &[&str]) -> Vec<&'a ast::Symbol> {
+    if segs.is_empty() { return vec![]; }
+    let mut out = Vec::new();
+    for parent in syms.iter().filter(|s| s.name == segs[0]) {
+        if segs.len() == 1 {
+            out.push(parent);
+            continue;
+        }
+        // Descend by byte containment.
+        let candidates: Vec<&ast::Symbol> = syms.iter()
+            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
+            .collect();
+        for matched in resolve_dotted_inner(&candidates, &segs[1..]) {
+            out.push(matched);
+        }
+    }
+    out
+}
+
+fn resolve_dotted_inner<'a>(syms: &[&'a ast::Symbol], segs: &[&str]) -> Vec<&'a ast::Symbol> {
+    if segs.is_empty() { return vec![]; }
+    let mut out = Vec::new();
+    for parent in syms.iter().filter(|s| s.name == segs[0]) {
+        if segs.len() == 1 {
+            out.push(*parent);
+            continue;
+        }
+        let inner: Vec<&ast::Symbol> = syms.iter().copied()
+            .filter(|c| c.start_byte > parent.start_byte && c.end_byte <= parent.end_byte)
+            .collect();
+        for matched in resolve_dotted_inner(&inner, &segs[1..]) {
+            out.push(matched);
+        }
+    }
+    out
+}
+
+/// Fuzzy case-insensitive substring match on symbol names. Returns
+/// each matched symbol's source, one block per match.
+fn read_by_query(targets: &[PathBuf], query: &str) -> ToolResult {
+    let needle = query.to_lowercase();
+    let mut out = String::new();
+    let mut matches = 0usize;
+    for path in targets {
+        let lang = match ast::detect_language(path) { Some(l) => l, None => continue };
+        let content = match fs::read_to_string(path) { Ok(s) => s, Err(_) => continue };
+        let syms = ast::file_symbols(&content, lang);
+        for sym in syms.iter().filter(|s| s.name.to_lowercase().contains(&needle)) {
+            matches += 1;
+            out.push_str(&format!("=== {} — {} {} (L{}-L{}) ===\n",
+                path.display(), sym.kind.tag(), sym.name, sym.start_row, sym.end_row));
+            let slice = content.get(sym.start_byte..sym.end_byte).unwrap_or("");
+            for (i, line) in slice.lines().enumerate() {
+                out.push_str(&format!("{:>6}\t{line}\n", sym.start_row + i));
+            }
+            out.push('\n');
+            if out.len() > MAX_READ_OUTPUT { break; }
+        }
+        if out.len() > MAX_READ_OUTPUT { break; }
+    }
+    if matches == 0 {
+        return ToolResult::error(format!(
+            "no symbol name matches '{query}' across {} target(s)", targets.len()
+        ));
+    }
+    cap_output(out, Some(&PathBuf::from(format!("query:{query}"))))
 }
 
 // ── images ──────────────────────────────────────────────────────────────
