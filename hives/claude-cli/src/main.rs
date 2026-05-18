@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         hive: "claude-cli".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,
-        source: Some("https://github.com/adiled/hum/tree/main/perches/claude-cli".to_string()),
+        source: Some("https://github.com/adiled/hum/tree/main/hives/claude-cli".to_string()),
     };
 
     serve_worker(worker, advert).await

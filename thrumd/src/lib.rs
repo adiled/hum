@@ -87,6 +87,11 @@ impl Thrum {
         *self.inner.sink.write() = Some(sink);
     }
 
+    /// True if a sink is currently installed.
+    pub fn has_sink(&self) -> bool {
+        self.inner.sink.read().is_some()
+    }
+
     /// True if the given client_id still has a live thrum connection
     /// (either a real UDS conn or a synthetic registration). Lets the
     /// host prune stale registry entries lazily on access.

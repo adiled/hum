@@ -1693,8 +1693,6 @@ version = "0.30.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-cli",
- "claude-repl",
  "config",
  "drift",
  "drone",

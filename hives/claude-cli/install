@@ -6,8 +6,8 @@
 # registers the worker at runtime via thrum bee:["worker"].
 #
 # Usage:
-#   perches/claude-cli/install            # build + install unit + start
-#   perches/claude-cli/install uninstall  # stop + remove unit
+#   hives/claude-cli/install            # build + install unit + start
+#   hives/claude-cli/install uninstall  # stop + remove unit
 #
 # Env:
 #   HUM_THRUM_SOCK     default $XDG_RUNTIME_DIR/hum/thrum.sock

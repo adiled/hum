@@ -119,7 +119,7 @@ fi
 # Step 5 — bring up the claude-cli worker bee. humd is a router; it
 # can't serve any model without at least one worker registered via thrum.
 echo "[opencode] (re)installing hum-claude-cli-worker service …"
-su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/perches/claude-cli && ./install" >/dev/null
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/claude-cli && ./install" >/dev/null
 
 # Step 6 — install the openai-server service unit (the nestler side).
 echo "[opencode] (re)installing hum-openai-server service …"

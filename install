@@ -253,9 +253,9 @@ install_service_unit() {
   log "service unit installed for hum ($SVC_OS)"
   # humd does its own daily auto-update check in-process — no separate
   # timer / cron / launchd interval to maintain.
-  # Perches are NOT installed here — each perch ships its own installer
-  # under perches/<kind>/install. humd just routes; whichever perch
-  # you bring up registers itself via thrum role:"perch".
+  # Hives are NOT installed here — each hive ships its own installer
+  # under hives/<kind>/install. humd just routes; whichever bee you
+  # bring up registers itself via thrum bee:["worker"] (or "forager").
 }
 
 start_daemon() {

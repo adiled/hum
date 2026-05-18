@@ -511,6 +511,14 @@ impl Sim {
             .get(&humd)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        // Wait until humd has installed its ToneSink — spawn_humd's
+        // `tokio::spawn(humd::run)` may not have reached `set_sink` yet
+        // when this method is awaited. Without this guard the hello
+        // inject races boot and humd never registers the worker.
+        for _ in 0..200 {
+            if h.thrum.has_sink() { break; }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         let client_id = format!("sim-worker-{}", uuid::Uuid::new_v4());
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         // Hello first so humd records bee:["worker"] + models before the
@@ -528,11 +536,9 @@ impl Sim {
             "models": models,
             "chis": ["hello", "prompt", "chunk", "finish"],
         });
-        let thrum_for_hello = h.thrum.clone();
-        let cid_for_hello = client_id.clone();
-        tokio::spawn(async move {
-            thrum_for_hello.inject_tone(&cid_for_hello, hello).await;
-        });
+        // Await the hello inject directly so the worker is registered
+        // in humd's manifests by the time this method returns.
+        h.thrum.inject_tone(&client_id, hello).await;
         // Pump: on inbound prompt, inject synthetic chunks + finish
         // back through the sink so humd's passthrough block forwards
         // them to the originating nestler's sigil claim.
