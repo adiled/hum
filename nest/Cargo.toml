@@ -3,7 +3,7 @@ name = "nest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Claude subprocess pool. Two perches: pipe (claude -p stream-json) and PTY. The daemon talks JSON to roosts via this crate."
+description = "LLM subprocess pool. Defines WorkerBee + ForagerBee traits, Roost runtime, and the Nest. humd talks JSON to roosts via this crate."
 
 [dependencies]
 tokio = { workspace = true }

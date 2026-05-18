@@ -217,7 +217,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default perch_tag (config::HumConfig::default
+                // Match humd's default hive_tag (config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.
@@ -353,7 +353,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default perch_tag (config::HumConfig::default
+                // Match humd's default hive_tag (config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.
@@ -395,7 +395,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default perch_tag (config::HumConfig::default
+                // Match humd's default hive_tag (config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.

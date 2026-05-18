@@ -99,8 +99,8 @@ impl SpawnSpec {
 pub struct Roost {
     pub pid: Option<u32>,
     /// Send raw NDJSON lines (already serialized, no trailing newline) to the
-    /// child's stdin. PipePerch writes them straight through; PtyPerch
-    /// translates `{type:"user",...}` into typed text + Enter.
+    /// child's stdin. Pipe-mode workers write them straight through;
+    /// PTY workers translate `{type:"user",...}` into typed text + Enter.
     pub stdin: mpsc::Sender<String>,
     /// Parsed stream events. Each Value is one JSON message off
     /// stdout. The daemon binary turns these into thrum petals.

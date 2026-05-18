@@ -182,7 +182,7 @@ ensure_hum_config() {
     "idleThresholdMs": 300000,
     "default": "claude-cli"
   },
-  "perches": {
+  "hives": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
   }
