@@ -37,10 +37,16 @@ async fn overflow_inference() {
 
     sim.wire(a.id, b.id).expect("wire humd-A ↔ humd-B");
 
-    // Tiny pause for the unsigned-hello handshake to settle so humd-A's
+    // External-perch model: B advertises a perch so A can overflow to
+    // it. A has no perch (capacity 0 forces overflow anyway).
+    sim.attach_mock_perch(b.id, vec!["claude-haiku-4-5".into()])
+        .await
+        .expect("mock perch attaches to humd-B");
+
+    // Wait for the unsigned-hello handshake to settle so humd-A's
     // `peer_caps(humd-B)` returns the learned caps (nests, free_slots)
     // rather than the empty transport-view fallback.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Synthetic nestler on humd-A — no `to:` field (or pointed at self).
     // The prompt is "local" to humd-A; the daemon decides to overflow.

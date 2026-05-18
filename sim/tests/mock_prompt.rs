@@ -18,10 +18,12 @@ async fn mock_prompt_yields_finish() {
     let sim = sim::Sim::new();
     let a = sim.spawn_humd(ensemble::HumdId::random()).await;
 
-    // No wire — single humd. MockPerch is the default test perch the
-    // sim plugs in when a humd is spawned via Sim::spawn_humd.
-    // TODO(sim-api): if MockPerch needs explicit attachment (e.g.
-    // `sim.attach_perch(a.id, MockPerch::default())`), do it here.
+    // External-perch model: humd no longer hosts perches in-process.
+    // Attach a synthetic mock perch over thrum so chi:"prompt" routes.
+    sim.attach_mock_perch(a.id, vec!["claude-haiku-4-5".into()])
+        .await
+        .expect("mock perch attaches");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     sim.nestler_send(
         a.id,

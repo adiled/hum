@@ -61,6 +61,13 @@ async fn co_pilot_fanout() {
     let phone = sim.spawn_humd(ensemble::HumdId::random()).await;
     sim.wire(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
+    // External-perch model: humd's a router. Attach a synthetic mock
+    // perch to laptop so the prompt can be served there.
+    sim.attach_mock_perch(laptop.id, vec!["claude-haiku-4-5".into()])
+        .await
+        .expect("mock perch attaches to laptop");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
     // 1) Observer on phone announces interest in hum-X over on laptop.
     //    Done first so it registers before any reply tones arrive.
     sim.attach_observer(phone.id, laptop.id, "hum-X")

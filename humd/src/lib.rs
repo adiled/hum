@@ -248,6 +248,8 @@ where
         perch_tag: perch_tag.clone(),
     }));
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -260,6 +262,7 @@ where
         tool_pending: tool_pending.clone(),
         perch_tag: perch_tag.clone(),
         manifests: manifests.clone(),
+        sid_origins: sid_origins.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -430,6 +433,13 @@ struct HumdSink {
     /// Live registry of every chi:"hello" we've received. Keyed by
     /// thrum client_id. Routing scans this for role/models matches.
     manifests: Manifests,
+    /// Map sid → originating peer humd. Populated in the prompt arm
+    /// when a prompt arrives via the ensemble pump (client_id ==
+    /// "ensemble" and the tone carries a peer `from` humd id). Read
+    /// in the passthrough block: chi:"chunk"/"finish" tones whose
+    /// sid is in this map get stamped `to: <origin>` and routed via
+    /// the ensemble back to the originating humd.
+    sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>>,
 }
 
 /// Map of in-flight nestler-tool call ids → oneshot senders waiting
@@ -587,6 +597,40 @@ impl ToneSink for HumdSink {
                         | Some(Chi::ToolCall) | Some(Chi::ToolInfo) | Some(Chi::SessionReady)
                         | Some(Chi::Pulse) | Some(Chi::Breath)
                     ) {
+                        // Fan out to every peer humd that attached as
+                        // a hearOnly observer on this sid. Each gets
+                        // its own copy stamped `to: <observer>` so the
+                        // ensemble routes correctly. Await in-line so
+                        // chunk ordering is preserved across multi-
+                        // chunk turns (spawn would race chunks vs
+                        // finish at the receiver).
+                        if let Some(ens) = &self.ensemble {
+                            let obs = self.observers.read().get(&sid).cloned().unwrap_or_default();
+                            for peer in obs {
+                                let mut copy = tone.clone();
+                                if let Some(obj) = copy.as_object_mut() {
+                                    obj.insert("to".into(), Value::String(peer.to_hex()));
+                                    obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                                }
+                                if let Err(e) = ens.route(copy).await {
+                                    warn!(err = %e, "perch.reply.observer.failed");
+                                }
+                            }
+                        }
+                        // Cross-humd return path: if the prompt arrived
+                        // from a peer humd, stamp `to: <origin>` and
+                        // route via the ensemble back to it.
+                        let origin = self.sid_origins.read().get(&sid).cloned();
+                        if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
+                            let mut copy = tone.clone();
+                            if let Some(obj) = copy.as_object_mut() {
+                                obj.insert("to".into(), Value::String(origin.to_hex()));
+                                obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                            }
+                            if let Err(e) = ens.route(copy).await {
+                                warn!(err = %e, "perch.reply.ensemble.failed");
+                            }
+                        }
                         self.thrum.thrum_broadcast(&sid, &self.perch_tag, tone.clone());
                         return;
                     }
@@ -884,9 +928,12 @@ impl ToneSink for HumdSink {
                     }
                 }
                 trace!(sid, model, perch_client = %perch_client, "prompt.forward.to-perch");
+                // Record origin so reply tones from the perch route
+                // back to the originating peer humd via ensemble.
+                if let Some(origin) = origin {
+                    self.sid_origins.write().insert(sid.clone(), origin);
+                }
                 self.thrum.thrum_to(&perch_client, forward);
-                // Track origin for ensemble routing later (TODO post-refactor).
-                let _ = origin;
                 self.waneman.tick(&sid);
             }
             Some(Chi::Cancel) => {

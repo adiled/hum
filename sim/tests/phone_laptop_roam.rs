@@ -36,6 +36,13 @@ async fn phone_laptop_roam() {
 
     sim.wire(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
+    // External-perch model: laptop hosts the perch; phone is just an
+    // access surface that routes via `to:`.
+    sim.attach_mock_perch(laptop.id, vec!["claude-haiku-4-5".into()])
+        .await
+        .expect("mock perch attaches to laptop");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
     // Phone's nestler sends a prompt addressed at the laptop. The hum
     // "hum-X" is hosted on the laptop; the phone is the access surface.
     sim.nestler_send(

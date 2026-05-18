@@ -55,11 +55,11 @@ async fn good_signature_admits_peer() {
     assert!(admitted, "both ensembles must learn each other's caps from verified hellos");
 
     // Caps actually came from the hello (not the transport stub) — the
-    // learned caps include `claude-cli` in nests because that's what
-    // `wire_signed` advertises.
+    // learned caps include the perch_tag in nests because that's what
+    // `wire_signed` advertises (matches humd's default perch_tag).
     let b_caps_on_a = a.ensemble.peer_caps(&b.id).expect("b in A's registry");
     assert!(
-        b_caps_on_a.nests.iter().any(|n| n == "claude-cli"),
+        b_caps_on_a.nests.iter().any(|n| n == "claude-repl"),
         "verified hello must surface nests in learned_caps, got {:?}",
         b_caps_on_a.nests
     );

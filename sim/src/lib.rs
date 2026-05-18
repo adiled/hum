@@ -217,7 +217,11 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                nests: vec!["claude-cli".to_string()],
+                // Match humd's default perch_tag (config::HumConfig::default
+                // → nest.default = "claude-repl"). Overflow lookup keys on
+                // this nest name; mismatch with the daemon's tag breaks
+                // the test deterministically.
+                nests: vec!["claude-repl".to_string()],
                 free_slots,
                 ..Default::default()
             }
@@ -349,7 +353,11 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                nests: vec!["claude-cli".to_string()],
+                // Match humd's default perch_tag (config::HumConfig::default
+                // → nest.default = "claude-repl"). Overflow lookup keys on
+                // this nest name; mismatch with the daemon's tag breaks
+                // the test deterministically.
+                nests: vec!["claude-repl".to_string()],
                 free_slots,
                 ..Default::default()
             }
@@ -387,7 +395,11 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                nests: vec!["claude-cli".to_string()],
+                // Match humd's default perch_tag (config::HumConfig::default
+                // → nest.default = "claude-repl"). Overflow lookup keys on
+                // this nest name; mismatch with the daemon's tag breaks
+                // the test deterministically.
+                nests: vec!["claude-repl".to_string()],
                 free_slots,
                 ..Default::default()
             }
@@ -484,6 +496,66 @@ impl Sim {
             }
         }
         Ok(())
+    }
+
+    /// Attach a synthetic mock perch to `humd`. Registers a fresh
+    /// thrum client, hello's it as `role:"perch"` advertising `models`,
+    /// then spawns a task that turns every inbound chi:"prompt" into
+    /// a canned chunk sequence (text_delta "HELLO" + finish/end_turn).
+    /// Mirrors what the old in-process `nest::MockPerch` did, just
+    /// over the wire so it works under the external-perch model.
+    pub async fn attach_mock_perch(&self, humd: HumdId, models: Vec<String>) -> Result<String> {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        let client_id = format!("sim-perch-{}", uuid::Uuid::new_v4());
+        let mut rx = h.thrum.register_synthetic(client_id.clone());
+        // Hello first so humd records role:"perch" + models before the
+        // first prompt arrives.
+        // Use the default perch_tag as the nestling kind so the
+        // ensemble's overflow gossip (which keys peer capabilities by
+        // nest name) sees a matching advertised nest. Tests that
+        // exercise overflow routing rely on this match.
+        let hello = serde_json::json!({
+            "chi": "hello",
+            "role": "perch",
+            "nestling": "claude-repl",
+            "version": "0.0.0",
+            "protoVersion": thrum_core::THRUM_VERSION,
+            "models": models,
+            "chis": ["hello", "prompt", "chunk", "finish"],
+        });
+        let thrum_for_hello = h.thrum.clone();
+        let cid_for_hello = client_id.clone();
+        tokio::spawn(async move {
+            thrum_for_hello.inject_tone(&cid_for_hello, hello).await;
+        });
+        // Pump: on inbound prompt, inject synthetic chunks + finish
+        // back through the sink so humd's passthrough block forwards
+        // them to the originating nestler's sigil claim.
+        let thrum = h.thrum.clone();
+        let cid_for_pump = client_id.clone();
+        tokio::spawn(async move {
+            while let Some(tone) = rx.recv().await {
+                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if chi != "prompt" { continue; }
+                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if sid.is_empty() { continue; }
+                let frames = vec![
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
+                    serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
+                ];
+                for f in frames {
+                    thrum.inject_tone(&cid_for_pump, f).await;
+                }
+            }
+        });
+        Ok(client_id)
     }
 
     /// Mock-send a tone into humd's Thrum as if from a connected
