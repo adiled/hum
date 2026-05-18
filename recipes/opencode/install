@@ -55,7 +55,7 @@ if [ -s "$RECIPE_MODELS" ]; then
 else
   MODEL_IDS='["claude-opus-4-7","claude-sonnet-4-6","claude-haiku-4-5"]'
 fi
-su -l "$TARGET" -c "mkdir -p ~/.config/hum/nestlings"
+su -l "$TARGET" -c "mkdir -p ~/.config/hum/hives"
 echo "[opencode] seeding $NESTLING_CFG …"
 su -l "$TARGET" -c "cat > $NESTLING_CFG" <<EOF
 {

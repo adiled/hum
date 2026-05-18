@@ -14,7 +14,7 @@ interface NestlingConfig {
 }
 
 function readConfigFile(): NestlingConfig {
-  const path = join(homedir(), ".config", "hum", "nestlings", "openai-server.json");
+  const path = join(homedir(), ".config", "hum", "hives", "openai-server.json");
   try {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as NestlingConfig;
