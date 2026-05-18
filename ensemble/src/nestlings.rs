@@ -71,14 +71,15 @@ pub struct NestlingManifest {
     /// the nestler doesn't supply one.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "nestlerId")]
     pub nestler_id: Option<String>,
-    /// Wire role. `"nestler"` (the default, faces an outside wire and
-    /// translates to thrum) vs `"perch"` (the model-side: accepts
-    /// `chi:"prompt"` for advertised models and emits `chi:"chunk"`/
-    /// `"finish"`). humd consults this to route prompts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-    /// Model ids this entry can serve. Meaningful only when
-    /// `role == "perch"`; nestlers may carry an empty list.
+    /// Bee kinds this nestled bee fulfills. `"worker"` produces compute
+    /// (accepts `chi:"prompt"` for advertised models, emits
+    /// `chi:"chunk"`/`"finish"`); `"forager"` translates an outside wire
+    /// to thrum. A hybrid bee carries both. humd consults this to route
+    /// prompts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bee: Vec<String>,
+    /// Model ids this entry can serve. Meaningful when
+    /// `bee.contains("worker")`; foragers may carry an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
 }
@@ -130,7 +131,7 @@ impl NestlingManifest {
             chis: Vec::new(),
             source: None,
             bind: None,
-            role: None,
+            bee: Vec::new(),
             models: Vec::new(),
             nestler_id: None,
         }

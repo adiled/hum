@@ -7,7 +7,7 @@
 //! `sid="overflow-1"`. humd-A's daemon notices its own capacity is 0,
 //! finds humd-B (advertises `claude-cli`, unbounded `free_slots`),
 //! stamps the tone with `to: <humd-B>` and routes via the ensemble.
-//! humd-B's MockPerch produces text_delta "HELLO" + the result; the
+//! humd-B's MockWorkerBee produces text_delta "HELLO" + the result; the
 //! reply tones flow back through the existing peer-reply forwarding
 //! path and land in humd-A's nestler tap.
 //!
@@ -39,7 +39,7 @@ async fn overflow_inference() {
 
     // External-perch model: B advertises a perch so A can overflow to
     // it. A has no perch (capacity 0 forces overflow anyway).
-    sim.attach_mock_perch(b.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_worker(b.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock perch attaches to humd-B");
 
@@ -65,7 +65,7 @@ async fn overflow_inference() {
     .expect("humd-A nestler accepts overflow prompt");
 
     // Drain the local nestler tap until we see both a text_delta of
-    // "HELLO" (proves humd-B's MockPerch ran AND replies traversed the
+    // "HELLO" (proves humd-B's MockWorkerBee ran AND replies traversed the
     // ensemble) and a finish (proves the wilt event made it back).
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let mut saw_text_delta = false;

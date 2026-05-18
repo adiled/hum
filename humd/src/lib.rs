@@ -40,8 +40,8 @@ type Observers = Arc<RwLock<HashMap<String, Vec<HumdId>>>>;
 /// via [`DaemonConfig::from_env`] for production defaults or build one
 /// by hand for tests / simulators.
 ///
-/// humd is a router: perches register over thrum via `chi:"hello"`
-/// with `role:"perch"`. There's no in-process perch hosting anymore.
+/// humd is a router: worker bees register over thrum via `chi:"hello"`
+/// with `bee: ["worker"]`. There's no in-process worker hosting anymore.
 /// The sim hooks layer on top: `thrum_override` (caller-owned Thrum,
 /// skip the socket listener), `ensemble` (peer registry for `to:`-
 /// addressed tones), `bind_mcp` (skip the HTTP MCP listener).
@@ -209,9 +209,9 @@ where
     // ensemble instead of just cfg.ensemble.
     let ensemble_for_sink = ensemble_opt.clone();
 
-    // humd no longer hosts an in-process nest pool — perches register
-    // over thrum as separate processes. Configuration (max_procs,
-    // idle_threshold) becomes the perch's concern.
+    // humd no longer hosts an in-process nest pool — worker bees
+    // register over thrum as separate processes. Configuration
+    // (max_procs, idle_threshold) becomes the worker's concern.
     let mcp_url = format!("http://{}", cfg.mcp_addr);
 
     // Caller-owned Thrum (sim) vs daemon-owned (production). When the
@@ -234,18 +234,18 @@ where
     // dispatches gets translated into a chi:"tool-call" tone routed to
     // the originating client. The thrum sigil claim made at chi:"prompt"
     // time guarantees the tone lands on the right consumer.
-    let perch_tag = cfg.hum_cfg.nest.default.clone();
+    let hive_tag = cfg.hum_cfg.nest.default.clone();
     mcp_registry.set_nestler_hook(Arc::new(NestlerBridge {
         thrum: thrum.clone(),
         pending: tool_pending.clone(),
-        perch_tag: perch_tag.clone(),
+        hive_tag: hive_tag.clone(),
     }));
     // Native MCP tool completions become chi:"tool-info" events on
     // the wire. Observers see {sid, name, args, result, source} as a
     // single semantic event — no need to reconstitute from chunks.
     mcp_registry.set_tool_info_hook(Arc::new(ToolInfoBroadcaster {
         thrum: thrum.clone(),
-        perch_tag: perch_tag.clone(),
+        hive_tag: hive_tag.clone(),
     }));
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::HumdId>>> =
@@ -260,7 +260,7 @@ where
         capacity_override: cfg.capacity_override,
         mcp_registry: mcp_registry.clone(),
         tool_pending: tool_pending.clone(),
-        perch_tag: perch_tag.clone(),
+        hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
         sid_origins: sid_origins.clone(),
     });
@@ -419,8 +419,8 @@ struct HumdSink {
     /// capacity instead of awakening here. `None` = unbounded.
     capacity_override: Option<usize>,
     /// MCP registry — populated per-session with nestler-declared tools
-    /// extracted from chi:"prompt".tools so the perch's MCP client sees
-    /// them advertised alongside humd's native tools.
+    /// extracted from chi:"prompt".tools so the worker bee's MCP client
+    /// sees them advertised alongside humd's native tools.
     mcp_registry: McpRegistry,
     /// Pending dispatches of nestler-declared tool calls, keyed by the
     /// callId we minted when issuing chi:"tool-call". Resolved when the
@@ -428,10 +428,10 @@ struct HumdSink {
     tool_pending: ToolPending,
     /// Routing tag used in thrum_broadcast + sigil for all reply tones.
     /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
-    /// a specific perch name; whichever perch is configured is the tag.
-    perch_tag: String,
+    /// a specific hive name; whichever hive is configured is the tag.
+    hive_tag: String,
     /// Live registry of every chi:"hello" we've received. Keyed by
-    /// thrum client_id. Routing scans this for role/models matches.
+    /// thrum client_id. Routing scans this for bee/models matches.
     manifests: Manifests,
     /// Map sid → originating peer humd. Populated in the prompt arm
     /// when a prompt arrives via the ensemble pump (client_id ==
@@ -448,10 +448,10 @@ struct HumdSink {
 type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
 
 /// Live registry of every client that handshook via `chi:"hello"`.
-/// Keyed by thrum client_id. The manifest carries `role`, advertised
-/// models, propensity, chi vocabulary, etc. — humd queries this to
-/// route prompts to perches, to identify which clients are perches
-/// vs nestlers, and to fan out gossip on connect.
+/// Keyed by thrum client_id. The manifest carries `bee` kinds,
+/// advertised models, propensity, chi vocabulary, etc. — humd queries
+/// this to route prompts to worker bees, to identify which clients are
+/// workers vs foragers, and to fan out gossip on connect.
 ///
 /// Volatile: cleared on humd restart; entries pruned on disconnect.
 /// Same data shape ensemble gossips, just held in-process for
@@ -459,12 +459,12 @@ type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::NestlingManifest>>>;
 
 /// MCP NestlerHook impl that round-trips nestler-declared tool calls
-/// back to the originator over thrum. The perch's MCP client (whatever
-/// perch is running) sees these tools advertised alongside humd's
-/// native ones; when the model invokes one, the call lands here.
+/// back to the originator over thrum. The worker bee's MCP client
+/// (whatever worker is running) sees these tools advertised alongside
+/// humd's native ones; when the model invokes one, the call lands here.
 /// Hum-native MCP tools resolve in-process without leaving humd.
 ///
-/// 1. perch calls tool with args → MCP server dispatches → us.
+/// 1. worker calls tool with args → MCP server dispatches → us.
 /// 2. We mint a callId, store a oneshot tx in `pending`, and emit
 ///    `chi:"tool-call" {sid, callId, name, args}`. The thrum sigil
 ///    claim placed at chi:"prompt" time routes the tone to the
@@ -472,14 +472,14 @@ type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::NestlingManif
 /// 3. Originator executes externally, replies with
 ///    `chi:"tool-result" {sid, callId, result}`. humd's
 ///    chi:"tool-result" arm pops the sender and forwards the result.
-/// 4. dispatch() returns; MCP packages the result; perch continues.
+/// 4. dispatch() returns; MCP packages the result; worker continues.
 struct NestlerBridge {
     thrum: Thrum,
     pending: ToolPending,
-    /// Nest name used as the broadcast tag for the chi:"tool-call"
+    /// Hive name used as the broadcast tag for the chi:"tool-call"
     /// tone. Comes from cfg.hum_cfg.nest.default so the routing tag
-    /// matches whatever perch humd is running, not a hardcoded name.
-    perch_tag: String,
+    /// matches whatever hive humd is running, not a hardcoded name.
+    hive_tag: String,
 }
 
 #[async_trait::async_trait]
@@ -501,8 +501,8 @@ impl mcp::NestlerHook for NestlerBridge {
             "args": args,
         });
         // sigil claim made at chi:"prompt" time gets this back to the
-        // originator. Broadcast tag is the configured nest name.
-        self.thrum.thrum_broadcast(session_id, &self.perch_tag, tone);
+        // originator. Broadcast tag is the configured hive name.
+        self.thrum.thrum_broadcast(session_id, &self.hive_tag, tone);
         match tokio::time::timeout(Duration::from_secs(300), rx).await {
             Ok(Ok(result)) => {
                 // Emit a chi:"tool-info" tone with the completed pair
@@ -518,7 +518,7 @@ impl mcp::NestlerHook for NestlerBridge {
                     "result": result,
                     "source": "nestler",
                 });
-                self.thrum.thrum_broadcast(session_id, &self.perch_tag, info);
+                self.thrum.thrum_broadcast(session_id, &self.hive_tag, info);
                 Ok(result)
             }
             Ok(Err(_)) => {
@@ -538,7 +538,7 @@ impl mcp::NestlerHook for NestlerBridge {
 /// MCP dispatch in any way.
 struct ToolInfoBroadcaster {
     thrum: Thrum,
-    perch_tag: String,
+    hive_tag: String,
 }
 
 impl mcp::ToolInfoHook for ToolInfoBroadcaster {
@@ -562,14 +562,14 @@ impl mcp::ToolInfoHook for ToolInfoBroadcaster {
             "result": result,
             "source": source_tag,
         });
-        self.thrum.thrum_broadcast(session_id, &self.perch_tag, tone);
+        self.thrum.thrum_broadcast(session_id, &self.hive_tag, tone);
     }
 }
 
-// (NestListener removed — perches emit chi:"chunk"/"finish" directly
-// over thrum from their own process. humd just routes; see the
-// passthrough block in ToneSink::hear that re-broadcasts those tones
-// on the sigil sid claimed by the originating nestler.)
+// (NestListener removed — worker bees emit chi:"chunk"/"finish"
+// directly over thrum from their own process. humd just routes; see
+// the passthrough block in ToneSink::hear that re-broadcasts those
+// tones on the sigil sid claimed by the originating forager bee.)
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
@@ -580,17 +580,20 @@ impl ToneSink for HumdSink {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
 
-        // Perch passthrough: any output tone (chunk / finish / error /
+        // Worker passthrough: any output tone (chunk / finish / error /
         // tool-call / tool-info / session-ready) coming from a client
-        // whose manifest declares role:"perch" gets re-broadcast on
-        // the sid sigil so the originating nestler receives it. Hello
-        // arrives from the perch but is handled normally below.
+        // whose manifest declares `bee` containing "worker" gets
+        // re-broadcast on the sid sigil so the originating forager
+        // receives it. Hello arrives from the worker but is handled
+        // normally below.
         if !matches!(chi, Some(Chi::Hello)) {
-            let is_perch = {
+            let is_worker = {
                 let m = self.manifests.read();
-                m.get(client_id).and_then(|man| man.role.as_deref()) == Some("perch")
+                m.get(client_id)
+                    .map(|man| man.bee.iter().any(|b| b == "worker"))
+                    .unwrap_or(false)
             };
-            if is_perch {
+            if is_worker {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
                     if matches!(chi,
                         Some(Chi::Chunk) | Some(Chi::Finish) | Some(Chi::Error)
@@ -613,7 +616,7 @@ impl ToneSink for HumdSink {
                                     obj.insert("from".into(), Value::String(ens.me().to_hex()));
                                 }
                                 if let Err(e) = ens.route(copy).await {
-                                    warn!(err = %e, "perch.reply.observer.failed");
+                                    warn!(err = %e, "worker.reply.observer.failed");
                                 }
                             }
                         }
@@ -628,10 +631,10 @@ impl ToneSink for HumdSink {
                                 obj.insert("from".into(), Value::String(ens.me().to_hex()));
                             }
                             if let Err(e) = ens.route(copy).await {
-                                warn!(err = %e, "perch.reply.ensemble.failed");
+                                warn!(err = %e, "worker.reply.ensemble.failed");
                             }
                         }
-                        self.thrum.thrum_broadcast(&sid, &self.perch_tag, tone.clone());
+                        self.thrum.thrum_broadcast(&sid, &self.hive_tag, tone.clone());
                         return;
                     }
                 }
@@ -647,7 +650,7 @@ impl ToneSink for HumdSink {
         if matches!(chi, Some(Chi::Attach)) && client_id != "ensemble" {
             if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
                 if !sid.is_empty() {
-                    self.thrum.claim_sigil(client_id, thrum_core::sigil(sid, &self.perch_tag));
+                    self.thrum.claim_sigil(client_id, thrum_core::sigil(sid, &self.hive_tag));
                     self.thrum.claim_sigil(client_id, sid.to_string());
                     let hear_only = tone.get("hearOnly").and_then(Value::as_bool).unwrap_or(false);
                     trace!(client_id, sid, hear_only, "attach.local.claimed");
@@ -691,7 +694,7 @@ impl ToneSink for HumdSink {
                 let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
                 if let Some(sid) = sid_opt {
                     trace!(client_id, %chi_str, %sid, "thrum.recv.peer-reply.forward");
-                    self.thrum.thrum_broadcast(&sid, &self.perch_tag, tone);
+                    self.thrum.thrum_broadcast(&sid, &self.hive_tag, tone);
                     return;
                 }
             }
@@ -704,15 +707,23 @@ impl ToneSink for HumdSink {
                 self.thrum.thrum_to(client_id, breath);
 
                 // Build the manifest once from the hello tone.
-                // Role + models come from the new fields; everything
+                // Bee + models come from the new fields; everything
                 // else (name, version, proto, propensity, chis, source,
                 // bind, nestlerId) lives where it always did.
-                let role = tone.get("role").and_then(Value::as_str).map(str::to_string);
+                let bee: Vec<String> = match tone.get("bee") {
+                    Some(Value::Array(arr)) => arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                    Some(Value::String(s)) => vec![s.clone()],
+                    _ => Vec::new(),
+                };
                 let models: Vec<String> = tone.get("models")
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                     .unwrap_or_default();
-                let name = tone.get("nestling").and_then(Value::as_str)
+                let name = tone.get("hive").and_then(Value::as_str)
+                    .or_else(|| tone.get("nestling").and_then(Value::as_str))
                     .map(str::to_string)
                     .or_else(|| tone.get("from").and_then(Value::as_str).map(str::to_string));
                 if let Some(name) = name {
@@ -747,22 +758,21 @@ impl ToneSink for HumdSink {
                     manifest.source = source;
                     manifest.bind = bind;
                     manifest.nestler_id = Some(nestler_id);
-                    manifest.role = role.clone();
+                    manifest.bee = bee.clone();
                     manifest.models = models.clone();
 
                     // Local store — single source of truth for routing
-                    // decisions humd makes (perch lookup, passthrough
+                    // decisions humd makes (worker lookup, passthrough
                     // membership). Pruned on disconnect.
                     if client_id != "ensemble" {
                         self.manifests.write().insert(client_id.to_string(), manifest.clone());
-                        if role.as_deref() == Some("perch") {
-                            info!(client_id, ?models, "perch.registered");
+                        if bee.iter().any(|b| b == "worker") {
+                            info!(client_id, ?models, "worker.registered");
                         }
                     }
 
                     // Gossip to peers via ensemble. Same manifest. Peer
-                    // humds learn about both nestlers and perches the
-                    // same way.
+                    // humds learn about workers and foragers the same way.
                     if client_id != "ensemble" {
                         if let Some(ensemble) = &self.ensemble {
                             let ens = ensemble.clone();
@@ -780,8 +790,8 @@ impl ToneSink for HumdSink {
                     return;
                 }
                 // Overflow routing — if this prompt came from a local
-                // nestler AND we have no spare capacity, hand it to a
-                // peer that advertises the nest kind with free slots.
+                // forager AND we have no spare capacity, hand it to a
+                // peer that advertises the hive with free slots.
                 // Prompts arriving from a peer (`client_id == "ensemble"`)
                 // are work *we* accepted from somebody else; never bounce
                 // them again.
@@ -789,12 +799,12 @@ impl ToneSink for HumdSink {
                     && self.capacity_override.map(|c| c == 0).unwrap_or(false)
                 {
                     if let Some(ensemble) = &self.ensemble {
-                        let target = pick_overflow_peer(ensemble, &self.perch_tag);
+                        let target = pick_overflow_peer(ensemble, &self.hive_tag);
                         if let Some(peer) = target {
                             // Claim the sid so reply tones (chunks +
                             // finish) routed back via the ensemble pump
                             // reach this client's queue.
-                            self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
+                            self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                             self.thrum.claim_sigil(client_id, &sid);
                             if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                                 self.thrum.thrum_to(client_id, thrumd::echo_tone(rid, true, None));
@@ -825,7 +835,7 @@ impl ToneSink for HumdSink {
                 if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                     self.thrum.thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                 }
-                self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
+                self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                 self.thrum.claim_sigil(client_id, &sid);
                 // Origin detection: if the prompt arrived from a peer
                 // (we received it via the ensemble pump, whose synthetic
@@ -847,17 +857,17 @@ impl ToneSink for HumdSink {
                 };
                 trace!(sid, model, ?origin, "thrum.recv.prompt");
 
-                // Look up a registered external perch by advertised
-                // model — scan manifests for role:"perch" + a matching
-                // models entry. Lazy-prune stale entries (perch
+                // Look up a registered worker bee by advertised model —
+                // scan manifests for bee.contains("worker") + a matching
+                // models entry. Lazy-prune stale entries (worker
                 // disconnected since hello) on the same pass.
-                let perch_client = {
+                let worker_client = {
                     let mut to_prune: Vec<String> = Vec::new();
                     let pick = {
                         let m = self.manifests.read();
                         let mut found: Option<String> = None;
                         for (cid, man) in m.iter() {
-                            if man.role.as_deref() == Some("perch")
+                            if man.bee.iter().any(|b| b == "worker")
                                 && man.models.iter().any(|m| m == &model)
                             {
                                 if self.thrum.is_connected(cid) {
@@ -876,19 +886,19 @@ impl ToneSink for HumdSink {
                     }
                     pick
                 };
-                let Some(perch_client) = perch_client else {
-                    warn!(sid, model, "prompt.no-perch — no external perch advertises this model");
+                let Some(worker_client) = worker_client else {
+                    warn!(sid, model, "prompt.no-worker — no worker bee advertises this model");
                     let err = serde_json::json!({
                         "chi": "error",
                         "sid": sid,
-                        "message": format!("no perch advertises model '{}'", model),
+                        "message": format!("no worker bee advertises model '{}'", model),
                     });
-                    self.thrum.thrum_broadcast(&sid, &self.perch_tag, err);
+                    self.thrum.thrum_broadcast(&sid, &self.hive_tag, err);
                     return;
                 };
 
                 // Register nestler-declared tools on the MCP session so
-                // the perch's MCP client sees them advertised. Dispatch
+                // the worker's MCP client sees them advertised. Dispatch
                 // still routes through NestlerBridge → thrum → originator.
                 if let Some(nestler_tools) = tone.get("tools").and_then(Value::as_array) {
                     let parsed: Vec<mcp::ToolDef> = nestler_tools.iter().filter_map(|t| {
@@ -908,8 +918,8 @@ impl ToneSink for HumdSink {
                     }
                 }
 
-                // Forward the prompt tone verbatim to the perch, plus
-                // augment with mcpUrl + cwd if absent (perches need them).
+                // Forward the prompt tone verbatim to the worker, plus
+                // augment with mcpUrl + cwd if absent (workers need them).
                 let mut forward = tone.clone();
                 if let Some(obj) = forward.as_object_mut() {
                     if obj.get("cwd").is_none() {
@@ -927,41 +937,41 @@ impl ToneSink for HumdSink {
                         }
                     }
                 }
-                trace!(sid, model, perch_client = %perch_client, "prompt.forward.to-perch");
-                // Record origin so reply tones from the perch route
+                trace!(sid, model, worker_client = %worker_client, "prompt.forward.to-worker");
+                // Record origin so reply tones from the worker route
                 // back to the originating peer humd via ensemble.
                 if let Some(origin) = origin {
                     self.sid_origins.write().insert(sid.clone(), origin);
                 }
-                self.thrum.thrum_to(&perch_client, forward);
+                self.thrum.thrum_to(&worker_client, forward);
                 self.waneman.tick(&sid);
             }
             Some(Chi::Cancel) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward cancel to every registered perch — they
-                    // no-op on unknown sids. sid→perch routing is a
+                    // Forward cancel to every registered worker — they
+                    // no-op on unknown sids. sid→worker routing is a
                     // future optimization.
-                    let perches: Vec<String> = self.manifests.read()
+                    let workers: Vec<String> = self.manifests.read()
                         .iter()
-                        .filter(|(_, m)| m.role.as_deref() == Some("perch"))
+                        .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
                         .map(|(cid, _)| cid.clone())
                         .collect();
-                    for pc in perches {
-                        self.thrum.thrum_to(&pc, tone.clone());
+                    for wc in workers {
+                        self.thrum.thrum_to(&wc, tone.clone());
                     }
                     let _ = sid;
                 }
             }
             Some(Chi::Cleanup) => {
                 if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward cleanup to all registered perches.
-                    let perches: Vec<String> = self.manifests.read()
+                    // Forward cleanup to all registered workers.
+                    let workers: Vec<String> = self.manifests.read()
                         .iter()
-                        .filter(|(_, m)| m.role.as_deref() == Some("perch"))
+                        .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
                         .map(|(cid, _)| cid.clone())
                         .collect();
-                    for pc in perches {
-                        self.thrum.thrum_to(&pc, tone.clone());
+                    for wc in workers {
+                        self.thrum.thrum_to(&wc, tone.clone());
                     }
                     // MCP registry session drop.
                     if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
@@ -996,7 +1006,7 @@ impl ToneSink for HumdSink {
                     // tones (which arrive via the ensemble pump and get
                     // broadcast on the sid) land in this client's queue,
                     // then forward the attach to the host humd.
-                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.perch_tag));
+                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                     self.thrum.claim_sigil(client_id, &sid);
                     if let Some(ensemble) = &self.ensemble {
                         if let Some(to) = tone.get("to").and_then(Value::as_str) {

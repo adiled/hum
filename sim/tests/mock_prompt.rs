@@ -1,8 +1,8 @@
-//! Single humd serves a prompt end-to-end via MockPerch.
+//! Single humd serves a prompt end-to-end via MockWorkerBee.
 //!
 //! Narrative: one humd boots in-process with the mock perch. A mock
 //! nestler sends a `chi:prompt` for sid "test-hum-1". The listener
-//! bridge walks the canned MockPerch event sequence (system → text_delta
+//! bridge walks the canned MockWorkerBee event sequence (system → text_delta
 //! "HELLO" → result/end_turn) and broadcasts chi:chunk + chi:finish on
 //! the sid. The nestler tap receives a chi:finish within 2s.
 //!
@@ -20,7 +20,7 @@ async fn mock_prompt_yields_finish() {
 
     // External-perch model: humd no longer hosts perches in-process.
     // Attach a synthetic mock perch over thrum so chi:"prompt" routes.
-    sim.attach_mock_perch(a.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_worker(a.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock perch attaches");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

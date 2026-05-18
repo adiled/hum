@@ -8,7 +8,7 @@
 //! Expected flow:
 //!   1. phone humd's ToneSink sees `to: laptop` → ensemble route → wire
 //!   2. laptop humd's HumdSink receives the prompt
-//!   3. laptop's MockPerch produces text_delta "HELLO" + result
+//!   3. laptop's MockWorkerBee produces text_delta "HELLO" + result
 //!   4. listener bridge fires chi:chunk + chi:finish for sid "hum-X"
 //!   5. laptop's HumdSink replies *back to phone* (because the prompt
 //!      came from there) — chi:finish flows phone-ward over the wire
@@ -38,7 +38,7 @@ async fn phone_laptop_roam() {
 
     // External-perch model: laptop hosts the perch; phone is just an
     // access surface that routes via `to:`.
-    sim.attach_mock_perch(laptop.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock perch attaches to laptop");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

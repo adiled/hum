@@ -11,7 +11,7 @@
 //!   2. phone's observer nestler sends chi:attach, sid="hum-X",
 //!      to: laptop, hearOnly: true.
 //!   3. laptop's HumdSink records {sid="hum-X", observer=phone}.
-//!   4. MockPerch fires text_delta "HELLO" + finish.
+//!   4. MockWorkerBee fires text_delta "HELLO" + finish.
 //!   5. NestListener emits reply tones; each is:
 //!        a) broadcast locally → driver sees it
 //!        b) fan-out routed `to: phone` over the ensemble → observer sees it
@@ -63,7 +63,7 @@ async fn co_pilot_fanout() {
 
     // External-perch model: humd's a router. Attach a synthetic mock
     // perch to laptop so the prompt can be served there.
-    sim.attach_mock_perch(laptop.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock perch attaches to laptop");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -76,7 +76,7 @@ async fn co_pilot_fanout() {
     // Give the attach tone a beat to traverse the ensemble pump before
     // the prompt's reply tones start flowing — without this, the prompt
     // can finish faster than the observer registration lands and the
-    // fan-out roster is empty when MockPerch emits its delta.
+    // fan-out roster is empty when MockWorkerBee emits its delta.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // 2) Driver on laptop sends the actual prompt. No `to:` field — the

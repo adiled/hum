@@ -4,7 +4,7 @@
 //! `ensemble::InMemoryEndpoint::pair`, fake-network them, and run
 //! narrative tests against the result. No sockets, no real subprocesses,
 //! no I/O — every humd's `Thrum` is in-memory and every nest uses
-//! `nest::MockPerch`.
+//! `nest::MockWorkerBee`.
 //!
 //! This crate is the foundation for the narrative test suite. It owns
 //! lifecycle (spawn/wire/shutdown) and the synthetic-nestler hooks
@@ -498,31 +498,31 @@ impl Sim {
         Ok(())
     }
 
-    /// Attach a synthetic mock perch to `humd`. Registers a fresh
-    /// thrum client, hello's it as `role:"perch"` advertising `models`,
+    /// Attach a synthetic mock worker bee to `humd`. Registers a fresh
+    /// thrum client, hello's it as `bee:["worker"]` advertising `models`,
     /// then spawns a task that turns every inbound chi:"prompt" into
     /// a canned chunk sequence (text_delta "HELLO" + finish/end_turn).
-    /// Mirrors what the old in-process `nest::MockPerch` did, just
-    /// over the wire so it works under the external-perch model.
-    pub async fn attach_mock_perch(&self, humd: HumdId, models: Vec<String>) -> Result<String> {
+    /// Mirrors what the old in-process `nest::MockWorkerBee` did, just
+    /// over the wire so it works under the external-worker model.
+    pub async fn attach_mock_worker(&self, humd: HumdId, models: Vec<String>) -> Result<String> {
         let h = self
             .humds
             .read()
             .get(&humd)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
-        let client_id = format!("sim-perch-{}", uuid::Uuid::new_v4());
+        let client_id = format!("sim-worker-{}", uuid::Uuid::new_v4());
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        // Hello first so humd records role:"perch" + models before the
+        // Hello first so humd records bee:["worker"] + models before the
         // first prompt arrives.
-        // Use the default perch_tag as the nestling kind so the
-        // ensemble's overflow gossip (which keys peer capabilities by
-        // nest name) sees a matching advertised nest. Tests that
-        // exercise overflow routing rely on this match.
+        // Use the default hive_tag as the hive name so the ensemble's
+        // overflow gossip (which keys peer capabilities by nest name)
+        // sees a matching advertised hive. Tests that exercise overflow
+        // routing rely on this match.
         let hello = serde_json::json!({
             "chi": "hello",
-            "role": "perch",
-            "nestling": "claude-repl",
+            "bee": ["worker"],
+            "hive": "claude-repl",
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "models": models,
