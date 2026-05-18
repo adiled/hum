@@ -87,6 +87,13 @@ impl Thrum {
         *self.inner.sink.write() = Some(sink);
     }
 
+    /// True if the given client_id still has a live thrum connection
+    /// (either a real UDS conn or a synthetic registration). Lets the
+    /// host prune stale registry entries lazily on access.
+    pub fn is_connected(&self, client_id: &str) -> bool {
+        self.inner.clients.read().get(client_id).is_some()
+    }
+
     /// Send to one specific client. Drops silently if the client is gone
     /// or its outbound queue is full — callers can probe with `has_client`.
     pub fn thrum_to(&self, client_id: &str, tone: Tone) {

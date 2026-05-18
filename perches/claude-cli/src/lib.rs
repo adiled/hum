@@ -104,7 +104,9 @@ impl Perch for ClaudeCliPerch {
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
     async fn spawn(&self, spec: SpawnSpec) -> Result<Roost> {
-        let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
+        let cli = spec.cli_path.clone()
+            .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
+            .unwrap_or_else(|| "claude".into());
         let argv = build_argv(&spec);
         let env = build_env(&spec);
 

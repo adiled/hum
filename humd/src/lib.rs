@@ -247,7 +247,7 @@ where
         thrum: thrum.clone(),
         perch_tag: perch_tag.clone(),
     }));
-    let external_perches: ExternalPerches = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
@@ -259,7 +259,7 @@ where
         mcp_registry: mcp_registry.clone(),
         tool_pending: tool_pending.clone(),
         perch_tag: perch_tag.clone(),
-        external_perches: external_perches.clone(),
+        manifests: manifests.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -427,10 +427,9 @@ struct HumdSink {
     /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
     /// a specific perch name; whichever perch is configured is the tag.
     perch_tag: String,
-    /// External perches — processes that handshook as `role:"perch"`.
-    /// Lookup by advertised model id; routing is to the perch's thrum
-    /// client_id. Empty until a perch hellos.
-    external_perches: ExternalPerches,
+    /// Live registry of every chi:"hello" we've received. Keyed by
+    /// thrum client_id. Routing scans this for role/models matches.
+    manifests: Manifests,
 }
 
 /// Map of in-flight nestler-tool call ids → oneshot senders waiting
@@ -438,25 +437,16 @@ struct HumdSink {
 /// on dispatch) and the chi:"tool-result" handler (resolver).
 type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
 
-/// Registry of external perches — processes that registered via
-/// `chi:"hello"` with `role: "perch"`. Keyed by advertised model id.
-/// When a prompt's modelId matches an entry, humd forwards the
-/// `chi:"prompt"` to the perch's thrum client_id instead of spawning
-/// a local subprocess via PerchSet.
-type ExternalPerches = Arc<parking_lot::RwLock<HashMap<String, ExternalPerchReg>>>;
-
-#[derive(Debug, Clone)]
-struct ExternalPerchReg {
-    /// Thrum client id the perch handshook on. Address for outbound
-    /// prompts.
-    client_id: String,
-    /// Free-form propensity advertised on hello. Carried verbatim so
-    /// downstream observability (drone, dashboards) can reason about
-    /// stateful vs stateless behavior.
-    propensity: serde_json::Value,
-    /// Every model id this perch advertised. A perch can serve many.
-    models: Vec<String>,
-}
+/// Live registry of every client that handshook via `chi:"hello"`.
+/// Keyed by thrum client_id. The manifest carries `role`, advertised
+/// models, propensity, chi vocabulary, etc. — humd queries this to
+/// route prompts to perches, to identify which clients are perches
+/// vs nestlers, and to fan out gossip on connect.
+///
+/// Volatile: cleared on humd restart; entries pruned on disconnect.
+/// Same data shape ensemble gossips, just held in-process for
+/// routing decisions humd makes locally.
+type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::NestlingManifest>>>;
 
 /// MCP NestlerHook impl that round-trips nestler-declared tool calls
 /// back to the originator over thrum. The perch's MCP client (whatever
@@ -582,13 +572,13 @@ impl ToneSink for HumdSink {
 
         // Perch passthrough: any output tone (chunk / finish / error /
         // tool-call / tool-info / session-ready) coming from a client
-        // registered as an external perch gets re-broadcast on the
-        // sid sigil so the originating nestler receives it. Hello
+        // whose manifest declares role:"perch" gets re-broadcast on
+        // the sid sigil so the originating nestler receives it. Hello
         // arrives from the perch but is handled normally below.
         if !matches!(chi, Some(Chi::Hello)) {
             let is_perch = {
-                let perches = self.external_perches.read();
-                perches.values().any(|r| r.client_id == client_id)
+                let m = self.manifests.read();
+                m.get(client_id).and_then(|man| man.role.as_deref()) == Some("perch")
             };
             if is_perch {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
@@ -669,95 +659,74 @@ impl ToneSink for HumdSink {
                 let breath = thrumd::breath_tone(serde_json::json!({}));
                 self.thrum.thrum_to(client_id, breath);
 
-                // External perch registration. A process announcing
-                // `role:"perch"` is offering to serve one or more
-                // model ids. Record the {model → client_id} mapping
-                // so the prompt arm can forward to it instead of
-                // spawning a built-in perch locally.
-                if tone.get("role").and_then(Value::as_str) == Some("perch") {
-                    let models: Vec<String> = tone.get("models")
-                        .and_then(Value::as_array)
-                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                // Build the manifest once from the hello tone.
+                // Role + models come from the new fields; everything
+                // else (name, version, proto, propensity, chis, source,
+                // bind, nestlerId) lives where it always did.
+                let role = tone.get("role").and_then(Value::as_str).map(str::to_string);
+                let models: Vec<String> = tone.get("models")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                let name = tone.get("nestling").and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| tone.get("from").and_then(Value::as_str).map(str::to_string));
+                if let Some(name) = name {
+                    let proto = tone.get("protoVersion").and_then(Value::as_str)
+                        .unwrap_or(thrum_core::THRUM_VERSION).to_string();
+                    let version = tone.get("version").and_then(Value::as_str)
+                        .or_else(|| tone.get("nestlingVersion").and_then(Value::as_str))
+                        .unwrap_or("0.0.0").to_string();
+                    let propensity = tone.get("propensity")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_default();
-                    let propensity = tone.get("propensity").cloned().unwrap_or(Value::Null);
-                    if !models.is_empty() {
-                        let reg = ExternalPerchReg {
-                            client_id: client_id.to_string(),
-                            propensity,
-                            models: models.clone(),
-                        };
-                        let mut perches = self.external_perches.write();
-                        for m in &models {
-                            perches.insert(m.clone(), reg.clone());
-                        }
-                        info!(client_id, ?models, "perch.registered");
-                    }
-                    // External perch hello doesn't need the nestling-
-                    // discovery gossip below; perches advertise via
-                    // their own capability surface.
-                    return;
-                }
-
-                // Advertise this nestler on the ensemble's nestling-discovery
-                // topic so peer humds know which nestlings are available
-                // here. Skipped if no ensemble is wired (sim or solo run).
-                // Skipped for ensemble-routed tones: those came from a peer
-                // humd whose nestlings we don't host.
-                if client_id != "ensemble" {
-                  if let Some(ensemble) = &self.ensemble {
-                    let name = tone.get("nestling").and_then(Value::as_str)
+                    let chis: Vec<String> = tone.get("chis")
+                        .or_else(|| tone.get("chi"))
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default();
+                    let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
+                    let bind: Option<ensemble::BindAddr> = tone.get("bind")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok());
+                    let nestler_id = tone.get("nestlerId").and_then(Value::as_str)
                         .map(str::to_string)
-                        // Older nestlings used `from` only; fall back to that
-                        // so they get a manifest too.
-                        .or_else(|| tone.get("from").and_then(Value::as_str).map(str::to_string));
-                    if let Some(name) = name {
-                        let proto = tone.get("protoVersion").and_then(Value::as_str)
-                            .unwrap_or(thrum_core::THRUM_VERSION)
-                            .to_string();
-                        let version = tone.get("version").and_then(Value::as_str)
-                            .or_else(|| tone.get("nestlingVersion").and_then(Value::as_str))
-                            .unwrap_or("0.0.0")
-                            .to_string();
-                        let propensity = tone.get("propensity")
-                            .and_then(|v| serde_json::from_value(v.clone()).ok())
-                            .unwrap_or_default();
-                        // Hello tone has `chi: "hello"` (the discriminator),
-                        // so the manifest's vocabulary list lives under
-                        // `chis` (plural). Tolerate legacy `chi:[...]` form
-                        // for back-compat with pre-rename hellos.
-                        let chis: Vec<String> = tone.get("chis")
-                            .or_else(|| tone.get("chi"))
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-                            .unwrap_or_default();
-                        let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
-                        let bind: Option<ensemble::BindAddr> = tone.get("bind")
-                            .and_then(|v| serde_json::from_value(v.clone()).ok());
-                        // nestlerId: nestler-supplied if present, else
-                        // humd mints one from client_id + now_ms. The
-                        // mint guarantees colocated same-kind nestlers
-                        // get distinct ids without coordination.
-                        let nestler_id = tone.get("nestlerId").and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| {
-                                let ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0);
-                                format!("{}-{}", client_id, ms)
-                            });
-                        let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
-                        manifest.propensity = propensity;
-                        manifest.chis = chis;
-                        manifest.source = source;
-                        manifest.bind = bind;
-                        manifest.nestler_id = Some(nestler_id);
-                        let ens = ensemble.clone();
-                        tokio::spawn(async move {
-                            ens.nestling_advertise(manifest).await;
+                        .unwrap_or_else(|| {
+                            let ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            format!("{}-{}", client_id, ms)
                         });
+                    let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
+                    manifest.propensity = propensity;
+                    manifest.chis = chis;
+                    manifest.source = source;
+                    manifest.bind = bind;
+                    manifest.nestler_id = Some(nestler_id);
+                    manifest.role = role.clone();
+                    manifest.models = models.clone();
+
+                    // Local store — single source of truth for routing
+                    // decisions humd makes (perch lookup, passthrough
+                    // membership). Pruned on disconnect.
+                    if client_id != "ensemble" {
+                        self.manifests.write().insert(client_id.to_string(), manifest.clone());
+                        if role.as_deref() == Some("perch") {
+                            info!(client_id, ?models, "perch.registered");
+                        }
                     }
-                  }
+
+                    // Gossip to peers via ensemble. Same manifest. Peer
+                    // humds learn about both nestlers and perches the
+                    // same way.
+                    if client_id != "ensemble" {
+                        if let Some(ensemble) = &self.ensemble {
+                            let ens = ensemble.clone();
+                            tokio::spawn(async move {
+                                ens.nestling_advertise(manifest).await;
+                            });
+                        }
+                    }
                 }
             }
             Some(Chi::Prompt) => {
@@ -834,10 +803,34 @@ impl ToneSink for HumdSink {
                 };
                 trace!(sid, model, ?origin, "thrum.recv.prompt");
 
-                // Look up a registered external perch by advertised model.
+                // Look up a registered external perch by advertised
+                // model — scan manifests for role:"perch" + a matching
+                // models entry. Lazy-prune stale entries (perch
+                // disconnected since hello) on the same pass.
                 let perch_client = {
-                    let perches = self.external_perches.read();
-                    perches.get(&model).map(|r| r.client_id.clone())
+                    let mut to_prune: Vec<String> = Vec::new();
+                    let pick = {
+                        let m = self.manifests.read();
+                        let mut found: Option<String> = None;
+                        for (cid, man) in m.iter() {
+                            if man.role.as_deref() == Some("perch")
+                                && man.models.iter().any(|m| m == &model)
+                            {
+                                if self.thrum.is_connected(cid) {
+                                    found = Some(cid.clone());
+                                    break;
+                                } else {
+                                    to_prune.push(cid.clone());
+                                }
+                            }
+                        }
+                        found
+                    };
+                    if !to_prune.is_empty() {
+                        let mut m = self.manifests.write();
+                        for cid in &to_prune { m.remove(cid); }
+                    }
+                    pick
                 };
                 let Some(perch_client) = perch_client else {
                     warn!(sid, model, "prompt.no-perch — no external perch advertises this model");
@@ -890,6 +883,7 @@ impl ToneSink for HumdSink {
                         }
                     }
                 }
+                trace!(sid, model, perch_client = %perch_client, "prompt.forward.to-perch");
                 self.thrum.thrum_to(&perch_client, forward);
                 // Track origin for ensemble routing later (TODO post-refactor).
                 let _ = origin;
@@ -897,13 +891,14 @@ impl ToneSink for HumdSink {
             }
             Some(Chi::Cancel) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward cancel to whichever perch owns this sid.
-                    // We don't track sid→perch mapping yet; broadcast to
-                    // all perches and let them no-op on unknown sids.
-                    let perches: Vec<String> = {
-                        let p = self.external_perches.read();
-                        p.values().map(|r| r.client_id.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect()
-                    };
+                    // Forward cancel to every registered perch — they
+                    // no-op on unknown sids. sid→perch routing is a
+                    // future optimization.
+                    let perches: Vec<String> = self.manifests.read()
+                        .iter()
+                        .filter(|(_, m)| m.role.as_deref() == Some("perch"))
+                        .map(|(cid, _)| cid.clone())
+                        .collect();
                     for pc in perches {
                         self.thrum.thrum_to(&pc, tone.clone());
                     }
@@ -913,10 +908,11 @@ impl ToneSink for HumdSink {
             Some(Chi::Cleanup) => {
                 if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
                     // Forward cleanup to all registered perches.
-                    let perches: Vec<String> = {
-                        let p = self.external_perches.read();
-                        p.values().map(|r| r.client_id.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect()
-                    };
+                    let perches: Vec<String> = self.manifests.read()
+                        .iter()
+                        .filter(|(_, m)| m.role.as_deref() == Some("perch"))
+                        .map(|(cid, _)| cid.clone())
+                        .collect();
                     for pc in perches {
                         self.thrum.thrum_to(&pc, tone.clone());
                     }

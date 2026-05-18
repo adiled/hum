@@ -249,11 +249,13 @@ install_service_unit() {
     --env "XDG_STATE_HOME=$XDG_STATE_HOME" \
     --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
-    --env "CLAUDE_CLI_PATH=$(command -v claude || echo claude)" \
     --env "PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
   log "service unit installed for hum ($SVC_OS)"
   # humd does its own daily auto-update check in-process — no separate
   # timer / cron / launchd interval to maintain.
+  # Perches are NOT installed here — each perch ships its own installer
+  # under perches/<kind>/install. humd just routes; whichever perch
+  # you bring up registers itself via thrum role:"perch".
 }
 
 start_daemon() {
