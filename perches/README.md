@@ -14,17 +14,19 @@ declares a *kind* of roost: how to spawn it, what it speaks, when it's
 ephemeral.
 
 This directory is the catalogue of concrete Perch impls — one
-sub-crate per kind of roost. A humd loads one or more of these at
-build time; its nest can then spawn roosts of those kinds when a
-`chi:"prompt"` asks for them.
+sub-crate per kind of roost. **Each crate ships as a standalone
+binary** that registers with humd over thrum (`chi:"hello"` with
+`role:"perch"`). humd never links a perch in at build time; perches
+attach at runtime, same shape as nestlings on the other side of
+the wire.
 
 ## Current catalogue
 
-| crate | what it spawns | when humd's nest uses it |
-|---|---|---|
-| [`claude-cli`](claude-cli) | `claude -p` with `stream-json` over a pipe | normal model-CLI usage; the canonical pipe-mode perch |
-| [`claude-repl`](claude-repl) | claude-cli in interactive REPL mode over a PTY | non-stream-json fallback; ephemeral PTY-mode perch |
-| [`common`](common) | shared building blocks across nest impls | imports drone's `Classifier` trait, provides the regex pattern bank for context-loss detection. Not a Perch itself |
+| crate | binary | what it spawns | propensity |
+|---|---|---|---|
+| [`claude-cli`](claude-cli) | `claude-cli-perch` | `claude -p` with `stream-json` over a pipe | stateful-session |
+| [`claude-repl`](claude-repl) | `claude-repl-perch` | claude in interactive REPL over a PTY | ephemeral-per-call |
+| [`common`](common) | — | `serve_perch` helper + `Classifier` regex bank | library |
 
 ## What a Perch impl owns
 
@@ -56,51 +58,40 @@ From the wire's point of view all of these are identical: `chi:"prompt"`
 in, `chi:"chunk"` + `chi:"finish"` out. The wire never sees the Perch
 boundary.
 
-## How a new nest kind gets onto the mesh
+## How a new perch gets on the wire
 
-The `Perch` trait is the only **wire** contract — nothing about a new
-perch shows up on thrum or the ensemble protocol. But binary wiring
-isn't free: humd has to know how to construct your impl at boot.
+Perches are thrum-attached processes — same architectural status as
+nestlings. No humd recompile required, no PR required.
 
-Two paths, depending on whether you ship in-tree or out-of-tree.
+1. **Write your Perch impl.** Implement `nest::Perch` (defined in
+   [`nest/`](../nest)) in your own Rust crate. The trait says how to
+   spawn a roost from a `SpawnSpec`; the helper in
+   [`common/`](common) (`nest_common::serve_perch`) takes care of
+   the thrum loop, hello, prompt dispatch, chunk fan-out, and
+   reconnect on socket close.
+2. **Ship a binary.** Wrap your impl with `serve_perch(perch, advert)`
+   in a `main.rs`. Build the binary; run it.
+3. **It registers with humd.** On boot the binary sends a
+   `chi:"hello"` with `role:"perch"`, `models: [...]`, `propensity`,
+   and the canonical chi vocabulary it speaks. humd records the
+   manifest, indexed by thrum client_id, and routes future
+   `chi:"prompt"` tones with a matching `modelId` to you.
+4. **Mesh discovery is free.** humd gossips your manifest on the
+   ensemble's `hum/nestlings/announce` topic. Peer humds learn you
+   exist and can overflow-route their own prompts to your humd.
 
-### Out-of-tree (your own humd build)
+The `Perch` trait + the `Roost` struct stay as the Rust SDK for
+authors who want to build perches in Rust. Non-Rust authors can
+implement the same wire role with the per-language thrum-client libs
+under [`thrum-clients/`](../thrum-clients) — humd doesn't care which
+language your process is in.
 
-You maintain a fork (or just a downstream binary) that links your
-perch crate. No PR here required.
-
-1. **Write your Perch impl** in your own Rust crate. Implement
-   `nest::Perch` for your roost kind. The crate can live anywhere.
-2. **Build it into your humd.** Add the crate as a dependency,
-   register the impl on `PerchSet` at startup (replacing or extending
-   the default `claude-cli` / `claude-repl` set).
-3. **Run your humd.** Its `PeerCapabilities` gossip advertises the
-   nest name to the ensemble.
-4. **Other humds discover.** A peer humd routing a `chi:"prompt"`
-   with `modelId: <your-model>` consults the gossip and routes to you.
-
-### In-tree (shipped with hum)
-
-To land in this repo, four edits are unavoidable today:
-
-1. Add the crate path under `[workspace]` in the root `Cargo.toml`.
-2. Construct your impl in humd's default `PerchSet` (`humd/src/lib.rs`).
-3. Add a `perches.<name>` block to `hum.schema.json` if your perch
-   has per-perch config.
-4. Mention it in the canonical install if it's part of the default
-   set, or document install instructions next to it otherwise.
-
-The wire stays clean. The build wiring is humd's job, not the wire's
-— that's the honest framing. Future: a dynamic plugin loader removes
-in-tree edits 1–2 (config + docs would still be 3–4).
-
-## Want your Perch listed here as reference?
+## Want a perch in this repo as reference?
 
 Listing in this catalogue is editorial — for Perch impls the
-maintainers consider exemplars. A PR is optional, unrelated to
-discoverability. Your Perch is reachable from the mesh the moment
-your humd runs and joins the ensemble, regardless of whether this
-README knows about it.
+maintainers consider exemplars. A PR is optional and unrelated to
+discoverability. Your perch is reachable from any humd it handshakes
+with the moment it runs.
 
 ## See also
 
