@@ -45,7 +45,15 @@ SVC="$REPO_ROOT/scripts/svc.sh"
 . "$SVC"
 
 build() {
-  command -v cargo >/dev/null 2>&1 || fail "cargo (rustup) required — https://rustup.rs"
+  # Pre-built binary path (dev/deploy or release artifact installed
+  # it). cargo build only when no binary exists yet.
+  if [ -x "$PERCH_BIN" ]; then
+    log "binary already present: $PERCH_BIN — skipping cargo"
+    return 0
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    fail "no $PERCH_BIN and cargo unavailable — install rustup or have an upstream deploy supply the binary"
+  fi
   log "building $KIND-perch (cargo install --path $PERCH_DIR)"
   cargo install --quiet --locked --path "$PERCH_DIR" --root "$HOME/.local" --force --bin "${KIND}-perch"
   [ -x "$PERCH_BIN" ] || fail "binary not at $PERCH_BIN after build"

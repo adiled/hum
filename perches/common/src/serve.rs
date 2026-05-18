@@ -286,16 +286,40 @@ impl WireListener {
     }
 
     async fn forward_raw(&self, value: Value) {
-        // Stream-json events have the shape produced by the claude CLI.
-        // Translate the common ones to chi:"chunk" payloads matching
-        // what humd's NestListener historically emitted.
-        let typ = value.get("type").and_then(Value::as_str).unwrap_or("");
-        match typ {
+        // claude emits stream-json events. The relevant chunk events
+        // arrive wrapped as `{"type":"stream_event","event":{...inner...}}`;
+        // unwrap to inspect the inner type. Mirrors the dispatch
+        // humd used to do in-process (nest::pool::dispatch_loop).
+        let mut msg = value;
+        if msg.get("type").and_then(Value::as_str) == Some("stream_event") {
+            if let Some(inner) = msg.get("event").cloned() {
+                msg = inner;
+            }
+        }
+        let typ = msg.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+
+        match typ.as_str() {
+            "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
+                // Session readiness signal. Carries claude's session_id
+                // and model so consumers can attach.
+                let mut body = json!({
+                    "chi": "session-ready",
+                    "sid": self.sid,
+                });
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert("nestId".into(), msg.get("session_id").cloned().unwrap_or(Value::Null));
+                    obj.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
+                    obj.insert("tools".into(), msg.get("tools").cloned().unwrap_or(json!([])));
+                }
+                self.send(body).await;
+            }
             "content_block_start" => {
-                let block = value.get("content_block").cloned().unwrap_or(json!({}));
-                match block.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "text" => self.chunk("text_start", json!({"id": value.get("index")})).await,
-                    "thinking" => self.chunk("reasoning_start", json!({"id": value.get("index")})).await,
+                let idx = msg.get("index").cloned().unwrap_or(Value::Null);
+                let block = msg.get("content_block").cloned().unwrap_or(json!({}));
+                let bt = block.get("type").and_then(Value::as_str).unwrap_or("");
+                match bt {
+                    "text" => self.chunk("text_start", json!({"id": idx})).await,
+                    "thinking" => self.chunk("reasoning_start", json!({"id": idx})).await,
                     "tool_use" => {
                         self.chunk("tool_input_start", json!({
                             "toolCallId": block.get("id"),
@@ -306,7 +330,7 @@ impl WireListener {
                 }
             }
             "content_block_delta" => {
-                let delta = value.get("delta").cloned().unwrap_or(json!({}));
+                let delta = msg.get("delta").cloned().unwrap_or(json!({}));
                 match delta.get("type").and_then(Value::as_str).unwrap_or("") {
                     "thinking_delta" => self.chunk("reasoning_delta", json!({"delta": delta.get("thinking")})).await,
                     "text_delta" => self.chunk("text_delta", json!({"delta": delta.get("text")})).await,
@@ -315,11 +339,31 @@ impl WireListener {
                 }
             }
             "content_block_stop" => {
-                self.chunk("content_block_stop", json!({"blockIdx": value.get("index")})).await;
+                self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
+            }
+            "result" => {
+                // Claude's wilt event — terminal of one prompt cycle.
+                // Forward as chi:"finish" so the nestler receives the
+                // canonical finish signal + usage.
+                let finish_reason = msg.get("subtype")
+                    .and_then(Value::as_str)
+                    .unwrap_or("stop")
+                    .to_string();
+                let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
+                let mut body = json!({
+                    "chi": "finish",
+                    "sid": self.sid,
+                    "finishReason": finish_reason,
+                });
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert("usage".into(), usage);
+                }
+                self.send(body).await;
             }
             _ => {
-                // Unknown / structural — drop. humd's previous parser
-                // is the reference for what to expand here.
+                // Structural / unrecognized — drop. Mirrors humd's
+                // historical filter; richer chi values can plug in here
+                // (perf-mark, drone, etc.) when perches grow them.
                 let _ = &self.kind;
             }
         }

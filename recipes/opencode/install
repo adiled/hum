@@ -116,28 +116,36 @@ else
   echo "                  Add provider.hum manually — see MIGRATING.md."
 fi
 
-# Step 5 — install the openai-server service unit (Linux systemd or
-# macOS launchd via scripts/svc.sh) and bounce.
+# Step 5 — bring up the claude-cli perch. humd is a router; it can't
+# serve any model without at least one perch registered via thrum.
+echo "[opencode] (re)installing hum-claude-cli-perch service …"
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/perches/claude-cli && ./install" >/dev/null
+
+# Step 6 — install the openai-server service unit (the nestler side).
 echo "[opencode] (re)installing hum-openai-server service …"
 su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/nestlings/openai-server && ./install" >/dev/null
+
 # Health check via the svc helper — sourced from the rsynced source tree.
 SVC_PATH="$TARGET_HOME/.local/share/hum/src/scripts/svc.sh"
 if su -l "$TARGET" -c "test -f $SVC_PATH"; then
-  if su -l "$TARGET" -c ". $SVC_PATH && XDG_RUNTIME_DIR=$TARGET_RUNTIME svc_is_active hum-openai-server"; then
-    echo "[opencode] hum-openai-server service active ✓"
-  else
-    echo "[opencode] hum-openai-server did NOT start cleanly"
-    echo "           Linux:  journalctl --user -u hum-openai-server"
-    echo "           macOS:  tail ~/Library/Logs/sh.hum.hum-openai-server.err.log"
-  fi
+  for svc in hum-claude-cli-perch hum-openai-server; do
+    if su -l "$TARGET" -c ". $SVC_PATH && XDG_RUNTIME_DIR=$TARGET_RUNTIME svc_is_active $svc"; then
+      echo "[opencode] $svc active ✓"
+    else
+      echo "[opencode] $svc did NOT start cleanly"
+      echo "           Linux:  journalctl --user -u $svc"
+      echo "           macOS:  tail ~/Library/Logs/sh.hum.$svc.err.log"
+    fi
+  done
 else
   echo "[opencode] WARN: $SVC_PATH missing; can't health-check"
 fi
 
 echo
 echo "[opencode] done."
-echo "  humd:          $TARGET_RUNTIME/hum/thrum.sock"
-echo "  openai-server: http://127.0.0.1:$PORT/v1"
-echo "  opencode cfg:  $OC_CFG"
+echo "  humd:               $TARGET_RUNTIME/hum/thrum.sock"
+echo "  claude-cli perch:   registered via thrum role:'perch'"
+echo "  openai-server:      http://127.0.0.1:$PORT/v1"
+echo "  opencode cfg:       $OC_CFG"
 echo
 echo "Now: su -l $TARGET -c '${HUM_OC_CLI:-opencode}'  →  pick provider \"hum\""
