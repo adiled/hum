@@ -275,7 +275,7 @@ start_daemon() {
 # ─── next steps ──────────────────────────────────────────────────────────────
 
 # humd has no opinion on which nestlings you run. Each nestling is a
-# separate process with its own installer under nestlings/<kind>/install.
+# separate process with its own installer under hives/<kind>/install.
 # Pick at least one to give humd an outside-world surface.
 print_next_steps() {
   log ""
@@ -285,9 +285,9 @@ print_next_steps() {
   log "    ./recipes/opencode/install"
   log ""
   log "  Other nestlings — each is a standalone install:"
-  log "    nestlings/openai-server/install     (OpenAI-shape HTTP)"
-  log "    nestlings/anthropic-server/install  (Anthropic-shape HTTP)"
-  log "    nestlings/ollama-server/install     (Ollama-shape HTTP)"
+  log "    hives/openai-server/install     (OpenAI-shape HTTP)"
+  log "    hives/anthropic-server/install  (Anthropic-shape HTTP)"
+  log "    hives/ollama-server/install     (Ollama-shape HTTP)"
   log ""
   log "Health checks:"
   log "    ./install status                    (is humd alive)"

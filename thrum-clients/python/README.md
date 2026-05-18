@@ -1,6 +1,6 @@
 ---
 title: "thrum (Python)"
-description: "wire-protocol primitives for Python nestlings"
+description: "wire-protocol primitives for Python bees"
 ---
 
 # thrum (Python)
@@ -8,7 +8,7 @@ description: "wire-protocol primitives for Python nestlings"
 > _wire-protocol primitives for Python nestlings_
 
 Python reference client for **thrum** — the NDJSON socket between
-humd and nestlings. Same wire as Rust (`thrum-core`) and TS
+humd and bees. Same wire as Rust (`thrum-core`) and TS
 (`thrum`); same algorithms; one source of truth.
 
 ## Install
@@ -34,12 +34,12 @@ async def main():
     await c.connect()
 
     # Handshake. Optional fields (chi, propensity, source) feed the
-    # on-mesh nestling registry — see ensemble/README.md.
+    # on-mesh bee registry — see ensemble/README.md.
     await c.send({
         "chi": Chi.HELLO,
         "rid": rid(),
-        "from": "my-py-nestling",
-        "nestling": "my-py-nestling",
+        "from": "my-py-bee",
+        "bee": "my-py-bee",
         "version": "0.1.0",
         "protoVersion": THRUM_VERSION,
         "propensity": {"statefulness": "stateless", "richness": "lean", "wire": "custom"},

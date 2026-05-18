@@ -44,7 +44,7 @@ pub trait PermissionHook: Send + Sync {
 /// (native or nestler-roundtripped). Informational only — the
 /// callback never affects dispatch or response. The host installs
 /// one to broadcast `chi:"tool-info"` to thrum observers (drone,
-/// dashboards, rich nestlings).
+/// dashboards, rich bees).
 pub trait ToolInfoHook: Send + Sync {
     fn record(
         &self,

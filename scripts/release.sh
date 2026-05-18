@@ -74,7 +74,7 @@ rm -f "$ROOT/Cargo.toml.bak"
 
 # 3. every nestling's package.json
 shopt -s nullglob
-for pkg in "$ROOT"/nestlings/*/package.json "$ROOT"/recipes/*/tests/package.json; do
+for pkg in "$ROOT"/hives/*/package.json "$ROOT"/recipes/*/tests/package.json; do
   tmp="$(mktemp)"
   jq --arg v "$NEXT" '.version = $v' "$pkg" > "$tmp"
   mv "$tmp" "$pkg"

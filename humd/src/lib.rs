@@ -456,7 +456,7 @@ type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::
 /// Volatile: cleared on humd restart; entries pruned on disconnect.
 /// Same data shape ensemble gossips, just held in-process for
 /// routing decisions humd makes locally.
-type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::NestlingManifest>>>;
+type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
 /// MCP NestlerHook impl that round-trips nestler-declared tool calls
 /// back to the originator over thrum. The worker bee's MCP client
@@ -506,7 +506,7 @@ impl mcp::NestlerHook for NestlerBridge {
         match tokio::time::timeout(Duration::from_secs(300), rx).await {
             Ok(Ok(result)) => {
                 // Emit a chi:"tool-info" tone with the completed pair
-                // so observers (drone, dashboards, rich nestlings) can
+                // so observers (drone, dashboards, rich bees) can
                 // render the full call+result without subscribing to
                 // chunk-level fragments.
                 let info = serde_json::json!({
@@ -723,14 +723,12 @@ impl ToneSink for HumdSink {
                     .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                     .unwrap_or_default();
                 let name = tone.get("hive").and_then(Value::as_str)
-                    .or_else(|| tone.get("nestling").and_then(Value::as_str))
                     .map(str::to_string)
                     .or_else(|| tone.get("from").and_then(Value::as_str).map(str::to_string));
                 if let Some(name) = name {
                     let proto = tone.get("protoVersion").and_then(Value::as_str)
                         .unwrap_or(thrum_core::THRUM_VERSION).to_string();
                     let version = tone.get("version").and_then(Value::as_str)
-                        .or_else(|| tone.get("nestlingVersion").and_then(Value::as_str))
                         .unwrap_or("0.0.0").to_string();
                     let propensity = tone.get("propensity")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -752,7 +750,7 @@ impl ToneSink for HumdSink {
                                 .unwrap_or(0);
                             format!("{}-{}", client_id, ms)
                         });
-                    let mut manifest = ensemble::NestlingManifest::new(name, version, proto);
+                    let mut manifest = ensemble::HiveManifest::new(name, version, proto);
                     manifest.propensity = propensity;
                     manifest.chis = chis;
                     manifest.source = source;
@@ -777,7 +775,7 @@ impl ToneSink for HumdSink {
                         if let Some(ensemble) = &self.ensemble {
                             let ens = ensemble.clone();
                             tokio::spawn(async move {
-                                ens.nestling_advertise(manifest).await;
+                                ens.hive_advertise(manifest).await;
                             });
                         }
                     }

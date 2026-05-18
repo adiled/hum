@@ -1,6 +1,6 @@
 ---
 title: "thrum"
-description: "wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings"
+description: "wire-protocol primitives for thrum, the NDJSON socket between humd and bees"
 ---
 
 # thrum
@@ -8,8 +8,8 @@ description: "wire-protocol primitives for thrum, the NDJSON socket between humd
 > _wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings_
 
 `thrum` is the TypeScript contract for the **thrum** protocol that
-nestlings (clients) and humds (daemons) speak to each other. Importing
-this package is how you build a TS / JS nestling without copy-pasting
+bees (clients) and humds (daemons) speak to each other. Importing
+this package is how you build a TS / JS bee without copy-pasting
 chi constants.
 
 It's generated from the Rust source of truth (`thrum-core`) — bumping a
@@ -43,7 +43,7 @@ import {
 import type { ChiKind, Tone, Envelope } from "thrum";
 ```
 
-## Build a nestling
+## Build a bee
 
 ```ts
 import { Chi, THRUM_VERSION } from "thrum";
@@ -60,12 +60,12 @@ let buf = "";
 
 sock.on("connect", () => {
   // Handshake. `chi`, `propensity`, and `source` feed the on-mesh
-  // nestling registry — see ensemble/README.md.
+  // bee registry — see ensemble/README.md.
   sock.write(JSON.stringify({
     chi: Chi.hello,
     rid: `hello-${Date.now().toString(36)}`,
-    from: "my-nestling",
-    nestling: "my-nestling",
+    from: "my-bee",
+    bee: "my-bee",
     version: "0.1.0",
     protoVersion: THRUM_VERSION,
     chis: [Chi.hello, Chi.prompt, Chi.chunk, Chi.finish],
@@ -105,7 +105,7 @@ package version. Nestlings warn on mismatch.
   is generated from.
 - [`ensemble`](../ensemble) — the mesh of humds. Nestlings advertise
   themselves and discover each other on the
-  `hum/nestlings/announce` gossip topic.
-- [`nestlings/`](../nestlings) — reference implementations:
-  the catalogue is at [`nestlings/`](../../nestlings).
+  `hum/hives/announce` gossip topic.
+- [`hives/`](../hives) — reference implementations:
+  the catalogue is at [`hives/`](../../bees).
 - [adiled.github.io/hum/](https://adiled.github.io/hum/) — docs site.

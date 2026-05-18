@@ -1,6 +1,6 @@
 //! thrumd — the NDJSON unix-socket server.
 //!
-//! One listener, many breaths. Each connected nestling gets a `Reach`: a
+//! One listener, many breaths. Each connected bee gets a `Reach`: a
 //! client id, an outbound channel, and a set of sigils it claims. Tones
 //! arrive line-delimited over the socket; we validate the envelope (chi
 //! must be a non-empty string), check for dusk, auto-echo on receipt,

@@ -14,7 +14,7 @@ type Chi string
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 const (
-    // announce self — protoVersion, nestling, version
+    // announce self — protoVersion, bee, version
     ChiHello Chi = "hello"
     // start a turn — content, system, tools
     ChiPrompt Chi = "prompt"

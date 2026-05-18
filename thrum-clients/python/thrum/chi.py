@@ -11,7 +11,7 @@ THRUM_VERSION = "0.7.0"
 class Chi:
     """Every wire-known chi value. Adding a new variant bumps the
     protocol minor; renaming/removing bumps major."""
-    # announce self — protoVersion, nestling, version
+    # announce self — protoVersion, bee, version
     HELLO: str = "hello"
     # start a turn — content, system, tools
     PROMPT: str = "prompt"

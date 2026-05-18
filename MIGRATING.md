@@ -7,7 +7,7 @@ this is the guide for you. **0.3 isn't a point release — it's the
 rename + reshape.** The project is now `hum`. The daemon is now Rust.
 The opencode integration is no longer a bespoke plugin; it's opencode's
 own `openai-compatible` provider pointed at hum's `openai-server`
-nestling.
+bee.
 
 Written for humans and agents. There's no migration script — too much
 changed to mechanically translate. Read, edit, restart.
@@ -22,7 +22,7 @@ changed to mechanically translate. Read, edit, restart.
 | `~/.config/clwnd/clwnd.json` (flat keys) | `~/.config/hum/hum.json` (namespaced sections) |
 | opencode plugin in `~/.config/opencode/opencode.json` under `plugin.clwnd` | opencode `provider.hum` block (native `openai-compatible`) |
 | `clwnd` socket — `<runtime>/clwnd/clwnd.sock` (and variants) | `thrum.sock` — `<runtime>/hum/thrum.sock` |
-| projects registry in config | gone — `fs.roots` instead; nestlings own project notions if they need them |
+| projects registry in config | gone — `fs.roots` instead; bees own project notions if they need them |
 | drone TS halves (`drone/llm.ts`, `cup.ts`, prompts) | drone is Rust-only; regex bank in `hives/common` |
 | OC plugin shipped with hum repo | shed entirely; opencode talks to hum via plain openai-compat |
 
@@ -56,9 +56,9 @@ changed to mechanically translate. Read, edit, restart.
    - mints an Ed25519 identity at `~/.local/state/hum/humd.key`
    - writes a default `~/.config/hum/hum.json` (the new namespaced shape)
    - seeds an empty `~/.config/hum/peers.json`
-   - writes the per-nestling-kind config `~/.config/hum/nestlings/openai-server.json`
+   - writes the per-bee-kind config `~/.config/hum/hives/openai-server.json`
    - installs the systemd user unit
-   - builds the `openai-server` nestling (TS, ships in `nestlings/openai-server/`)
+   - builds the `openai-server` bee (TS, ships in `hives/openai-server/`)
    - starts the daemon
 
 3. **Edit `~/.config/opencode/opencode.json`** to add the new provider
@@ -79,12 +79,12 @@ changed to mechanically translate. Read, edit, restart.
    }
    ```
 
-   Then start the `openai-server` nestling (the install script builds
+   Then start the `openai-server` bee (the install script builds
    it but does not yet auto-start it; a future commit adds the
    systemd unit). For now:
 
    ```bash
-   node ~/.local/share/hum/src/nestlings/openai-server/dist/index.js &
+   node ~/.local/share/hum/src/hives/openai-server/dist/index.js &
    ```
 
    In opencode, pick `provider: hum`, model `claude-sonnet-4-5`. Done.
@@ -116,14 +116,14 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 | `permissionDusk` | `humd.permissionDuskMs` |
 | `nest` (enum `"claude-cli"` / `"claude-repl"`) | `nest.default` (free-form string; must appear in `hives`) |
 | `driftRetentionDays` | `humd.driftRetentionDays` |
-| `projects` | **dropped** — filesystem is now `fs.roots`; project IDs are a nestling-side concern |
+| `projects` | **dropped** — filesystem is now `fs.roots`; project IDs are a bee-side concern |
 | `droned` | **dropped** — drone is always on; the swallow path is internal |
 | `droneModel` | **dropped** — the LLM-judge seam is in code (`drone::Evaluator` trait); no default judge ships |
 | `smallModel` | **dropped** — title generation was a plugin concern; opencode handles it natively |
 | `ccFlags` | `hives.claude-cli.ccFlags` (per-hive, not global) |
 | `experimental.subpath` | **dropped** — plugin-only feature |
 | `compaction` | **dropped** — manual-compaction is opencode's choice; hum doesn't proxy |
-| `nestlings.<name>` (never shipped) | per-kind config at `~/.config/hum/nestlings/<name>.json`; humd doesn't pre-know nestlings |
+| `bees.<name>` (never shipped) | per-kind config at `~/.config/hum/hives/<name>.json`; humd doesn't pre-know bees |
 
 ## fs is new and worth understanding
 
@@ -136,7 +136,7 @@ inference-only nests.
 
 ## Nestling config lives outside hum.json
 
-`~/.config/hum/nestlings/<kind>.json` per nestling kind. The
+`~/.config/hum/hives/<kind>.json` per bee kind. The
 installer seeds `openai-server.json`:
 
 ```jsonc

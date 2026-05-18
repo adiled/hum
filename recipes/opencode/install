@@ -7,7 +7,7 @@
 # Pipeline:
 #   1. invoke ./dev/deploy if present (gets humd live for HUM_DEV_USER)
 #   2. build the openai-server nestling
-#   3. seed ~/.config/hum/nestlings/openai-server.json (target user)
+#   3. seed ~/.config/hum/hives/openai-server.json (target user)
 #   4. seed/patch ~/.config/opencode/opencode.json with provider.hum
 #   5. install hum-openai-server systemd unit + bounce
 #
@@ -39,7 +39,7 @@ fi
 # standalone TS project (no root workspace).
 if command -v pnpm >/dev/null 2>&1; then
   echo "[opencode] building openai-server …"
-  (cd nestlings/openai-server && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
+  (cd hives/openai-server && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
 else
   echo "[opencode] pnpm missing; cannot build openai-server" >&2
   exit 1
@@ -48,7 +48,7 @@ fi
 # Step 3 — seed the per-kind config. Always (re)write: the recipe owns
 # the model id-set, derived from recipes/opencode/models.json (the
 # authoritative OC-flavored catalogue).
-NESTLING_CFG="$TARGET_HOME/.config/hum/nestlings/openai-server.json"
+NESTLING_CFG="$TARGET_HOME/.config/hum/hives/openai-server.json"
 RECIPE_MODELS="./recipes/opencode/models.json"
 if [ -s "$RECIPE_MODELS" ]; then
   MODEL_IDS="$(jq -c 'keys' "$RECIPE_MODELS")"
@@ -123,7 +123,7 @@ su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hi
 
 # Step 6 — install the openai-server service unit (the nestler side).
 echo "[opencode] (re)installing hum-openai-server service …"
-su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/nestlings/openai-server && ./install" >/dev/null
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/openai-server && ./install" >/dev/null
 
 # Health check via the svc helper — sourced from the rsynced source tree.
 SVC_PATH="$TARGET_HOME/.local/share/hum/src/scripts/svc.sh"

@@ -10,7 +10,7 @@
 //! - [`PeerConnection`] — opaque link to one peer; send/recv tones.
 //! - [`Transport`] — the seam: connect / accept implementations
 //!   (in-memory for the sim, TCP+TLS / libp2p / Tor later as
-//!   nestlings).
+//!   bees).
 //! - [`Ensemble`] — local registry: peers by [`HumdId`], `route` for
 //!   tones with a `to:` field, capability lookup.
 //!
@@ -62,8 +62,8 @@ pub use kad::{
     KAD_FIND_NODE_CHI, KAD_FIND_NODE_RESP_CHI, KAD_K, KAD_MAX_ROUNDS,
 };
 
-pub mod nestlings;
-pub use nestlings::{BindAddr, NestlingAnnounce, NestlingManifest, Propensity, ANNOUNCE_TOPIC};
+pub mod hives;
+pub use hives::{BindAddr, HiveAnnounce, HiveManifest, Propensity, ANNOUNCE_TOPIC};
 
 // Headroom advertise — `PeerCapabilities` gains a runtime snapshot of
 // free slots / pressure / p95 latency so peer humds can route away from
@@ -890,54 +890,54 @@ impl Ensemble {
         self.gossip.subscribe(topic)
     }
 
-    /// Announce a nestling running on this humd to the mesh. Wraps a
-    /// [`NestlingAnnounce::Advertise`] in a gossip-publish on
+    /// Announce a bee running on this humd to the mesh. Wraps a
+    /// [`HiveAnnounce::Advertise`] in a gossip-publish on
     /// [`ANNOUNCE_TOPIC`]. Call on each nestler handshake; safe to call
     /// repeatedly (the receiver dedups on payload hash via gossip's
     /// seen-set, and a manifest update is just a new advertise tone).
-    pub async fn nestling_advertise(&self, manifest: nestlings::NestlingManifest) {
-        let env = nestlings::NestlingAnnounce::Advertise {
+    pub async fn hive_advertise(&self, manifest: hives::HiveManifest) {
+        let env = hives::HiveAnnounce::Advertise {
             humd_id: self.me.to_hex(),
             manifest,
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(nestlings::ANNOUNCE_TOPIC, payload).await,
-            Err(e) => tracing::warn!(target: "ensemble.nestlings", error = %e, "advertise serialize"),
+            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "advertise serialize"),
         }
     }
 
-    /// Announce that a nestling has gone away. Same channel as
-    /// [`Ensemble::nestling_advertise`], envelope kind = `retract`.
-    pub async fn nestling_retract(&self, name: &str) {
-        let env = nestlings::NestlingAnnounce::Retract {
+    /// Announce that a bee has gone away. Same channel as
+    /// [`Ensemble::hive_advertise`], envelope kind = `retract`.
+    pub async fn hive_retract(&self, name: &str) {
+        let env = hives::HiveAnnounce::Retract {
             humd_id: self.me.to_hex(),
             name: name.to_string(),
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(nestlings::ANNOUNCE_TOPIC, payload).await,
-            Err(e) => tracing::warn!(target: "ensemble.nestlings", error = %e, "retract serialize"),
+            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "retract serialize"),
         }
     }
 
-    /// Raw subscription to every nestling announcement on the mesh.
-    /// Returns a typed mpsc receiver of [`NestlingAnnounce`] envelopes
+    /// Raw subscription to every bee announcement on the mesh.
+    /// Returns a typed mpsc receiver of [`HiveAnnounce`] envelopes
     /// (parsed from the underlying gossip topic). Malformed payloads
     /// are logged and dropped. Backed by a tokio task; drop the
     /// receiver to stop it.
-    pub fn nestling_announcements(&self) -> mpsc::Receiver<nestlings::NestlingAnnounce> {
-        let mut raw = self.subscribe_topic(nestlings::ANNOUNCE_TOPIC);
+    pub fn hive_announcements(&self) -> mpsc::Receiver<hives::HiveAnnounce> {
+        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
-                    Ok(v) => match serde_json::from_value::<nestlings::NestlingAnnounce>(v.clone()) {
+                    Ok(v) => match serde_json::from_value::<hives::HiveAnnounce>(v.clone()) {
                         Ok(env) => {
                             if tx.send(env).await.is_err() {
                                 break;
                             }
                         }
                         Err(e) => tracing::debug!(
-                            target: "ensemble.nestlings",
+                            target: "ensemble.bees",
                             error = %e,
                             payload = %v,
                             "announce parse"
@@ -951,22 +951,22 @@ impl Ensemble {
         rx
     }
 
-    /// Discover humds advertising a nestling with the given `name`.
-    /// Returns an mpsc receiver of `(HumdId, NestlingManifest)` pairs
+    /// Discover humds advertising a bee with the given `name`.
+    /// Returns an mpsc receiver of `(HumdId, HiveManifest)` pairs
     /// for matching `Advertise` envelopes. Retract envelopes are
     /// dropped (caller should track their own roster of seen humds and
-    /// expire entries on retract — surfaced via [`Self::nestling_announcements`]).
-    pub fn nestling_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(HumdId, nestlings::NestlingManifest)> {
+    /// expire entries on retract — surfaced via [`Self::hive_announcements`]).
+    pub fn hive_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(HumdId, hives::HiveManifest)> {
         let needle = name.into();
-        let mut raw = self.subscribe_topic(nestlings::ANNOUNCE_TOPIC);
+        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
                     Ok(v) => {
-                        let parsed: Result<nestlings::NestlingAnnounce, _> =
+                        let parsed: Result<hives::HiveAnnounce, _> =
                             serde_json::from_value(v);
-                        if let Ok(nestlings::NestlingAnnounce::Advertise { humd_id, manifest }) = parsed {
+                        if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed {
                             if manifest.name != needle {
                                 continue;
                             }
@@ -1609,7 +1609,7 @@ mod tests {
                 "chi": "hello",
                 "rid": "tunneled-hello",
                 "from": "nestler-via-tunnel",
-                "nestling": "vercel-ai",
+                "bee": "vercel-ai",
             }))
             .await
             .unwrap();
@@ -1620,7 +1620,7 @@ mod tests {
             .expect("subscribe channel closed");
         assert_eq!(got.get("chi").unwrap(), "hello");
         assert_eq!(got.get("rid").unwrap(), "tunneled-hello");
-        assert_eq!(got.get("nestling").unwrap(), "vercel-ai");
+        assert_eq!(got.get("bee").unwrap(), "vercel-ai");
     }
 
     /// Non-hello tones from a peer must reach `subscribe()` listeners;

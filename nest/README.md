@@ -21,7 +21,7 @@ This crate defines what lives in the nest and how:
   pipe, the parsed-event stream, and the roost lifecycle.
 - **`ForagerBee`** trait — translates outside wires (OpenAI, Anthropic,
   custom HTTP) into thrum. Stub-only today; concrete impls live in
-  [`nestlings/`](../nestlings).
+  [`hives/`](../hives).
 - **`Roost`** struct — one live LLM subprocess. The compute itself.
 - **`Listener`** trait — what humd binds to a roost to receive parsed
   events for a particular sid.
@@ -51,7 +51,7 @@ And the cohabitants from the other side of the thrum:
 
 | word | what it is |
 |---|---|
-| **hive** | the kind/contract a bee conforms to (defined in [`hives/`](../hives) or [`nestlings/`](../nestlings)). Doesn't run; doesn't send anything. |
+| **hive** | the kind/contract a bee conforms to (defined in [`hives/`](../hives) or [`hives/`](../hives)). Doesn't run; doesn't send anything. |
 | **bee** | the running instance. Declares its kinds on hello: `bee: ["worker"]`, `bee: ["forager"]`, or both. |
 | **nestler** | the bee, *in the act of joining*. Pre-acceptance. Awaiting the breath. |
 | **nestled** | the bee, *after joining*. Same actor, registered, has a nestledId. Keeps asking throughout the connection. |

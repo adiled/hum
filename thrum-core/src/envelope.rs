@@ -14,8 +14,8 @@ use crate::chi::Chi;
 /// Envelope fields shared by every tone.
 ///
 /// `chi` and `rid` are required; everything else is situational.
-/// `ext` is the nestling-private extension bag — thrum core ignores it,
-/// each nestling owns its own key (e.g. `ext.opencode.serverUrl`).
+/// `ext` is the bee-private extension bag — thrum core ignores it,
+/// each bee owns its own key (e.g. `ext.opencode.serverUrl`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
     pub chi: Chi,

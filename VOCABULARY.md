@@ -14,7 +14,7 @@ like the thing — readers and writers share the same mental model.
 - **thrum** — the bidirectional NDJSON socket between humd and any nestler.
 - **tone** — one message frame on the thrum. Envelope (chi/rid/sid/…) plus body.
 - **chi** — the tone's discriminator. `prompt`, `chunk`, `finish`, `gossip-publish`, …
-- **chis** — the *list* of chi values a nestling speaks. Advertised in the hello.
+- **chis** — the *list* of chi values a bee speaks. Advertised in the hello.
 - **sigil** — content-addressable session pairing hash. Stable across reconnects.
 - **wane** — Lamport-clock per sigil. Increments on every state mutation.
 - **dusk** — absolute ms expiry on a tone. Past dusk, drop.

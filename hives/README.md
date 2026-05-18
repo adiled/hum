@@ -64,7 +64,7 @@ boundary.
 ## How a new hive gets on the wire
 
 Hives are thrum-attached processes — same architectural status as
-forager hives in [`nestlings/`](../nestlings). No humd recompile
+forager hives in [`hives/`](../hives). No humd recompile
 required, no PR required.
 
 1. **Write your WorkerBee impl.** Implement `nest::WorkerBee` (defined
@@ -82,7 +82,7 @@ required, no PR required.
    and routes future `chi:"prompt"` tones with a matching `modelId`
    to you.
 4. **Mesh discovery is free.** humd gossips your manifest on the
-   ensemble's `hum/nestlings/announce` topic. Peer humds learn you
+   ensemble's `hum/hives/announce` topic. Peer humds learn you
    exist and can overflow-route their own prompts to your humd.
 
 The `WorkerBee` trait + the `Roost` struct stay as the Rust SDK for
@@ -103,7 +103,7 @@ runs.
 - [`nest/`](../nest) — the trait crate. Defines `WorkerBee`,
   `ForagerBee`, `Roost`, `Listener`, `Nest`, `SpawnSpec`, the encoding
   helpers.
-- [`nestlings/`](../nestlings) — forager hives (the kinds that
+- [`hives/`](../hives) — forager hives (the kinds that
   translate outside wire ↔ thrum). Will eventually consolidate into
   `hives/` alongside worker hives.
 - [WIRE.md](../WIRE.md) — the "nest model" section explains what

@@ -19,11 +19,11 @@ members = [
     "penny",
     "ensemble",
     "sim",
-    "nestlings/grpc",
-    "nestlings/paid-oracle",
-    "nestlings/gsm-modem",
-    "nestlings/ollama-server",
-    "nestlings/bp7-nestling",
+    "hives/grpc",
+    "hives/paid-oracle",
+    "hives/gsm-modem",
+    "hives/ollama-server",
+    "hives/bp7",
 ]
 
 [workspace.package]

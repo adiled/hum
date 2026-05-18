@@ -45,7 +45,7 @@ is not a transaction. Three things have natural on-chain homes:
 
 | concept | what's stored on-chain | use case |
 |---|---|---|
-| **HumdId identity** | `pubkey + owner address + manifest hash + URI` | censorship-resistant alternative to `hum/nestlings/announce` gossip. Anyone can verify "this address speaks for this HumdId" |
+| **HumdId identity** | `pubkey + owner address + manifest hash + URI` | censorship-resistant alternative to `hum/hives/announce` gossip. Anyone can verify "this address speaks for this HumdId" |
 | **Conversation escrow** _(future)_ | `sigil → { from, to, amount, expiresAt }` | state channels for paid conversations — both sides deposit, release on signed transcript root |
 | **Tool-call attestation** _(future)_ | `callId → (argsHash, resultHash, signer)` | provable execution of a tool call. Useful for regulated reads (KYC, AML, on-chain oracles) |
 
@@ -96,7 +96,7 @@ forge create --rpc-url arc_testnet \
 ```
 
 `forge create` prints the deployed address. Hand it to your humds and
-nestlings:
+bees:
 
 ```bash
 export HUMD_REGISTRY_ADDR=0xthe-address-forge-just-printed
@@ -140,7 +140,7 @@ swapping in a richer implementation of the same interface.
 
 ## See also
 
-- [`ensemble/src/nestlings.rs`](../ensemble/src/nestlings.rs) — the
+- [`ensemble/src/bees.rs`](../ensemble/src/bees.rs) — the
   off-chain manifest type these commitments are about.
 - [`ensemble/src/onchain.rs`](../ensemble/src/onchain.rs) — Rust
   client. Reads against the interface, works with any implementation.

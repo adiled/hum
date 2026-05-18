@@ -18,7 +18,7 @@ it is all composed of biodiverse primitives, not an outcome of conventional ling
 - **thrum** the hum-native vibration protocol, built on a range of `chi`
 - **nest** where netlers nestle
 - **nestled** a nestler when it has nestled 
-- **nestling** what a nestler conforms to, for becoming nestled
+- **bee** what a nestler conforms to, for becoming nestled
 - **petal** a cohesive yet inconclusive evidence of a bloom
 - **bloom** the one which wilts
 

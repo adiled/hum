@@ -1,7 +1,7 @@
 //! Hum state persistence.
 //!
 //! Each hum is a long-lived session record: which nest (Claude CLI, future
-//! backends) drives it, which nestlings (OpenCode and any hear-only
+//! backends) drives it, which bees (OpenCode and any hear-only
 //! observers) are attached, and the per-turn cached fields the daemon
 //! needs to cold-respawn an inference process.
 //!
@@ -36,11 +36,11 @@ pub struct NestRef {
 }
 
 /// One entry of `Hum.nestled` — an attached observer or driver. The first
-/// entry without `hear_only = true` is the active nestling.
+/// entry without `hear_only = true` is the active bee.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NestledRef {
-    pub nestling: String,
+    pub bee: String,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hear_only: Option<bool>,
@@ -280,7 +280,7 @@ pub fn nestled_id(h: &Hum) -> Option<&str> {
 
 /// First nestled entry's name (`"opencode"`, etc.), or `None`.
 pub fn nestling_name(h: &Hum) -> Option<&str> {
-    h.nestled.first().map(|n| n.nestling.as_str())
+    h.nestled.first().map(|n| n.bee.as_str())
 }
 
 /// Update or create the single nest entry, replacing any existing one.
@@ -379,7 +379,7 @@ fn read_and_backfill(path: &Path) -> Option<HashMap<String, Hum>> {
                 plugins
                     .into_iter()
                     .map(|p| {
-                        let nestling = p
+                        let bee = p
                             .get("plugin")
                             .and_then(|v| v.as_str())
                             .unwrap_or("opencode")
@@ -389,12 +389,12 @@ fn read_and_backfill(path: &Path) -> Option<HashMap<String, Hum>> {
                             .and_then(|v| v.as_str())
                             .map(str::to_string)
                             .unwrap_or_else(|| sid.clone());
-                        serde_json::json!({ "nestling": nestling, "id": id })
+                        serde_json::json!({ "bee": bee, "id": id })
                     })
                     .collect::<Vec<_>>()
             } else {
                 let id = opencode_session_id.unwrap_or_else(|| sid.clone());
-                vec![serde_json::json!({ "nestling": "opencode", "id": id })]
+                vec![serde_json::json!({ "bee": "opencode", "id": id })]
             };
             o.insert("nestled".into(), Value::Array(new_arr));
             nestled_back += 1;
@@ -482,7 +482,7 @@ mod tests {
         let h = Hums::load_from(path.clone());
         let mut hum = blank_hum("abc");
         hum.nestled = vec![NestledRef {
-            nestling: "opencode".into(),
+            bee: "opencode".into(),
             id: "o1".into(),
             hear_only: None,
         }];
@@ -536,8 +536,8 @@ mod tests {
 
         let b = h.get("sid-plugin").unwrap();
         assert_eq!(b.nestled.len(), 2);
-        assert_eq!(b.nestled[0].nestling, "opencode");
-        assert_eq!(b.nestled[1].nestling, "ghost");
+        assert_eq!(b.nestled[0].bee, "opencode");
+        assert_eq!(b.nestled[1].bee, "ghost");
         assert_eq!(b.nestled[1].id, "g-1");
     }
 

@@ -16,7 +16,7 @@ use strum::{EnumIter, IntoStaticStr};
 #[strum(serialize_all = "kebab-case")]
 pub enum Chi {
     // ── Nestler → Daemon ────────────────────────────────────────────
-    /// announce self — protoVersion, nestling, version
+    /// announce self — protoVersion, bee, version
     Hello,
     /// start a turn — content, system, tools
     Prompt,

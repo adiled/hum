@@ -1,7 +1,7 @@
 //! Thrum wire protocol — source of truth in Rust.
 //!
 //! The thrum is the bidirectional NDJSON socket between humd and any
-//! nestling. Every frame is a *tone*: an envelope plus a chi-specific
+//! bee. Every frame is a *tone*: an envelope plus a chi-specific
 //! body. This crate enumerates the chi registry, defines the envelope,
 //! and provides the small primitives (sigil, rid, wane, dusk, echo)
 //! every other crate leans on.

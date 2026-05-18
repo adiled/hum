@@ -127,8 +127,8 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
     // sigil by itself — the sink does that when it understands which sid
     // this client is responsible for.
     if chi == "hello" {
-        let nestling = tone
-            .get("nestling")
+        let bee = tone
+            .get("bee")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string();
@@ -138,7 +138,7 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
             .unwrap_or("");
         info!(
             client_id = %short(client_id),
-            nestling = %nestling,
+            bee = %bee,
             proto_version = %proto_version,
             "thrum.hello"
         );

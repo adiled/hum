@@ -13,7 +13,7 @@ cooperate. This crate owns the daemon-native shape that survives
 across every trust tier — from your two laptops on the same LAN to
 autonomous agents finding each other on the open internet.
 
-A single humd works without ever loading ensemble. Solo nestlings,
+A single humd works without ever loading ensemble. Solo bees,
 single-machine agents, and local development don't need any of
 this. ensemble matters only when two or more humds need to talk.
 
@@ -49,7 +49,7 @@ the *same* humd talk, they're already on `thrum`. When nestlers on
 | who handles NAT, firewalls, dynamic IPs? | `IrohEndpoint::bind_relayed()` — QUIC + Noise + hole-punching via the public iroh relay mesh. |
 
 Nothing in ensemble knows about Claude, MCP, JSONL, plugins, billing,
-or models. Those live in `humd` and `nestlings`. This crate is purely
+or models. Those live in `humd` and `hives`. This crate is purely
 "how do humds find each other and exchange tones."
 
 ## The four tiers
@@ -203,7 +203,7 @@ of the default `Ensemble::new(me)`.
 
 This is the big one — the case the user has in mind.
 
-An autonomous agent (running a humd + one or more nestlings, anywhere
+An autonomous agent (running a humd + one or more bees, anywhere
 on the internet) wants to find other agents offering a service:
 market-making quotes, settlement routes, oracle data, attention-as-
 service. It doesn't know their addresses ahead of time. It has no
@@ -229,12 +229,12 @@ systemctl --user start hum
 > else (a `hum.sh`, a curl-pipe-sh URL, a package manager entry) does
 > not exist.
 
-### 2. Write a nestling — no PR to this repo required
+### 2. Write a bee — no PR to this repo required
 
-A nestling is just a process that opens hum's thrum socket and speaks
+A bee is just a process that opens hum's thrum socket and speaks
 the protocol. Anything that imports the [`thrum-core`](../thrum-core)
 crate (Rust) or the [`thrum`](../thrum) npm package (TS) conforms.
-The repo's `nestlings/` directory is reference implementations, not
+The repo's `hives/` directory is reference implementations, not
 the registry — the registry is on the mesh, see step 4.
 
 Skeleton in Rust, in your own crate (`Cargo.toml`):
@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
         "chi": Chi::Hello,
         "rid": "hello-1",
         "from": "market-maker",
-        "nestling": "market-maker",
+        "bee": "market-maker",
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
         "propensity": {
@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
             "wire": "custom/mm-v0"
         },
         "chis": ["hello", "gossip-publish", "tool-call", "tool-result"],
-        "source": "https://github.com/your-org/mm-nestling"
+        "source": "https://github.com/your-org/mm-bee"
     });
     wr.write_all(format!("{hello}\n").as_bytes()).await?;
 
@@ -309,17 +309,17 @@ fn humd_sock() -> std::path::PathBuf {
 
 ### 3. Get advertised — humd does it for you
 
-When the nestling sends its `hello`, humd builds a `NestlingManifest`
+When the bee sends its `hello`, humd builds a `NestlingManifest`
 from the handshake payload and gossips it on the
-`hum/nestlings/announce` topic. Every humd subscribed to that topic
+`hum/hives/announce` topic. Every humd subscribed to that topic
 learns "humd X runs market-maker (version, propensity, chi)".
 
-No code on the nestling side. The mere act of completing a handshake
+No code on the bee side. The mere act of completing a handshake
 adds you to the on-mesh registry. Shut down → the entry stays seen
-until you call `chi:"nestling-retract"` (or daemon adds an eviction
+until you call `chi:"bee-retract"` (or daemon adds an eviction
 heartbeat, which is a planned improvement).
 
-### 4. Self-discover — find peers that advertise a nestling
+### 4. Self-discover — find peers that advertise a bee
 
 From a Rust caller embedded in humd (or any process holding an
 `Arc<Ensemble>`):
@@ -345,14 +345,14 @@ For the broader stream (advertise + retract envelopes) use
 
 ### 5. Trade — quotes are gossip, fills are unicast
 
-The market-maker nestling publishes quotes on a topic; counterparties
+The market-maker bee publishes quotes on a topic; counterparties
 subscribe to that topic, decide what they want, and send a
 fill-request *unicast* to the quoting humd (`to: humd_id` field on
-the tone). Settlement is the nestling's problem — ensemble just
+the tone). Settlement is the bee's problem — ensemble just
 delivers messages.
 
 ```rust
-// In your TS or Rust nestling, after detecting interest, send the
+// In your TS or Rust bee, after detecting interest, send the
 // fill request unicast to the quote's humd:
 {
     "chi": "tool-call",
@@ -364,15 +364,15 @@ delivers messages.
 }
 ```
 
-The maker's humd routes that tone to its market-maker nestling via
-the local thrum socket. The nestling validates (x402 payment, KYC,
+The maker's humd routes that tone to its market-maker bee via
+the local thrum socket. The bee validates (x402 payment, KYC,
 rate limit — whatever), then replies with a `chi:"tool-result"`
 unicast back.
 
-**Settlement** lives in the nestling, not in ensemble. The actual
-USDC transfer happens on-chain via the nestling's x402 client + Arc
+**Settlement** lives in the bee, not in ensemble. The actual
+USDC transfer happens on-chain via the bee's x402 client + Arc
 contract calls. The `tx_hash` flows back through thrum so the
-counterparty's nestling sees the on-chain proof.
+counterparty's bee sees the on-chain proof.
 
 **Trust** scales with what each side reads from the other's `hello`:
 - A signed handshake proves the counterparty owns `HumdId = X`.
@@ -382,7 +382,7 @@ counterparty's nestling sees the on-chain proof.
   before you honour the fill.
 
 Ensemble doesn't know any of this. It just delivers tones. The
-**nestling** decides what counts as a trustworthy counterparty and
+**bee** decides what counts as a trustworthy counterparty and
 what counts as proof of payment.
 
 ## What ensemble does NOT do
@@ -391,23 +391,23 @@ These belong to other layers — keeping them out of ensemble is what
 keeps the mesh layer thin and reusable.
 
 - **Money / payment.** No USDC, no x402, no Arc. The settlement
-  nestling owns this. ensemble just carries the messages.
-- **Smart contracts.** A nestling can post a transaction; ensemble
+  bee owns this. ensemble just carries the messages.
+- **Smart contracts.** A bee can post a transaction; ensemble
   never reads or writes chain state.
-- **AML / KYC / reputation.** A nestling layered on top can rate-limit,
+- **AML / KYC / reputation.** A bee layered on top can rate-limit,
   scorecard, or refuse to fill. ensemble has no policy.
 - **Model inference.** The `humd` daemon's `nest` crate spawns the
   LLM (claude-cli, claude-repl, future kinds). ensemble doesn't know
   what's inside a `chi:"prompt"`.
 - **Persistence.** ensemble is in-RAM. Conversation state lives in
   `humd/hums.json`; routing-table seed peers live in `peers.json`.
-- **Smart routing semantics.** A nestling that wants to gossip "this
+- **Smart routing semantics.** A bee that wants to gossip "this
   hum moved" is responsible for emitting the right topic. ensemble
   fans the message; it doesn't interpret.
 
 ## The protocol seam
 
-When a new nestling wants to ride the mesh, it picks which chi values
+When a new bee wants to ride the mesh, it picks which chi values
 it speaks. ensemble's protocol surface (today, THRUM_VERSION 0.7.0):
 
 | chi | direction | use |
@@ -420,8 +420,8 @@ it speaks. ensemble's protocol surface (today, THRUM_VERSION 0.7.0):
 | `wane-sync` | both | Lamport-clock reconciliation after partition. |
 | `attach` | both | Observer joins an existing hum elsewhere on the mesh. |
 
-A nestling that doesn't need any of this can ignore most of them.
-The market-maker nestling above uses `gossip-publish` (quotes),
+A bee that doesn't need any of this can ignore most of them.
+The market-maker bee above uses `gossip-publish` (quotes),
 unicast tones with `to:` set (fill requests), and `hello` (initial
 identity). That's all.
 
@@ -447,7 +447,7 @@ What it promises:
   smuggling, no hidden side channels.
 
 When you build on top, ensemble keeps its hands off your policy. Your
-nestling decides who to trust, what to forward, what to settle.
+bee decides who to trust, what to forward, what to settle.
 
 ## Try it
 

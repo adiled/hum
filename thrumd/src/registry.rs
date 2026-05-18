@@ -13,7 +13,7 @@ pub type ClientId = String;
 /// drain this fast, we'd rather drop than stall the broadcast caller.
 const OUTBOUND_CAPACITY: usize = 1024;
 
-/// A live nestling we can reach. Outbound goes through the channel; the
+/// A live bee we can reach. Outbound goes through the channel; the
 /// per-connection writer task drains and writes to the socket.
 pub struct Reach {
     pub client_id: ClientId,

@@ -1,6 +1,6 @@
 ---
 title: "thrum (Go)"
-description: "wire-protocol primitives for Go nestlings"
+description: "wire-protocol primitives for Go bees"
 ---
 
 # thrum (Go)
@@ -8,7 +8,7 @@ description: "wire-protocol primitives for Go nestlings"
 > _wire-protocol primitives for Go nestlings_
 
 Go reference client for **thrum** — the NDJSON socket between humd
-and nestlings. Same wire as Rust (`thrum-core`), TS (`thrum`), and
+and bees. Same wire as Rust (`thrum-core`), TS (`thrum`), and
 Python (`clients/python`); same algorithms; one source of truth.
 
 ## Install
@@ -40,12 +40,12 @@ func main() {
     defer c.Close()
 
     // Handshake. Optional fields (chi, propensity, source) feed the
-    // on-mesh nestling registry — see ensemble/README.md.
+    // on-mesh bee registry — see ensemble/README.md.
     if err := c.Send(thrum.Tone{
         "chi":          string(thrum.ChiHello),
         "rid":          thrum.Rid(),
-        "from":         "my-go-nestling",
-        "nestling":     "my-go-nestling",
+        "from":         "my-go-bee",
+        "bee":     "my-go-bee",
         "version":      "0.1.0",
         "protoVersion": thrum.ThrumVersion,
         "propensity": map[string]any{

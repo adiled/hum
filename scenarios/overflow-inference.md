@@ -15,7 +15,7 @@ Trust tier **T3/T4** — federated or open mesh. Two humds with
 asymmetric capacity:
 
 - **humd-A** — gateway. Has a nestler attached (an `openai-server`
-  nestling fronting a public HTTPS endpoint, convention-stateful,
+  bee fronting a public HTTPS endpoint, convention-stateful,
   medium richness). It announces `nests: []` for the requested model
   or `can_relay: true` with no local capacity. It is the door, not
   the kitchen.

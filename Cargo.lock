@@ -369,11 +369,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bp7-nestling"
+name = "bp7"
 version = "0.30.0"
 dependencies = [
  "anyhow",
- "bp7",
+ "bp7 0.10.7",
  "libc",
  "serde",
  "serde_json",

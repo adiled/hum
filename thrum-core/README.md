@@ -1,6 +1,6 @@
 ---
 title: "thrum-core"
-description: "wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings"
+description: "wire-protocol primitives for thrum, the NDJSON socket between humd and bees"
 ---
 
 # thrum-core
@@ -8,9 +8,9 @@ description: "wire-protocol primitives for thrum, the NDJSON socket between humd
 > _wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings_
 
 `thrum-core` is the Rust contract for **thrum**, the bidirectional
-NDJSON socket protocol that nestlings (clients) and humds (daemons)
+NDJSON socket protocol that bees (clients) and humds (daemons)
 speak to each other. Importing this crate is how you build a Rust
-nestling that conforms to the protocol without copying constants
+bee that conforms to the protocol without copying constants
 across repos.
 
 ## What's in it
@@ -24,7 +24,7 @@ across repos.
 - `sigil(nest, sid)` — content-addressable handle for an inference
   context.
 
-## Build a nestling
+## Build a bee
 
 ```rust
 use thrum_core::{Chi, THRUM_VERSION};
@@ -41,12 +41,12 @@ async fn main() -> anyhow::Result<()> {
     let mut lines = BufReader::new(rd).lines();
 
     // Handshake. Optional fields (chi, propensity, source) feed the
-    // on-mesh nestling registry — see ensemble/README.md.
+    // on-mesh bee registry — see ensemble/README.md.
     let hello = json!({
         "chi": Chi::Hello,
         "rid": "hello-1",
-        "from": "my-nestling",
-        "nestling": "my-nestling",
+        "from": "my-bee",
+        "bee": "my-bee",
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
         "chis": ["hello", "prompt", "chunk", "finish"],
@@ -97,7 +97,7 @@ a wire-protocol event. Nestlings warn on `THRUM_VERSION` mismatch.
 
 - `ensemble/` — the mesh of humds. Nestlings discover each other
   through `nestling_advertise` / `nestling_discover` on the
-  `hum/nestlings/announce` gossip topic.
-- [`nestlings/`](../nestlings) — reference implementations. One
+  `hum/hives/announce` gossip topic.
+- [`hives/`](../hives) — reference implementations. One
   canonical catalogue; don't enumerate them here.
 - [adiled.github.io/hum/](https://adiled.github.io/hum/) — docs site.

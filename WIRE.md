@@ -1,11 +1,11 @@
 ---
 title: "thrum wire spec"
-description: "the language-neutral protocol nestlings speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library."
+description: "the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library."
 ---
 
 # thrum wire spec
 
-> _the language-neutral protocol nestlings speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
+> _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
 This is the **canonical wire spec**. Rust (`thrum-core`), TypeScript
 (`thrum`), Python (`clients/python`), and Go (`clients/go`) are
@@ -43,13 +43,13 @@ Every tone is a JSON object with these top-level fields:
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
 | `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. |
 | `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
-| `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, nestling name when on a local socket. |
+| `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
 | `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same (nest, sid). |
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
 | `dusk` | integer | optional | Absolute ms expiry. If `now > dusk`, the receiver MAY drop. |
-| `ext` | object | optional | Per-nestling extension bag. Key it by your nestling name; ignore other keys. |
+| `ext` | object | optional | Per-bee extension bag. Key it by your bee name; ignore other keys. |
 
 Beyond the envelope, **each chi defines its own body fields**. A
 `chi:"prompt"` tone carries `text`/`content`/`modelId`/`cwd`/etc.
@@ -60,8 +60,8 @@ bridge, gossip relay) so future chi extensions are backward-compatible.
 
 The first tone a nestler sends after `connect()` MUST be `chi:"hello"`.
 **This tone is the registration**: the humd that receives it now knows
-your nestling exists, what chi values you speak, and can route tones
-to you. Nothing else is required for a single-machine nestling. The
+your bee exists, what chi values you speak, and can route tones
+to you. Nothing else is required for a single-machine bee. The
 ensemble layer (peer humds, gossip) and the on-chain layer
 (`HumdRegistry`) are additive opt-ins on top.
 
@@ -70,7 +70,7 @@ arriving on humd's local Unix socket and a hello bridged through the
 ensemble from a peer humd hit the same code path. Local-dev runs,
 local-prod-with-systemd setups, and distributed mesh deployments all
 exercise the same `chi:"hello"` shape — see
-[nestlings/README.md](../nestlings/) for the three deployment
+[hives/foragers.md](../hives/) for the three deployment
 paradigms (local-dev / local-prod / distributed) that share this
 single protocol.
 
@@ -78,9 +78,9 @@ single protocol.
 {
   "chi": "hello",
   "rid": "hello-1",
-  "from": "<nestling-name>",
-  "nestling": "<nestling-name>",
-  "version": "<your nestling's semver>",
+  "from": "<bee-name>",
+  "bee": "<bee-name>",
+  "version": "<your bee's semver>",
   "protoVersion": "<THRUM_VERSION you target>",
   "propensity": {
     "statefulness": "stateless | convention-stateful | stateful | transport-only",
@@ -92,15 +92,15 @@ single protocol.
 }
 ```
 
-- `nestling`, `protoVersion` — **required**.
-- `chis` (note: plural) is the list of chi values this nestling speaks
+- `bee`, `protoVersion` — **required**.
+- `chis` (note: plural) is the list of chi values this bee speaks
   and expects to receive. **Distinct from `chi`** at the top level —
   `chi` is the discriminator (this tone IS a hello); `chis` is the
-  vocabulary (these are the tones this nestling knows). One word per
+  vocabulary (these are the tones this bee knows). One word per
   concept; never reuse `chi` for a list.
 - All other fields — optional but **strongly recommended**: humd uses
   them to build a `NestlingManifest` and gossip it to the rest of the
-  ensemble on the `hum/nestlings/announce` topic.
+  ensemble on the `hum/hives/announce` topic.
 - humd replies with `chi:"breath"` — a snapshot of any state relevant
   to this nestler (today: `{}`; reserved for future state sync).
 - A `protoVersion` mismatch is **a warning, not a hard error**. The
@@ -171,7 +171,7 @@ registry by one bump.
 
 | chi | body fields | meaning |
 |---|---|---|
-| `hello` | `nestling`, `protoVersion`, optional `version`/`propensity`/`chi`/`source` | first frame after connect |
+| `hello` | `bee`, `protoVersion`, optional `version`/`propensity`/`chi`/`source` | first frame after connect |
 | `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn |
 | `cancel` | `sid` | interrupt the current turn for this sid |
 | `cleanup` | `sid` | drop daemon state for this session |
@@ -262,7 +262,7 @@ Both ends converge in O(1) round-trips after the link heals.
 
 ## Tool-call extension
 
-A nestler-declared tool is an arbitrary callable the nestling exposes
+A nestler-declared tool is an arbitrary callable the bee exposes
 to the model via `chi:"prompt"` `tools` array. When the model picks
 it, humd emits `chi:"tool-call"`; the nestler answers with
 `chi:"tool-result"` carrying the same `callId`.
@@ -313,5 +313,5 @@ Reference: [`thrum-core`](../thrum-core), [`thrum`](.),
 - [`thrum`](./) — TypeScript reference client.
 - [`clients/python`](../clients/python), [`clients/go`](../clients/go) — Python + Go reference clients.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
-- [`nestlings/README.md`](../nestlings/README.md) — typology + propensity axes.
+- [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

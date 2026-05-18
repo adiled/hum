@@ -345,8 +345,8 @@ fn render_ts(spec: &ChiSpec) -> String {
     s.push_str("export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];\n\n");
 
     s.push_str("// Fields every tone may carry. `chi` and `rid` are required; the rest\n");
-    s.push_str("// are situational. `ext` is the nestling-private extension bag — thrum\n");
-    s.push_str("// core ignores it, each nestling owns its own key.\n");
+    s.push_str("// are situational. `ext` is the bee-private extension bag — thrum\n");
+    s.push_str("// core ignores it, each bee owns its own key.\n");
     s.push_str("export interface Envelope {\n");
     s.push_str("  chi: ChiKind;\n");
     s.push_str("  rid: string;\n");

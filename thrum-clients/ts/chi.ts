@@ -9,7 +9,7 @@ export const THRUM_VERSION = "0.7.0" as const;
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 export const Chi = {
-  /** announce self — protoVersion, nestling, version */
+  /** announce self — protoVersion, bee, version */
   hello: "hello",
   /** start a turn — content, system, tools */
   prompt: "prompt",
@@ -97,8 +97,8 @@ export const PulseKind = {
 export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];
 
 // Fields every tone may carry. `chi` and `rid` are required; the rest
-// are situational. `ext` is the nestling-private extension bag — thrum
-// core ignores it, each nestling owns its own key.
+// are situational. `ext` is the bee-private extension bag — thrum
+// core ignores it, each bee owns its own key.
 export interface Envelope {
   chi: ChiKind;
   rid: string;
