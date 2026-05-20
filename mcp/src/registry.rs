@@ -42,6 +42,15 @@ pub trait ForagerToolProvider: Send + Sync {
     /// attached forager hive. Empty when no foragers are advertising
     /// tool surfaces yet.
     fn list_tools(&self) -> Vec<ToolDef>;
+
+    /// Capability categories the registered forager hives claim
+    /// (e.g. `["fs"]`). Used by `list_tools` to strip nestler-
+    /// declared tools whose names fall in those capabilities' well-
+    /// known sets — the protocol-level decision that says "this
+    /// surface is owned elsewhere, don't let the agent reach
+    /// locally for it."
+    fn provides(&self) -> Vec<String> { Vec::new() }
+
     async fn dispatch(
         &self,
         session_id: &str,
@@ -192,7 +201,26 @@ impl Registry {
             .collect();
         out.extend(native);
 
-        out.extend(s.nestler_tools.iter().cloned());
+        // Capability-level filter. When any registered forager hive
+        // declares `provides: ["<cap>"]`, that surface is owned
+        // elsewhere; nestler-declared tools whose names fall in
+        // the capability's well-known set get dropped from
+        // tools/list. Generic mechanism — humd knows the
+        // category-to-name mapping (mcp::capability), but
+        // categories themselves are wire-level declarations.
+        let mut filter_names: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        if let Some(provider) = self.inner.forager.lock().clone() {
+            for cap in provider.provides() {
+                if let Some(names) = crate::capability::capability_tools(&cap) {
+                    for n in names { filter_names.insert((*n).into()); }
+                }
+            }
+        }
+        let nestler_iter = s.nestler_tools.iter().filter(|t| {
+            !filter_names.contains(&t.name)
+        });
+        out.extend(nestler_iter.cloned());
         let ext: Vec<ToolDef> = match &s.visible_external {
             Some(vis) => s.external_tools.iter().filter(|t| vis.contains(&t.name)).cloned().collect(),
             None => s.external_tools.clone(),

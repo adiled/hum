@@ -647,6 +647,18 @@ impl mcp::ForagerToolProvider for ForagerBridge {
             .collect()
     }
 
+    fn provides(&self) -> Vec<String> {
+        let m = self.manifests.read();
+        let mut set = std::collections::BTreeSet::<String>::new();
+        for man in m.values() {
+            if !man.bee.iter().any(|b| b == "forager") { continue; }
+            for cap in &man.provides {
+                set.insert(cap.clone());
+            }
+        }
+        set.into_iter().collect()
+    }
+
     async fn dispatch(
         &self,
         session_id: &str,
@@ -1064,6 +1076,19 @@ impl ToneSink for HumdSink {
                             let input_schema = v.get("inputSchema").cloned().unwrap_or(Value::Null);
                             Some(ensemble::ToolEntry { name, description, input_schema })
                         }).collect();
+                    }
+                    if let Some(arr) = tone.get("provides").and_then(Value::as_array) {
+                        manifest.provides = arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect();
+                        if !manifest.provides.is_empty() {
+                            info!(
+                                client_id,
+                                provides = ?manifest.provides,
+                                "forager.capabilities.registered"
+                            );
+                        }
                         if !manifest.tools.is_empty() {
                             info!(
                                 client_id,

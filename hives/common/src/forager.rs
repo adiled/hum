@@ -36,7 +36,7 @@ use crate::identity::load_or_mint_bee_key;
 
 /// One advertised tool. Description + schema land in humd's tool
 /// registry and get fanned out to MCP clients verbatim.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolDef {
     /// Tool name — `humfs_read`, `humfs_do_code`, etc. Routing key.
     pub name: String,
@@ -98,6 +98,19 @@ pub struct ForagerAdvert {
     /// Optional source URL; humd carries it into the gossiped
     /// manifest verbatim.
     pub source: Option<String>,
+    /// Capability categories this forager owns. humd uses these
+    /// hive-level claims to deauthorize the same surface from other
+    /// sources (native MCP tools, nestler-declared tools that fall
+    /// in the named capability's well-known set). Today the only
+    /// well-known capability is `"fs"`; future categories include
+    /// `"net"`, `"shell"`, `"todo"`, etc.
+    pub provides: Vec<String>,
+}
+
+impl Default for ForagerAdvert {
+    fn default() -> Self {
+        Self { hive: String::new(), version: String::new(), source: None, provides: Vec::new() }
+    }
 }
 
 fn default_socket_path() -> PathBuf {
@@ -170,11 +183,18 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "protoVersion": thrum_core::THRUM_VERSION,
         "tools": tools_value,
         "toolNames": tool_names,
+        "provides": &advert.provides,
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
     });
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
-    info!(hive = %advert.hive, hid = %bee_key.hid.short(), tools = ?tool_names, "forager.hello.sent");
+    info!(
+        hive = %advert.hive,
+        hid = %bee_key.hid.short(),
+        tools = ?tool_names,
+        provides = ?advert.provides,
+        "forager.hello.sent"
+    );
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {

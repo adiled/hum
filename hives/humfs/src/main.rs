@@ -40,6 +40,12 @@ async fn main() -> Result<()> {
         hive: "humfs".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         source: Some("https://github.com/adiled/hum/tree/main/hives/humfs".into()),
+        // Hive-level capability claim: humfs owns the fs surface
+        // for whichever humd it attaches to. humd uses this to
+        // deauthorize nestler-declared fs tools (Read/Write/Edit/
+        // Glob/Grep/Bash/MultiEdit) from MCP tools/list so the
+        // asking nestler's catalogue doesn't shadow humfs_*.
+        provides: vec!["fs".into()],
     };
     serve_forager(dispatcher, advert).await
 }

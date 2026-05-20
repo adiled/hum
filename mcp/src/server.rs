@@ -79,6 +79,7 @@ async fn dispatch(
             if name.is_empty() {
                 return Some(JsonRpcResponse::err(id, -32602, "Missing tool name"));
             }
+            tracing::trace!(sid, %name, "mcp.tools.call");
             let result = registry.call_tool(sid, &name, args).await;
             Some(JsonRpcResponse::ok(id, wrap_tool_result(result)))
         }

@@ -95,6 +95,15 @@ pub struct HiveManifest {
     /// chi:"tool-call" tones by `toolName`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolEntry>,
+    /// Capability categories this bee claims. The asking nestler's
+    /// chi:"prompt" can defer to a hive by pinning a `hum://` URI,
+    /// and humd uses these capabilities to know which tool
+    /// surface elsewhere (native MCP / nestler-declared) becomes
+    /// out-of-scope for the prompt. Today the only well-known
+    /// capability is `"fs"` (filesystem); future categories include
+    /// `"net"`, `"shell"`, `"todo"`, etc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<String>,
 }
 
 /// One advertised tool. Carried verbatim from the forager's hello
@@ -159,6 +168,7 @@ impl HiveManifest {
             bee: Vec::new(),
             models: Vec::new(),
             tools: Vec::new(),
+            provides: Vec::new(),
             nestler_id: None,
             hid: None,
         }
