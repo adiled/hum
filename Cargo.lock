@@ -2462,18 +2462,11 @@ name = "mcp"
 version = "0.30.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "axum",
- "base64",
- "mime_guess",
- "parking_lot",
- "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "thrum-core",
  "tokio",
- "tower 0.5.3",
  "tracing",
 ]
 
@@ -2637,11 +2630,14 @@ version = "0.30.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "drone",
  "ed25519-dalek 2.2.0",
  "ensemble",
  "futures",
+ "mcp",
  "nest",
+ "parking_lot",
  "rand 0.8.6",
  "regex",
  "serde",

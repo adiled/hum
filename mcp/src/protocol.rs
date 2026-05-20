@@ -47,14 +47,15 @@ impl JsonRpcResponse {
     }
 }
 
-/// Advertised tool. Matches the TOOLS shape in mcp/tools.ts: `name` +
-/// `description` + JSON Schema `inputSchema`. Schemas are opaque to the
-/// server — Claude CLI is the only consumer.
-#[derive(Debug, Clone, Default, Serialize)]
+/// Advertised tool. `name` + `description` + JSON Schema
+/// `inputSchema`. Schemas are opaque to consumers; the agent
+/// (Claude CLI etc.) is the only thing that interprets them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolDef {
     pub name: String,
+    #[serde(default)]
     pub description: String,
-    #[serde(rename = "inputSchema")]
+    #[serde(rename = "inputSchema", default)]
     pub input_schema: Value,
 }
 

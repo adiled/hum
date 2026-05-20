@@ -34,9 +34,11 @@ use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
 use ensemble::HidPrefix;
+use mcp::protocol::ToolDef;
 use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
 
 use crate::identity::load_or_mint_bee_key;
+use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
 
 /// Resolve the canonical thrum socket path. Mirrors `thrumd::default_socket_path`.
 fn default_socket_path() -> PathBuf {
@@ -135,6 +137,27 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
     info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 
+    // Spawn the worker-local MCP bridge. Compute spawned by this
+    // worker (e.g. claude binary) dials it for tools/list +
+    // tools/call. The bridge ships chi:"tool-call" tones via the
+    // worker's thrum write half; humd routes them by toolName +
+    // (sid-pinned) fs_hid. chi:"tool-result" tones arriving back
+    // get resolved by callId.
+    let write_for_bridge = write_half.clone();
+    let bridge = McpBridge::new(Arc::new(move |tone: Value| {
+        let write_half = write_for_bridge.clone();
+        tokio::spawn(async move {
+            let line = format!("{}\n", tone);
+            if let Err(e) = write_half.lock().await.write_all(line.as_bytes()).await {
+                warn!(err = %e, "mcp.bridge.tool-call.write.failed");
+            }
+        });
+    }));
+    let mcp_addr = spawn_local_mcp(bridge.clone()).await
+        .context("spawn local mcp bridge")?;
+    let mcp_url = format!("http://{}", mcp_addr);
+    info!(%mcp_url, "worker.mcp.bridge.up");
+
     // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
     let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -151,12 +174,34 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
         match chi {
             "prompt" => {
+                // Update the MCP bridge's catalogue from the forager
+                // tools humd merged + any tools the asker shipped.
+                let provided: Vec<String> = tone.get("provided")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                let forager_tools: Vec<ToolDef> = tone.get("foragerTools")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter()
+                        .filter_map(|v| serde_json::from_value::<ToolDef>(v.clone()).ok())
+                        .collect())
+                    .unwrap_or_default();
+                let nestler_tools: Vec<ToolDef> = tone.get("tools")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter()
+                        .filter_map(|v| serde_json::from_value::<ToolDef>(v.clone()).ok())
+                        .collect())
+                    .unwrap_or_default();
+                if !forager_tools.is_empty() || !nestler_tools.is_empty() {
+                    bridge.set_catalogue(&sid, forager_tools, nestler_tools, &provided);
+                }
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
                 let hive = advert.hive.clone();
+                let mcp_url = mcp_url.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
@@ -173,7 +218,16 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 }
             }
             "tool-result" => {
-                if !sid.is_empty() {
+                let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
+                // Two paths: tool-results for calls we shipped via
+                // the local MCP bridge (callId prefix "call-")
+                // resolve there; tool-results for calls claude
+                // issued via its own native tool-use feed into the
+                // cell's stdin via encode_tool_result.
+                let resolved_by_bridge = call_id.as_deref()
+                    .map(|cid| bridge.resolve(cid, tone.clone()))
+                    .unwrap_or(false);
+                if !resolved_by_bridge && !sid.is_empty() {
                     let r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let (Some(call_id), Some(result)) = (
@@ -206,6 +260,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     cells: Arc<Mutex<HashMap<String, CellBundle>>>,
     hive: String,
+    mcp_url: String,
     tone: Value,
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
@@ -216,14 +271,15 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         .or_else(|| tone.get("text").and_then(Value::as_str))
         .unwrap_or("").to_string();
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
-    let mcp_url = tone.get("mcpUrl").and_then(Value::as_str).map(str::to_string);
 
     // Build SpawnSpec — only the common knobs; worker-specific extras
     // (sampling block, cli flags) ride along on the tone if the
-    // worker wants them.
+    // worker wants them. mcp_url points at THIS worker's local
+    // bridge — the compute (e.g. claude) sees a single MCP
+    // catalogue that humfs + asker-shipped tools both feed.
     let mut spec = SpawnSpec::new(sid.clone(), model.clone(), cwd);
     spec.system_prompt = system_prompt;
-    spec.mcp_url = mcp_url;
+    spec.mcp_url = Some(mcp_url);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
         spec.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }

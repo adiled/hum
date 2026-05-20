@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
-use mcp::{serve as mcp_serve, Registry as McpRegistry};
 use parking_lot::RwLock;
 use serde_json::Value;
 use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
@@ -210,9 +209,9 @@ where
     let ensemble_for_sink = ensemble_opt.clone();
 
     // humd no longer hosts an in-process nest pool — worker bees
-    // register over thrum as separate processes. Configuration
-    // (max_procs, idle_threshold) becomes the worker's concern.
-    let mcp_url = format!("http://{}", cfg.mcp_addr);
+    // register over thrum as separate processes and own their own
+    // MCP servers (when their compute speaks MCP at all). humd
+    // doesn't bind an MCP HTTP endpoint anymore.
 
     // Caller-owned Thrum (sim) vs daemon-owned (production). When the
     // caller owns it, we install our sink onto theirs and never bind.
@@ -222,31 +221,7 @@ where
         None => (Thrum::new(), true),
     };
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
-    // MCP registry has to outlive its serve task because HumdSink also
-    // pokes it (sets per-session nestler_tools when chi:"prompt" carries
-    // body.tools). Build it once, share via clone.
-    let mcp_registry = McpRegistry::new();
-    // Pending nestler-tool dispatches keyed by callId. The NestlerHook
-    // installs a oneshot Sender on each call; the chi:"tool-result"
-    // handler resolves it. Lives on the sink so both halves can reach it.
-    let tool_pending: ToolPending = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-    // Install the bridge: any nestler-tool MCP call humd's MCP server
-    // dispatches gets translated into a chi:"tool-call" tone routed to
-    // the originating client. The thrum sigil claim made at chi:"prompt"
-    // time guarantees the tone lands on the right consumer.
     let hive_tag = cfg.hum_cfg.nest.default.clone();
-    mcp_registry.set_nestler_hook(Arc::new(NestlerBridge {
-        thrum: thrum.clone(),
-        pending: tool_pending.clone(),
-        hive_tag: hive_tag.clone(),
-    }));
-    // Native MCP tool completions become chi:"tool-info" events on
-    // the wire. Observers see {sid, name, args, result, source} as a
-    // single semantic event — no need to reconstitute from chunks.
-    mcp_registry.set_tool_info_hook(Arc::new(ToolInfoBroadcaster {
-        thrum: thrum.clone(),
-        hive_tag: hive_tag.clone(),
-    }));
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -259,27 +234,13 @@ where
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
-    // Forager-tool bridge: MCP tools/list aggregates every attached
-    // forager hive's advertised tool catalogue; MCP tools/call dispatches
-    // via thrum_to to the forager whose manifest carries the name.
-    // Lives parallel to NestlerBridge; the chi:"tool-result" arm pops
-    // both pending maps so either dispatch path resolves cleanly.
-    mcp_registry.set_forager_provider(Arc::new(ForagerBridge {
-        thrum: thrum.clone(),
-        pending: tool_pending.clone(),
-        manifests: manifests.clone(),
-        tool_routes: tool_routes.clone(),
-    }));
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
-        mcp_url: mcp_url.clone(),
         cli_path: cfg.cli_path.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
-        mcp_registry: mcp_registry.clone(),
-        tool_pending: tool_pending.clone(),
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
         sid_origins: sid_origins.clone(),
@@ -300,18 +261,6 @@ where
         });
     } else {
         trace!("thrum.override.installed");
-    }
-
-    if cfg.bind_mcp {
-        let mcp_addr = cfg.mcp_addr;
-        let registry = mcp_registry.clone();
-        tokio::spawn(async move {
-            if let Err(e) = mcp_serve(mcp_addr, registry).await {
-                warn!(err = %e, "mcp.exit");
-            }
-        });
-    } else {
-        trace!("mcp.bind.skipped");
     }
 
     // Ensemble inbound pump — every tone arriving from a peer humd is
@@ -430,7 +379,6 @@ fn parse_tag_name(body: &str) -> Option<String> {
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    mcp_url: String,
     cli_path: String,
     /// When present, tones with a `to:` hex addressed to a *different*
     /// humd are routed through here instead of being dispatched locally.
@@ -443,14 +391,6 @@ struct HumdSink {
     /// prompt arm — local prompts get forwarded to a peer with spare
     /// capacity instead of awakening here. `None` = unbounded.
     capacity_override: Option<usize>,
-    /// MCP registry — populated per-session with nestler-declared tools
-    /// extracted from chi:"prompt".tools so the worker bee's MCP client
-    /// sees them advertised alongside humd's native tools.
-    mcp_registry: McpRegistry,
-    /// Pending dispatches of nestler-declared tool calls, keyed by the
-    /// callId we minted when issuing chi:"tool-call". Resolved when the
-    /// matching chi:"tool-result" lands.
-    tool_pending: ToolPending,
     /// Routing tag used in thrum_broadcast + sigil for all reply tones.
     /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
     /// a specific hive name; whichever hive is configured is the tag.
@@ -522,11 +462,6 @@ impl ensemble::AliasResolver for PeersAliasResolver {
     }
 }
 
-/// Map of in-flight nestler-tool call ids → oneshot senders waiting
-/// for the result content. Shared between the NestlerBridge (writer
-/// on dispatch) and the chi:"tool-result" handler (resolver).
-type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
-
 /// Live registry of every client that handshook via `chi:"hello"`.
 /// Keyed by thrum client_id. The manifest carries `bee` kinds,
 /// advertised models, propensity, chi vocabulary, etc. — humd queries
@@ -538,208 +473,13 @@ type ToolPending = Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
-/// MCP NestlerHook impl that round-trips nestler-declared tool calls
-/// back to the originator over thrum. The worker bee's MCP client
-/// (whatever worker is running) sees these tools advertised alongside
-/// humd's native ones; when the model invokes one, the call lands here.
-/// Hum-native MCP tools resolve in-process without leaving humd.
-///
-/// 1. worker calls tool with args → MCP server dispatches → us.
-/// 2. We mint a callId, store a oneshot tx in `pending`, and emit
-///    `chi:"tool-call" {sid, callId, name, args}`. The thrum sigil
-///    claim placed at chi:"prompt" time routes the tone to the
-///    originating client.
-/// 3. Originator executes externally, replies with
-///    `chi:"tool-result" {sid, callId, result}`. humd's
-///    chi:"tool-result" arm pops the sender and forwards the result.
-/// 4. dispatch() returns; MCP packages the result; worker continues.
-struct NestlerBridge {
-    thrum: Thrum,
-    pending: ToolPending,
-    /// Hive name used as the broadcast tag for the chi:"tool-call"
-    /// tone. Comes from cfg.hum_cfg.nest.default so the routing tag
-    /// matches whatever hive humd is running, not a hardcoded name.
-    hive_tag: String,
-}
-
-#[async_trait::async_trait]
-impl mcp::NestlerHook for NestlerBridge {
-    async fn dispatch(
-        &self,
-        session_id: &str,
-        tool: &str,
-        args: Value,
-    ) -> anyhow::Result<String> {
-        let call_id = format!("call-{}", thrum_core::rid());
-        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-        self.pending.lock().insert(call_id.clone(), tx);
-        let tone = serde_json::json!({
-            "chi": "tool-call",
-            "sid": session_id,
-            "callId": call_id,
-            "name": tool,
-            "args": args,
-        });
-        // sigil claim made at chi:"prompt" time gets this back to the
-        // originator. Broadcast tag is the configured hive name.
-        self.thrum.thrum_broadcast(session_id, &self.hive_tag, tone);
-        match tokio::time::timeout(Duration::from_secs(300), rx).await {
-            Ok(Ok(result)) => {
-                // Emit a chi:"tool-info" tone with the completed pair
-                // so observers (drone, dashboards, rich bees) can
-                // render the full call+result without subscribing to
-                // chunk-level fragments.
-                let info = serde_json::json!({
-                    "chi": "tool-info",
-                    "sid": session_id,
-                    "callId": call_id,
-                    "name": tool,
-                    "args": args,
-                    "result": result,
-                    "source": "nestler",
-                });
-                self.thrum.thrum_broadcast(session_id, &self.hive_tag, info);
-                Ok(result)
-            }
-            Ok(Err(_)) => {
-                self.pending.lock().remove(&call_id);
-                anyhow::bail!("nestler tool-result channel closed")
-            }
-            Err(_) => {
-                self.pending.lock().remove(&call_id);
-                anyhow::bail!("nestler tool-result timed out (300s)")
-            }
-        }
-    }
-}
-
-/// MCP ForagerToolProvider impl — backs MCP's tools/list and
-/// tools/call with the live forager-hive manifest registry. When a
-/// claude / OC client asks the embedded MCP for tools, the answer is
-/// the union of every attached forager hive's advertised tools (and
-/// nothing else, when at least one forager is present). When the
-/// client invokes one, this dispatches via thrum_to to the forager's
-/// client_id and parks on the same `tool_pending` oneshot the
-/// NestlerBridge uses.
-struct ForagerBridge {
-    thrum: Thrum,
-    pending: ToolPending,
-    manifests: Manifests,
-    /// Routing table shared with HumdSink. We never need to write to
-    /// it from the bridge — the chi:"tool-result" handler resolves
-    /// pending entries directly via `pending`, not via tool_routes.
-    /// Carried only so future routing paths can grow off the bridge.
-    #[allow(dead_code)]
-    tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
-}
-
-#[async_trait::async_trait]
-impl mcp::ForagerToolProvider for ForagerBridge {
-    fn list_tools(&self) -> Vec<mcp::ToolDef> {
-        let m = self.manifests.read();
-        m.values()
-            .filter(|man| man.bee.iter().any(|b| b == "forager"))
-            .flat_map(|man| man.tools.iter().map(|t| mcp::ToolDef {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: t.input_schema.clone(),
-            }))
-            .collect()
-    }
-
-    fn provides(&self) -> Vec<String> {
-        let m = self.manifests.read();
-        let mut set = std::collections::BTreeSet::<String>::new();
-        for man in m.values() {
-            if !man.bee.iter().any(|b| b == "forager") { continue; }
-            for cap in &man.provides {
-                set.insert(cap.clone());
-            }
-        }
-        set.into_iter().collect()
-    }
-
-    async fn dispatch(
-        &self,
-        session_id: &str,
-        tool: &str,
-        args: Value,
-    ) -> anyhow::Result<String> {
-        // Find the forager whose manifest carries this tool name.
-        // Multiple hives may advertise the same name (e.g. two humfs
-        // instances on different roots); pick the first match —
-        // future improvement: round-robin or pin per-session.
-        let forager_cid = {
-            let m = self.manifests.read();
-            m.iter().find(|(_, man)| {
-                man.bee.iter().any(|b| b == "forager")
-                && man.tools.iter().any(|t| t.name == tool)
-            }).map(|(cid, _)| cid.clone())
-        };
-        let Some(forager_cid) = forager_cid else {
-            anyhow::bail!("no forager hive advertises tool '{tool}'");
-        };
-
-        let call_id = format!("call-{}", thrum_core::rid());
-        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-        self.pending.lock().insert(call_id.clone(), tx);
-        let tone = serde_json::json!({
-            "chi": "tool-call",
-            "sid": session_id,
-            "callId": call_id,
-            "toolName": tool,
-            "name": tool,
-            "args": args,
-        });
-        trace!(%forager_cid, tool, call_id, "mcp.tool-call.route.to-forager");
-        self.thrum.thrum_to(&forager_cid, tone);
-
-        match tokio::time::timeout(Duration::from_secs(300), rx).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => {
-                self.pending.lock().remove(&call_id);
-                anyhow::bail!("forager tool-result channel closed")
-            }
-            Err(_) => {
-                self.pending.lock().remove(&call_id);
-                anyhow::bail!("forager tool-result timed out (300s)")
-            }
-        }
-    }
-}
-
-/// MCP ToolInfoHook impl — turns native MCP tool completions into
-/// chi:"tool-info" tones on thrum. Pure observation; doesn't affect
-/// MCP dispatch in any way.
-struct ToolInfoBroadcaster {
-    thrum: Thrum,
-    hive_tag: String,
-}
-
-impl mcp::ToolInfoHook for ToolInfoBroadcaster {
-    fn record(
-        &self,
-        session_id: &str,
-        tool: &str,
-        args: Value,
-        result: &str,
-        source: mcp::ToolInfoSource,
-    ) {
-        let source_tag = match source {
-            mcp::ToolInfoSource::Native => "native",
-            mcp::ToolInfoSource::External => "external",
-        };
-        let tone = serde_json::json!({
-            "chi": "tool-info",
-            "sid": session_id,
-            "name": tool,
-            "args": args,
-            "result": result,
-            "source": source_tag,
-        });
-        self.thrum.thrum_broadcast(session_id, &self.hive_tag, tone);
-    }
-}
+// (R5: NestlerBridge / ForagerBridge / ToolInfoBroadcaster removed.
+// humd no longer hosts an in-process MCP server, so the bridges that
+// proxied MCP tool calls back over thrum are gone. Tool-call routing
+// is entirely thrum-native now: workers emit chi:"tool-call", humd
+// intercepts in the worker-passthrough block, routes to the matching
+// forager hive (local or peer). Worker bees that want to expose an
+// MCP surface to their compute spawn their own listener.)
 
 // (NestListener removed — worker bees emit chi:"chunk"/"finish"
 // directly over thrum from their own process. humd just routes; see
@@ -1270,36 +1010,20 @@ impl ToneSink for HumdSink {
                     return;
                 };
 
-                // Register nestler-declared tools on the MCP session so
-                // the worker's MCP client sees them advertised. Dispatch
-                // still routes through NestlerBridge → thrum → originator.
-                if let Some(nestler_tools) = tone.get("tools").and_then(Value::as_array) {
-                    let parsed: Vec<mcp::ToolDef> = nestler_tools.iter().filter_map(|t| {
-                        let name = t.get("name").and_then(Value::as_str)?.to_string();
-                        let description = t.get("description")
-                            .and_then(Value::as_str).unwrap_or("").to_string();
-                        let input_schema = t.get("parameters")
-                            .or_else(|| t.get("inputSchema"))
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({"type":"object","properties":{}}));
-                        Some(mcp::ToolDef { name, description, input_schema })
-                    }).collect();
-                    if !parsed.is_empty() {
-                        let session = self.mcp_registry.session(&sid);
-                        session.lock().nestler_tools = parsed;
-                        trace!(sid, count = nestler_tools.len(), "mcp.nestler_tools.registered");
-                    }
-                }
+                // (R1: nestler-declared tools[] from chi:prompt now
+                // forward to the worker as-is in chi:prompt.tools;
+                // the worker is responsible for exposing them to its
+                // compute. humd no longer maintains MCP session state.)
 
                 // Forward the prompt tone verbatim to the worker, plus
-                // augment with mcpUrl + cwd if absent (workers need them).
+                // augment with cwd if absent. mcpUrl is the worker's
+                // concern — when it spawns compute that needs MCP
+                // (claude binary), it spawns its own MCP listener and
+                // passes its own URL.
                 let mut forward = tone.clone();
                 if let Some(obj) = forward.as_object_mut() {
                     if obj.get("cwd").is_none() {
                         obj.insert("cwd".into(), Value::String(cwd.clone()));
-                    }
-                    if obj.get("mcpUrl").is_none() {
-                        obj.insert("mcpUrl".into(), Value::String(self.mcp_url.clone()));
                     }
                     if obj.get("content").is_none() && !text.is_empty() {
                         obj.insert("content".into(), Value::String(text.clone()));
@@ -1309,35 +1033,53 @@ impl ToneSink for HumdSink {
                             obj.insert("systemPrompt".into(), Value::String(sp.clone()));
                         }
                     }
-                    // disallowedTools: union of
-                    //   (a) what the asker already requested
-                    //   (b) every tool name advertised by an attached
-                    //       forager hive (humfs et al.) — workers'
-                    //       built-in fs primitives must defer to the
-                    //       forager surface humd routes
-                    //   (c) the worker harness's built-in fs primitive
-                    //       names (Read/Write/Edit/Bash/Glob/Grep)
-                    //       whenever (b) is non-empty — keeps the
-                    //       harness from shadowing humfs's tools
+                    // R1: inject the forager catalogue into the
+                    // outbound chi:"prompt" so the worker bee sees
+                    // every advertised tool that's owned somewhere
+                    // on the mesh. Worker builds its own
+                    // catalogue from this + any tools the nestler
+                    // already shipped on its own prompt; humd is
+                    // purely the wire.
+                    let (forager_tools_json, provided_caps): (Vec<Value>, Vec<String>) = {
+                        let m = self.manifests.read();
+                        let mut tools: Vec<Value> = Vec::new();
+                        let mut caps: std::collections::BTreeSet<String> =
+                            std::collections::BTreeSet::new();
+                        for man in m.values() {
+                            if !man.bee.iter().any(|b| b == "forager") { continue; }
+                            for t in &man.tools {
+                                tools.push(serde_json::json!({
+                                    "name": t.name,
+                                    "description": t.description,
+                                    "inputSchema": t.input_schema,
+                                }));
+                            }
+                            for c in &man.provides { caps.insert(c.clone()); }
+                        }
+                        (tools, caps.into_iter().collect())
+                    };
+                    if !forager_tools_json.is_empty() {
+                        obj.insert("foragerTools".into(), Value::Array(forager_tools_json));
+                    }
+                    if !provided_caps.is_empty() {
+                        obj.insert("provided".into(),
+                            Value::Array(provided_caps.iter().cloned().map(Value::String).collect()));
+                    }
+
+                    // disallowedTools: union of asker-requested
+                    // names + the names in any capability the
+                    // mesh declares ownership of. Generic; no
+                    // hardcoded list — the capability table in
+                    // mcp::capability holds the per-category
+                    // canonical name set.
                     let mut disallowed: std::collections::BTreeSet<String> =
                         obj.get("disallowedTools")
                             .and_then(Value::as_array)
                             .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                             .unwrap_or_default();
-                    let forager_tool_names: Vec<String> = {
-                        let m = self.manifests.read();
-                        m.values()
-                            .filter(|man| man.bee.iter().any(|b| b == "forager"))
-                            .flat_map(|man| man.tools.iter().map(|t| t.name.clone()))
-                            .collect()
-                    };
-                    let has_forager_tools = !forager_tool_names.is_empty();
-                    for name in forager_tool_names {
-                        disallowed.insert(name);
-                    }
-                    if has_forager_tools {
-                        for name in ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "MultiEdit"] {
-                            disallowed.insert(name.into());
+                    for cap in &provided_caps {
+                        if let Some(names) = mcp::capability::capability_tools(cap) {
+                            for n in names { disallowed.insert((*n).into()); }
                         }
                     }
                     if !disallowed.is_empty() {
@@ -1380,10 +1122,6 @@ impl ToneSink for HumdSink {
                         .collect();
                     for wc in workers {
                         self.thrum.thrum_to(&wc, tone.clone());
-                    }
-                    // MCP registry session drop.
-                    if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                        self.mcp_registry.drop_session(sid);
                     }
                 }
             }
@@ -1562,18 +1300,12 @@ impl ToneSink for HumdSink {
                         return;
                     }
                 }
-                // Arm 4: broker-tool oneshot resolution.
-                let result = tone.get("result").and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| tone.get("content").and_then(Value::as_str).map(str::to_string))
-                    .unwrap_or_default();
+                // (R5: broker-tool oneshot resolution removed —
+                // NestlerBridge is gone. callIds with no route match
+                // fall through silently; the originator can decide
+                // what to do with orphan tool-results.)
                 if let Some(call_id) = call_id {
-                    if let Some(tx) = self.tool_pending.lock().remove(call_id) {
-                        let _ = tx.send(result);
-                        trace!(call_id, "tool_result.resolved");
-                    } else {
-                        trace!(call_id, "tool_result.no_pending");
-                    }
+                    trace!(call_id, "tool_result.unrouted");
                 }
             }
             Some(Chi::Curate)

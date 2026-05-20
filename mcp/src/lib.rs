@@ -1,34 +1,27 @@
-//! hum's MCP server — HTTP JSON-RPC.
+//! MCP ↔ thrum translation library.
 //!
-//! The wire shape is one POST per JSON-RPC frame at `/s/<session_id>`,
-//! matching what `mcp/tools.ts` + the TS daemon expose today. The session
-//! id segment scopes per-session state: cwd, permissions, allowed-tool
-//! set, nestler-declared tools, visible external tool filter.
+//! Pure data-mapping crate. **No server**, no Axum, no session
+//! storage, no Registry. The compute side (each worker bee) decides
+//! whether to expose an MCP server at all — if it does, it spawns
+//! its own listener and uses these helpers to translate between
+//! JSON-RPC frames and `chi:"tool-call"` / `chi:"tool-result"`
+//! tones.
 //!
-//! Native tools live under `tools::*` and dispatch through [`Registry`].
-//! Nestler-declared and external-MCP tools are out-of-process: the
-//! registry holds hooks that a caller wires before bringing the server
-//! up. v0 ships native correctness for Read / Edit / Write / Bash /
-//! Glob / Grep; MultiEdit / Apply / TodoWrite are stubs.
+//! Modules:
 //!
-//! ```no_run
-//! use mcp::{Registry, serve};
-//! # async fn run() -> anyhow::Result<()> {
-//! let registry = Registry::new();
-//! serve("127.0.0.1:7777".parse().unwrap(), registry).await?;
-//! # Ok(()) }
-//! ```
+//! - [`protocol`] — JSON-RPC envelope + `ToolDef` / `ToolResult`
+//!   shapes
+//! - [`capability`] — capability category → tool name set table
+//!   (e.g. `"fs"` → `["Read","Write","Edit",…]`)
+//! - [`translate`] — `tone ↔ JSON-RPC` shape mapping helpers
+//! - [`catalogue`] — merge + filter helpers for `tools/list`
+//!   composition
 
 pub mod capability;
+pub mod catalogue;
 pub mod protocol;
-pub mod registry;
-pub mod server;
-pub mod session;
-pub mod tools;
+pub mod translate;
 
-pub use protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDef, ToolResult};
-pub use registry::{
-    ForagerToolProvider, NestlerHook, PermissionHook, Registry, ToolInfoHook, ToolInfoSource,
+pub use protocol::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDef, ToolResult,
 };
-pub use server::serve;
-pub use session::{PermissionRule, SessionState};
