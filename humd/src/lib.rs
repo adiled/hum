@@ -895,6 +895,15 @@ impl ToneSink for HumdSink {
                     manifest.nestler_id = Some(nestler_id);
                     manifest.bee = bee.clone();
                     manifest.models = models.clone();
+                    // Stable role-tagged bee identity. Survives
+                    // reconnect — humd indexes by it (alongside
+                    // client_id, which is per-thrum-conn).
+                    manifest.hid = tone.get("hid")
+                        .and_then(Value::as_str)
+                        .and_then(|s| ensemble::Hid::from_hex(s).ok());
+                    if let Some(hid) = manifest.hid {
+                        trace!(client_id, hid = %hid.short(), "bee.hid.registered");
+                    }
                     // Forager tool advertisement — fills the manifest's
                     // tools[] array. humd routes chi:"tool-call" by
                     // toolName to whichever hive's manifest carries

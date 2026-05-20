@@ -33,7 +33,10 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
+use ensemble::HidPrefix;
 use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
+
+use crate::identity::load_or_mint_bee_key;
 
 /// Resolve the canonical thrum socket path. Mirrors `thrumd::default_socket_path`.
 fn default_socket_path() -> PathBuf {
@@ -102,9 +105,15 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(Mutex::new(write_half));
 
+    // Load (or mint) the persistent worker-bee identity. The wbee_
+    // hid survives reconnect + restart; humd indexes manifests by it
+    // so the worker stays the "same" bee across thrum connections.
+    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Wbee)
+        .with_context(|| format!("load/mint wbee key for hive {}", advert.hive))?;
+
     // Hello — register as `bee:["worker"]`. humd reads:
-    //   bee, hive (kind), models, propensity, version, protoVersion,
-    //   source, chis.
+    //   hid, bee, hive (kind), models, propensity, version,
+    //   protoVersion, source, chis.
     let propensity_str = match worker.propensity() {
         nest::Propensity::StatefulSession => "stateful_session",
         nest::Propensity::StatelessPerCall => "stateless_per_call",
@@ -113,7 +122,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let hello = json!({
         "chi": "hello",
         "bee": ["worker"],
-        "from": &advert.hive,
+        "hid": bee_key.hid.to_hex(),
+        "from": bee_key.hid.to_hex(),
         "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -123,7 +133,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         "source": advert.source.clone().unwrap_or_default(),
     });
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
-    info!(hive = %advert.hive, models = ?advert.models, "worker.hello.sent");
+    info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 
     // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.

@@ -78,6 +78,13 @@ pub struct HiveManifest {
     /// prompts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bee: Vec<String>,
+    /// Stable role-tagged identity (`wbee_<hex>`, `fbee_<hex>`).
+    /// Survives reconnect / restart — distinct from the transient
+    /// thrum client_id humd assigns per connection. Indexed by humd
+    /// alongside the kind name so routing tables stay consistent
+    /// when a bee drops + comes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hid: Option<crate::Hid>,
     /// Model ids this entry can serve. Meaningful when
     /// `bee.contains("worker")`; foragers may carry an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -153,6 +160,7 @@ impl HiveManifest {
             models: Vec::new(),
             tools: Vec::new(),
             nestler_id: None,
+            hid: None,
         }
     }
 

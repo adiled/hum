@@ -25,11 +25,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use ensemble::HidPrefix;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
+
+use crate::identity::load_or_mint_bee_key;
 
 /// One advertised tool. Description + schema land in humd's tool
 /// registry and get fanned out to MCP clients verbatim.
@@ -144,6 +147,11 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(Mutex::new(write_half));
 
+    // Load (or mint) the persistent forager-bee identity. fbee_ hid
+    // survives reconnect / restart; humd indexes by it.
+    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Fbee)
+        .with_context(|| format!("load/mint fbee key for hive {}", advert.hive))?;
+
     let defs = dispatcher.tool_defs();
     let tool_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     let tools_value: Vec<Value> = defs.iter().map(|d| json!({
@@ -155,7 +163,8 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     let hello = json!({
         "chi": "hello",
         "bee": ["forager"],
-        "from": &advert.hive,
+        "hid": bee_key.hid.to_hex(),
+        "from": bee_key.hid.to_hex(),
         "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -165,7 +174,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "source": advert.source.clone().unwrap_or_default(),
     });
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
-    info!(hive = %advert.hive, tools = ?tool_names, "forager.hello.sent");
+    info!(hive = %advert.hive, hid = %bee_key.hid.short(), tools = ?tool_names, "forager.hello.sent");
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
