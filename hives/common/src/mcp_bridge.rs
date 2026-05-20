@@ -108,6 +108,123 @@ pub async fn spawn_local_mcp(bridge: Arc<McpBridge>) -> Result<SocketAddr> {
     Ok(addr)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex as PlMutex;
+    use serde_json::json;
+
+    fn def(name: &str) -> ToolDef {
+        ToolDef { name: name.into(), description: String::new(), input_schema: json!({}) }
+    }
+
+    #[tokio::test]
+    async fn list_tools_returns_set_catalogue() {
+        let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
+        let shipped_for_closure = shipped.clone();
+        let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
+        bridge.set_catalogue("hum-test", vec![def("humfs_read")], vec![], &["fs".into()]);
+        let addr = spawn_local_mcp(bridge).await.expect("bind");
+        let client = reqwest_get_post();
+        let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
+        let resp = client.post(format!("http://{}/s/hum-test", addr))
+            .json(&body).send().await.expect("post");
+        let v: Value = resp.json().await.expect("json");
+        let names: Vec<&str> = v["result"]["tools"].as_array().unwrap()
+            .iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"humfs_read"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_round_trips_via_bridge_resolve() {
+        let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
+        let shipped_for_closure = shipped.clone();
+        let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
+        bridge.set_catalogue("hum-test", vec![def("humfs_read")], vec![], &["fs".into()]);
+        let addr = spawn_local_mcp(bridge.clone()).await.expect("bind");
+        let client = reqwest_get_post();
+        // Fire-and-park: post tools/call in a task; after a moment,
+        // resolve via the bridge with a fake tool-result tone.
+        let url = format!("http://{}/s/hum-test", addr);
+        let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"humfs_read","arguments":{"file_path":"/x"}}});
+        let call_task = tokio::spawn(async move {
+            client.post(url).json(&body).send().await.unwrap().json().await.unwrap()
+        });
+        // Wait for the bridge to ship the tool-call so we know its callId.
+        let call_id = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(tone) = shipped.lock().first().cloned() {
+                    return tone["callId"].as_str().unwrap().to_string();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("tool-call shipped");
+        let fake_result = json!({
+            "chi":"tool-result","sid":"hum-test","callId":call_id,
+            "output":"file body"
+        });
+        assert!(bridge.resolve(&call_id, fake_result), "callId resolved");
+        let resp = call_task.await.expect("call task joined");
+        assert_eq!(resp["result"]["content"][0]["text"], "file body");
+    }
+
+    // Minimal reqwest client built from std + hyper would bloat the
+    // crate; just use a tiny inline TcpStream-based POST helper.
+    fn reqwest_get_post() -> reqwest_lite::Client { reqwest_lite::Client::new() }
+
+    mod reqwest_lite {
+        use serde::Serialize;
+        use serde_json::Value;
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+
+        pub struct Client;
+        impl Client {
+            pub fn new() -> Self { Self }
+            pub fn post(self, url: String) -> RequestBuilder {
+                RequestBuilder { url, body: None }
+            }
+        }
+        pub struct RequestBuilder {
+            url: String,
+            body: Option<String>,
+        }
+        impl RequestBuilder {
+            pub fn json<T: Serialize>(mut self, v: &T) -> Self {
+                self.body = Some(serde_json::to_string(v).unwrap());
+                self
+            }
+            pub async fn send(self) -> Result<Response, std::io::Error> {
+                let url = self.url;
+                let body = self.body.unwrap_or_default();
+                tokio::task::spawn_blocking(move || -> Result<Response, std::io::Error> {
+                    let stripped = url.strip_prefix("http://").unwrap();
+                    let (host, path) = stripped.split_once('/').unwrap();
+                    let path = format!("/{path}");
+                    let mut stream = TcpStream::connect(host)?;
+                    let req = format!(
+                        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(req.as_bytes())?;
+                    let mut buf = Vec::new();
+                    stream.read_to_end(&mut buf)?;
+                    let s = String::from_utf8_lossy(&buf).to_string();
+                    let body_start = s.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+                    Ok(Response { body: s[body_start..].to_string() })
+                }).await.unwrap()
+            }
+        }
+        pub struct Response { body: String }
+        impl Response {
+            pub async fn json(self) -> Result<Value, serde_json::Error> {
+                serde_json::from_str(&self.body)
+            }
+        }
+    }
+}
+
 async fn handle(
     State(bridge): State<Arc<McpBridge>>,
     Path(sid): Path<String>,
