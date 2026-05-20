@@ -63,7 +63,9 @@ pub use kad::{
 };
 
 pub mod hives;
+pub mod uri;
 pub use hives::{BindAddr, HiveAnnounce, HiveManifest, Propensity, ToolEntry, ANNOUNCE_TOPIC};
+pub use uri::{AliasResolver, HostRef, HumUri, UriParseError};
 
 // Headroom advertise — `PeerCapabilities` gains a runtime snapshot of
 // free slots / pressure / p95 latency so peer humds can route away from
