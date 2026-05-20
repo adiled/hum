@@ -26,6 +26,11 @@ use tracing::{trace, warn};
 pub struct PeerConfig {
     pub humd_id: Hid,
     pub hints: Vec<String>,
+    /// Human-friendly alias for the peer (e.g. `"workstation"`).
+    /// Used by `hum://<alias>/<path>` URI resolution. Optional —
+    /// peers without an alias still bootstrap fine, they just
+    /// can't be addressed by name.
+    pub alias: Option<String>,
 }
 
 /// Wire shape — fields stay loose strings so we can tolerate malformed
@@ -43,6 +48,8 @@ struct RawPeer {
     humd_id: String,
     #[serde(default)]
     hints: Vec<String>,
+    #[serde(default)]
+    alias: Option<String>,
 }
 
 /// Resolve `${XDG_CONFIG_HOME or $HOME/.config}/hum/peers.json`.
@@ -91,7 +98,11 @@ pub fn load() -> Vec<PeerConfig> {
     let mut out = Vec::with_capacity(parsed.peers.len());
     for row in parsed.peers {
         match parse_humd_id(&row.humd_id) {
-            Some(humd_id) => out.push(PeerConfig { humd_id, hints: row.hints }),
+            Some(humd_id) => out.push(PeerConfig {
+                humd_id,
+                hints: row.hints,
+                alias: row.alias,
+            }),
             None => {
                 warn!(humd_id = %row.humd_id, "peers.skip.bad-id");
             }

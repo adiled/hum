@@ -252,6 +252,13 @@ where
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let sid_fs: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let alias_resolver = Arc::new(PeersAliasResolver::from_peers(&cfg.bootstrap_peers));
+    let tool_routes_peer: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
     // Forager-tool bridge: MCP tools/list aggregates every attached
     // forager hive's advertised tool catalogue; MCP tools/call dispatches
     // via thrum_to to the forager whose manifest carries the name.
@@ -277,6 +284,10 @@ where
         manifests: manifests.clone(),
         sid_origins: sid_origins.clone(),
         tool_routes,
+        sid_fs: sid_fs.clone(),
+        alias_resolver: alias_resolver.clone(),
+        tool_routes_peer: tool_routes_peer.clone(),
+        incoming_tool_calls: incoming_tool_calls.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
@@ -460,6 +471,55 @@ struct HumdSink {
     /// consumed when the forager's chi:"tool-result" lands so humd
     /// can return the result to the original worker.
     tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
+    /// Map sid → fs-hive humd (the Hid extracted from the prompt's
+    /// `cwd` field when it carried a `hum://<host>/<path>` URI).
+    /// Tool-call interception consults this before falling back to
+    /// the local forager scan — if the URI pinned a peer humd as
+    /// the fs host, the tone routes via ensemble instead.
+    sid_fs: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+    /// Asker-side alias resolver: peers.json `alias` field → Hid.
+    /// Used by the prompt arm's URI canonicalization step. Empty
+    /// when no peers carry aliases (every URI host then must be a
+    /// shortid / full hid form).
+    alias_resolver: Arc<PeersAliasResolver>,
+    /// callId → peer humd that holds the originating worker for
+    /// cross-humd tool-call dispatch. Populated when humd-S stamps
+    /// `to:<fs_hid>` on a chi:"tool-call" and routes via ensemble;
+    /// consumed when the matching chi:"tool-result" arrives back
+    /// from humd-W so humd-S can forward to the worker. Distinct
+    /// from `tool_routes` (which maps callId → local worker client
+    /// id when the forager was colocated).
+    tool_routes_peer: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+    /// Inverse map for the forager-host side (humd-W). Records the
+    /// `from` peer for each inbound cross-humd chi:"tool-call" so
+    /// the forager's outbound chi:"tool-result" can be stamped
+    /// `to:<origin-peer>` and routed back through the ensemble.
+    incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+}
+
+/// AliasResolver backed by the bootstrap peers.json `alias` field.
+/// Other resolvers (ENS / HNS / DID / libp2p kademlia) chain on
+/// top via [`ensemble::AliasResolver`] — peers.json is the v0 floor.
+pub struct PeersAliasResolver {
+    by_alias: HashMap<String, ensemble::Hid>,
+}
+
+impl PeersAliasResolver {
+    pub fn from_peers(peers: &[peers::PeerConfig]) -> Self {
+        let mut by_alias = HashMap::new();
+        for p in peers {
+            if let Some(name) = &p.alias {
+                by_alias.insert(name.clone(), p.humd_id);
+            }
+        }
+        Self { by_alias }
+    }
+}
+
+impl ensemble::AliasResolver for PeersAliasResolver {
+    fn resolve(&self, alias: &str) -> Option<ensemble::Hid> {
+        self.by_alias.get(alias).copied()
+    }
 }
 
 /// Map of in-flight nestler-tool call ids → oneshot senders waiting
@@ -689,6 +749,51 @@ impl ToneSink for HumdSink {
         // re-broadcast on the sid sigil so the originating forager
         // receives it. Hello arrives from the worker but is handled
         // normally below.
+        // Inbound tool-call from a peer humd (cross-humd routing): a
+        // remote worker emitted chi:tool-call addressed at our local
+        // forager hive. Dispatch to the matching forager by toolName.
+        // Trust gate: the ensemble pump only delivers tones from
+        // wire-authenticated peers, so reaching this arm means the
+        // sender already passed handshake. No per-call signature
+        // verification yet (T2+ hardening).
+        if client_id == "ensemble" && matches!(chi, Some(Chi::ToolCall)) {
+            let tool_name = tone.get("toolName").and_then(Value::as_str)
+                .or_else(|| tone.get("name").and_then(Value::as_str))
+                .map(str::to_string);
+            if let Some(tool_name) = tool_name {
+                let forager_cid = {
+                    let m = self.manifests.read();
+                    m.iter().find(|(_, man)| {
+                        man.bee.iter().any(|b| b == "forager")
+                        && man.tools.iter().any(|t| t.name == tool_name)
+                    }).map(|(cid, _)| cid.clone())
+                };
+                if let Some(fcid) = forager_cid {
+                    // Remember the origin peer so the forager's
+                    // outbound chi:tool-result can route back to it.
+                    let call_id = tone.get("callId").and_then(Value::as_str)
+                        .unwrap_or("").to_string();
+                    let from_peer = tone.get("from").and_then(Value::as_str)
+                        .and_then(parse_humd_id);
+                    if let (Some(call_id), Some(from_peer)) = (
+                        (!call_id.is_empty()).then_some(call_id.clone()),
+                        from_peer,
+                    ) {
+                        self.incoming_tool_calls.write().insert(call_id, from_peer);
+                    }
+                    trace!(
+                        from = "ensemble", to = %fcid, %tool_name,
+                        "tool-call.peer.route.to-local-forager"
+                    );
+                    self.thrum.thrum_to(&fcid, tone);
+                    return;
+                } else {
+                    warn!(%tool_name, "tool-call.peer.no-local-forager");
+                    return;
+                }
+            }
+        }
+
         if !matches!(chi, Some(Chi::Hello)) {
             let is_worker = {
                 let m = self.manifests.read();
@@ -697,15 +802,58 @@ impl ToneSink for HumdSink {
                     .unwrap_or(false)
             };
             if is_worker {
-                // tool-call interception — if this worker is calling a
-                // tool advertised by a forager hive (humfs et al.),
-                // route the tone directly to that forager and record
-                // the callId → worker client_id mapping so the result
-                // returns to the right place. Skip the sigil broadcast.
+                // tool-call interception. Three-tier routing:
+                //
+                // 1. Pinned fs-hive (cross-humd): if the prompt's
+                //    cwd was a `hum://<host>/<path>` URI naming a
+                //    peer humd, that pin lives in `sid_fs`. Stamp
+                //    `to:<fs_hid>` and route via ensemble. Record
+                //    callId → fs_hid in `tool_routes_peer` so the
+                //    result returns through humd-W's ensemble pump.
+                // 2. Local forager match: pre-existing P8 path —
+                //    any local forager hive advertising the
+                //    toolName gets the tone via thrum_to.
+                // 3. Sigil broadcast: fall through to the legacy
+                //    fan-out (covers nestler-declared MCP tools).
                 if matches!(chi, Some(Chi::ToolCall)) {
+                    let sid_for_lookup = tone.get("sid").and_then(Value::as_str)
+                        .map(str::to_string).unwrap_or_default();
                     let tool_name = tone.get("toolName").and_then(Value::as_str)
                         .or_else(|| tone.get("name").and_then(Value::as_str))
                         .map(str::to_string);
+                    let pinned_fs = self.sid_fs.read().get(&sid_for_lookup).copied();
+
+                    if let (Some(fs_hid), Some(ens), Some(tn)) =
+                        (pinned_fs, &self.ensemble, tool_name.as_ref())
+                    {
+                        if fs_hid != ens.me() {
+                            let call_id = tone.get("callId").and_then(Value::as_str)
+                                .unwrap_or("").to_string();
+                            if !call_id.is_empty() {
+                                self.tool_routes.write().insert(
+                                    call_id.clone(), client_id.to_string()
+                                );
+                                self.tool_routes_peer.write().insert(
+                                    call_id.clone(), fs_hid
+                                );
+                            }
+                            let mut routed = tone.clone();
+                            if let Some(obj) = routed.as_object_mut() {
+                                obj.insert("to".into(), Value::String(fs_hid.to_hex()));
+                                obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                            }
+                            trace!(
+                                from = client_id, to = %fs_hid.short(),
+                                tool_name = %tn, %call_id,
+                                "tool-call.route.to-peer-forager"
+                            );
+                            if let Err(e) = ens.route(routed).await {
+                                warn!(err = %e, "tool-call.peer.route.failed");
+                            }
+                            return;
+                        }
+                    }
+
                     if let Some(tool_name) = tool_name {
                         let forager_cid = {
                             let m = self.manifests.read();
@@ -989,9 +1137,45 @@ impl ToneSink for HumdSink {
                     }
                 }
                 let model = tone.get("modelId").and_then(Value::as_str).unwrap_or("sonnet").to_string();
-                let cwd = tone.get("cwd").and_then(Value::as_str)
+                let cwd_raw = tone.get("cwd").and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+                // cwd may carry a `hum://<host>/<path>` URI pinning a
+                // remote fs hive. Parse, resolve alias to Hid via the
+                // peers.json resolver, stash (sid → fs_hid) so the
+                // tool-call interceptor knows where humfs lives. The
+                // path component (with leading slash restored) is
+                // what the worker actually sees.
+                let cwd = if ensemble::HumUri::starts_with_scheme(&cwd_raw) {
+                    match ensemble::HumUri::parse(&cwd_raw) {
+                        Ok(uri) => {
+                            let fs_hid = match &uri.host {
+                                ensemble::HostRef::Hid(h) => Some(*h),
+                                ensemble::HostRef::Alias(name) => {
+                                    use ensemble::AliasResolver;
+                                    self.alias_resolver.resolve(name)
+                                }
+                            };
+                            if let Some(fs_hid) = fs_hid {
+                                self.sid_fs.write().insert(sid.clone(), fs_hid);
+                                trace!(sid, fs_hid = %fs_hid.short(), "prompt.fs.pinned");
+                            } else {
+                                warn!(sid, uri = %cwd_raw, "prompt.fs.alias.unknown");
+                            }
+                            // Hand the worker just the path component
+                            // (leading slash restored). Worker has no
+                            // hum-uri awareness today; humd handles
+                            // the routing pin internally.
+                            format!("/{}", uri.path)
+                        }
+                        Err(e) => {
+                            warn!(uri = %cwd_raw, err = %e, "prompt.cwd.uri.parse.failed");
+                            cwd_raw
+                        }
+                    }
+                } else {
+                    cwd_raw
+                };
                 let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
                 let text = tone.get("text").and_then(Value::as_str).map(str::to_string)
                     .or_else(|| tone.get("content").and_then(Value::as_str).map(str::to_string))
@@ -1300,28 +1484,60 @@ impl ToneSink for HumdSink {
                 );
             }
             Some(Chi::ToolResult) => {
-                // Two-arm resolution:
+                // Four-arm resolution:
                 //
-                // 1. Forager-hive return path: a humfs (or other
-                //    forager) finished a tool-call humd routed to it.
-                //    callId is in `tool_routes` — forward the
-                //    tool-result tone directly to the originating
-                //    worker client_id.
-                // 2. Broker-tool path: a nestler-declared tool dispatch
-                //    that NestlerBridge parked on a oneshot keyed by
-                //    callId; pop the channel and forward the result
-                //    content.
+                // 1. Cross-humd return (humd-W → humd-S): the local
+                //    forager finished a tool-call that arrived via
+                //    a peer. callId is in `incoming_tool_calls`;
+                //    stamp `to:<origin-peer>` and route via ensemble.
+                // 2. Forager-hive return (local, humd-S): a local
+                //    forager finished a tool-call humd routed to it.
+                //    callId is in `tool_routes` — forward to the
+                //    originating worker client_id.
+                // 3. Cross-humd worker forward (humd-S inbound from
+                //    humd-W via ensemble): result arriving for a
+                //    tool-call we sent to a peer; callId is in
+                //    `tool_routes_peer`. Forward to the worker via
+                //    `tool_routes[call_id]` (recorded at dispatch).
+                // 4. Broker-tool path: a nestler-declared tool
+                //    dispatch parked on a oneshot keyed by callId.
                 //
                 // Missing callId means the bee echoed after timeout —
                 // silent drop.
                 let call_id = tone.get("callId").and_then(Value::as_str);
+
                 if let Some(call_id) = call_id {
+                    // Arm 1: local forager → cross-humd return.
+                    // Drop the MutexGuard before the await below
+                    // (Send bound on the ToneSink future).
+                    let origin_peer = self.incoming_tool_calls.write().remove(call_id);
+                    if let Some(origin_peer) = origin_peer {
+                        if let Some(ens) = &self.ensemble {
+                            let mut routed = tone.clone();
+                            if let Some(obj) = routed.as_object_mut() {
+                                obj.insert("to".into(), Value::String(origin_peer.to_hex()));
+                                obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                            }
+                            trace!(call_id, to = %origin_peer.short(),
+                                "tool_result.route.to-origin-peer");
+                            if let Err(e) = ens.route(routed).await {
+                                warn!(err = %e, "tool_result.peer.route.failed");
+                            }
+                            return;
+                        }
+                    }
+                    // Arm 3: cross-humd worker forward — clean up
+                    // tool_routes_peer (callId fully resolved) before
+                    // delivering to local worker.
+                    self.tool_routes_peer.write().remove(call_id);
+                    // Arm 2: local forager → local worker.
                     if let Some(worker_cid) = self.tool_routes.write().remove(call_id) {
                         trace!(call_id, %worker_cid, "tool_result.route.to-worker");
                         self.thrum.thrum_to(&worker_cid, tone.clone());
                         return;
                     }
                 }
+                // Arm 4: broker-tool oneshot resolution.
                 let result = tone.get("result").and_then(Value::as_str)
                     .map(str::to_string)
                     .or_else(|| tone.get("content").and_then(Value::as_str).map(str::to_string))
