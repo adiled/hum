@@ -83,8 +83,16 @@ else
   echo "[opencode] no $RECIPE_MODELS — using narrow fallback (3 models)" >&2
   MODELS_JSON='{"claude-opus-4-7":{},"claude-sonnet-4-6":{},"claude-haiku-4-5":{}}'
 fi
+# Use @ai-sdk/openai (not @ai-sdk/openai-compatible) so OC routes
+# through the OpenAI Responses API (/v1/responses). Required for
+# provider-executed tool semantics: the worker bee's MCP bridge
+# resolves humfs_* tools inline and openai-server emits them as
+# `mcp_call` hosted items, which the SDK marks providerExecuted=
+# true. OC renders the tool call + result as already-done without
+# trying to re-execute (which would land tool: invalid since
+# humfs_* aren't in OC's local tool registry).
 HUM_BLOCK=$(jq -n --argjson models "$MODELS_JSON" '{
-  type: "openai-compatible",
+  npm: "@ai-sdk/openai",
   options: { baseURL: "http://127.0.0.1:'"$PORT"'/v1", apiKey: "hum-dev" },
   models: $models
 }')

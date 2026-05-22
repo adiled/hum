@@ -154,94 +154,231 @@ describe("live hum-openai-server: tool-use round-trip", () => {
 // AND the worker bee's claude actually executes them via the
 // bridge → forager → real filesystem.
 
-// Each of these prompts ships NO tools[] from the asker side —
-// humd merges the forager catalogue (humfs_read / humfs_do_code /
-// humfs_do_noncode / humfs_bash) into the worker's MCP server
-// automatically. So whatever claude sees IS what humfs provides;
-// there's no asker write/edit/bash shadow to compete with. If a
-// test fails, it means either the worker isn't seeing the merged
-// catalogue or humfs isn't routing the call. Both are the actual
-// product surface.
 
-describe("live hum-openai-server: humfs forager tools", () => {
-  // /tmp is in hum.json's fs.roots — humfs writes here.
-  const tmpFile = `/tmp/hum-live-noncode-${Date.now()}.md`;
-  const tmpFile2 = `/tmp/hum-live-docode-${Date.now()}.rs`;
+// Regression — the OC TUI symptom: the worker bee resolves humfs_*
+// tools internally via its MCP bridge, but the openai-server SSE
+// stream still leaks the tool_use blocks to OC as OpenAI
+// `tool_calls`. OC's claude SDK tries to execute the call against
+// its own tool registry — which doesn't contain humfs_* (OC only
+// knows its stock tools + the MCP servers in its own opencode.json,
+// which does NOT register hum as MCP). OC marks the part
+// `tool: invalid` and the UI stalls on an empty trailing message.
+//
+// What SHOULD reach OC:
+//   - content text describing the action
+//   - finish_reason=stop
+//   - NO tool_calls block (the tool was already executed inside the
+//     worker; OC doesn't need to and CAN'T re-execute it)
+//
+// What CURRENTLY reaches OC (the bug):
+//   - tool_calls[{name:"humfs_do_code",...}] in the delta stream
+//   - finish_reason="tool_calls" or mixed
+//   - OC sees an unknown tool, marks the part invalid, stalls
+//
+// These tests assert the SHOULD-state. They will fail today.
 
-  test("humfs_do_noncode: create a new file via humd's merged catalogue", async () => {
+// OC's integration uses the OpenAI Responses API (/v1/responses)
+// via the `@ai-sdk/openai` provider. That's the standard interface
+// that lets us emit forager-resolved tools as `mcp_call` hosted
+// items — which OC's openai-responses.ts parser maps to
+// tool-call + tool-result events tagged `providerExecuted: true`.
+// Equivalent to the old clwnd-opencode plugin's flag, via a public
+// OpenAI protocol, so OC stays a pure TUI.
+
+interface ResponsesItem {
+  type: string;
+  id?: string;
+  server_label?: string;
+  name?: string;
+  arguments?: string;
+  output?: unknown;
+  text?: string;
+  status?: string;
+  error?: unknown;
+}
+interface ResponsesEvent {
+  type: string;
+  item?: ResponsesItem;
+  delta?: string;
+  response?: { id?: string; usage?: Record<string, number> };
+}
+
+interface ResponsesCollected {
+  events: ResponsesEvent[];
+  items: ResponsesItem[];
+  text: string;
+  rawDoneAt: number;
+}
+
+async function streamResponses(body: Record<string, unknown>, timeoutMs: number): Promise<ResponsesCollected> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stream: true, ...body }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`/responses returned ${r.status}: ${await r.text()}`);
+    if (!r.body) throw new Error("no response body");
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    const out: ResponsesCollected = { events: [], items: [], text: "", rawDoneAt: 0 };
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const ev = parseSse(block);
+        if (!ev) continue;
+        if (ev === "[DONE]") { out.rawDoneAt = Date.now(); continue; }
+        out.events.push(ev);
+        if (ev.type === "response.output_text.delta" && typeof ev.delta === "string") {
+          out.text += ev.delta;
+        }
+        if (ev.type === "response.output_item.done" && ev.item) {
+          out.items.push(ev.item);
+        }
+      }
+    }
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseSse(block: string): ResponsesEvent | "[DONE]" | null {
+  // OpenAI Responses uses `event: <name>\ndata: <json>` framing.
+  // We accept either explicit event-line + data, or just data
+  // with type embedded — our shim emits the second form.
+  const lines = block.split("\n");
+  let data = "";
+  for (const line of lines) {
+    if (line.startsWith("data: ")) data = line.slice(6);
+  }
+  if (!data) return null;
+  if (data === "[DONE]") return "[DONE]";
+  try { return JSON.parse(data) as ResponsesEvent; } catch { return null; }
+}
+
+describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
+  test("emits mcp_call items so OC renders forager tools as provider-executed", async () => {
     skipIfDead();
-    const marker = `WRITE_OK_${Date.now()}`;
-    const result = await streamChat({
+    const marker = `MARK_${Date.now()}`;
+    const path = `/tmp/hum-responses-${Date.now()}.txt`;
+    const result = await streamResponses({
       model: "claude-haiku-4-5",
-      messages: [{ role: "user", content:
-        `Create the file ${tmpFile} containing exactly: ${marker}` }],
+      input: [{ role: "user", content: [{ type: "input_text", text: `Create ${path} with contents: ${marker}. Confirm when done.` }] }],
     }, 90_000);
-    expect(result.rawDoneAt).toBeGreaterThan(0);
-    expect(result.toolCalls.length).toBeGreaterThan(0);
-    const calledNames = result.toolCalls.map((tc) => tc.name);
+
+    // Worker actually executed the tool against humfs.
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(path), "worker resolved the tool against humfs").toBe(true);
+    expect(readFileSync(path, "utf-8")).toContain(marker);
+
+    // Stream closed cleanly.
+    expect(result.rawDoneAt, "/responses SSE ended with [DONE]").toBeGreaterThan(0);
+
+    // The stream MUST include an mcp_call item — that's the hosted-
+    // tool shape OC's openai-responses parser recognizes as
+    // provider-executed and tags providerExecuted=true on. Without
+    // it, OC's tool runtime tries to re-execute and lands tool:invalid.
+    const mcpCalls = result.items.filter((i) => i.type === "mcp_call");
     expect(
-      calledNames.some((n) => n === "humfs_do_noncode" || n === "humfs_do_code"),
-      `expected humfs write-style tool call; got ${JSON.stringify(calledNames)}`,
-    ).toBe(true);
+      mcpCalls.length,
+      `expected at least one item.type="mcp_call" in /responses stream; got items: ` +
+      `${result.items.map((i) => i.type).join(",")}`,
+    ).toBeGreaterThan(0);
+
+    const call = mcpCalls[0];
+    expect(call.server_label, "mcp_call carries server_label (the forager hive)").toBeTruthy();
+    expect(call.name, "mcp_call carries the tool name").toMatch(/humfs_/);
+    expect(call.arguments, "mcp_call carries arguments JSON").toBeTruthy();
+    expect(() => JSON.parse(String(call.arguments))).not.toThrow();
+
+    const completed = result.events.find((e) => e.type === "response.completed");
+    expect(completed, "stream ends with response.completed event").toBeTruthy();
+  }, 120_000);
+
+  test("plain prompt through /responses streams output_text deltas", async () => {
+    skipIfDead();
+    const result = await streamResponses({
+      model: "claude-haiku-4-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "Reply with exactly: hello-responses" }] }],
+    }, 60_000);
+    expect(result.rawDoneAt).toBeGreaterThan(0);
+    expect(result.text.toLowerCase()).toContain("hello-responses");
+    const completed = result.events.find((e) => e.type === "response.completed");
+    expect(completed).toBeTruthy();
+  }, 90_000);
+
+  // One mcp_call assertion per forager tool — each humd registers
+  // them on its worker bridge under the same `mcp__hum__*` namespace
+  // OC sees. The asker ships no tools[]; humd auto-merges the
+  // forager catalogue into the worker's MCP server, so the only
+  // tools claude can call are the humfs_* surfaces. Each side
+  // effect (file on disk, output in content) confirms the call
+  // ran end-to-end.
+
+  test("humfs_read via mcp_call: hostname round-trips through forager", async () => {
+    skipIfDead();
+    const result = await streamResponses({
+      model: "claude-haiku-4-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: `Read /etc/hostname and state the hostname.` }] }],
+    }, 90_000);
+    const calls = result.items.filter((i) => i.type === "mcp_call" && i.name === "humfs_read");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(JSON.stringify(calls[0].output)).toMatch(/canary/);
+  }, 120_000);
+
+  test("humfs_do_noncode via mcp_call: file materializes on disk", async () => {
+    skipIfDead();
+    const tmpFile = `/tmp/hum-r-noncode-${Date.now()}.md`;
+    const marker = `WRITE_OK_${Date.now()}`;
+    const result = await streamResponses({
+      model: "claude-haiku-4-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: `Create ${tmpFile} containing exactly: ${marker}` }] }],
+    }, 90_000);
+    const calls = result.items.filter((i) =>
+      i.type === "mcp_call" && (i.name === "humfs_do_noncode" || i.name === "humfs_do_code")
+    );
+    expect(calls.length, `expected a humfs write tool call; got: ${result.items.map((i) => i.name).join(",")}`).toBeGreaterThan(0);
     const { readFileSync, existsSync } = await import("node:fs");
-    expect(existsSync(tmpFile), "humfs must materialize the file on disk").toBe(true);
+    expect(existsSync(tmpFile)).toBe(true);
     expect(readFileSync(tmpFile, "utf-8")).toContain(marker);
   }, 120_000);
 
-  test("humfs_do_code: edit an existing file in place via humd's merged catalogue", async () => {
+  test("humfs_do_code via mcp_call: symbol rewrite in place", async () => {
     skipIfDead();
+    const tmpFile = `/tmp/hum-r-docode-${Date.now()}.rs`;
     const { writeFileSync, readFileSync } = await import("node:fs");
-    writeFileSync(tmpFile2, "fn the_target() {}\n// untouched comment\n");
-    const result = await streamChat({
+    writeFileSync(tmpFile, "fn the_target() {}\n// untouched comment\n");
+    const result = await streamResponses({
       model: "claude-haiku-4-5",
-      messages: [{ role: "user", content:
-        `In ${tmpFile2}, change the function name "the_target" to "the_replacement". Edit in place.` }],
+      input: [{ role: "user", content: [{ type: "input_text", text: `In ${tmpFile}, rename the_target to the_replacement. Edit in place.` }] }],
     }, 90_000);
-    expect(result.rawDoneAt).toBeGreaterThan(0);
-    expect(result.toolCalls.length).toBeGreaterThan(0);
-    const calledNames = result.toolCalls.map((tc) => tc.name);
-    expect(
-      calledNames.some((n) => n === "humfs_do_code"),
-      `expected humfs_do_code tool call; got ${JSON.stringify(calledNames)}`,
-    ).toBe(true);
-    const after = readFileSync(tmpFile2, "utf-8");
-    expect(after, "humfs_do_code must rewrite the symbol on disk").toContain("the_replacement");
-    expect(after, "humfs_do_code must remove the old symbol").not.toContain("the_target");
-    expect(after, "humfs_do_code must leave the unrelated comment intact").toContain("untouched comment");
+    const calls = result.items.filter((i) => i.type === "mcp_call" && i.name === "humfs_do_code");
+    expect(calls.length).toBeGreaterThan(0);
+    const after = readFileSync(tmpFile, "utf-8");
+    expect(after).toContain("the_replacement");
+    expect(after).not.toContain("the_target");
+    expect(after).toContain("untouched comment");
   }, 120_000);
 
-  test("humfs_bash: shell command output round-trips into model's content", async () => {
+  test("humfs_bash via mcp_call: stdout surfaces in mcp_call output", async () => {
     skipIfDead();
     const sentinel = `BASH_${Date.now()}`;
-    const result = await streamChat({
+    const result = await streamResponses({
       model: "claude-haiku-4-5",
-      messages: [{ role: "user", content:
-        `Run the shell command: echo ${sentinel}. Then quote stdout in your reply.` }],
+      input: [{ role: "user", content: [{ type: "input_text", text: `Run the shell command: echo ${sentinel}` }] }],
     }, 90_000);
-    expect(result.rawDoneAt).toBeGreaterThan(0);
-    expect(result.toolCalls.length).toBeGreaterThan(0);
-    const calledNames = result.toolCalls.map((tc) => tc.name);
-    expect(
-      calledNames.some((n) => n === "humfs_bash"),
-      `expected humfs_bash tool call; got ${JSON.stringify(calledNames)}`,
-    ).toBe(true);
-    expect(result.content).toContain(sentinel);
-  }, 120_000);
-
-  test("humfs_read: read an existing file via humd's merged catalogue", async () => {
-    skipIfDead();
-    const result = await streamChat({
-      model: "claude-haiku-4-5",
-      messages: [{ role: "user", content:
-        `Read /etc/hostname and state the hostname.` }],
-    }, 90_000);
-    expect(result.rawDoneAt).toBeGreaterThan(0);
-    expect(result.toolCalls.length).toBeGreaterThan(0);
-    const calledNames = result.toolCalls.map((tc) => tc.name);
-    expect(
-      calledNames.some((n) => n === "humfs_read"),
-      `expected humfs_read tool call; got ${JSON.stringify(calledNames)}`,
-    ).toBe(true);
-    expect(result.content.toLowerCase()).toMatch(/canary|hostname/i);
+    const calls = result.items.filter((i) => i.type === "mcp_call" && i.name === "humfs_bash");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(JSON.stringify(calls[0].output)).toContain(sentinel);
   }, 120_000);
 });

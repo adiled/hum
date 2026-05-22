@@ -257,6 +257,7 @@ async fn handle(
                     id, -32602, "Missing tool name",
                 ))));
             }
+            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
             let call_id = format!("call-{}", thrum_core::rid());
             let (tx, rx) = oneshot::channel::<Value>();
             bridge.pending.lock().insert(call_id.clone(), tx);
@@ -266,6 +267,33 @@ async fn handle(
             match tokio::time::timeout(Duration::from_secs(300), rx).await {
                 Ok(Ok(tone)) => {
                     let body = translate::tone_to_mcp_result(&tone);
+                    // Mirror the resolution to humd as a sid-tagged
+                    // chi:"chunk" so nestling shims (openai-server's
+                    // /v1/responses, anthropic-server's server_tool_use
+                    // path) can surface this tool call as
+                    // provider-executed to the asker. Without this
+                    // mirror, openai-server only sees text + finish
+                    // and OC's openai-responses parser has no way to
+                    // emit a `mcp_call` item with providerExecuted.
+                    let output_text = body.get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|a| a.first())
+                        .and_then(|p| p.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let is_error = body.get("isError").and_then(Value::as_bool).unwrap_or(false);
+                    let chunk = serde_json::json!({
+                        "chi": "chunk",
+                        "sid": sid,
+                        "chunkType": "tool_executed",
+                        "callId": call_id,
+                        "toolName": name,
+                        "arguments": arguments,
+                        "output": output_text,
+                        "isError": is_error,
+                    });
+                    (bridge.ship_tool_call)(chunk);
                     (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, body))))
                 }
                 _ => {

@@ -327,6 +327,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         hive,
         write_half: write_half.clone(),
         finish_sent: finish_sent.clone(),
+        tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
     });
 
     let listener_clone = listener.clone();
@@ -370,6 +371,17 @@ struct WireListener {
     /// checks this before emitting its fallback finish so consumers
     /// never see two finishes per prompt.
     finish_sent: Arc<AtomicBool>,
+    /// Block indices the model emitted as `tool_use`. We resolve all
+    /// tools internally via the worker's MCP bridge (humd routes the
+    /// tone to a forager, the result feeds back into claude before
+    /// the model continues) — the asking nestler never sees nor can
+    /// execute these calls. So we suppress the tool_input_* /
+    /// content_block_stop chi:chunks for any block index in this set
+    /// to prevent openai-server from leaking them as OpenAI
+    /// `tool_calls` (OC then reports `tool: invalid` because the
+    /// bare humfs_* name isn't in its registry, the file is already
+    /// written, and the UI stalls on an empty trailing message).
+    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
 }
 
 impl WireListener {
@@ -414,25 +426,47 @@ impl WireListener {
                     "text" => self.chunk("text_start", json!({"id": idx})).await,
                     "thinking" => self.chunk("reasoning_start", json!({"id": idx})).await,
                     "tool_use" => {
-                        self.chunk("tool_input_start", json!({
-                            "toolCallId": block.get("id"),
-                            "toolName": block.get("name"),
-                        })).await;
+                        // Track the index so the corresponding
+                        // input_json_delta + content_block_stop get
+                        // suppressed. Worker resolves tools inline via
+                        // the MCP bridge; the bridge ships a single
+                        // chi:"chunk" tool_executed with full args +
+                        // output once the call completes. Emitting
+                        // tool_input_* here would leak the in-flight
+                        // call to nestlings (the bug that landed
+                        // tool: invalid parts in OC).
+                        if let Some(i) = idx.as_i64() {
+                            self.tool_use_blocks.lock().await.insert(i);
+                        }
                     }
                     _ => {}
                 }
             }
             "content_block_delta" => {
                 let delta = msg.get("delta").cloned().unwrap_or(json!({}));
+                let idx = msg.get("index").and_then(Value::as_i64);
+                let is_tool_block = match idx {
+                    Some(i) => self.tool_use_blocks.lock().await.contains(&i),
+                    None => false,
+                };
                 match delta.get("type").and_then(Value::as_str).unwrap_or("") {
                     "thinking_delta" => self.chunk("reasoning_delta", json!({"delta": delta.get("thinking")})).await,
                     "text_delta" => self.chunk("text_delta", json!({"delta": delta.get("text")})).await,
-                    "input_json_delta" => self.chunk("tool_input_delta", json!({"partialJson": delta.get("partial_json")})).await,
-                    _ => {}
+                    "input_json_delta" if !is_tool_block => {
+                        self.chunk("tool_input_delta", json!({"partialJson": delta.get("partial_json")})).await
+                    }
+                    _ => {} // tool-block input_json_delta: suppressed (bridge ships chunk:tool_executed instead)
                 }
             }
             "content_block_stop" => {
-                self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
+                let idx = msg.get("index").and_then(Value::as_i64);
+                let is_tool_block = match idx {
+                    Some(i) => self.tool_use_blocks.lock().await.remove(&i),
+                    None => false,
+                };
+                if !is_tool_block {
+                    self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
+                }
             }
             "result" => {
                 // Claude's wilt event — terminal of one prompt cycle.

@@ -638,6 +638,13 @@ async function start(): Promise<void> {
         sse("response.content_part.added", { type: "response.content_part.added", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: "" } });
         let collected = "";
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+        // Output index counter. Position 0 is the assistant message
+        // (text) the model is producing. Subsequent positions host
+        // `mcp_call` items emitted as the worker's MCP bridge
+        // resolves tool calls — OC's openai-responses parser maps
+        // these to tool-call + tool-result events tagged
+        // providerExecuted=true. Each call gets its own item id.
+        let nextOutputIndex = 1;
         thrum.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
           if (chi === "chunk" && msg.chunkType === "text_delta") {
@@ -646,6 +653,49 @@ async function start(): Promise<void> {
               collected += delta;
               sse("response.output_text.delta", { type: "response.output_text.delta", item_id: itemId, output_index: 0, content_index: 0, delta });
             }
+          } else if (chi === "chunk" && msg.chunkType === "tool_executed") {
+            // Worker bridge resolved a tool call inline. Emit as a
+            // `mcp_call` hosted-tool item — OC parses item.type=
+            // "mcp_call" via HOSTED_TOOLS and emits provider-
+            // executed tool-call + tool-result events. The asker
+            // (OC) renders the call as already-done; never tries
+            // to re-execute.
+            const callItemId = (msg.callId as string) ?? `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+            const toolName = (msg.toolName as string) ?? "";
+            const args = msg.arguments !== undefined
+              ? (typeof msg.arguments === "string" ? msg.arguments : JSON.stringify(msg.arguments))
+              : "{}";
+            const output = (msg.output as string) ?? "";
+            const isError = (msg.isError as boolean) === true;
+            // server_label namespaces the call. We use the hive name
+            // implied by the tool prefix (`humfs_*` → "humfs") so OC
+            // matches the same label the asker would expect. Future:
+            // pull server_label from the forager manifest carried in
+            // chi:"prompt".foragerTools.
+            const serverLabel = toolName.includes("_")
+              ? toolName.split("_", 2)[0]
+              : "hum";
+            const idx = nextOutputIndex++;
+            const itemBase = {
+              id: callItemId,
+              type: "mcp_call",
+              server_label: serverLabel,
+              name: toolName,
+              arguments: args,
+              status: isError ? "failed" : "completed",
+              output,
+              ...(isError ? { error: { message: output } } : {}),
+            };
+            sse("response.output_item.added", {
+              type: "response.output_item.added",
+              output_index: idx,
+              item: { ...itemBase, output: "", status: "in_progress" },
+            });
+            sse("response.output_item.done", {
+              type: "response.output_item.done",
+              output_index: idx,
+              item: itemBase,
+            });
           } else if (chi === "finish") {
             usage = msg.usage as typeof usage;
             sse("response.output_text.done", { type: "response.output_text.done", item_id: itemId, output_index: 0, content_index: 0, text: collected });
