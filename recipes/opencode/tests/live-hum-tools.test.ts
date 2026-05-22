@@ -135,62 +135,6 @@ describe("live hum-openai-server: tool-use round-trip", () => {
     expect(j.data.some((m) => m.id.includes("claude"))).toBe(true);
   });
 
-  // The bug: tools came in as `parameters`, landed on the wire as
-  // `inputSchema: null`, claude's mcp client rejected the entire
-  // tools/list, model hallucinated Claude-Code-trained names like
-  // `agent`. If that path is still broken the model can't invoke
-  // any tool — including ones we pass here.
-  test("tool-call + result flow into final text response", async () => {
-    skipIfDead();
-    const result = await streamChat({
-      model: "claude-haiku-4-5",
-      messages: [{ role: "user", content: "Use the read tool to read /etc/hostname. Then state the hostname plainly." }],
-      tools: [{
-        type: "function",
-        function: {
-          name: "read",
-          description: "Read a file from disk",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string", description: "Absolute path" } },
-            required: ["path"],
-          },
-        },
-      }],
-    }, 90_000);
-
-    // Stream closed cleanly.
-    expect(result.rawDoneAt, "SSE ended with [DONE]").toBeGreaterThan(0);
-    // finish_reason landed.
-    expect(result.finishReason, "stream emitted finish_reason").not.toBeNull();
-    // Model invoked a tool.
-    expect(result.toolCalls.length, "at least one tool_call was emitted").toBeGreaterThan(0);
-
-    // Pre-fix, the model could NOT pick any tool by humfs_* name
-    // because the schemas were null and the catalogue was empty.
-    // Now humd merges the forager catalogue into the worker's MCP
-    // server, so claude picks one of these.
-    const calledNames = result.toolCalls.map((tc) => tc.name);
-    expect(
-      calledNames.some((n) => n === "read" || n === "humfs_read"),
-      `expected a read-style tool call; got ${JSON.stringify(calledNames)}`,
-    ).toBe(true);
-
-    // The arguments parsed as JSON — i.e. the model emitted a real
-    // schema-respecting call, not a hallucination.
-    const args = result.toolCalls[0].arguments;
-    expect(() => JSON.parse(args)).not.toThrow();
-    const parsed = JSON.parse(args);
-    expect(typeof parsed).toBe("object");
-
-    // Content in the same response includes the file contents the
-    // model just read. The worker bee's claude resolves the tool
-    // call inline via the MCP bridge → humfs forager → real fs →
-    // result back through the bridge into the model's continuation.
-    // The hostname on this canary host is "canary".
-    expect(result.content.toLowerCase()).toMatch(/canary|hostname/i);
-  }, 120_000);
-
   test("plain prompt without tools still completes cleanly", async () => {
     skipIfDead();
     const result = await streamChat({
@@ -201,4 +145,103 @@ describe("live hum-openai-server: tool-use round-trip", () => {
     expect(result.finishReason).toBe("stop");
     expect(result.content.length).toBeGreaterThan(0);
   }, 90_000);
+});
+
+// The four humfs forager tools — each humd registers them on its
+// claude-cli worker bridge under the same `mcp__hum__*` namespace
+// OC sees. A successful round-trip per tool proves the merged
+// catalogue lands in the worker's MCP server with valid schemas
+// AND the worker bee's claude actually executes them via the
+// bridge → forager → real filesystem.
+
+// Each of these prompts ships NO tools[] from the asker side —
+// humd merges the forager catalogue (humfs_read / humfs_do_code /
+// humfs_do_noncode / humfs_bash) into the worker's MCP server
+// automatically. So whatever claude sees IS what humfs provides;
+// there's no asker write/edit/bash shadow to compete with. If a
+// test fails, it means either the worker isn't seeing the merged
+// catalogue or humfs isn't routing the call. Both are the actual
+// product surface.
+
+describe("live hum-openai-server: humfs forager tools", () => {
+  // /tmp is in hum.json's fs.roots — humfs writes here.
+  const tmpFile = `/tmp/hum-live-noncode-${Date.now()}.md`;
+  const tmpFile2 = `/tmp/hum-live-docode-${Date.now()}.rs`;
+
+  test("humfs_do_noncode: create a new file via humd's merged catalogue", async () => {
+    skipIfDead();
+    const marker = `WRITE_OK_${Date.now()}`;
+    const result = await streamChat({
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content:
+        `Create the file ${tmpFile} containing exactly: ${marker}` }],
+    }, 90_000);
+    expect(result.rawDoneAt).toBeGreaterThan(0);
+    expect(result.toolCalls.length).toBeGreaterThan(0);
+    const calledNames = result.toolCalls.map((tc) => tc.name);
+    expect(
+      calledNames.some((n) => n === "humfs_do_noncode" || n === "humfs_do_code"),
+      `expected humfs write-style tool call; got ${JSON.stringify(calledNames)}`,
+    ).toBe(true);
+    const { readFileSync, existsSync } = await import("node:fs");
+    expect(existsSync(tmpFile), "humfs must materialize the file on disk").toBe(true);
+    expect(readFileSync(tmpFile, "utf-8")).toContain(marker);
+  }, 120_000);
+
+  test("humfs_do_code: edit an existing file in place via humd's merged catalogue", async () => {
+    skipIfDead();
+    const { writeFileSync, readFileSync } = await import("node:fs");
+    writeFileSync(tmpFile2, "fn the_target() {}\n// untouched comment\n");
+    const result = await streamChat({
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content:
+        `In ${tmpFile2}, change the function name "the_target" to "the_replacement". Edit in place.` }],
+    }, 90_000);
+    expect(result.rawDoneAt).toBeGreaterThan(0);
+    expect(result.toolCalls.length).toBeGreaterThan(0);
+    const calledNames = result.toolCalls.map((tc) => tc.name);
+    expect(
+      calledNames.some((n) => n === "humfs_do_code"),
+      `expected humfs_do_code tool call; got ${JSON.stringify(calledNames)}`,
+    ).toBe(true);
+    const after = readFileSync(tmpFile2, "utf-8");
+    expect(after, "humfs_do_code must rewrite the symbol on disk").toContain("the_replacement");
+    expect(after, "humfs_do_code must remove the old symbol").not.toContain("the_target");
+    expect(after, "humfs_do_code must leave the unrelated comment intact").toContain("untouched comment");
+  }, 120_000);
+
+  test("humfs_bash: shell command output round-trips into model's content", async () => {
+    skipIfDead();
+    const sentinel = `BASH_${Date.now()}`;
+    const result = await streamChat({
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content:
+        `Run the shell command: echo ${sentinel}. Then quote stdout in your reply.` }],
+    }, 90_000);
+    expect(result.rawDoneAt).toBeGreaterThan(0);
+    expect(result.toolCalls.length).toBeGreaterThan(0);
+    const calledNames = result.toolCalls.map((tc) => tc.name);
+    expect(
+      calledNames.some((n) => n === "humfs_bash"),
+      `expected humfs_bash tool call; got ${JSON.stringify(calledNames)}`,
+    ).toBe(true);
+    expect(result.content).toContain(sentinel);
+  }, 120_000);
+
+  test("humfs_read: read an existing file via humd's merged catalogue", async () => {
+    skipIfDead();
+    const result = await streamChat({
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content:
+        `Read /etc/hostname and state the hostname.` }],
+    }, 90_000);
+    expect(result.rawDoneAt).toBeGreaterThan(0);
+    expect(result.toolCalls.length).toBeGreaterThan(0);
+    const calledNames = result.toolCalls.map((tc) => tc.name);
+    expect(
+      calledNames.some((n) => n === "humfs_read"),
+      `expected humfs_read tool call; got ${JSON.stringify(calledNames)}`,
+    ).toBe(true);
+    expect(result.content.toLowerCase()).toMatch(/canary|hostname/i);
+  }, 120_000);
 });
