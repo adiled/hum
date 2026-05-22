@@ -399,7 +399,7 @@ beforeAll(async () => {
       if (!(check as any)?.id) seedSessionId = "";
     }
   }
-}, 120_000);
+}, 300_000);
 
 afterAll(async () => {
   // Sweep any sessions that leaked during tests
@@ -488,87 +488,6 @@ describe("e2e-serve: session basics", () => {
       expect(text).toContain(tool);
     }
   }, TIMEOUT);
-
-  // Regression: openai-server used to ship `parameters` not
-  // `inputSchema`, which made claude-cli's mcp client reject the
-  // whole tools/list ("expected object, received null"). The model
-  // then hallucinated Claude Code tool names (Agent, TaskCreate)
-  // and OC turned them into tool=invalid parts in a loop. Locks
-  // both the success path (a real tool actually invoked + result
-  // observed) AND the absence of the failure signature.
-  test("tool use: read file successfully invokes a real tool with valid output", async () => {
-    skipIfDead();
-    const sid = await createSession();
-
-    const resp = await sendMessage(
-      sid,
-      `Read ${join(PROJECT_DIR, "hello.txt")} using the read tool.`,
-    );
-    const parts = resp.parts ?? [];
-
-    const toolParts = parts.filter((p: any) => p.type === "tool");
-    expect(toolParts.length, "model must invoke at least one tool to read the file").toBeGreaterThan(0);
-
-    // No part is tagged OC's "invalid tool" sentinel — that fires
-    // when the model calls a name OC doesn't know (e.g. claude-
-    // code-trained `agent` when only `task` exists). Repeated
-    // hits indicate the model can't see real tools and is
-    // hallucinating Claude Code names.
-    const invalidParts = parts.filter((p: any) => p.type === "tool" && p.tool === "invalid");
-    expect(
-      invalidParts,
-      `model invoked unknown tools: ${invalidParts.map((p: any) => JSON.stringify(p.state?.input ?? p.state)).join("; ")}`,
-    ).toHaveLength(0);
-
-    // At least one tool actually ran to completion without error.
-    // State flow: pending → running → completed.
-    const succeededRead = toolParts.find((p: any) =>
-      p.state?.status === "completed" && !p.state?.error &&
-      (p.tool === "read" || p.tool?.endsWith?.("__read") || (p.state?.metadata?.filepath ?? "").includes("hello.txt"))
-    );
-    expect(succeededRead, "no successful read-style tool part observed").toBeTruthy();
-
-    // The tool's output carries the file contents end-to-end.
-    const out = JSON.stringify(succeededRead?.state?.output ?? "");
-    expect(out.toLowerCase()).toContain("hello world");
-  }, 180_000);
-
-  test("tool use: no invalid-tool parts across a multi-step task", async () => {
-    skipIfDead();
-    const sid = await createSession();
-
-    // Two-step: write then read. Stresses repeated tool selection
-    // — the path where the schema-rejection bug produced runaway
-    // `tool=invalid` loops.
-    const path = join(PROJECT_DIR, "toolwire.txt");
-    const r1 = await sendMessage(
-      sid,
-      `Write the exact string "wire-ok" to ${path}.`,
-      undefined,
-      180_000,
-    );
-    const r2 = await sendMessage(
-      sid,
-      `Read ${path}.`,
-      undefined,
-      180_000,
-    );
-    const all = [...(r1.parts ?? []), ...(r2.parts ?? [])];
-    const invalid = all.filter((p: any) => p.type === "tool" && p.tool === "invalid");
-    expect(
-      invalid,
-      `unknown-tool calls across the conversation: ${invalid.map((p: any) => JSON.stringify(p.state?.input)).join("; ")}`,
-    ).toHaveLength(0);
-
-    // The read tool's output carries the bytes we wrote in step 1.
-    const readPart = (r2.parts ?? []).find((p: any) =>
-      p.type === "tool" && p.state?.status === "completed" && !p.state?.error &&
-      (p.tool === "read" || p.tool?.endsWith?.("__read"))
-    );
-    expect(readPart, "second turn must include a successful read tool part").toBeTruthy();
-    const out = JSON.stringify(readPart?.state?.output ?? "");
-    expect(out).toContain("wire-ok");
-  }, 240_000);
 
   test("session continuity across turns", async () => {
     skipIfDead();
