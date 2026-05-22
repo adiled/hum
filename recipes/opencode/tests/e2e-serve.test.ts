@@ -489,6 +489,70 @@ describe("e2e-serve: session basics", () => {
     }
   }, TIMEOUT);
 
+  // Regression: openai-server used to ship `parameters` not
+  // `inputSchema`, which made claude-cli's mcp client reject the
+  // whole tools/list ("expected object, received null"). The model
+  // then hallucinated Claude Code tool names (Agent, TaskCreate)
+  // and OC turned them into tool=invalid parts in a loop. Locks
+  // both the success path (a real tool actually invoked + result
+  // observed) AND the absence of the failure signature.
+  test("tool use: read file successfully invokes the read tool", async () => {
+    skipIfDead();
+    const sid = await createSession();
+
+    const resp = await sendMessage(
+      sid,
+      `Read ${join(PROJECT_DIR, "hello.txt")} and tell me its contents verbatim.`,
+    );
+    const text = extractResponseText(resp).toLowerCase();
+    const parts = resp.parts ?? [];
+
+    // The file content reaches the model — only possible if the
+    // tool actually executed end-to-end.
+    expect(text).toContain("hello world");
+
+    const toolParts = parts.filter((p: any) => p.type === "tool");
+    expect(toolParts.length, "model must invoke at least one tool to read the file").toBeGreaterThan(0);
+
+    // No part is tagged with the magic OC "invalid tool" sentinel.
+    // That sentinel fires when the model calls a tool name OC
+    // doesn't know — which is exactly what we saw when claude
+    // couldn't see hum's catalogue and fell back to "agent".
+    const invalidParts = parts.filter((p: any) => p.type === "tool" && p.tool === "invalid");
+    expect(
+      invalidParts,
+      `model invoked unknown tools: ${invalidParts.map((p: any) => JSON.stringify(p.state?.input ?? p.state)).join("; ")}`,
+    ).toHaveLength(0);
+
+    // At least one tool part actually completed with output. The
+    // status flow OC uses: pending → running → completed.
+    const succeeded = toolParts.some((p: any) => p.state?.status === "completed" && !p.state?.error);
+    expect(succeeded, "at least one tool call must reach status=completed without error").toBe(true);
+  }, TIMEOUT);
+
+  test("tool use: no invalid-tool parts across a multi-step task", async () => {
+    skipIfDead();
+    const sid = await createSession();
+
+    // Two-step: write then read. Stresses repeated tool selection,
+    // which is the path where the old bug produced runaway loops.
+    const path = join(PROJECT_DIR, "toolwire.txt");
+    const r1 = await sendMessage(
+      sid,
+      `Create ${path} with the exact contents "wire-ok" (no newline trailing matters not). Confirm when done.`,
+    );
+    const r2 = await sendMessage(sid, `Now read ${path} and quote its contents.`);
+    const all = [...(r1.parts ?? []), ...(r2.parts ?? [])];
+    const invalid = all.filter((p: any) => p.type === "tool" && p.tool === "invalid");
+    expect(
+      invalid,
+      `unknown-tool calls across the conversation: ${invalid.map((p: any) => JSON.stringify(p.state?.input)).join("; ")}`,
+    ).toHaveLength(0);
+
+    const text = extractResponseText(r2).toLowerCase();
+    expect(text).toContain("wire-ok");
+  }, TIMEOUT);
+
   test("session continuity across turns", async () => {
     skipIfDead();
     const sid = await createSession();
