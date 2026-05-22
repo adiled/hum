@@ -295,6 +295,14 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let mut spec = SpawnSpec::new(sid.clone(), model.clone(), cwd);
     spec.system_prompt = system_prompt;
     spec.mcp_url = Some(mcp_url);
+    // Resume id flows from the asker shim (openai-server's
+    // /v1/responses captures claude's session_id from the
+    // chi:"session-ready" tone on turn N, then on turn N+1 attaches
+    // it here). When set, claude-cli is invoked with
+    // `--resume <id>` so the model sees the full prior conversation
+    // — including tool calls + results — as native MCP history,
+    // not as a text-marker pastiche.
+    spec.resume_id = tone.get("resume").and_then(Value::as_str).map(str::to_string);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
         spec.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }

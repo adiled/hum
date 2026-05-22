@@ -103,6 +103,15 @@ interface TenantUsage {
 const USAGE: Record<string, TenantUsage> = (() => {
   try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
 })();
+
+// sid → claude session_id (the "nestId" from chi:"session-ready").
+// Populated when the worker bee first reports it for a sid; on every
+// subsequent /v1/responses call for the same sid we pass it back in
+// chi:"prompt".resume so claude-cli is launched with `--resume <id>`
+// and rehydrates the full prior conversation (tool calls + their
+// results) from its session file. Without this, each turn would
+// spawn a fresh claude with zero memory.
+const SID_NEST: Map<string, string> = new Map();
 let usageDirty = false;
 function trackUsage(tenant: string, prompt: number, completion: number): void {
   const u = USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 };
@@ -549,9 +558,14 @@ async function start(): Promise<void> {
       if (!checkAuth(req)) return unauthorized(res);
       const tenant = tenantOf(req);
       if (!allow(tenant)) return tooManyRequests(res, tenant);
+      type ResponsesInputItem =
+        | { role?: string; content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> }
+        | { type: "function_call"; call_id?: string; name?: string; arguments?: string }
+        | { type: "function_call_output"; call_id?: string; output?: string }
+        | { type: "mcp_call"; id?: string; server_label?: string; name?: string; arguments?: string; output?: string };
       let body: {
         model?: string;
-        input?: string | Array<{ role?: string; content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> }>;
+        input?: string | Array<ResponsesInputItem>;
         instructions?: string;
         stream?: boolean;
         previous_response_id?: string;
@@ -566,41 +580,75 @@ async function start(): Promise<void> {
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
       if (!body.input) return bad(res, "input required");
 
-      // Normalize input → text. Input can be a string or a list of
-      // message-like items; image parts also get collected as
-      // attachments for vision-capable perches.
+      // Extract only the LATEST user message (the new turn). Prior
+      // turns' messages, function_calls, function_call_outputs, and
+      // mcp_calls are NOT replayed as text — claude-cli's --resume
+      // flag rehydrates them as native MCP history when we map
+      // sid → claude session_id. The asker (OC) ships full history
+      // on each call per OpenAI Responses spec; we extract just
+      // what's new and let claude pull the rest from disk.
       let userText = "";
       const respAttachments: ThrumAttachment[] = [];
       if (typeof body.input === "string") {
         userText = body.input;
       } else if (Array.isArray(body.input)) {
-        const parts: string[] = [];
-        for (const item of body.input) {
-          if (typeof item.content === "string") {
-            parts.push(item.content);
-          } else if (Array.isArray(item.content)) {
-            for (const p of item.content) {
-              if (p.type === "input_text" || p.type === "text") {
-                if (p.text) parts.push(p.text);
-              } else if (p.type === "input_image" || p.type === "image_url") {
-                const u = (p as { image_url?: { url?: string } }).image_url?.url;
-                if (u?.startsWith("data:")) {
-                  const m = u.match(/^data:([^;]+);base64,(.+)$/);
-                  if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
-                } else if (u) {
-                  respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
+        // Walk from the end backwards: the most recent user message
+        // is the actual new turn. Everything before it is replay
+        // claude already has via --resume.
+        const userMessages: string[] = [];
+        for (let i = body.input.length - 1; i >= 0; i--) {
+          const it = body.input[i] as ResponsesInputItem & { role?: string; type?: string };
+          if (it.type === "function_call" || it.type === "function_call_output" || it.type === "mcp_call") {
+            // Skip — already replayed via --resume.
+            continue;
+          }
+          if ((it as { role?: string }).role === "user" && "content" in it) {
+            const content = (it as { content?: unknown }).content;
+            if (typeof content === "string") {
+              userMessages.unshift(content);
+            } else if (Array.isArray(content)) {
+              const parts: string[] = [];
+              for (const p of content as Array<{ type: string; text?: string; image_url?: { url?: string } }>) {
+                if (p.type === "input_text" || p.type === "text") {
+                  if (p.text) parts.push(p.text);
+                } else if (p.type === "input_image" || p.type === "image_url") {
+                  const u = p.image_url?.url;
+                  if (u?.startsWith("data:")) {
+                    const m = u.match(/^data:([^;]+);base64,(.+)$/);
+                    if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
+                  } else if (u) {
+                    respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
+                  }
                 }
               }
+              if (parts.length) userMessages.unshift(parts.join("\n"));
             }
+            // Found the most recent user turn — stop walking back.
+            // Continuation context lives in claude's session file,
+            // not in our wire.
+            break;
           }
         }
-        userText = parts.join("\n");
+        userText = userMessages.join("\n");
       }
 
       const stream = body.stream === true;
       const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
       // sid: derived from previous_response_id (continuation) or input.
-      const anchor = body.previous_response_id ?? userText.slice(0, 256);
+      // Sid derivation priority:
+      //   1. OC's `x-session-affinity` header — present on every
+      //      continuation call from the OC TUI, stable across all
+      //      turns of one session. THIS is what lets us look up
+      //      the prior claude session_id and ship `resume`.
+      //   2. `previous_response_id` — the OpenAI Responses native
+      //      continuation anchor; we honor it when present.
+      //   3. Hash of the latest user message — last resort for
+      //      first-turn or one-shot callers without session state.
+      const sessionAffinity = req.headers["x-session-affinity"];
+      const anchor =
+        (typeof sessionAffinity === "string" && sessionAffinity.length > 0 ? sessionAffinity : undefined)
+        ?? body.previous_response_id
+        ?? userText.slice(0, 256);
       const sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(anchor).digest("hex").slice(0, 16)}`;
       const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
@@ -647,7 +695,14 @@ async function start(): Promise<void> {
         let nextOutputIndex = 1;
         thrum.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
-          if (chi === "chunk" && msg.chunkType === "text_delta") {
+          if (chi === "session-ready") {
+            // claude reports its session_id on its very first event;
+            // we stash it so the next /v1/responses for the same sid
+            // can request --resume. The nestId is stable across the
+            // whole turn — claude reuses the same session file.
+            const nid = msg.nestId as string | undefined;
+            if (nid) SID_NEST.set(sid, nid);
+          } else if (chi === "chunk" && msg.chunkType === "text_delta") {
             const delta = (msg.delta as string) ?? "";
             if (delta) {
               collected += delta;
@@ -727,7 +782,10 @@ async function start(): Promise<void> {
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
         thrum.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
-          if (chi === "chunk" && msg.chunkType === "text_delta") {
+          if (chi === "session-ready") {
+            const nid = msg.nestId as string | undefined;
+            if (nid) SID_NEST.set(sid, nid);
+          } else if (chi === "chunk" && msg.chunkType === "text_delta") {
             collected += (msg.delta as string) ?? "";
           } else if (chi === "finish") {
             usage = msg.usage as typeof usage;
@@ -762,6 +820,14 @@ async function start(): Promise<void> {
 
       req.on("close", () => { thrum.off(sid); });
 
+      // Resume token: when we have a previously-seen claude session_id
+      // for this sid, ship it so the worker spawns claude with
+      // `--resume <id>` and the model rehydrates full prior context
+      // (tool calls + results) from its session file. First turn:
+      // no entry yet, claude spawns fresh and reports its
+      // session_id back via chi:"session-ready" which we capture
+      // for the next turn.
+      const resume = SID_NEST.get(sid);
       thrum.send({
         chi: "prompt",
         sid,
@@ -772,6 +838,7 @@ async function start(): Promise<void> {
         ...(tools ? { tools } : {}),
         ...(respAttachments.length > 0 ? { attachments: respAttachments } : {}),
         ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
+        ...(resume ? { resume } : {}),
       });
       return;
     }
