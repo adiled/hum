@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 import { OpenAITranslator } from "./transform.ts";
+import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
+export { toolsFromOpenAI } from "./tools.ts";
 
 interface NestlingConfig {
   host?: string;
@@ -157,34 +159,6 @@ interface OpenAIMessage {
   name?: string;
 }
 
-interface OpenAITool {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
-}
-
-interface ToolSpec {
-  name: string;
-  description?: string;
-  parameters?: Record<string, unknown>;
-}
-
-function toolsFromOpenAI(tools: OpenAITool[] | undefined): ToolSpec[] | undefined {
-  if (!Array.isArray(tools) || tools.length === 0) return undefined;
-  const out: ToolSpec[] = [];
-  for (const t of tools) {
-    if (t?.type !== "function" || !t.function?.name) continue;
-    out.push({
-      name: t.function.name,
-      ...(t.function.description ? { description: t.function.description } : {}),
-      ...(t.function.parameters ? { parameters: t.function.parameters } : {}),
-    });
-  }
-  return out.length > 0 ? out : undefined;
-}
 
 function flatten(content: OpenAIMessage["content"]): string {
   if (typeof content === "string") return content;

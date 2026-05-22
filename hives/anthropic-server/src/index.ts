@@ -230,7 +230,7 @@ function toolsToThrum(tools: AnthropicTool[] | undefined) {
   return tools.map((t) => ({
     name: t.name,
     ...(t.description ? { description: t.description } : {}),
-    ...(t.input_schema ? { parameters: t.input_schema } : {}),
+    inputSchema: t.input_schema ?? {},
   }));
 }
 

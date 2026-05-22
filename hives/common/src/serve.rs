@@ -182,15 +182,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .unwrap_or_default();
                 let forager_tools: Vec<ToolDef> = tone.get("foragerTools")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter()
-                        .filter_map(|v| serde_json::from_value::<ToolDef>(v.clone()).ok())
-                        .collect())
+                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
                     .unwrap_or_default();
                 let nestler_tools: Vec<ToolDef> = tone.get("tools")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter()
-                        .filter_map(|v| serde_json::from_value::<ToolDef>(v.clone()).ok())
-                        .collect())
+                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
                     .unwrap_or_default();
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
                     bridge.set_catalogue(&sid, forager_tools, nestler_tools, &provided);
@@ -253,6 +249,25 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 struct CellBundle {
     stdin: mpsc::Sender<String>,
     kill: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// Build a `ToolDef` from a wire tone entry. MCP standard field is
+/// `inputSchema`; tolerate legacy `parameters` (some hum-side
+/// shims still emit it). Drop entries with no name OR no usable
+/// schema — claude's mcp client rejects the entire tools/list if
+/// any entry has `inputSchema: null`, so one bad apple kills all
+/// tools for the session.
+fn parse_tool_def(v: &Value) -> Option<ToolDef> {
+    let name = v.get("name").and_then(Value::as_str)?.to_string();
+    let description = v.get("description").and_then(Value::as_str).unwrap_or("").to_string();
+    let schema = v.get("inputSchema")
+        .or_else(|| v.get("parameters"))
+        .cloned();
+    let schema = match schema {
+        Some(s) if s.is_object() => s,
+        _ => serde_json::json!({ "type": "object", "properties": {} }),
+    };
+    Some(ToolDef { name, description, input_schema: schema })
 }
 
 async fn handle_prompt<W: WorkerBee + 'static>(

@@ -4221,6 +4221,7 @@ dependencies = [
  "config",
  "ensemble",
  "humd",
+ "mcp",
  "nest",
  "parking_lot",
  "serde_json",
