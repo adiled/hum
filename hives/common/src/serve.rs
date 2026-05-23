@@ -29,13 +29,12 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
+use nest::{encode_prompt, Listener, SpawnSpec, WorkerBee};
 
 use crate::identity::load_or_mint_bee_key;
 use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
@@ -206,32 +205,29 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 if !sid.is_empty() {
                     let r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
-                        if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
-                            let _ = bundle.stdin.send(encode_cancel(rid)).await;
-                        }
+                        // stdin is closed after prompt send (forces
+                        // claude's EOF-on-finish). encode_cancel via
+                        // stdin no longer reaches the child — kill
+                        // the process is the only stop signal we
+                        // have. Worker MCP bridge in-flight calls
+                        // are aborted by the bridge HTTP timeout.
                         (bundle.kill)();
                     }
                 }
             }
             "tool-result" => {
                 let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
-                // Two paths: tool-results for calls we shipped via
-                // the local MCP bridge (callId prefix "call-")
-                // resolve there; tool-results for calls claude
-                // issued via its own native tool-use feed into the
-                // cell's stdin via encode_tool_result.
+                // All tool round-trips now resolve through the
+                // worker MCP bridge (R4 architecture). Anything
+                // arriving here with a matching callId resolves;
+                // un-matched chi:tool-result tones are orphans we
+                // can't ship to claude (stdin closed) — log + drop.
                 let resolved_by_bridge = call_id.as_deref()
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
-                if !resolved_by_bridge && !sid.is_empty() {
-                    let r = cells.lock().await;
-                    if let Some(bundle) = r.get(&sid) {
-                        if let (Some(call_id), Some(result)) = (
-                            tone.get("callId").and_then(Value::as_str),
-                            tone.get("result").and_then(Value::as_str),
-                        ) {
-                            let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
-                        }
+                if !resolved_by_bridge {
+                    if let Some(cid) = call_id.as_deref() {
+                        trace!(call_id = cid, "worker.tool-result.orphan");
                     }
                 }
             }
@@ -247,7 +243,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 }
 
 struct CellBundle {
-    stdin: mpsc::Sender<String>,
     kill: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -315,15 +310,26 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let events = cell.events.clone();
     let kill = cell.kill.clone();
 
-    cells.lock().await.insert(sid.clone(), CellBundle { stdin: stdin.clone(), kill: kill.clone() });
-
     // First user turn — murmur the prompt content as a single user
-    // message. Multi-turn continuity arrives as subsequent chi:"prompt"
-    // tones with the same sid (the worker's pool decides whether to
-    // reuse — but in the serve_worker loop each prompt currently
-    // spawns its own cell; pooling is an optimization for later).
+    // message. Then immediately drop both stdin Sender clones so
+    // the channel closes, the stdin pump exits, and the child's
+    // stdin pipe gets EOF. Current claude `-p` requires the EOF
+    // even in stream-json mode — without it, claude blocks on
+    // epoll_wait forever after emitting its `result` event, and
+    // child processes pile up (52 alive in production before this
+    // fix).
+    //
+    // Side effect: chi:"cancel" and non-MCP chi:"tool-result"
+    // arms can no longer push down stdin since the channel's
+    // gone. That's the right tradeoff under the worker MCP
+    // bridge architecture — all tool round-trips resolve via
+    // bridge HTTP, not stdin. The CellBundle still carries the
+    // kill handle so chi:"cancel" can force-exit the child.
+    cells.lock().await.insert(sid.clone(), CellBundle { kill: kill.clone() });
     stdin.send(encode_prompt(&content)).await
         .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
+    drop(stdin);
+    drop(cell.stdin);
 
     // Dispatch loop — Cell.events → chi:"chunk" tones over thrum.
     // `finish_sent` lets the dispatch path claim the finish emit when
@@ -349,11 +355,53 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         trace!(sid = %sid_for_loop, "worker.dispatch.exit");
     });
 
-    // Wait for exit. Don't abort dispatch — let it drain naturally so
-    // a trailing `result` event still reaches the listener and emits
-    // the canonical finish. Only emit a fallback finish if dispatch
-    // never saw a `result` (e.g. cell crashed mid-stream).
+    // Wait for exit — but with a deadline. claude `-p` should exit
+    // after emitting its `result` event (one turn). When it doesn't
+    // (stale MCP bridge URL after worker restart, tool-call hang,
+    // streaming wait), nothing reaped the child and processes
+    // accumulated — 52 alive simultaneously in production. Now:
+    //
+    // 1. Wait at most KILL_AFTER_FINISH_MS after finish_sent fires
+    //    before sending SIGKILL via the cell's kill handle.
+    // 2. If no finish ever fires, KILL_NO_FINISH_MS is the absolute
+    //    ceiling. Crash-path fallback finish is still emitted so
+    //    askers don't hang on /v1/{responses,chat/completions} SSE.
+    //
+    // Tuned high enough that healthy turns finish well within the
+    // grace window; tuned low enough that orphans never pile up.
+    const KILL_AFTER_FINISH_MS: u64 = 5_000;
+    const KILL_NO_FINISH_MS: u64 = 600_000;
+
+    let finish_watcher = finish_sent.clone();
+    let kill_for_timeout = kill.clone();
+    let sid_for_timeout = sid.clone();
+    let exit_killer = tokio::spawn(async move {
+        let start = std::time::Instant::now();
+        let mut killed = false;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if killed { return; }
+            let elapsed = start.elapsed();
+            if finish_watcher.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(KILL_AFTER_FINISH_MS)).await;
+                if !killed {
+                    warn!(sid = %sid_for_timeout, "worker.cell.kill.after-finish.grace");
+                    (kill_for_timeout)();
+                    killed = true;
+                    return;
+                }
+            }
+            if elapsed.as_millis() as u64 > KILL_NO_FINISH_MS {
+                warn!(sid = %sid_for_timeout, "worker.cell.kill.no-finish.ceiling");
+                (kill_for_timeout)();
+                killed = true;
+                return;
+            }
+        }
+    });
+
     let exit_code = cell.exited.await.unwrap_or(1);
+    exit_killer.abort();
     let _ = dispatch.await;
     if !finish_sent.load(Ordering::SeqCst) {
         let finish = json!({

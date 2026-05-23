@@ -24,7 +24,7 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{trace, warn};
 
-use mcp::protocol::{wrap_tool_result, JsonRpcRequest, JsonRpcResponse, ToolDef};
+use mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ToolDef};
 use mcp::catalogue;
 use mcp::translate;
 

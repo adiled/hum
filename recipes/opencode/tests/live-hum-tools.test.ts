@@ -370,6 +370,47 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     expect(after).toContain("untouched comment");
   }, 120_000);
 
+  // Regression: each chi:"prompt" spawns a fresh claude `-p`. If
+  // any one hangs (stale MCP bridge URL after worker restart,
+  // tool-call wait, streaming wait), nothing reaped the child.
+  // In production we hit 52 simultaneous claude processes. Fix
+  // adds a kill-after-finish grace deadline in nest-common
+  // handle_prompt. This test fires N prompts back-to-back and,
+  // after a grace window, asserts the claude proc count stays
+  // bounded.
+  test("process budget: N prompts do not leak claude children", async () => {
+    skipIfDead();
+    const { spawn: cpSpawn } = await import("node:child_process");
+    const countClaude = async (): Promise<number> => new Promise((res) => {
+      const p = cpSpawn("sh", ["-c", "ps -u clwnd -o cmd | grep -c '^/home/clwnd/.local/bin/claude -p '"]);
+      let buf = "";
+      p.stdout.on("data", (c: Buffer) => { buf += c.toString(); });
+      p.on("exit", () => res(parseInt(buf.trim(), 10) || 0));
+    });
+    const before = await countClaude();
+    // 6 distinct prompts → 6 distinct sids via x-session-affinity
+    // pinning won't apply (no header here), so each is its own
+    // turn. Pure shape: assert no monotonic growth.
+    for (let i = 0; i < 6; i++) {
+      await streamResponses({
+        model: "claude-haiku-4-5",
+        input: [{ role: "user", content: [{ type: "input_text", text: `Reply with: turn-${i}` }] }],
+      }, 60_000);
+    }
+    // Grace window > KILL_AFTER_FINISH_MS (5s) so the deadline
+    // killer has time to reap any straggler.
+    await new Promise((r) => setTimeout(r, 8_000));
+    const after = await countClaude();
+    // Allow a small ceiling for the worker daemon itself + any
+    // mid-flight grace-period claude. Hard cap: must NOT grow by
+    // anywhere near N (= 6).
+    expect(
+      after - before,
+      `claude proc count grew by ${after - before} after 6 prompts ` +
+      `(was ${before}, now ${after}) — kill-after-finish deadline failed`,
+    ).toBeLessThanOrEqual(2);
+  }, 180_000);
+
   test("humfs_bash via mcp_call: stdout surfaces in mcp_call output", async () => {
     skipIfDead();
     const sentinel = `BASH_${Date.now()}`;

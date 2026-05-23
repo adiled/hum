@@ -840,9 +840,30 @@ impl ToneSink for HumdSink {
 
                     // Local store — single source of truth for routing
                     // decisions humd makes (worker lookup, passthrough
-                    // membership). Pruned on disconnect.
+                    // membership). thrumd disconnect doesn't notify
+                    // humd, so manifests linger after a bee restart
+                    // and chi:"tool-call" routes to a dead client_id
+                    // (the bf2018da bug). When the SAME bee identity
+                    // (hid) re-hellos under a new client_id, evict
+                    // the prior client_id entries. Workers, foragers,
+                    // and nestlers all benefit.
                     if client_id != "ensemble" {
-                        self.manifests.write().insert(client_id.to_string(), manifest.clone());
+                        let mut m = self.manifests.write();
+                        if let Some(new_hid) = manifest.hid {
+                            let stale: Vec<String> = m.iter()
+                                .filter_map(|(cid, mf)| match mf.hid {
+                                    Some(h) if h == new_hid && cid != client_id => Some(cid.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            for cid in &stale {
+                                trace!(stale_client_id = %cid, hid = %new_hid.short(),
+                                    "manifest.evict.stale-rehello");
+                                m.remove(cid);
+                            }
+                        }
+                        m.insert(client_id.to_string(), manifest.clone());
+                        drop(m);
                         if bee.iter().any(|b| b == "worker") {
                             info!(client_id, ?models, "worker.registered");
                         }
