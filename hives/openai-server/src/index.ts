@@ -782,6 +782,20 @@ async function start(): Promise<void> {
           if (!open) return;
           openItems.delete(blockIdx);
           if (open.kind === "reasoning") {
+            sse("response.reasoning_summary_text.done", {
+              type: "response.reasoning_summary_text.done",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              summary_index: 0,
+              text: open.text,
+            });
+            sse("response.reasoning_summary_part.done", {
+              type: "response.reasoning_summary_part.done",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              summary_index: 0,
+              part: { type: "summary_text", text: open.text },
+            });
             sse("response.reasoning.done", {
               type: "response.reasoning.done",
               item_id: open.itemId,
@@ -852,6 +866,13 @@ async function start(): Promise<void> {
               output_index: idx,
               item: { id: rsId, type: "reasoning", status: "in_progress", summary: [] },
             });
+            sse("response.reasoning_summary_part.added", {
+              type: "response.reasoning_summary_part.added",
+              item_id: rsId,
+              output_index: idx,
+              summary_index: 0,
+              part: { type: "summary_text", text: "" },
+            });
             return;
           }
           if (chi === "chunk" && chunkType === "reasoning_delta") {
@@ -860,11 +881,21 @@ async function start(): Promise<void> {
             const delta = (msg.delta as string) ?? "";
             if (!delta) return;
             open.text += delta;
+            // Raw thinking text stream.
             sse("response.reasoning.delta", {
               type: "response.reasoning.delta",
               item_id: open.itemId,
               output_index: open.outputIndex,
               content_index: 0,
+              delta,
+            });
+            // Summary-stream surface (what most OAI Responses
+            // consumers key on for showing a reasoning panel).
+            sse("response.reasoning_summary_text.delta", {
+              type: "response.reasoning_summary_text.delta",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              summary_index: 0,
               delta,
             });
             return;

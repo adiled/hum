@@ -448,7 +448,7 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     expect(seqs[0]).toBe(0);
   }, 60_000);
 
-  test("reasoning: /v1/responses emits reasoning item + response.reasoning.delta", async () => {
+  test("reasoning: /v1/responses emits reasoning item + raw + summary streams", async () => {
     skipIfDead();
     const result = await streamResponses({
       model: "claude-haiku-4-5",
@@ -456,11 +456,13 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     }, 90_000);
     const reasoningItems = result.items.filter((i) => i.type === "reasoning");
     expect(reasoningItems.length, "at least one reasoning output_item.done").toBeGreaterThan(0);
-    const reasoningDeltas = result.events.filter((e) => e.type === "response.reasoning.delta");
-    expect(reasoningDeltas.length, "reasoning deltas streamed").toBeGreaterThan(0);
-    // First delta carries real text once the worker has thinking enabled.
-    const deltaText = (reasoningDeltas[0] as { delta?: string }).delta ?? "";
-    expect(deltaText.length, "delta text non-empty").toBeGreaterThan(0);
+    const rawDeltas = result.events.filter((e) => e.type === "response.reasoning.delta");
+    expect(rawDeltas.length, "raw reasoning deltas streamed").toBeGreaterThan(0);
+    expect(((rawDeltas[0] as { delta?: string }).delta ?? "").length).toBeGreaterThan(0);
+    const summaryDeltas = result.events.filter((e) => e.type === "response.reasoning_summary_text.delta");
+    expect(summaryDeltas.length, "summary text deltas streamed").toBeGreaterThan(0);
+    expect(result.events.some((e) => e.type === "response.reasoning_summary_part.added")).toBe(true);
+    expect(result.events.some((e) => e.type === "response.reasoning_summary_part.done")).toBe(true);
   }, 120_000);
 
   test("reasoning: /v1/chat/completions emits delta.reasoning_content", async () => {
