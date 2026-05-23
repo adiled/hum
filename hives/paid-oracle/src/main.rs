@@ -31,9 +31,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tracing::{info, warn};
 
-const NESTLING_NAME: &str = "paid-oracle";
-const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
+const HIVE_NAME: &str = "paid-oracle";
+const BEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const QUOTE_TOOL: &str = "quote";
+const CAPABILITY: &str = "x402:quote";
 /// Quote price in atomic USDC (6 decimals). `50_000` = $0.05.
 /// Display price in cents (0.01 USD units). Atomic amount is computed
 /// at runtime from the configured chain's USDC decimals so the same
@@ -165,7 +166,7 @@ async fn main() -> Result<()> {
     let mut lines = BufReader::new(rd).lines();
 
     send(&wr, &hello(&cfg)).await?;
-    info!(bee = NESTLING_NAME, "thrum.handshake.sent");
+    info!(hive = HIVE_NAME, "thrum.handshake.sent");
 
     while let Some(line) = lines.next_line().await? {
         if line.is_empty() {
@@ -202,10 +203,33 @@ fn hello(cfg: &Config) -> Value {
     json!({
         "chi": Chi::Hello,
         "rid": format!("hello-{}", uuid::Uuid::new_v4()),
-        "from": NESTLING_NAME,
-        "bee": NESTLING_NAME,
-        "version": NESTLING_VERSION,
+        "from": HIVE_NAME,
+        "bee": ["forager"],
+        "hive": HIVE_NAME,
+        "version": BEE_VERSION,
         "protoVersion": THRUM_VERSION,
+        "provides": [CAPABILITY],
+        "tools": [
+            {
+                "name": QUOTE_TOOL,
+                "description": "Get a real-time market quote for a token pair (e.g. ETH-USD). Paid per call via on-chain USDC; first call returns chi:error 402 with terms, asker pays + resubmits with paymentProof.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pair": { "type": "string", "description": "Pair symbol like ETH-USD." },
+                        "paymentProof": {
+                            "type": "object",
+                            "description": "Optional. Set on resubmission after paying.",
+                            "properties": {
+                                "txHash": { "type": "string" },
+                                "nonce":  { "type": "string" }
+                            }
+                        }
+                    },
+                    "required": ["pair"]
+                }
+            }
+        ],
         "propensity": {
             "statefulness": "stateless",
             "richness": "lean",

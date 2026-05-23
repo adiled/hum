@@ -1,0 +1,16 @@
+{
+  "name": "@hum/paid-oracle-buyer",
+  "version": "0.31.7",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "keygen": "bun keygen.ts",
+    "buy": "bun buy.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

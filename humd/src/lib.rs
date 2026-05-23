@@ -545,12 +545,46 @@ impl ToneSink for HumdSink {
         }
 
         if !matches!(chi, Some(Chi::Hello)) {
-            let is_worker = {
+            let bee_kind: Vec<String> = {
                 let m = self.manifests.read();
-                m.get(client_id)
-                    .map(|man| man.bee.iter().any(|b| b == "worker"))
-                    .unwrap_or(false)
+                m.get(client_id).map(|man| man.bee.clone()).unwrap_or_default()
             };
+            let is_worker = bee_kind.iter().any(|b| b == "worker");
+            // chi:"tool-call" from any sender — workers emit them
+            // mid-turn, askers/foragers fire them to consume each
+            // others' surfaces. The routing is the same: find a
+            // forager whose tools[] advertises this toolName.
+            let _ = &is_worker;
+            if !is_worker
+                && matches!(chi, Some(Chi::ToolCall))
+                && client_id != "ensemble"
+            {
+                let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
+                let tool_name = tone.get("toolName").and_then(Value::as_str)
+                    .or_else(|| tone.get("name").and_then(Value::as_str))
+                    .map(str::to_string);
+                if !sid.is_empty() {
+                    self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
+                    self.thrum.claim_sigil(client_id, &sid);
+                }
+                if let Some(tn) = tool_name.as_ref() {
+                    let forager_cid: Option<String> = self.manifests.read()
+                        .iter()
+                        .find(|(_, m)| m.bee.iter().any(|b| b == "forager")
+                            && m.tools.iter().any(|t| &t.name == tn))
+                        .map(|(cid, _)| cid.clone());
+                    if let Some(fcid) = forager_cid {
+                        let call_id = tone.get("callId").and_then(Value::as_str)
+                            .unwrap_or("").to_string();
+                        if !call_id.is_empty() {
+                            self.tool_routes.write().insert(call_id.clone(), client_id.to_string());
+                        }
+                        trace!(from = client_id, to = %fcid, %tn, %call_id, "tool-call.route.from-asker");
+                        self.thrum.thrum_to(&fcid, tone);
+                        return;
+                    }
+                }
+            }
             if is_worker {
                 // tool-call interception. Three-tier routing:
                 //
@@ -568,6 +602,16 @@ impl ToneSink for HumdSink {
                 if matches!(chi, Some(Chi::ToolCall)) {
                     let sid_for_lookup = tone.get("sid").and_then(Value::as_str)
                         .map(str::to_string).unwrap_or_default();
+                    // The originator (asker bee) gets the sid sigil so any
+                    // chi:"tool-result" / chi:"error" broadcasted on this
+                    // sid reaches its mailbox. Foragers like paid-oracle
+                    // reply with chi:"error" 402 before chi:"tool-result"
+                    // ever fires; without this claim the buyer never sees
+                    // the challenge.
+                    if !sid_for_lookup.is_empty() {
+                        self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid_for_lookup, &self.hive_tag));
+                        self.thrum.claim_sigil(client_id, &sid_for_lookup);
+                    }
                     let tool_name = tone.get("toolName").and_then(Value::as_str)
                         .or_else(|| tone.get("name").and_then(Value::as_str))
                         .map(str::to_string);
@@ -1249,6 +1293,36 @@ impl ToneSink for HumdSink {
                     advanced,
                     "thrum.recv.wane-sync"
                 );
+            }
+            Some(Chi::Error) => {
+                // Foragers can reply chi:"error" instead of chi:"tool-result"
+                // (paid-oracle returns 402 challenges this way). Same
+                // routing as tool-result: callId → originator.
+                let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
+                if let Some(cid) = call_id.as_deref() {
+                    let origin_peer = self.incoming_tool_calls.read().get(cid).copied();
+                    if let (Some(origin_peer), Some(ens)) = (origin_peer, &self.ensemble) {
+                        let mut routed = tone.clone();
+                        if let Some(obj) = routed.as_object_mut() {
+                            obj.insert("to".into(), Value::String(origin_peer.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                        }
+                        trace!(call_id = cid, to = %origin_peer.short(), "error.route.to-origin-peer");
+                        if let Err(e) = ens.route(routed).await {
+                            warn!(err = %e, "error.peer.route.failed");
+                        }
+                        return;
+                    }
+                    if let Some(originator) = self.tool_routes.read().get(cid).cloned() {
+                        trace!(call_id = cid, %originator, "error.route.to-originator");
+                        self.thrum.thrum_to(&originator, tone.clone());
+                        return;
+                    }
+                }
+                if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
+                    trace!(%sid, "error.broadcast.fallback");
+                    self.thrum.thrum_broadcast(&sid, &self.hive_tag, tone);
+                }
             }
             Some(Chi::ToolResult) => {
                 // Four-arm resolution:
