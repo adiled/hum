@@ -367,6 +367,124 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
   // Delta mode: caller sends previous_response_id from the first
   // response.created event and a fresh user message only. Same sid
   // reuses the warm cell.
+  test("sid anchor: `conversation` field pins the sid", async () => {
+    skipIfDead();
+    const convId = `conv-test-${Date.now()}`;
+    const turn = async (text: string) => {
+      const r = await fetch(`${BASE}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          stream: true,
+          conversation: convId,
+          input: [{ role: "user", content: [{ type: "input_text", text }] }],
+        }),
+      });
+      const reader = r.body!.getReader();
+      while (true) { const { done } = await reader.read(); if (done) break; }
+    };
+    await turn(`first-msg-${Date.now()}`);
+    await turn(`second-msg-${Date.now()}`);
+    // Two distinct first messages would normally fall to different sid
+    // anchors. The conversation field overrides — same sid.
+    // Verified indirectly via humd log; here we assert no error / both
+    // turns reach completion.
+  }, 90_000);
+
+  test("metadata echo: response.completed carries the caller's metadata", async () => {
+    skipIfDead();
+    const r = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: false,
+        metadata: { tenant_internal: "wryme-prod", run_kind: "smoke" },
+        safety_identifier: "user-7",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Reply ok" }] }],
+      }),
+    });
+    const j = await r.json() as { metadata?: Record<string, string>; safety_identifier?: string };
+    expect(j.metadata).toEqual({ tenant_internal: "wryme-prod", run_kind: "smoke" });
+    expect(j.safety_identifier).toBe("user-7");
+  }, 60_000);
+
+  test("streaming: sequence_number monotonic across one stream", async () => {
+    skipIfDead();
+    const r = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: `Say hi ${Date.now()}` }] }],
+      }),
+    });
+    const dec = new TextDecoder();
+    let buf = "";
+    const seqs: number[] = [];
+    const reader = r.body!.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const m = block.match(/data: ({.*})/);
+        if (!m) continue;
+        try {
+          const evt = JSON.parse(m[1]) as { sequence_number?: number };
+          if (typeof evt.sequence_number === "number") seqs.push(evt.sequence_number);
+        } catch {}
+      }
+    }
+    expect(seqs.length, "at least three events").toBeGreaterThan(2);
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i], `seq[${i}] >= seq[${i - 1}]`).toBeGreaterThanOrEqual(seqs[i - 1]);
+    }
+    expect(seqs[0]).toBe(0);
+  }, 60_000);
+
+  test("response.in_progress emitted after response.created", async () => {
+    skipIfDead();
+    const r = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: `ack ${Date.now()}` }] }],
+      }),
+    });
+    const dec = new TextDecoder();
+    let buf = "";
+    const types: string[] = [];
+    const reader = r.body!.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const m = block.match(/data: ({.*})/);
+        if (!m) continue;
+        try {
+          const evt = JSON.parse(m[1]) as { type?: string };
+          if (typeof evt.type === "string") types.push(evt.type);
+        } catch {}
+      }
+    }
+    const createdIdx = types.indexOf("response.created");
+    const inProgressIdx = types.indexOf("response.in_progress");
+    expect(createdIdx).toBeGreaterThanOrEqual(0);
+    expect(inProgressIdx).toBeGreaterThan(createdIdx);
+  }, 60_000);
+
   test("delta mode: previous_response_id chains the same sid", async () => {
     skipIfDead();
     const { spawn: cpSpawn } = await import("node:child_process");

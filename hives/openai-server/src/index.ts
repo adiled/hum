@@ -106,19 +106,37 @@ const USAGE: Record<string, TenantUsage> = (() => {
 
 // sid → claude session_id. Populated from chi:"session-ready" so
 // follow-up turns can ship `resume` in chi:"prompt".
-const SID_NEST: Map<string, string> = new Map();
+const sid_to_nestid: Map<string, string> = new Map();
 
 // responseId → sid. Lets callers chain via OpenAI Responses
 // `previous_response_id` even though hum's sid is independent.
 // Capped to avoid unbounded growth; oldest entries evicted FIFO.
-const RESPONSE_TO_SID: Map<string, string> = new Map();
+const bloom_to_sid: Map<string, string> = new Map();
+
+// sid → caller-owned bookkeeping (metadata, safety_identifier,
+// prompt_cache_key). Echoed back on response.completed per spec.
+interface SidMeta {
+  metadata?: Record<string, string>;
+  safety_identifier?: string;
+  prompt_cache_key?: string;
+}
+const sid_to_meta: Map<string, SidMeta> = new Map();
+const SID_META_CAP = 4096;
+function rememberSidMeta(sid: string, meta: SidMeta): void {
+  if (Object.keys(meta).length === 0) return;
+  if (sid_to_meta.size >= SID_META_CAP) {
+    const first = sid_to_meta.keys().next().value;
+    if (first) sid_to_meta.delete(first);
+  }
+  sid_to_meta.set(sid, meta);
+}
 const RESPONSE_MAP_CAP = 4096;
 function rememberResponse(responseId: string, sid: string): void {
-  if (RESPONSE_TO_SID.size >= RESPONSE_MAP_CAP) {
-    const first = RESPONSE_TO_SID.keys().next().value;
-    if (first) RESPONSE_TO_SID.delete(first);
+  if (bloom_to_sid.size >= RESPONSE_MAP_CAP) {
+    const first = bloom_to_sid.keys().next().value;
+    if (first) bloom_to_sid.delete(first);
   }
-  RESPONSE_TO_SID.set(responseId, sid);
+  bloom_to_sid.set(responseId, sid);
 }
 let usageDirty = false;
 function trackUsage(tenant: string, prompt: number, completion: number): void {
@@ -544,7 +562,7 @@ async function start(): Promise<void> {
         thrum.send({
           chi: "prompt",
           sid,
-          nestling: "openai-server",
+          hive: "openai-server",
           modelId: model,
           content: userPrompt,
           ...(systemPrompt ? { systemPrompt } : {}),
@@ -577,9 +595,28 @@ async function start(): Promise<void> {
         instructions?: string;
         stream?: boolean;
         previous_response_id?: string;
+        conversation?: string | { id: string } | null;
+        user?: string;
+        metadata?: Record<string, string>;
+        safety_identifier?: string;
+        prompt_cache_key?: string;
+        prompt_cache_retention?: string;
+        store?: boolean;
+        allowed_tools?: string[];
+        service_tier?: string;
+        truncation?: string;
+        reasoning?: { effort?: string; summary?: string };
+        text?: { verbosity?: string };
+        include?: string[];
+        background?: boolean;
+        stream_options?: Record<string, unknown>;
         max_output_tokens?: number;
+        max_tool_calls?: number;
         temperature?: number;
         top_p?: number;
+        top_logprobs?: number;
+        frequency_penalty?: number;
+        presence_penalty?: number;
         tools?: OpenAITool[];
         tool_choice?: string | { type: string };
         parallel_tool_calls?: boolean;
@@ -603,17 +640,25 @@ async function start(): Promise<void> {
       // turn. Image attachments collected either way.
       let userText = "";
       let firstUserMsg = "";
+      let firstItemId = "";
       const respAttachments: ThrumAttachment[] = [];
       if (typeof body.input === "string") {
         userText = body.input;
         firstUserMsg = body.input;
       } else if (Array.isArray(body.input)) {
+        if (body.input.length > 0) {
+          const first = body.input[0] as { id?: unknown };
+          if (typeof first?.id === "string") firstItemId = first.id;
+        }
         const allUserTurns: string[] = [];
         for (const item of body.input) {
           const it = item as ResponsesInputItem & { role?: string; type?: string };
-          if (it.type === "function_call" || it.type === "function_call_output" || it.type === "mcp_call") {
-            continue;
-          }
+          // Non-message item types: function_call, function_call_output,
+          // mcp_call, reasoning, custom tool calls, apply_patch,
+          // file_search_call, image_generation_call, provider extensions
+          // (provider_slug:custom_type). All skipped — claude pulls
+          // history via --resume; provider extensions are opaque.
+          if (typeof it.type === "string" && it.type !== "message") continue;
           if ((it as { role?: string }).role !== "user" || !("content" in it)) continue;
           const content = (it as { content?: unknown }).content;
           let collected = "";
@@ -644,25 +689,42 @@ async function start(): Promise<void> {
           : (allUserTurns[allUserTurns.length - 1] ?? "");
       }
 
-      // sid:
-      //   delta:        lookup mapped sid by previous_response_id; if
-      //                 unknown, hash the id as anchor (still chains
-      //                 same id → same sid across calls).
-      //   full-history: hash the conversation root (first user msg).
+      // Sid resolver cascade:
+      //   1. previous_response_id → bloom_to_sid lookup (or self-hash on miss)
+      //   2. conversation          → canonical session anchor per spec
+      //   3. metadata.session_id   → caller-explicit metadata convention
+      //   4. firstItemId           → spec-required item id when present
+      //   5. hash(firstUserMsg)    → fragile last-resort
+      const prefix = `${tenant === "default" ? "" : tenant + ":"}oai-r-`;
+      const hash16 = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 16);
+      const conversationId = typeof body.conversation === "string"
+        ? body.conversation
+        : (body.conversation && typeof body.conversation === "object" && typeof body.conversation.id === "string")
+          ? body.conversation.id
+          : undefined;
+      const metaSessionId = typeof body.metadata?.session_id === "string"
+        ? body.metadata.session_id
+        : undefined;
       let sid: string;
       if (isDeltaMode) {
-        const known = RESPONSE_TO_SID.get(body.previous_response_id!);
-        if (known) {
-          sid = known;
-        } else {
-          sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(body.previous_response_id!).digest("hex").slice(0, 16)}`;
-        }
+        const known = bloom_to_sid.get(body.previous_response_id!);
+        sid = known ?? `${prefix}${hash16(body.previous_response_id!)}`;
+      } else if (conversationId && conversationId.length > 0) {
+        sid = `${prefix}${hash16(conversationId)}`;
+      } else if (metaSessionId && metaSessionId.length > 0) {
+        sid = `${prefix}${hash16(metaSessionId)}`;
+      } else if (firstItemId.length > 0) {
+        sid = `${prefix}${hash16(firstItemId)}`;
       } else {
-        const anchor = firstUserMsg.slice(0, 256);
-        sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(anchor).digest("hex").slice(0, 16)}`;
+        sid = `${prefix}${hash16(firstUserMsg.slice(0, 256))}`;
       }
       const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       rememberResponse(responseId, sid);
+      rememberSidMeta(sid, {
+        ...(body.metadata && Object.keys(body.metadata).length > 0 ? { metadata: body.metadata } : {}),
+        ...(body.safety_identifier ? { safety_identifier: body.safety_identifier } : {}),
+        ...(body.prompt_cache_key ? { prompt_cache_key: body.prompt_cache_key } : {}),
+      });
       audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
 
       let systemPrompt = body.instructions;
@@ -677,6 +739,16 @@ async function start(): Promise<void> {
       if (typeof body.max_output_tokens === "number") sampling.maxTokens = body.max_output_tokens;
       if (body.tool_choice !== undefined) sampling.toolChoice = body.tool_choice;
       if (typeof body.parallel_tool_calls === "boolean") sampling.parallelToolCalls = body.parallel_tool_calls;
+      if (body.service_tier) sampling.serviceTier = body.service_tier;
+      if (body.truncation) sampling.truncation = body.truncation;
+      if (body.reasoning?.effort) sampling.reasoningEffort = body.reasoning.effort;
+      if (body.reasoning?.summary) sampling.reasoningSummary = body.reasoning.summary;
+      if (body.text?.verbosity) sampling.textVerbosity = body.text.verbosity;
+      if (Array.isArray(body.include)) sampling.include = body.include;
+      if (typeof body.max_tool_calls === "number") sampling.maxToolCalls = body.max_tool_calls;
+      if (typeof body.frequency_penalty === "number") sampling.frequencyPenalty = body.frequency_penalty;
+      if (typeof body.presence_penalty === "number") sampling.presencePenalty = body.presence_penalty;
+      if (typeof body.top_logprobs === "number") sampling.topLogprobs = body.top_logprobs;
 
       const tools = toolsFromOpenAI(body.tools);
       const itemId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -689,12 +761,14 @@ async function start(): Promise<void> {
           "Connection": "keep-alive",
           "X-Accel-Buffering": "no",
         });
+        let seq = 0;
         const sse = (event: string, data: Record<string, unknown>) => {
-          res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          const enriched = { ...data, sequence_number: seq++ };
+          res.write(`event: ${event}\ndata: ${JSON.stringify(enriched)}\n\n`);
         };
-        // Responses-shape lifecycle events.
         sse("response.created", { type: "response.created", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
-        sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: itemId, type: "message", role: "assistant", content: [] } });
+        sse("response.in_progress", { type: "response.in_progress", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
+        sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: itemId, type: "message", role: "assistant", status: "in_progress", content: [] } });
         sse("response.content_part.added", { type: "response.content_part.added", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: "" } });
         let collected = "";
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
@@ -713,7 +787,7 @@ async function start(): Promise<void> {
             // can request --resume. The nestId is stable across the
             // whole turn — claude reuses the same session file.
             const nid = msg.nestId as string | undefined;
-            if (nid) SID_NEST.set(sid, nid);
+            if (nid) sid_to_nestid.set(sid, nid);
           } else if (chi === "chunk" && msg.chunkType === "text_delta") {
             const delta = (msg.delta as string) ?? "";
             if (delta) {
@@ -778,7 +852,19 @@ async function start(): Promise<void> {
               total_tokens: inputT + outputT,
             } : undefined;
             if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
-            sse("response.completed", { type: "response.completed", response: { id: responseId, object: "response", created_at: createdAt, model, status: "completed", output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }], ...(finalUsage ? { usage: finalUsage } : {}) } });
+            const meta = sid_to_meta.get(sid);
+            sse("response.completed", { type: "response.completed", response: {
+              id: responseId,
+              object: "response",
+              created_at: createdAt,
+              model,
+              status: "completed",
+              output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }],
+              ...(meta?.metadata ? { metadata: meta.metadata } : {}),
+              ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
+              ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
+              ...(finalUsage ? { usage: finalUsage } : {}),
+            } });
             res.write("data: [DONE]\n\n");
             res.end();
             thrum.off(sid);
@@ -796,7 +882,7 @@ async function start(): Promise<void> {
           const chi = msg.chi as string | undefined;
           if (chi === "session-ready") {
             const nid = msg.nestId as string | undefined;
-            if (nid) SID_NEST.set(sid, nid);
+            if (nid) sid_to_nestid.set(sid, nid);
           } else if (chi === "chunk" && msg.chunkType === "text_delta") {
             collected += (msg.delta as string) ?? "";
           } else if (chi === "finish") {
@@ -811,6 +897,7 @@ async function start(): Promise<void> {
               total_tokens: inputT + outputT,
             } : undefined;
             if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
+            const meta = sid_to_meta.get(sid);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
               id: responseId,
@@ -819,6 +906,9 @@ async function start(): Promise<void> {
               model,
               status: "completed",
               output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }],
+              ...(meta?.metadata ? { metadata: meta.metadata } : {}),
+              ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
+              ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
               ...(finalUsage ? { usage: finalUsage } : {}),
             }));
             thrum.off(sid);
@@ -839,15 +929,16 @@ async function start(): Promise<void> {
       // no entry yet, claude spawns fresh and reports its
       // session_id back via chi:"session-ready" which we capture
       // for the next turn.
-      const resume = SID_NEST.get(sid);
+      const resume = sid_to_nestid.get(sid);
       thrum.send({
         chi: "prompt",
         sid,
-        nestling: "openai-server",
+        hive: "openai-server",
         modelId: model,
         content: userText,
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(tools ? { tools } : {}),
+        ...(Array.isArray(body.allowed_tools) && body.allowed_tools.length > 0 ? { allowedTools: body.allowed_tools } : {}),
         ...(respAttachments.length > 0 ? { attachments: respAttachments } : {}),
         ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
         ...(resume ? { resume } : {}),

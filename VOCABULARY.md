@@ -56,20 +56,17 @@ like the thing — readers and writers share the same mental model.
     models and emits `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"`.
   - **forager** — translates outside wire ↔ thrum. Implements
     `ForagerBee` — wraps an HTTP / gRPC / stdio surface into thrum tones.
-- **nestler** — the bee *in the act of joining* the nest. The live process
-  sending its first ask: `chi:"hello"`. Awaits the breath that confirms
-  handshake. (Verb-state, not a kind.)
-- **nestled** — the bee *after joining* the nest. Same actor, registered.
-  Has a nestledId. **Keeps asking throughout the connection** —
-  `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`,
-  `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"`. Hello is the
-  first ask; nestled is what asks the rest.
+- **nestler** — a bee's lifecycle phase: handshaking, awaiting the
+  breath that accepts `chi:"hello"`. Verb-state of the same instance.
+- **nestled** — a bee's lifecycle phase: post-handshake, registered,
+  has a nestledId. The bee keeps asking — `chi:"prompt"`, `chi:"cancel"`,
+  `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
+  `chi:"curate"` — for the rest of the connection.
 
-The four are not synonyms. Hive describes the kind; bee is the running
-participant; nestler arrives; nestled inhabits. The transition nestler →
-nestled is one of *state*, not function: the actor is an asker through
-both. A nestled bee shares the nest with the cells that live there, and
-continues sending chi at it until disconnect.
+The vocabulary stacks as: **hive** = kind; **bee** = the running
+instance of that kind; **nestler** and **nestled** = states of that
+same bee. Nestler arrives, nestled inhabits — same actor, two phases.
+A nestled bee shares the nest with the cells that live there.
 
 ## Observation
 

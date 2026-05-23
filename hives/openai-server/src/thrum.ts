@@ -1,7 +1,10 @@
 import { createConnection, type Socket } from "node:net";
 
 export const THRUM_VERSION = "0.7.0";
-export const NESTLING_NAME = "openai-server";
+export const HIVE_NAME = "openai-server";
+export const BEE_VERSION = "0.31.3";
+export const BEE_ROLE = "forager";
+export const BEE_PROVIDES = ["session"];
 
 // Minimal thrum client. Connects to hum's NDJSON socket, sends framed
 // tones, dispatches incoming tones to subscribers by `sid`.
@@ -64,9 +67,13 @@ export class ThrumClient {
       const hello: Tone = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: NESTLING_NAME,
-        nestling: NESTLING_NAME,
+        from: HIVE_NAME,
+        bee: [BEE_ROLE],
+        hive: HIVE_NAME,
+        version: BEE_VERSION,
+        provides: BEE_PROVIDES,
         protoVersion: THRUM_VERSION,
+        chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
         source: "https://github.com/adiled/hum/tree/main/hives/openai-server",
       };
       if (this.bind) hello.bind = this.bind;
