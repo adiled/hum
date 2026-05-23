@@ -768,39 +768,175 @@ async function start(): Promise<void> {
         };
         sse("response.created", { type: "response.created", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
         sse("response.in_progress", { type: "response.in_progress", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
-        sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: itemId, type: "message", role: "assistant", status: "in_progress", content: [] } });
-        sse("response.content_part.added", { type: "response.content_part.added", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: "" } });
-        let collected = "";
+
+        type OpenItem =
+          | { kind: "reasoning"; outputIndex: number; itemId: string; text: string }
+          | { kind: "message"; outputIndex: number; itemId: string; text: string };
+        const openItems = new Map<number, OpenItem>();
+        const finalOutput: Array<Record<string, unknown>> = [];
+        let nextOutputIndex = 0;
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
-        // Output index counter. Position 0 is the assistant message
-        // (text) the model is producing. Subsequent positions host
-        // `mcp_call` items emitted as the worker's MCP bridge
-        // resolves tool calls — OC's openai-responses parser maps
-        // these to tool-call + tool-result events tagged
-        // providerExecuted=true. Each call gets its own item id.
-        let nextOutputIndex = 1;
+
+        const closeItem = (blockIdx: number) => {
+          const open = openItems.get(blockIdx);
+          if (!open) return;
+          openItems.delete(blockIdx);
+          if (open.kind === "reasoning") {
+            sse("response.reasoning.done", {
+              type: "response.reasoning.done",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              content_index: 0,
+              text: open.text,
+            });
+            const doneItem = {
+              id: open.itemId,
+              type: "reasoning",
+              status: "completed",
+              summary: [{ type: "summary_text", text: open.text }],
+            };
+            sse("response.output_item.done", {
+              type: "response.output_item.done",
+              output_index: open.outputIndex,
+              item: doneItem,
+            });
+            finalOutput.push(doneItem);
+          } else {
+            sse("response.output_text.done", {
+              type: "response.output_text.done",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              content_index: 0,
+              text: open.text,
+            });
+            sse("response.content_part.done", {
+              type: "response.content_part.done",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              content_index: 0,
+              part: { type: "output_text", text: open.text },
+            });
+            const doneItem = {
+              id: open.itemId,
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: open.text }],
+            };
+            sse("response.output_item.done", {
+              type: "response.output_item.done",
+              output_index: open.outputIndex,
+              item: doneItem,
+            });
+            finalOutput.push(doneItem);
+          }
+        };
+
         thrum.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
+          const chunkType = msg.chunkType as string | undefined;
+          const blockIdx = typeof msg.id === "number" ? (msg.id as number)
+            : typeof msg.blockIdx === "number" ? (msg.blockIdx as number)
+            : -1;
           if (chi === "session-ready") {
-            // claude reports its session_id on its very first event;
-            // we stash it so the next /v1/responses for the same sid
-            // can request --resume. The nestId is stable across the
-            // whole turn — claude reuses the same session file.
             const nid = msg.nestId as string | undefined;
             if (nid) sid_to_nestid.set(sid, nid);
-          } else if (chi === "chunk" && msg.chunkType === "text_delta") {
+            return;
+          }
+          if (chi === "chunk" && chunkType === "reasoning_start") {
+            const idx = nextOutputIndex++;
+            const rsId = `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+            openItems.set(blockIdx, { kind: "reasoning", outputIndex: idx, itemId: rsId, text: "" });
+            sse("response.output_item.added", {
+              type: "response.output_item.added",
+              output_index: idx,
+              item: { id: rsId, type: "reasoning", status: "in_progress", summary: [] },
+            });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "reasoning_delta") {
+            const open = openItems.get(blockIdx);
+            if (!open || open.kind !== "reasoning") return;
             const delta = (msg.delta as string) ?? "";
-            if (delta) {
-              collected += delta;
-              sse("response.output_text.delta", { type: "response.output_text.delta", item_id: itemId, output_index: 0, content_index: 0, delta });
+            if (!delta) return;
+            open.text += delta;
+            sse("response.reasoning.delta", {
+              type: "response.reasoning.delta",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              content_index: 0,
+              delta,
+            });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "text_start") {
+            const idx = nextOutputIndex++;
+            const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+            openItems.set(blockIdx, { kind: "message", outputIndex: idx, itemId: msgId, text: "" });
+            sse("response.output_item.added", {
+              type: "response.output_item.added",
+              output_index: idx,
+              item: { id: msgId, type: "message", role: "assistant", status: "in_progress", content: [] },
+            });
+            sse("response.content_part.added", {
+              type: "response.content_part.added",
+              item_id: msgId,
+              output_index: idx,
+              content_index: 0,
+              part: { type: "output_text", text: "" },
+            });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "text_delta") {
+            const open = openItems.get(blockIdx);
+            if (!open || open.kind !== "message") {
+              // Fallback: text without a text_start — lazily open a message item.
+              const idx = nextOutputIndex++;
+              const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+              const fresh: OpenItem = { kind: "message", outputIndex: idx, itemId: msgId, text: "" };
+              openItems.set(blockIdx, fresh);
+              sse("response.output_item.added", {
+                type: "response.output_item.added",
+                output_index: idx,
+                item: { id: msgId, type: "message", role: "assistant", status: "in_progress", content: [] },
+              });
+              sse("response.content_part.added", {
+                type: "response.content_part.added",
+                item_id: msgId,
+                output_index: idx,
+                content_index: 0,
+                part: { type: "output_text", text: "" },
+              });
+              const delta = (msg.delta as string) ?? "";
+              if (delta) {
+                fresh.text += delta;
+                sse("response.output_text.delta", {
+                  type: "response.output_text.delta",
+                  item_id: msgId,
+                  output_index: idx,
+                  content_index: 0,
+                  delta,
+                });
+              }
+              return;
             }
-          } else if (chi === "chunk" && msg.chunkType === "tool_executed") {
-            // Worker bridge resolved a tool call inline. Emit as a
-            // `mcp_call` hosted-tool item — OC parses item.type=
-            // "mcp_call" via HOSTED_TOOLS and emits provider-
-            // executed tool-call + tool-result events. The asker
-            // (OC) renders the call as already-done; never tries
-            // to re-execute.
+            const delta = (msg.delta as string) ?? "";
+            if (!delta) return;
+            open.text += delta;
+            sse("response.output_text.delta", {
+              type: "response.output_text.delta",
+              item_id: open.itemId,
+              output_index: open.outputIndex,
+              content_index: 0,
+              delta,
+            });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "content_block_stop") {
+            closeItem(blockIdx);
+            return;
+          }
+          if (chi === "chunk" && chunkType === "tool_executed") {
             const callItemId = (msg.callId as string) ?? `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
             const toolName = (msg.toolName as string) ?? "";
             const args = msg.arguments !== undefined
@@ -808,14 +944,7 @@ async function start(): Promise<void> {
               : "{}";
             const output = (msg.output as string) ?? "";
             const isError = (msg.isError as boolean) === true;
-            // server_label namespaces the call. We use the hive name
-            // implied by the tool prefix (`humfs_*` → "humfs") so OC
-            // matches the same label the asker would expect. Future:
-            // pull server_label from the forager manifest carried in
-            // chi:"prompt".foragerTools.
-            const serverLabel = toolName.includes("_")
-              ? toolName.split("_", 2)[0]
-              : "hum";
+            const serverLabel = toolName.includes("_") ? toolName.split("_", 2)[0] : "hum";
             const idx = nextOutputIndex++;
             const itemBase = {
               id: callItemId,
@@ -837,11 +966,14 @@ async function start(): Promise<void> {
               output_index: idx,
               item: itemBase,
             });
-          } else if (chi === "finish") {
+            finalOutput.push(itemBase);
+            return;
+          }
+          if (chi === "finish") {
             usage = msg.usage as typeof usage;
-            sse("response.output_text.done", { type: "response.output_text.done", item_id: itemId, output_index: 0, content_index: 0, text: collected });
-            sse("response.content_part.done", { type: "response.content_part.done", item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: collected } });
-            sse("response.output_item.done", { type: "response.output_item.done", output_index: 0, item: { id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] } });
+            // Close any items the worker left open (no explicit
+            // content_block_stop for them).
+            for (const idx of [...openItems.keys()]) closeItem(idx);
             const inputT = (usage?.input_tokens ?? 0)
               + (usage?.cache_read_input_tokens ?? 0)
               + (usage?.cache_creation_input_tokens ?? 0);
@@ -859,7 +991,7 @@ async function start(): Promise<void> {
               created_at: createdAt,
               model,
               status: "completed",
-              output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }],
+              output: finalOutput,
               ...(meta?.metadata ? { metadata: meta.metadata } : {}),
               ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
               ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
@@ -868,7 +1000,9 @@ async function start(): Promise<void> {
             res.write("data: [DONE]\n\n");
             res.end();
             thrum.off(sid);
-          } else if (chi === "error") {
+            return;
+          }
+          if (chi === "error") {
             sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: (msg.message as string) ?? "unknown" } } });
             res.write("data: [DONE]\n\n");
             res.end();
@@ -876,17 +1010,97 @@ async function start(): Promise<void> {
           }
         });
       } else {
-        let collected = "";
+        // Non-stream: accumulate all output items, return as one
+        // Response body. Mirrors stream-path semantics: reasoning,
+        // message, mcp_call all preserved in output[].
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+        type NSOpen =
+          | { kind: "reasoning"; itemId: string; text: string }
+          | { kind: "message"; itemId: string; text: string };
+        const nsOpen = new Map<number, NSOpen>();
+        const nsOutput: Array<Record<string, unknown>> = [];
+        const nsCloseItem = (blockIdx: number) => {
+          const open = nsOpen.get(blockIdx);
+          if (!open) return;
+          nsOpen.delete(blockIdx);
+          if (open.kind === "reasoning") {
+            nsOutput.push({
+              id: open.itemId,
+              type: "reasoning",
+              status: "completed",
+              summary: [{ type: "summary_text", text: open.text }],
+            });
+          } else {
+            nsOutput.push({
+              id: open.itemId,
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: open.text }],
+            });
+          }
+        };
         thrum.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
+          const chunkType = msg.chunkType as string | undefined;
+          const blockIdx = typeof msg.id === "number" ? (msg.id as number)
+            : typeof msg.blockIdx === "number" ? (msg.blockIdx as number)
+            : -1;
           if (chi === "session-ready") {
             const nid = msg.nestId as string | undefined;
             if (nid) sid_to_nestid.set(sid, nid);
-          } else if (chi === "chunk" && msg.chunkType === "text_delta") {
-            collected += (msg.delta as string) ?? "";
-          } else if (chi === "finish") {
+            return;
+          }
+          if (chi === "chunk" && chunkType === "reasoning_start") {
+            nsOpen.set(blockIdx, { kind: "reasoning", itemId: `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "reasoning_delta") {
+            const open = nsOpen.get(blockIdx);
+            if (open?.kind === "reasoning") open.text += (msg.delta as string) ?? "";
+            return;
+          }
+          if (chi === "chunk" && chunkType === "text_start") {
+            nsOpen.set(blockIdx, { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" });
+            return;
+          }
+          if (chi === "chunk" && chunkType === "text_delta") {
+            let open = nsOpen.get(blockIdx);
+            if (!open || open.kind !== "message") {
+              open = { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
+              nsOpen.set(blockIdx, open);
+            }
+            open.text += (msg.delta as string) ?? "";
+            return;
+          }
+          if (chi === "chunk" && chunkType === "content_block_stop") {
+            nsCloseItem(blockIdx);
+            return;
+          }
+          if (chi === "chunk" && chunkType === "tool_executed") {
+            const callItemId = (msg.callId as string) ?? `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+            const toolName = (msg.toolName as string) ?? "";
+            const args = msg.arguments !== undefined
+              ? (typeof msg.arguments === "string" ? msg.arguments : JSON.stringify(msg.arguments))
+              : "{}";
+            const output = (msg.output as string) ?? "";
+            const isError = (msg.isError as boolean) === true;
+            const serverLabel = toolName.includes("_") ? toolName.split("_", 2)[0] : "hum";
+            nsOutput.push({
+              id: callItemId,
+              type: "mcp_call",
+              server_label: serverLabel,
+              name: toolName,
+              arguments: args,
+              status: isError ? "failed" : "completed",
+              output,
+              ...(isError ? { error: { message: output } } : {}),
+            });
+            return;
+          }
+          if (chi === "finish") {
             usage = msg.usage as typeof usage;
+            for (const idx of [...nsOpen.keys()]) nsCloseItem(idx);
             const inputT = (usage?.input_tokens ?? 0)
               + (usage?.cache_read_input_tokens ?? 0)
               + (usage?.cache_creation_input_tokens ?? 0);
@@ -905,14 +1119,16 @@ async function start(): Promise<void> {
               created_at: createdAt,
               model,
               status: "completed",
-              output: [{ id: itemId, type: "message", role: "assistant", content: [{ type: "output_text", text: collected }] }],
+              output: nsOutput,
               ...(meta?.metadata ? { metadata: meta.metadata } : {}),
               ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
               ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
               ...(finalUsage ? { usage: finalUsage } : {}),
             }));
             thrum.off(sid);
-          } else if (chi === "error") {
+            return;
+          }
+          if (chi === "error") {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: { message: (msg.message as string) ?? "unknown", type: "internal_error" } }));
             thrum.off(sid);
