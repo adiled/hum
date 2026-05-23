@@ -28,7 +28,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.31.5"
+version = "0.31.6"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/adiled/hum"
