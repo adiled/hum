@@ -1,21 +1,10 @@
-// recipes/opencode/tests/live-hum-tools.test.ts
-//
 // Live integration: hits the running hum-openai-server endpoint
-// directly, the same way OC does. Asserts the full tool-use
-// round-trip works against a real deployment:
-//
-//   POST /v1/chat/completions (with tools[])
-//     → openai-server: rename parameters→inputSchema, forward chi:prompt
-//     → humd: merge forager catalogue, route to worker bee
-//     → worker MCP bridge: serve tools/list (no null schemas — was the bug)
-//     → worker's claude: pick a tool, call via MCP bridge, get result
-//     → worker's claude: continue, emit text, finish=stop
-//     → openai-server: stream SSE with tool_calls + content + [DONE]
+// directly, the same way OC and wryme do. Asserts the full
+// tool-use round-trip against a real deployment.
 //
 // Pre-req: `dev/deploy` has run on this box; humd + worker + humfs
 // forager + openai-server are all live as systemd units under the
-// HUM_DEV_USER. The test skips if openai-server isn't reachable —
-// no auto-start. This is meant to run against a stable deploy.
+// HUM_DEV_USER. Tests skip if openai-server isn't reachable.
 
 import { describe, expect, test, beforeAll } from "vitest";
 
@@ -147,43 +136,9 @@ describe("live hum-openai-server: tool-use round-trip", () => {
   }, 90_000);
 });
 
-// The four humfs forager tools — each humd registers them on its
-// claude-cli worker bridge under the same `mcp__hum__*` namespace
-// OC sees. A successful round-trip per tool proves the merged
-// catalogue lands in the worker's MCP server with valid schemas
-// AND the worker bee's claude actually executes them via the
-// bridge → forager → real filesystem.
-
-
-// Regression — the OC TUI symptom: the worker bee resolves humfs_*
-// tools internally via its MCP bridge, but the openai-server SSE
-// stream still leaks the tool_use blocks to OC as OpenAI
-// `tool_calls`. OC's claude SDK tries to execute the call against
-// its own tool registry — which doesn't contain humfs_* (OC only
-// knows its stock tools + the MCP servers in its own opencode.json,
-// which does NOT register hum as MCP). OC marks the part
-// `tool: invalid` and the UI stalls on an empty trailing message.
-//
-// What SHOULD reach OC:
-//   - content text describing the action
-//   - finish_reason=stop
-//   - NO tool_calls block (the tool was already executed inside the
-//     worker; OC doesn't need to and CAN'T re-execute it)
-//
-// What CURRENTLY reaches OC (the bug):
-//   - tool_calls[{name:"humfs_do_code",...}] in the delta stream
-//   - finish_reason="tool_calls" or mixed
-//   - OC sees an unknown tool, marks the part invalid, stalls
-//
-// These tests assert the SHOULD-state. They will fail today.
-
-// OC's integration uses the OpenAI Responses API (/v1/responses)
-// via the `@ai-sdk/openai` provider. That's the standard interface
-// that lets us emit forager-resolved tools as `mcp_call` hosted
-// items — which OC's openai-responses.ts parser maps to
-// tool-call + tool-result events tagged `providerExecuted: true`.
-// Equivalent to the old clwnd-opencode plugin's flag, via a public
-// OpenAI protocol, so OC stays a pure TUI.
+// /v1/responses streams forager-resolved tool calls as `mcp_call`
+// hosted items so OC's openai-responses parser tags them
+// providerExecuted=true.
 
 interface ResponsesItem {
   type: string;
@@ -284,10 +239,8 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     // Stream closed cleanly.
     expect(result.rawDoneAt, "/responses SSE ended with [DONE]").toBeGreaterThan(0);
 
-    // The stream MUST include an mcp_call item — that's the hosted-
-    // tool shape OC's openai-responses parser recognizes as
-    // provider-executed and tags providerExecuted=true on. Without
-    // it, OC's tool runtime tries to re-execute and lands tool:invalid.
+    // mcp_call items in the stream are how OC's openai-responses
+    // parser recognizes provider-executed tools.
     const mcpCalls = result.items.filter((i) => i.type === "mcp_call");
     expect(
       mcpCalls.length,
@@ -370,14 +323,47 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     expect(after).toContain("untouched comment");
   }, 120_000);
 
-  // Regression: each chi:"prompt" spawns a fresh claude `-p`. If
-  // any one hangs (stale MCP bridge URL after worker restart,
-  // tool-call wait, streaming wait), nothing reaped the child.
-  // In production we hit 52 simultaneous claude processes. Fix
-  // adds a kill-after-finish grace deadline in nest-common
-  // handle_prompt. This test fires N prompts back-to-back and,
-  // after a grace window, asserts the claude proc count stays
-  // bounded.
+  test("pool reuse: same-sid turns share one claude process", async () => {
+    skipIfDead();
+    const { spawn: cpSpawn } = await import("node:child_process");
+    const countClaude = async (): Promise<number> => new Promise((res) => {
+      const p = cpSpawn("sh", ["-c", "pgrep -u clwnd -fc 'claude -p'"]);
+      let buf = "";
+      p.stdout.on("data", (c: Buffer) => { buf += c.toString(); });
+      p.on("exit", () => res(parseInt(buf.trim(), 10) || 0));
+    });
+    const affinity = `affinity-${Date.now()}`;
+    const headers = { "content-type": "application/json", "x-session-affinity": affinity };
+    const turn = async (text: string) => {
+      const r = await fetch(`${BASE}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          stream: true,
+          input: [{ role: "user", content: [{ type: "input_text", text }] }],
+        }),
+      });
+      // Drain the stream so the turn completes before we count.
+      const reader = r.body!.getReader();
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    };
+    await turn("Reply with: one");
+    const after1 = await countClaude();
+    await turn("Reply with: two");
+    const after2 = await countClaude();
+    await turn("Reply with: three");
+    const after3 = await countClaude();
+    expect(
+      after2,
+      `same-sid turn 2 spawned a new claude (was ${after1}, now ${after2}) — pool reuse missing`,
+    ).toBe(after1);
+    expect(after3).toBe(after1);
+  }, 180_000);
+
   test("process budget: N prompts do not leak claude children", async () => {
     skipIfDead();
     const { spawn: cpSpawn } = await import("node:child_process");
@@ -388,22 +374,14 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
       p.on("exit", () => res(parseInt(buf.trim(), 10) || 0));
     });
     const before = await countClaude();
-    // 6 distinct prompts → 6 distinct sids via x-session-affinity
-    // pinning won't apply (no header here), so each is its own
-    // turn. Pure shape: assert no monotonic growth.
     for (let i = 0; i < 6; i++) {
       await streamResponses({
         model: "claude-haiku-4-5",
         input: [{ role: "user", content: [{ type: "input_text", text: `Reply with: turn-${i}` }] }],
       }, 60_000);
     }
-    // Grace window > KILL_AFTER_FINISH_MS (5s) so the deadline
-    // killer has time to reap any straggler.
     await new Promise((r) => setTimeout(r, 8_000));
     const after = await countClaude();
-    // Allow a small ceiling for the worker daemon itself + any
-    // mid-flight grace-period claude. Hard cap: must NOT grow by
-    // anywhere near N (= 6).
     expect(
       after - before,
       `claude proc count grew by ${after - before} after 6 prompts ` +

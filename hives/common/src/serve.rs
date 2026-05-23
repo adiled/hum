@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -34,7 +34,8 @@ use tracing::{info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_prompt, Listener, SpawnSpec, WorkerBee};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
+use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
 use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
@@ -136,12 +137,10 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
     info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 
-    // Spawn the worker-local MCP bridge. Compute spawned by this
-    // worker (e.g. claude binary) dials it for tools/list +
-    // tools/call. The bridge ships chi:"tool-call" tones via the
-    // worker's thrum write half; humd routes them by toolName +
-    // (sid-pinned) fs_hid. chi:"tool-result" tones arriving back
-    // get resolved by callId.
+    // Worker-local MCP bridge. The compute (e.g. claude) dials it
+    // for tools/list + tools/call; the bridge ships chi:"tool-call"
+    // over thrum and resolves the pending HTTP response when the
+    // matching chi:"tool-result" arrives.
     let write_for_bridge = write_half.clone();
     let bridge = McpBridge::new(Arc::new(move |tone: Value| {
         let write_half = write_for_bridge.clone();
@@ -205,29 +204,32 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 if !sid.is_empty() {
                     let r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
-                        // stdin is closed after prompt send (forces
-                        // claude's EOF-on-finish). encode_cancel via
-                        // stdin no longer reaches the child — kill
-                        // the process is the only stop signal we
-                        // have. Worker MCP bridge in-flight calls
-                        // are aborted by the bridge HTTP timeout.
+                        if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
+                            let _ = bundle.stdin.send(encode_cancel(rid)).await;
+                        }
                         (bundle.kill)();
                     }
                 }
             }
             "tool-result" => {
                 let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
-                // All tool round-trips now resolve through the
-                // worker MCP bridge (R4 architecture). Anything
-                // arriving here with a matching callId resolves;
-                // un-matched chi:tool-result tones are orphans we
-                // can't ship to claude (stdin closed) — log + drop.
+                // First try the worker MCP bridge — humfs_* tools
+                // route there. If callId isn't pending in the bridge,
+                // it's a nestler-native tool-result for a call the
+                // model made outside our MCP catalogue; forward via
+                // stdin so claude consumes it.
                 let resolved_by_bridge = call_id.as_deref()
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
-                if !resolved_by_bridge {
-                    if let Some(cid) = call_id.as_deref() {
-                        trace!(call_id = cid, "worker.tool-result.orphan");
+                if !resolved_by_bridge && !sid.is_empty() {
+                    let r = cells.lock().await;
+                    if let Some(bundle) = r.get(&sid) {
+                        if let (Some(call_id), Some(result)) = (
+                            tone.get("callId").and_then(Value::as_str),
+                            tone.get("result").and_then(Value::as_str),
+                        ) {
+                            let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
+                        }
                     }
                 }
             }
@@ -243,7 +245,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 }
 
 struct CellBundle {
+    stdin: mpsc::Sender<String>,
     kill: Arc<dyn Fn() + Send + Sync>,
+    finish_sent: Arc<AtomicBool>,
+    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
+    last_touched: Arc<AtomicU64>,
 }
 
 /// Build a `ToolDef` from a wire tone entry. MCP standard field is
@@ -265,6 +271,12 @@ fn parse_tool_def(v: &Value) -> Option<ToolDef> {
     Some(ToolDef { name, description, input_schema: schema })
 }
 
+/// Max quiet window before a warm cell gets reaped.
+const IDLE_TIMEOUT_MS: u64 = 300_000;
+/// Per-worker cap on concurrent claude processes. LRU eviction
+/// when full.
+const MAX_CELLS: usize = 8;
+
 async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
@@ -281,23 +293,47 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         .or_else(|| tone.get("text").and_then(Value::as_str))
         .unwrap_or("").to_string();
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
+    let resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
 
-    // Build SpawnSpec — only the common knobs; worker-specific extras
-    // (sampling block, cli flags) ride along on the tone if the
-    // worker wants them. mcp_url points at THIS worker's local
-    // bridge — the compute (e.g. claude) sees a single MCP
-    // catalogue that humfs + asker-shipped tools both feed.
+    // claude `-p --input-format stream-json` reads newline-delimited
+    // user messages until stdin EOF, emitting a `result` event per
+    // turn. Reuse the warm cell for the sid; per-turn state lives in
+    // finish_sent + tool_use_blocks and must reset before re-entry.
+    {
+        let g = cells.lock().await;
+        if let Some(bundle) = g.get(&sid) {
+            bundle.finish_sent.store(false, Ordering::SeqCst);
+            bundle.tool_use_blocks.lock().await.clear();
+            bundle.last_touched.store(now_ms(), Ordering::SeqCst);
+            let send = bundle.stdin.clone();
+            drop(g);
+            send.send(encode_prompt(&content)).await
+                .map_err(|e| anyhow::anyhow!("stdin closed on reused cell: {e}"))?;
+            trace!(sid = %sid, "worker.cell.reused");
+            return Ok(());
+        }
+    }
+
+    // No warm cell — evict LRU if at cap, then spawn fresh.
+    {
+        let mut g = cells.lock().await;
+        if g.len() >= MAX_CELLS {
+            let evict_sid = g.iter()
+                .min_by_key(|(_, b)| b.last_touched.load(Ordering::SeqCst))
+                .map(|(k, _)| k.clone());
+            if let Some(esid) = evict_sid {
+                if let Some(bundle) = g.remove(&esid) {
+                    warn!(evicted_sid = %esid, "worker.cell.evict.lru");
+                    (bundle.kill)();
+                }
+            }
+        }
+    }
+
     let mut spec = SpawnSpec::new(sid.clone(), model.clone(), cwd);
     spec.system_prompt = system_prompt;
     spec.mcp_url = Some(mcp_url);
-    // Resume id flows from the asker shim (openai-server's
-    // /v1/responses captures claude's session_id from the
-    // chi:"session-ready" tone on turn N, then on turn N+1 attaches
-    // it here). When set, claude-cli is invoked with
-    // `--resume <id>` so the model sees the full prior conversation
-    // — including tool calls + results — as native MCP history,
-    // not as a text-marker pastiche.
-    spec.resume_id = tone.get("resume").and_then(Value::as_str).map(str::to_string);
+    spec.resume_id = resume;
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
         spec.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
@@ -309,41 +345,21 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let stdin = cell.stdin.clone();
     let events = cell.events.clone();
     let kill = cell.kill.clone();
-
-    // First user turn — murmur the prompt content as a single user
-    // message. Then immediately drop both stdin Sender clones so
-    // the channel closes, the stdin pump exits, and the child's
-    // stdin pipe gets EOF. Current claude `-p` requires the EOF
-    // even in stream-json mode — without it, claude blocks on
-    // epoll_wait forever after emitting its `result` event, and
-    // child processes pile up (52 alive in production before this
-    // fix).
-    //
-    // Side effect: chi:"cancel" and non-MCP chi:"tool-result"
-    // arms can no longer push down stdin since the channel's
-    // gone. That's the right tradeoff under the worker MCP
-    // bridge architecture — all tool round-trips resolve via
-    // bridge HTTP, not stdin. The CellBundle still carries the
-    // kill handle so chi:"cancel" can force-exit the child.
-    cells.lock().await.insert(sid.clone(), CellBundle { kill: kill.clone() });
-    stdin.send(encode_prompt(&content)).await
-        .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
-    drop(stdin);
-    drop(cell.stdin);
-
-    // Dispatch loop — Cell.events → chi:"chunk" tones over thrum.
-    // `finish_sent` lets the dispatch path claim the finish emit when
-    // it sees claude's `result` event; the post-exit fallback below
-    // only fires on crash paths.
     let finish_sent = Arc::new(AtomicBool::new(false));
+    let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let last_touched = Arc::new(AtomicU64::new(now_ms()));
+
     let listener = Arc::new(WireListener {
         sid: sid.clone(),
         hive,
         write_half: write_half.clone(),
         finish_sent: finish_sent.clone(),
-        tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+        tool_use_blocks: tool_use_blocks.clone(),
+        last_touched: last_touched.clone(),
     });
 
+    // Cell-lifetime dispatch: each stream-json event flows through
+    // the listener until the child exits.
     let listener_clone = listener.clone();
     let sid_for_loop = sid.clone();
     let events_for_loop = events.clone();
@@ -355,66 +371,71 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         trace!(sid = %sid_for_loop, "worker.dispatch.exit");
     });
 
-    // Wait for exit — but with a deadline. claude `-p` should exit
-    // after emitting its `result` event (one turn). When it doesn't
-    // (stale MCP bridge URL after worker restart, tool-call hang,
-    // streaming wait), nothing reaped the child and processes
-    // accumulated — 52 alive simultaneously in production. Now:
-    //
-    // 1. Wait at most KILL_AFTER_FINISH_MS after finish_sent fires
-    //    before sending SIGKILL via the cell's kill handle.
-    // 2. If no finish ever fires, KILL_NO_FINISH_MS is the absolute
-    //    ceiling. Crash-path fallback finish is still emitted so
-    //    askers don't hang on /v1/{responses,chat/completions} SSE.
-    //
-    // Tuned high enough that healthy turns finish well within the
-    // grace window; tuned low enough that orphans never pile up.
-    const KILL_AFTER_FINISH_MS: u64 = 5_000;
-    const KILL_NO_FINISH_MS: u64 = 600_000;
-
-    let finish_watcher = finish_sent.clone();
-    let kill_for_timeout = kill.clone();
-    let sid_for_timeout = sid.clone();
-    let exit_killer = tokio::spawn(async move {
-        let start = std::time::Instant::now();
-        let mut killed = false;
+    // Idle reaper — kills the cell if last_touched stays below the
+    // IDLE_TIMEOUT_MS threshold.
+    let cells_for_idle = cells.clone();
+    let kill_for_idle = kill.clone();
+    let sid_for_idle = sid.clone();
+    let last_for_idle = last_touched.clone();
+    let idle_task = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            if killed { return; }
-            let elapsed = start.elapsed();
-            if finish_watcher.load(Ordering::SeqCst) {
-                tokio::time::sleep(std::time::Duration::from_millis(KILL_AFTER_FINISH_MS)).await;
-                if !killed {
-                    warn!(sid = %sid_for_timeout, "worker.cell.kill.after-finish.grace");
-                    (kill_for_timeout)();
-                    killed = true;
-                    return;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let last = last_for_idle.load(Ordering::SeqCst);
+            let age = now_ms().saturating_sub(last);
+            if age >= IDLE_TIMEOUT_MS {
+                let mut g = cells_for_idle.lock().await;
+                if g.remove(&sid_for_idle).is_some() {
+                    warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
+                    (kill_for_idle)();
                 }
-            }
-            if elapsed.as_millis() as u64 > KILL_NO_FINISH_MS {
-                warn!(sid = %sid_for_timeout, "worker.cell.kill.no-finish.ceiling");
-                (kill_for_timeout)();
-                killed = true;
                 return;
             }
         }
     });
 
-    let exit_code = cell.exited.await.unwrap_or(1);
-    exit_killer.abort();
-    let _ = dispatch.await;
-    if !finish_sent.load(Ordering::SeqCst) {
-        let finish = json!({
-            "chi": "finish",
-            "sid": sid,
-            "finishReason": if exit_code == 0 { "stop" } else { "error" },
-            "exitCode": exit_code,
-        });
-        let line = format!("{}\n", finish);
-        let _ = write_half.lock().await.write_all(line.as_bytes()).await;
-    }
-    cells.lock().await.remove(&sid);
+    cells.lock().await.insert(sid.clone(), CellBundle {
+        stdin: stdin.clone(),
+        kill: kill.clone(),
+        finish_sent: finish_sent.clone(),
+        tool_use_blocks: tool_use_blocks.clone(),
+        last_touched: last_touched.clone(),
+    });
+
+    stdin.send(encode_prompt(&content)).await
+        .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
+    trace!(sid = %sid, "worker.cell.spawned");
+
+    // On child exit: drain dispatch, emit a finish if the listener
+    // never saw `result`, and drop the cells entry.
+    let cells_for_cleanup = cells.clone();
+    let write_for_cleanup = write_half.clone();
+    let sid_for_cleanup = sid.clone();
+    let finish_for_cleanup = finish_sent.clone();
+    tokio::spawn(async move {
+        let exit_code = cell.exited.await.unwrap_or(1);
+        let _ = dispatch.await;
+        idle_task.abort();
+        if !finish_for_cleanup.load(Ordering::SeqCst) {
+            let finish = json!({
+                "chi": "finish",
+                "sid": sid_for_cleanup,
+                "finishReason": if exit_code == 0 { "stop" } else { "error" },
+                "exitCode": exit_code,
+            });
+            let line = format!("{}\n", finish);
+            let _ = write_for_cleanup.lock().await.write_all(line.as_bytes()).await;
+        }
+        cells_for_cleanup.lock().await.remove(&sid_for_cleanup);
+        trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
+    });
+
     Ok(())
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Translates raw claude-stream-json events into chi:"chunk" tones.
@@ -423,21 +444,18 @@ struct WireListener {
     sid: String,
     hive: String,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    /// Set once `result` is forwarded as `chi:"finish"`. handle_prompt
-    /// checks this before emitting its fallback finish so consumers
-    /// never see two finishes per prompt.
+    /// True once `result` was forwarded as chi:"finish" for the
+    /// current turn. handle_prompt resets it per-turn; the cell's
+    /// cleanup checks it to avoid a redundant crash-path finish.
     finish_sent: Arc<AtomicBool>,
-    /// Block indices the model emitted as `tool_use`. We resolve all
-    /// tools internally via the worker's MCP bridge (humd routes the
-    /// tone to a forager, the result feeds back into claude before
-    /// the model continues) — the asking nestler never sees nor can
-    /// execute these calls. So we suppress the tool_input_* /
-    /// content_block_stop chi:chunks for any block index in this set
-    /// to prevent openai-server from leaking them as OpenAI
-    /// `tool_calls` (OC then reports `tool: invalid` because the
-    /// bare humfs_* name isn't in its registry, the file is already
-    /// written, and the UI stalls on an empty trailing message).
+    /// Block indices the model emitted as `tool_use`. tool_input_* /
+    /// content_block_stop for these indices are suppressed since
+    /// the worker MCP bridge resolves the call inline and the
+    /// canonical surface is chi:"chunk" chunkType="tool_executed".
     tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
+    /// Updated on every stream-json event. The idle reaper compares
+    /// against this to distinguish a quiet cell from a stalled one.
+    last_touched: Arc<AtomicU64>,
 }
 
 impl WireListener {
@@ -447,6 +465,7 @@ impl WireListener {
     }
 
     async fn forward_raw(&self, value: Value) {
+        self.last_touched.store(now_ms(), Ordering::SeqCst);
         // claude emits stream-json events. The relevant chunk events
         // arrive wrapped as `{"type":"stream_event","event":{...inner...}}`;
         // unwrap to inspect the inner type. Mirrors the dispatch
@@ -482,15 +501,9 @@ impl WireListener {
                     "text" => self.chunk("text_start", json!({"id": idx})).await,
                     "thinking" => self.chunk("reasoning_start", json!({"id": idx})).await,
                     "tool_use" => {
-                        // Track the index so the corresponding
-                        // input_json_delta + content_block_stop get
-                        // suppressed. Worker resolves tools inline via
-                        // the MCP bridge; the bridge ships a single
-                        // chi:"chunk" tool_executed with full args +
-                        // output once the call completes. Emitting
-                        // tool_input_* here would leak the in-flight
-                        // call to nestlings (the bug that landed
-                        // tool: invalid parts in OC).
+                        // Track for downstream suppression — bridge
+                        // emits the canonical chi:"chunk" tool_executed
+                        // once resolved.
                         if let Some(i) = idx.as_i64() {
                             self.tool_use_blocks.lock().await.insert(i);
                         }

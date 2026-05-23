@@ -473,13 +473,11 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
-// (R5: NestlerBridge / ForagerBridge / ToolInfoBroadcaster removed.
-// humd no longer hosts an in-process MCP server, so the bridges that
-// proxied MCP tool calls back over thrum are gone. Tool-call routing
-// is entirely thrum-native now: workers emit chi:"tool-call", humd
-// intercepts in the worker-passthrough block, routes to the matching
-// forager hive (local or peer). Worker bees that want to expose an
-// MCP surface to their compute spawn their own listener.)
+// humd doesn't host an MCP server — tool-call routing is purely
+// thrum-native: workers emit chi:"tool-call", humd intercepts in
+// the worker-passthrough block and routes to the matching forager
+// hive (local or peer). Worker bees expose their own MCP listener
+// for compute that needs one.
 
 // (NestListener removed — worker bees emit chi:"chunk"/"finish"
 // directly over thrum from their own process. humd just routes; see
@@ -838,15 +836,11 @@ impl ToneSink for HumdSink {
                         }
                     }
 
-                    // Local store — single source of truth for routing
-                    // decisions humd makes (worker lookup, passthrough
-                    // membership). thrumd disconnect doesn't notify
-                    // humd, so manifests linger after a bee restart
-                    // and chi:"tool-call" routes to a dead client_id
-                    // (the bf2018da bug). When the SAME bee identity
-                    // (hid) re-hellos under a new client_id, evict
-                    // the prior client_id entries. Workers, foragers,
-                    // and nestlers all benefit.
+                    // Single source of truth for humd's routing
+                    // (worker lookup, passthrough membership). thrumd
+                    // disconnect doesn't notify humd, so a same-hid
+                    // re-hello must evict prior client_id entries to
+                    // keep tool-call routing live across bee restarts.
                     if client_id != "ensemble" {
                         let mut m = self.manifests.write();
                         if let Some(new_hid) = manifest.hid {
@@ -1031,16 +1025,9 @@ impl ToneSink for HumdSink {
                     return;
                 };
 
-                // (R1: nestler-declared tools[] from chi:prompt now
-                // forward to the worker as-is in chi:prompt.tools;
-                // the worker is responsible for exposing them to its
-                // compute. humd no longer maintains MCP session state.)
-
-                // Forward the prompt tone verbatim to the worker, plus
-                // augment with cwd if absent. mcpUrl is the worker's
-                // concern — when it spawns compute that needs MCP
-                // (claude binary), it spawns its own MCP listener and
-                // passes its own URL.
+                // Forward the prompt tone to the worker. Nestler
+                // tools[] pass through unchanged; cwd is filled in
+                // when absent. mcpUrl is the worker's concern.
                 let mut forward = tone.clone();
                 if let Some(obj) = forward.as_object_mut() {
                     if obj.get("cwd").is_none() {
@@ -1054,13 +1041,9 @@ impl ToneSink for HumdSink {
                             obj.insert("systemPrompt".into(), Value::String(sp.clone()));
                         }
                     }
-                    // R1: inject the forager catalogue into the
-                    // outbound chi:"prompt" so the worker bee sees
-                    // every advertised tool that's owned somewhere
-                    // on the mesh. Worker builds its own
-                    // catalogue from this + any tools the nestler
-                    // already shipped on its own prompt; humd is
-                    // purely the wire.
+                    // Inject the merged forager catalogue so the
+                    // worker sees every advertised tool on the
+                    // mesh, regardless of which forager owns it.
                     let (forager_tools_json, provided_caps): (Vec<Value>, Vec<String>) = {
                         let m = self.manifests.read();
                         let mut tools: Vec<Value> = Vec::new();
@@ -1321,10 +1304,6 @@ impl ToneSink for HumdSink {
                         return;
                     }
                 }
-                // (R5: broker-tool oneshot resolution removed —
-                // NestlerBridge is gone. callIds with no route match
-                // fall through silently; the originator can decide
-                // what to do with orphan tool-results.)
                 if let Some(call_id) = call_id {
                     trace!(call_id, "tool_result.unrouted");
                 }
