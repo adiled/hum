@@ -323,6 +323,102 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     expect(after).toContain("untouched comment");
   }, 120_000);
 
+  // sid binds to the conversation root in full-history mode: turn N+1
+  // ships the whole input array starting with the same first user
+  // message, so sid stays stable and the pool reuses the cell — no
+  // x-session-affinity, no previous_response_id required.
+  test("full-history mode: stable sid + pool reuse without continuity hints", async () => {
+    skipIfDead();
+    const { spawn: cpSpawn } = await import("node:child_process");
+    const countClaude = async (): Promise<number> => new Promise((res) => {
+      const p = cpSpawn("sh", ["-c", "pgrep -u clwnd -fc 'claude -p'"]);
+      let buf = "";
+      p.stdout.on("data", (c: Buffer) => { buf += c.toString(); });
+      p.on("exit", () => res(parseInt(buf.trim(), 10) || 0));
+    });
+    const rootMsg = `root-${Date.now()}`;
+    const turn1Input = [
+      { role: "user", content: [{ type: "input_text", text: rootMsg }] },
+    ];
+    const turn2Input = [
+      { role: "user", content: [{ type: "input_text", text: rootMsg }] },
+      { role: "assistant", content: [{ type: "output_text", text: "ack" }] },
+      { role: "user", content: [{ type: "input_text", text: "what did i say first?" }] },
+    ];
+    const turn = async (input: unknown) => {
+      const r = await fetch(`${BASE}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-haiku-4-5", stream: true, input }),
+      });
+      const reader = r.body!.getReader();
+      while (true) { const { done } = await reader.read(); if (done) break; }
+    };
+    await turn(turn1Input);
+    const after1 = await countClaude();
+    await turn(turn2Input);
+    const after2 = await countClaude();
+    expect(
+      after2,
+      `turn 2 spawned a new claude (${after1} → ${after2}) — full-history sid not stable`,
+    ).toBe(after1);
+  }, 180_000);
+
+  // Delta mode: caller sends previous_response_id from the first
+  // response.created event and a fresh user message only. Same sid
+  // reuses the warm cell.
+  test("delta mode: previous_response_id chains the same sid", async () => {
+    skipIfDead();
+    const { spawn: cpSpawn } = await import("node:child_process");
+    const countClaude = async (): Promise<number> => new Promise((res) => {
+      const p = cpSpawn("sh", ["-c", "pgrep -u clwnd -fc 'claude -p'"]);
+      let buf = "";
+      p.stdout.on("data", (c: Buffer) => { buf += c.toString(); });
+      p.on("exit", () => res(parseInt(buf.trim(), 10) || 0));
+    });
+    // Turn 1: capture response.id from the stream.
+    const r1 = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: `delta-root-${Date.now()}` }] }],
+      }),
+    });
+    const dec = new TextDecoder();
+    let buf = "";
+    let responseId = "";
+    const reader = r1.body!.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const m = buf.match(/"id":"(resp_[a-z0-9]+)"/);
+      if (m && !responseId) responseId = m[1];
+    }
+    expect(responseId).toMatch(/^resp_/);
+    const after1 = await countClaude();
+    // Turn 2: delta — only the new user message + previous_response_id.
+    const r2 = await fetch(`${BASE}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: true,
+        previous_response_id: responseId,
+        input: [{ role: "user", content: [{ type: "input_text", text: "say two" }] }],
+      }),
+    });
+    const reader2 = r2.body!.getReader();
+    while (true) { const { done } = await reader2.read(); if (done) break; }
+    const after2 = await countClaude();
+    expect(
+      after2,
+      `delta-mode turn 2 spawned a new claude (${after1} → ${after2}) — previous_response_id chain broken`,
+    ).toBe(after1);
+  }, 180_000);
+
   test("pool reuse: same-sid turns share one claude process", async () => {
     skipIfDead();
     const { spawn: cpSpawn } = await import("node:child_process");

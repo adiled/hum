@@ -104,14 +104,22 @@ const USAGE: Record<string, TenantUsage> = (() => {
   try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
 })();
 
-// sid → claude session_id (the "nestId" from chi:"session-ready").
-// Populated when the worker bee first reports it for a sid; on every
-// subsequent /v1/responses call for the same sid we pass it back in
-// chi:"prompt".resume so claude-cli is launched with `--resume <id>`
-// and rehydrates the full prior conversation (tool calls + their
-// results) from its session file. Without this, each turn would
-// spawn a fresh claude with zero memory.
+// sid → claude session_id. Populated from chi:"session-ready" so
+// follow-up turns can ship `resume` in chi:"prompt".
 const SID_NEST: Map<string, string> = new Map();
+
+// responseId → sid. Lets callers chain via OpenAI Responses
+// `previous_response_id` even though hum's sid is independent.
+// Capped to avoid unbounded growth; oldest entries evicted FIFO.
+const RESPONSE_TO_SID: Map<string, string> = new Map();
+const RESPONSE_MAP_CAP = 4096;
+function rememberResponse(responseId: string, sid: string): void {
+  if (RESPONSE_TO_SID.size >= RESPONSE_MAP_CAP) {
+    const first = RESPONSE_TO_SID.keys().next().value;
+    if (first) RESPONSE_TO_SID.delete(first);
+  }
+  RESPONSE_TO_SID.set(responseId, sid);
+}
 let usageDirty = false;
 function trackUsage(tenant: string, prompt: number, completion: number): void {
   const u = USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 };
@@ -580,77 +588,81 @@ async function start(): Promise<void> {
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
       if (!body.input) return bad(res, "input required");
 
-      // Extract only the LATEST user message (the new turn). Prior
-      // turns' messages, function_calls, function_call_outputs, and
-      // mcp_calls are NOT replayed as text — claude-cli's --resume
-      // flag rehydrates them as native MCP history when we map
-      // sid → claude session_id. The asker (OC) ships full history
-      // on each call per OpenAI Responses spec; we extract just
-      // what's new and let claude pull the rest from disk.
+      // Two input modes per OpenAI Responses contract:
+      //   - delta: previous_response_id present, input = new turn only
+      //   - full-history: no previous_response_id, input = whole convo
+      // sid derivation follows the same split so continuity binds
+      // to a stable anchor without depending on out-of-spec headers.
+      const stream = body.stream === true;
+      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
+      const isDeltaMode = typeof body.previous_response_id === "string" && body.previous_response_id.length > 0;
+
+      // Walk the input items. In full-history mode we keep the FIRST
+      // user message (sid anchor) and the LATEST (new turn text); in
+      // delta mode we flatten every user-text item since input ≡ new
+      // turn. Image attachments collected either way.
       let userText = "";
+      let firstUserMsg = "";
       const respAttachments: ThrumAttachment[] = [];
       if (typeof body.input === "string") {
         userText = body.input;
+        firstUserMsg = body.input;
       } else if (Array.isArray(body.input)) {
-        // Walk from the end backwards: the most recent user message
-        // is the actual new turn. Everything before it is replay
-        // claude already has via --resume.
-        const userMessages: string[] = [];
-        for (let i = body.input.length - 1; i >= 0; i--) {
-          const it = body.input[i] as ResponsesInputItem & { role?: string; type?: string };
+        const allUserTurns: string[] = [];
+        for (const item of body.input) {
+          const it = item as ResponsesInputItem & { role?: string; type?: string };
           if (it.type === "function_call" || it.type === "function_call_output" || it.type === "mcp_call") {
-            // Skip — already replayed via --resume.
             continue;
           }
-          if ((it as { role?: string }).role === "user" && "content" in it) {
-            const content = (it as { content?: unknown }).content;
-            if (typeof content === "string") {
-              userMessages.unshift(content);
-            } else if (Array.isArray(content)) {
-              const parts: string[] = [];
-              for (const p of content as Array<{ type: string; text?: string; image_url?: { url?: string } }>) {
-                if (p.type === "input_text" || p.type === "text") {
-                  if (p.text) parts.push(p.text);
-                } else if (p.type === "input_image" || p.type === "image_url") {
-                  const u = p.image_url?.url;
-                  if (u?.startsWith("data:")) {
-                    const m = u.match(/^data:([^;]+);base64,(.+)$/);
-                    if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
-                  } else if (u) {
-                    respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
-                  }
+          if ((it as { role?: string }).role !== "user" || !("content" in it)) continue;
+          const content = (it as { content?: unknown }).content;
+          let collected = "";
+          if (typeof content === "string") {
+            collected = content;
+          } else if (Array.isArray(content)) {
+            const parts: string[] = [];
+            for (const p of content as Array<{ type: string; text?: string; image_url?: { url?: string } }>) {
+              if (p.type === "input_text" || p.type === "text") {
+                if (p.text) parts.push(p.text);
+              } else if (p.type === "input_image" || p.type === "image_url") {
+                const u = p.image_url?.url;
+                if (u?.startsWith("data:")) {
+                  const m = u.match(/^data:([^;]+);base64,(.+)$/);
+                  if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
+                } else if (u) {
+                  respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
                 }
               }
-              if (parts.length) userMessages.unshift(parts.join("\n"));
             }
-            // Found the most recent user turn — stop walking back.
-            // Continuation context lives in claude's session file,
-            // not in our wire.
-            break;
+            collected = parts.join("\n");
           }
+          if (collected) allUserTurns.push(collected);
         }
-        userText = userMessages.join("\n");
+        firstUserMsg = allUserTurns[0] ?? "";
+        userText = isDeltaMode
+          ? allUserTurns.join("\n")
+          : (allUserTurns[allUserTurns.length - 1] ?? "");
       }
 
-      const stream = body.stream === true;
-      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
-      // sid: derived from previous_response_id (continuation) or input.
-      // Sid derivation priority:
-      //   1. OC's `x-session-affinity` header — present on every
-      //      continuation call from the OC TUI, stable across all
-      //      turns of one session. THIS is what lets us look up
-      //      the prior claude session_id and ship `resume`.
-      //   2. `previous_response_id` — the OpenAI Responses native
-      //      continuation anchor; we honor it when present.
-      //   3. Hash of the latest user message — last resort for
-      //      first-turn or one-shot callers without session state.
-      const sessionAffinity = req.headers["x-session-affinity"];
-      const anchor =
-        (typeof sessionAffinity === "string" && sessionAffinity.length > 0 ? sessionAffinity : undefined)
-        ?? body.previous_response_id
-        ?? userText.slice(0, 256);
-      const sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(anchor).digest("hex").slice(0, 16)}`;
+      // sid:
+      //   delta:        lookup mapped sid by previous_response_id; if
+      //                 unknown, hash the id as anchor (still chains
+      //                 same id → same sid across calls).
+      //   full-history: hash the conversation root (first user msg).
+      let sid: string;
+      if (isDeltaMode) {
+        const known = RESPONSE_TO_SID.get(body.previous_response_id!);
+        if (known) {
+          sid = known;
+        } else {
+          sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(body.previous_response_id!).digest("hex").slice(0, 16)}`;
+        }
+      } else {
+        const anchor = firstUserMsg.slice(0, 256);
+        sid = `${tenant === "default" ? "" : tenant + ":"}oai-r-${createHash("sha1").update(anchor).digest("hex").slice(0, 16)}`;
+      }
       const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      rememberResponse(responseId, sid);
       audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
 
       let systemPrompt = body.instructions;
