@@ -448,6 +448,56 @@ describe("live hum-openai-server: /v1/responses (OpenAI Responses API)", () => {
     expect(seqs[0]).toBe(0);
   }, 60_000);
 
+  test("reasoning: /v1/responses emits reasoning item + response.reasoning.delta", async () => {
+    skipIfDead();
+    const result = await streamResponses({
+      model: "claude-haiku-4-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: `think aloud about 8*9 ${Date.now()}` }] }],
+    }, 90_000);
+    const reasoningItems = result.items.filter((i) => i.type === "reasoning");
+    expect(reasoningItems.length, "at least one reasoning output_item.done").toBeGreaterThan(0);
+    const reasoningDeltas = result.events.filter((e) => e.type === "response.reasoning.delta");
+    expect(reasoningDeltas.length, "reasoning deltas streamed").toBeGreaterThan(0);
+    // First delta carries real text once the worker has thinking enabled.
+    const deltaText = (reasoningDeltas[0] as { delta?: string }).delta ?? "";
+    expect(deltaText.length, "delta text non-empty").toBeGreaterThan(0);
+  }, 120_000);
+
+  test("reasoning: /v1/chat/completions emits delta.reasoning_content", async () => {
+    skipIfDead();
+    const r = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        stream: true,
+        messages: [{ role: "user", content: `think aloud about 5*6 ${Date.now()}` }],
+      }),
+    });
+    const dec = new TextDecoder();
+    let buf = "";
+    let sawReasoning = false;
+    const reader = r.body!.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const m = block.match(/data: ({.*})/);
+        if (!m) continue;
+        try {
+          const c = JSON.parse(m[1]) as { choices?: Array<{ delta?: { reasoning_content?: string } }> };
+          const rc = c.choices?.[0]?.delta?.reasoning_content;
+          if (typeof rc === "string" && rc.length > 0) { sawReasoning = true; }
+        } catch {}
+      }
+    }
+    expect(sawReasoning, "chat.completions stream carried at least one delta.reasoning_content").toBe(true);
+  }, 90_000);
+
   test("response.in_progress emitted after response.created", async () => {
     skipIfDead();
     const r = await fetch(`${BASE}/responses`, {

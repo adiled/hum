@@ -498,8 +498,8 @@ impl WireListener {
                 let block = msg.get("content_block").cloned().unwrap_or(json!({}));
                 let bt = block.get("type").and_then(Value::as_str).unwrap_or("");
                 match bt {
-                    "text" => self.chunk("text_start", json!({"id": idx})).await,
-                    "thinking" => self.chunk("reasoning_start", json!({"id": idx})).await,
+                    "text" => self.chunk("text_start", json!({"blockIdx": idx})).await,
+                    "thinking" => self.chunk("reasoning_start", json!({"blockIdx": idx})).await,
                     "tool_use" => {
                         // Track for downstream suppression — bridge
                         // emits the canonical chi:"chunk" tool_executed
@@ -518,11 +518,12 @@ impl WireListener {
                     Some(i) => self.tool_use_blocks.lock().await.contains(&i),
                     None => false,
                 };
+                let block_idx_v = msg.get("index").cloned().unwrap_or(Value::Null);
                 match delta.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "thinking_delta" => self.chunk("reasoning_delta", json!({"delta": delta.get("thinking")})).await,
-                    "text_delta" => self.chunk("text_delta", json!({"delta": delta.get("text")})).await,
+                    "thinking_delta" => self.chunk("reasoning_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("thinking")})).await,
+                    "text_delta" => self.chunk("text_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("text")})).await,
                     "input_json_delta" if !is_tool_block => {
-                        self.chunk("tool_input_delta", json!({"partialJson": delta.get("partial_json")})).await
+                        self.chunk("tool_input_delta", json!({"blockIdx": block_idx_v, "partialJson": delta.get("partial_json")})).await
                     }
                     _ => {} // tool-block input_json_delta: suppressed (bridge ships chunk:tool_executed instead)
                 }
