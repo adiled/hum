@@ -10,8 +10,9 @@ description: "prose specs of ensemble narratives — one story per file, each pa
 The ensemble is the mesh of humds. This directory is its libretto. Each
 file names one situation a real user or pair of users might find
 themselves in — roaming across devices, watching a peer drive, handing
-work to another org, healing a partition — and tells the story of what
-the wire is supposed to do under it.
+work to another org, healing a partition, or letting a bloom finish on
+its own while you are out buying eggs — and tells the story of what the
+wire is supposed to do under it.
 
 Prose lives here so the *shape* of the narrative can be argued without
 the noise of test fixtures. The matching test under `sim/` asserts the
@@ -27,6 +28,7 @@ Pairing is strict — one MD, one test:
 | `federation-handoff.md` | `sim/tests/federation_handoff.rs` |
 | `overflow-inference.md` | `sim/tests/overflow_inference.rs` |
 | `partition-and-heal.md` | `sim/tests/partition_and_heal.rs` |
+| `eggs-on-the-hum.md` | `sim/tests/eggs_on_the_hum.rs` |
 
 Each MD covers five sections in the same order: **setup**, **happy
 path**, **failure modes**, **success criteria**, **what this validates**.

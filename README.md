@@ -31,7 +31,7 @@ An ensemble is a mesh of cooperating humds, where bees gossip like a hive tradin
 
 This is the whole of it, a decoupling so complete that the scattered many become one again, a single hum carrying across the long dark between distant stars. You raise a capability wherever it belongs, let it gossip, and the swarm folds it into the hum. Nothing needs repointing, nothing needs redeploying. Every new bee only deepens the hum.
 
-Learn more by simply humming along..
+Learn more by simply humming along.. or read the [scenarios](https://adiled.github.io/hum/scenarios/), one story per ensemble narrative.
 
 **Config** `~/.config/hum/hum.json`
 
