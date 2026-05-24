@@ -15,12 +15,14 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 
 it is all composed of biodiverse primitives, not an outcome of conventional linguistics, following are some nouns
 
-- **thrum** the hum-native vibration protocol, built on a range of `chi`
-- **nest** where netlers nestle
-- **nestled** a nestler when it has nestled 
-- **bee** what a nestler conforms to, for becoming nestled
-- **petal** a cohesive yet inconclusive evidence of a bloom
-- **bloom** the one which wilts
+- **hive** the kind, a typology a bee conforms to
+- **bee** the instance, a running participant a hive commissions
+- **nestler** a bee mid-handshake, awaiting the breath that accepts its hello
+- **nestled** a nestler once registered into the nest
+- **nest** where nestled bees gather, inside humd
+- **thrum** the hum-native vibration protocol, carrying tones across a range of `chi`
+- **petal** one unit of content, be it text, image, a tool call or its result
+- **bloom** one turn of conversation, opened by a prompt and closed when it wilts
 
 Learn more by simply humming along..
 
