@@ -29,7 +29,7 @@ it is all composed of biodiverse primitives, not an outcome of conventional ling
 
 An ensemble is a mesh of cooperating humds, and across it the bees gossip the way a hive trades news of distant blossoms. A single bloom need never live on one box. It draws inference from one humd, compute from another, a filesystem from a third, and surfaces in a UX that opens like a window somewhere else again. No bee is bounded by what its own field can offer. It will fly miles to forage, following the scent of the universe for whatever it holds, a model, a tool, a payment rail, a dataset that no flower nearby could give. There is no monolith and no central broker. Each capability stays sovereign on the host that grew it, and the mesh weaves them together while the bloom is still opening.
 
-This is the whole of it, a decoupling so complete it comes back around to feeling like one machine humming under the moon. You raise a capability wherever it belongs, let it gossip, and the swarm folds it into the song. Nothing needs repointing and nothing needs redeploying, for the hum only deepens as more bees arrive to sing. Supremacy here was never a bigger model. It is a wider chorus.
+This is the whole of it, a decoupling so complete that the scattered many become one again, a single hum carrying across the long dark between distant stars. You raise a capability wherever it belongs, let it gossip, and the swarm folds it into the hum. Nothing needs repointing, nothing needs redeploying. Every new bee only deepens the hum.
 
 Learn more by simply humming along..
 
