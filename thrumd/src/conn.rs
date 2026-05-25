@@ -55,6 +55,11 @@ pub async fn run(thrum: Thrum, sock: UnixStream) {
         let total = reg.len();
         info!(client_id = %short(&client_id), total, "thrum.disconnected");
     }
+    // Let the sink release per-client state (humd evicts the bee's
+    // manifest here so tools stop being advertised on disconnect).
+    if let Some(sink) = thrum.inner_sink() {
+        sink.forget(&client_id).await;
+    }
     drop(reach);
     let _ = writer_task.await;
 }

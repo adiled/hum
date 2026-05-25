@@ -48,6 +48,12 @@ async fn bridge(
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
 
+    // Persisted forager identity — humd dedupes us by this fbee_ hid
+    // across reconnects; without it every reconnect leaks a manifest.
+    let hid = nest_common::load_or_mint_bee_key(NESTLING_NAME, ensemble::HidPrefix::Fbee)
+        .map(|k| k.hid.to_hex())
+        .unwrap_or_default();
+
     // Send hello on connect so humd advertises us to the mesh.
     let hello = serde_json::json!({
         "chi": Chi::Hello,
@@ -56,7 +62,8 @@ async fn bridge(
             .map(|d| d.as_millis().to_string())
             .unwrap_or_default()),
         "from": NESTLING_NAME,
-        "bee": NESTLING_NAME,
+        "hid": hid,
+        "bee": ["forager"],
         "version": NESTLING_VERSION,
         "protoVersion": THRUM_VERSION,
         "propensity": {

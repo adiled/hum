@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
@@ -28,6 +30,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +108,9 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		"chi":          string(thrum.ChiHello),
 		"rid":          "hello-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
 		"from":         "twilio-sms",
+		"hid":          beeHid("twilio-sms", "fbee"),
+		"bee":          []string{"forager"},
+		"hive":         "twilio-sms",
 		"nestling":     "twilio-sms",
 		"version":      nestlingVersion,
 		"protoVersion": thrum.ThrumVersion,
@@ -276,6 +282,41 @@ func pctDecode(s string) (string, error) {
 		i += 2
 	}
 	return string(out), nil
+}
+
+// beeHid loads (or mints + persists) this bee's ed25519 seed and
+// returns its "<prefix>_<hex>" Hid, where hex is sha256(public key) —
+// byte-identical to the Rust hives/common identity. humd dedupes a
+// bee across reconnects by this hid; without it every reconnect leaks
+// a manifest. Seed lives at $XDG_STATE_HOME/hum/bees/<kind>.key (else
+// ~/.local/state/...), the same path + raw 32-byte format the Rust
+// and TS hives use.
+func beeHid(kind, prefix string) string {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	path := filepath.Join(base, "hum", "bees", kind+".key")
+
+	var seed []byte
+	if b, err := os.ReadFile(path); err == nil && len(b) == ed25519.SeedSize {
+		seed = b
+	} else {
+		seed = make([]byte, ed25519.SeedSize)
+		if _, err := rand.Read(seed); err != nil {
+			return ""
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+			_ = os.WriteFile(path, seed, 0o600)
+		}
+	}
+	pub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	sum := sha256.Sum256(pub)
+	return prefix + "_" + hex.EncodeToString(sum[:])
 }
 
 func main() {

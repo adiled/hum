@@ -3,10 +3,11 @@
 // framed tones, dispatch incoming tones to per-sid subscribers.
 
 import { createConnection, type Socket } from "node:net";
+import { beeHid } from "./identity";
 
 // Thrum protocol version this nestling targets. Bump when adopting a new
 // chi or envelope field that the daemon must understand.
-export const THRUM_VERSION = "0.2.0";
+export const THRUM_VERSION = "0.7.0";
 export const NESTLING_NAME = "vercel-ai";
 
 export type Tone = Record<string, unknown>;
@@ -47,6 +48,10 @@ export class ThrumClient {
           chi: "hello",
           rid: `hello-${Date.now().toString(36)}`,
           from: NESTLING_NAME,
+          hid: beeHid(NESTLING_NAME, "fbee"),
+          bee: ["forager"],
+          hive: NESTLING_NAME,
+          provides: ["session"],
           nestling: NESTLING_NAME,
           protoVersion: THRUM_VERSION,
         }) + "\n");

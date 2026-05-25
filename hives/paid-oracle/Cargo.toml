@@ -7,6 +7,8 @@ description = "x402-style paid oracle nestling — sells one price per USDC paym
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
+nest-common = { path = "../common" }
+ensemble = { path = "../../ensemble" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

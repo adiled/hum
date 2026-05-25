@@ -10,6 +10,8 @@
 //!   hum                    health summary
 //!   hum status             daemon + config + service state
 //!   hum logs               tail journalctl (Linux) / launchd logs (macOS)
+//!   hum bees               list bee services
+//!   hum bees restart NAME  restart one bee (or --all) via service mgr
 //!   hum penny              show lifetime counters
 //!   hum recipes [name]     list recipes / point at one
 //!   hum uninstall          remove service + binary (state preserved)
@@ -39,6 +41,13 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
+    /// List bee services, or restart them. `hum bees` lists; `hum bees
+    /// restart <name>` or `hum bees restart --all` bounces them through
+    /// the service manager (graceful, same identity — unlike pkill).
+    Bees {
+        #[command(subcommand)]
+        action: Option<BeeAction>,
+    },
     /// Show lifetime counters from penny.json
     Penny,
     /// List available recipes (recipes/*) or run one
@@ -58,12 +67,25 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum BeeAction {
+    /// Restart one bee by name, or every bee with --all.
+    Restart {
+        /// Bee service short id (e.g. "hum-paid-oracle"). Omit with --all.
+        name: Option<String>,
+        /// Restart every installed bee service.
+        #[arg(long)]
+        all: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         None => summary(),
         Some(Cmd::Status) => status(),
         Some(Cmd::Logs { lines }) => logs(lines),
+        Some(Cmd::Bees { action }) => bees(action),
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Uninstall) => uninstall(),
@@ -245,6 +267,79 @@ fn logs(lines: u32) -> Result<()> {
     "#, svc = svc.display());
     Command::new("bash").arg("-c").arg(script).status()?;
     Ok(())
+}
+
+fn bee_list(svc: &std::path::Path) -> Result<Vec<String>> {
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(format!(". {} && svc_list", svc.display()))
+        .output()
+        .context("run svc_list")?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn bees(action: Option<BeeAction>) -> Result<()> {
+    let svc = svc_helper().context("scripts/svc.sh not found — install hum first")?;
+    let installed = bee_list(&svc)?;
+
+    let restart = |name: &str| -> bool {
+        let ok = Command::new("bash")
+            .arg("-c")
+            .arg(format!(". {} && svc_restart {}", svc.display(), name))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        println!("  {} {name}", if ok { "✓ restarted" } else { "✗ failed" });
+        ok
+    };
+
+    match action {
+        // `hum bees` — list.
+        None => {
+            if installed.is_empty() {
+                println!("no bee services installed (foragers/workers register their own under hives/<kind>/install)");
+            } else {
+                println!("bee services:");
+                for b in &installed { println!("  {b}"); }
+                println!("\nrestart: hum bees restart <name>   |   all: hum bees restart --all");
+            }
+            Ok(())
+        }
+        Some(BeeAction::Restart { all: true, .. }) => {
+            if installed.is_empty() {
+                println!("no bee services to restart");
+                return Ok(());
+            }
+            println!("restarting {} bee(s):", installed.len());
+            for b in &installed { restart(b); }
+            Ok(())
+        }
+        Some(BeeAction::Restart { name: Some(name), all: false }) => {
+            // Accept the bare hive name too (e.g. "paid-oracle" → "hum-paid-oracle").
+            let target = if installed.iter().any(|b| b == &name) {
+                name.clone()
+            } else {
+                let prefixed = format!("hum-{name}");
+                if installed.iter().any(|b| b == &prefixed) { prefixed } else { name.clone() }
+            };
+            if !installed.iter().any(|b| b == &target) {
+                anyhow::bail!(
+                    "no bee service '{target}'. installed: {}",
+                    if installed.is_empty() { "(none)".into() } else { installed.join(", ") }
+                );
+            }
+            println!("restarting bee:");
+            if restart(&target) { Ok(()) } else { anyhow::bail!("restart failed for {target}") }
+        }
+        Some(BeeAction::Restart { name: None, all: false }) => {
+            anyhow::bail!("name a bee (hum bees restart <name>) or use --all. list: hum bees");
+        }
+    }
 }
 
 fn penny() -> Result<()> {

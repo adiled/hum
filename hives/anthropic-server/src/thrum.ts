@@ -5,6 +5,7 @@
 // a different nestling name.
 
 import { createConnection, type Socket } from "node:net";
+import { beeHid } from "./identity";
 
 export const THRUM_VERSION = "0.7.0";
 export const NESTLING_NAME = "anthropic-server";
@@ -66,6 +67,10 @@ export class ThrumClient {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
         from: NESTLING_NAME,
+        hid: beeHid(NESTLING_NAME, "fbee"),
+        bee: ["forager"],
+        hive: NESTLING_NAME,
+        provides: ["session"],
         nestling: NESTLING_NAME,
         version: "0.0.0",
         protoVersion: THRUM_VERSION,

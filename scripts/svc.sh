@@ -146,6 +146,31 @@ svc_stop() {
   esac
 }
 
+# svc_list — print the canonical short ids of installed bee services,
+# one per line. Bees are the `hum-*` units (workers, foragers); the
+# bare `hum` daemon is excluded.
+svc_list() {
+  case "$SVC_OS" in
+    Linux)
+      local dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+      [ -d "$dir" ] || return 0
+      for f in "$dir"/hum-*.service; do
+        [ -e "$f" ] || continue
+        local b; b="$(basename "$f")"; echo "${b%.service}"
+      done
+      ;;
+    Darwin)
+      local dir="$HOME/Library/LaunchAgents"
+      [ -d "$dir" ] || return 0
+      for f in "$dir"/sh.hum.hum-*.plist; do
+        [ -e "$f" ] || continue
+        local b; b="$(basename "$f")"; b="${b%.plist}"; echo "${b#sh.hum.}"
+      done
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 svc_status() {
   case "$SVC_OS" in
     Linux)  systemctl --user status "$1" --no-pager 2>&1 | head -8 ;;

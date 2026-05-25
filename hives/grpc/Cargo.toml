@@ -7,6 +7,8 @@ description = "gRPC bridge to hum — bidi stream, every chi flows through; tran
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
+nest-common = { path = "../common" }
+ensemble = { path = "../../ensemble" }
 tokio = { workspace = true }
 tokio-stream = "0.1"
 tonic = "0.12"

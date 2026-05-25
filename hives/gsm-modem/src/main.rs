@@ -118,12 +118,18 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
 
+    // Persisted forager identity — humd dedupes by this fbee_ hid.
+    let hid = nest_common::load_or_mint_bee_key(NESTLING_NAME, ensemble::HidPrefix::Fbee)
+        .map(|k| k.hid.to_hex())
+        .unwrap_or_default();
+
     // Hello (per WIRE.md §Handshake).
     let hello = json!({
         "chi": Chi::Hello,
         "rid": format!("hello-{}", now_ms()),
         "from": NESTLING_NAME,
-        "bee": NESTLING_NAME,
+        "hid": hid,
+        "bee": ["forager"],
         "version": NESTLING_VERSION,
         "protoVersion": THRUM_VERSION,
         "propensity": { "statefulness": "stateful", "richness": "lean", "wire": "gsm/at-cmd-sms" },

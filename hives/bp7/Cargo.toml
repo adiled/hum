@@ -7,6 +7,8 @@ description = "RFC 9171 Bundle Protocol v7 forager hive — interplanetary store
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
+nest-common = { path = "../common" }
+ensemble = { path = "../../ensemble" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

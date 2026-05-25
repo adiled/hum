@@ -486,6 +486,23 @@ type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
+    /// A bee's thrum connection dropped. Evict its manifest so its
+    /// tools stop being advertised immediately, and drop any pending
+    /// tool routes that pointed back at it. This is the durable cure
+    /// for ghost manifests: dedup no longer depends on a same-hid
+    /// re-hello, so a bee with a missing/stub hid can't pile up stale
+    /// registrations across reconnects.
+    async fn forget(&self, client_id: &str) {
+        if client_id == "ensemble" { return; }
+        let had_manifest = self.manifests.write().remove(client_id).is_some();
+        // Pending tool-call routes whose originator was this client are
+        // now undeliverable — drop them so the table doesn't grow.
+        self.tool_routes.write().retain(|_, originator| originator != client_id);
+        if had_manifest {
+            trace!(client_id, "manifest.evict.disconnect");
+        }
+    }
+
     async fn hear(&self, client_id: &str, tone: Tone) {
         let chi_str = tone.get("chi").and_then(Value::as_str).unwrap_or("?");
         let chi: Option<Chi> = tone
@@ -840,11 +857,28 @@ impl ToneSink for HumdSink {
                     // Stable role-tagged bee identity. Survives
                     // reconnect — humd indexes by it (alongside
                     // client_id, which is per-thrum-conn).
-                    manifest.hid = tone.get("hid")
-                        .and_then(Value::as_str)
-                        .and_then(|s| ensemble::Hid::from_hex(s).ok());
-                    if let Some(hid) = manifest.hid {
-                        trace!(client_id, hid = %hid.short(), "bee.hid.registered");
+                    let raw_hid = tone.get("hid").and_then(Value::as_str);
+                    manifest.hid = raw_hid.and_then(|s| ensemble::Hid::from_hex(s).ok());
+                    match (raw_hid, manifest.hid) {
+                        (Some(_), Some(hid)) => {
+                            trace!(client_id, hid = %hid.short(), "bee.hid.registered");
+                        }
+                        (Some(bad), None) => {
+                            // A hello carrying a hid that won't parse as a
+                            // canonical `fbee_<hex>` / `wbee_<hex>` Hid.
+                            // humd can't dedupe by it, so every reconnect
+                            // leaks a fresh manifest (ghost tools). Warn
+                            // loudly — silent acceptance is what let stub
+                            // hids pile up unnoticed.
+                            warn!(client_id, bad_hid = %bad,
+                                "bee.hid.invalid — not a canonical Hid; reconnect dedup disabled for this bee. \
+                                 Derive a stable hid from a persisted key (see hives/common identity).");
+                        }
+                        (None, _) => {
+                            warn!(client_id,
+                                "bee.hid.missing — hello has no hid; reconnect dedup disabled. \
+                                 Ghost manifests will accumulate on reconnect.");
+                        }
                     }
                     // Forager tool advertisement — fills the manifest's
                     // tools[] array. humd routes chi:"tool-call" by

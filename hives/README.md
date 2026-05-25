@@ -77,10 +77,33 @@ required, no PR required.
    in a `main.rs`. Build the binary; run it.
 3. **It registers with humd.** On boot the binary sends a
    `chi:"hello"` with `bee: ["worker"]`, `hive: "<your-kind>"`,
-   `models: [...]`, `propensity`, and the canonical chi vocabulary
-   it speaks. humd records the manifest, indexed by thrum client_id,
-   and routes future `chi:"prompt"` tones with a matching `modelId`
-   to you.
+   `models: [...]`, `propensity`, a valid **`hid`** (see below), and
+   the canonical chi vocabulary it speaks. humd records the manifest,
+   indexed by thrum client_id, and routes future `chi:"prompt"` tones
+   with a matching `modelId` to you.
+
+   > **The `hid` is mandatory and must be a real, stable Hid.** Format
+   > is `fbee_<hex>` (forager) or `wbee_<hex>` (worker), derived from a
+   > **persisted** ed25519 key — *not* an invented string. The thrum
+   > client_id is per-connection and changes every reconnect; humd
+   > dedupes a bee across reconnects **by its hid**. If the hid is
+   > missing, or a placeholder that doesn't parse as a canonical Hid,
+   > humd cannot dedupe and **every reconnect leaks a fresh manifest**
+   > — you will see your tool count multiply (N tools × number of
+   > reconnects) until humd restarts. humd now warns on a
+   > missing/invalid hid (`bee.hid.invalid` / `bee.hid.missing`); watch
+   > for it. Rust hives get this for free via
+   > [`hives/common`](common) identity (persists the key at
+   > `~/.local/state/hum/bees/{kind}.key`, derives the Hid from the
+   > pubkey). Non-Rust foragers must replicate it: mint once, persist,
+   > reuse the same key/hid on every boot.
+
+   For a bee you want to keep alive across reboots and restart cleanly,
+   ship a `hives/<kind>/install` modeled on
+   [`hives/paid-oracle/install`](paid-oracle/install) — it registers a
+   service via [`scripts/svc.sh`](../scripts/svc.sh) as `hum-<kind>`,
+   after which `hum bees restart <kind>` bounces it gracefully (same
+   identity, no `pkill`).
 4. **Mesh discovery is free.** humd gossips your manifest on the
    ensemble's `hum/hives/announce` topic. Peer humds learn you
    exist and can overflow-route their own prompts to your humd.

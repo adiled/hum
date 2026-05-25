@@ -1,4 +1,5 @@
 import { createConnection, type Socket } from "node:net";
+import { beeHid } from "./identity";
 
 export const THRUM_VERSION = "0.7.0";
 export const HIVE_NAME = "openai-server";
@@ -68,6 +69,7 @@ export class ThrumClient {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
         from: HIVE_NAME,
+        hid: beeHid(HIVE_NAME, "fbee"),
         bee: [BEE_ROLE],
         hive: HIVE_NAME,
         version: BEE_VERSION,

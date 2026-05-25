@@ -374,7 +374,9 @@ version = "0.31.9"
 dependencies = [
  "anyhow",
  "bp7 0.10.7",
+ "ensemble",
  "libc",
+ "nest-common",
  "serde",
  "serde_json",
  "thrum-core",
@@ -1445,7 +1447,9 @@ version = "0.31.9"
 dependencies = [
  "anyhow",
  "async-stream",
+ "ensemble",
  "libc",
+ "nest-common",
  "prost",
  "serde_json",
  "thrum-core",
@@ -1463,9 +1467,11 @@ version = "0.31.9"
 dependencies = [
  "anyhow",
  "bytes",
+ "ensemble",
  "futures-util",
  "hex",
  "libc",
+ "nest-common",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3069,8 +3075,10 @@ name = "paid-oracle"
 version = "0.31.9"
 dependencies = [
  "anyhow",
+ "ensemble",
  "hex",
  "libc",
+ "nest-common",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",

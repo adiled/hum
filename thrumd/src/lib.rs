@@ -38,6 +38,13 @@ pub type Tone = Value;
 #[async_trait]
 pub trait ToneSink: Send + Sync + 'static {
     async fn hear(&self, client_id: &str, tone: Tone);
+
+    /// Called once when a client's connection drops (EOF/error). The
+    /// sink should release any per-client state keyed by `client_id`
+    /// — e.g. humd evicting the bee's manifest so its tools stop being
+    /// advertised the instant it disconnects, rather than lingering
+    /// until a same-hid re-hello. Default: no-op.
+    async fn forget(&self, _client_id: &str) {}
 }
 
 /// Default socket path — `$XDG_RUNTIME_DIR/hum/thrum.sock`, or
