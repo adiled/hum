@@ -1,6 +1,6 @@
 {
   "name": "@hum/anthropic-server",
-  "version": "0.31.8",
+  "version": "0.31.9",
   "description": "Anthropic-compatible HTTP surface for hum (POST /v1/messages, SSE streaming)",
   "type": "module",
   "main": "dist/index.js",
