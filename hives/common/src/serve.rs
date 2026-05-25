@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
@@ -83,13 +83,32 @@ pub struct HiveAdvert {
 /// Run the worker service loop. Blocks until shutdown.
 pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAdvert) -> Result<()> {
     let path = default_socket_path();
+    // Connection cycling is normal: launchd/systemd start the worker and
+    // humd in parallel, so the first dials lose the race until humd binds
+    // the socket. That is not a warning. Only escalate to WARN once a bee
+    // that has *never* connected keeps failing past a grace window (humd
+    // genuinely down / wrong socket path), so a clean boot stays quiet.
+    let mut ever_connected = false;
+    let mut consecutive_fails = 0u32;
     loop {
         match dial_and_serve(&path, worker.clone(), &advert).await {
             Ok(()) => {
+                ever_connected = true;
+                consecutive_fails = 0;
                 trace!("serve_worker: clean exit, reconnecting");
             }
             Err(e) => {
-                warn!(err = %e, "serve_worker: connection failed, retrying");
+                consecutive_fails += 1;
+                if ever_connected {
+                    info!(err = %e, "serve_worker: thrum dropped, reconnecting");
+                } else if consecutive_fails >= 8 {
+                    // ~16s of never connecting — humd likely down or the
+                    // socket path is wrong. Now it is worth a warning.
+                    warn!(err = %e, attempts = consecutive_fails,
+                        "serve_worker: still cannot reach humd — check it is running and HUM_THRUM_SOCK matches");
+                } else {
+                    debug!(err = %e, "serve_worker: waiting for humd socket");
+                }
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;

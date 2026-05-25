@@ -64,17 +64,18 @@ SVC="$REPO_ROOT/scripts/svc.sh"
 . "$SVC"
 
 build() {
-  if [ -x "$BIN" ]; then
-    log "binary already present: $BIN — skipping cargo"
-    return 0
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
+  # Rebuild when cargo is present (always current; --force idempotent);
+  # use a pre-built binary only when there is no toolchain.
+  if command -v cargo >/dev/null 2>&1; then
+    log "building $KIND (cargo install --path $HIVE_DIR)"
+    cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "$KIND"
+    [ -x "$BIN" ] || fail "binary not at $BIN after build"
+    log "built: $BIN"
+  elif [ -x "$BIN" ]; then
+    log "cargo unavailable; using pre-built $BIN"
+  else
     fail "no $BIN and cargo unavailable — install rustup or pre-deploy the binary"
   fi
-  log "building $KIND (cargo install --path $HIVE_DIR)"
-  cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "$KIND"
-  [ -x "$BIN" ] || fail "binary not at $BIN after build"
-  log "built: $BIN"
 }
 
 install_unit() {

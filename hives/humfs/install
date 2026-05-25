@@ -35,17 +35,18 @@ SVC="$REPO_ROOT/scripts/svc.sh"
 . "$SVC"
 
 build() {
-  if [ -x "$FORAGER_BIN" ]; then
-    log "binary already present: $FORAGER_BIN — skipping cargo"
-    return 0
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
+  # Rebuild when cargo is present (always current; --force idempotent);
+  # use a pre-built binary only when there is no toolchain.
+  if command -v cargo >/dev/null 2>&1; then
+    log "building $KIND-forager (cargo install --path $HIVE_DIR)"
+    cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "${KIND}-forager"
+    [ -x "$FORAGER_BIN" ] || fail "binary not at $FORAGER_BIN after build"
+    log "built: $FORAGER_BIN"
+  elif [ -x "$FORAGER_BIN" ]; then
+    log "cargo unavailable; using pre-built $FORAGER_BIN"
+  else
     fail "no $FORAGER_BIN and cargo unavailable — install rustup or have an upstream deploy supply the binary"
   fi
-  log "building $KIND-forager (cargo install --path $HIVE_DIR)"
-  cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "${KIND}-forager"
-  [ -x "$FORAGER_BIN" ] || fail "binary not at $FORAGER_BIN after build"
-  log "built: $FORAGER_BIN"
 }
 
 install_unit() {

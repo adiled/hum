@@ -45,19 +45,20 @@ SVC="$REPO_ROOT/scripts/svc.sh"
 . "$SVC"
 
 build() {
-  # Pre-built binary path (dev/deploy or release artifact installed
-  # it). cargo build only when no binary exists yet.
-  if [ -x "$WORKER_BIN" ]; then
-    log "binary already present: $WORKER_BIN — skipping cargo"
-    return 0
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
+  # Rebuild whenever cargo is available so an install/update always
+  # lands current code (--force is idempotent). Fall back to a
+  # pre-built binary only when there is no toolchain (dev/deploy or a
+  # release artifact supplied it).
+  if command -v cargo >/dev/null 2>&1; then
+    log "building $KIND-worker (cargo install --path $HIVE_DIR)"
+    cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "${KIND}-worker"
+    [ -x "$WORKER_BIN" ] || fail "binary not at $WORKER_BIN after build"
+    log "built: $WORKER_BIN"
+  elif [ -x "$WORKER_BIN" ]; then
+    log "cargo unavailable; using pre-built $WORKER_BIN"
+  else
     fail "no $WORKER_BIN and cargo unavailable — install rustup or have an upstream deploy supply the binary"
   fi
-  log "building $KIND-worker (cargo install --path $HIVE_DIR)"
-  cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "${KIND}-worker"
-  [ -x "$WORKER_BIN" ] || fail "binary not at $WORKER_BIN after build"
-  log "built: $WORKER_BIN"
 }
 
 install_unit() {
