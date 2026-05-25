@@ -1,6 +1,6 @@
 {
   "name": "@hum/vercel-ai",
-  "version": "0.31.12",
+  "version": "0.31.13",
   "description": "Vercel AI SDK provider for hum — pure, no OC coupling",
   "type": "module",
   "main": "dist/index.js",
