@@ -222,16 +222,23 @@ build_humd() {
 
 # ─── service unit (Linux systemd / macOS launchd via scripts/svc.sh) ───────
 
-# Resolve and source the cross-platform svc helper.
-SVC_HELPER="$(dirname "$0")/scripts/svc.sh"
-if [ -f "$SVC_HELPER" ]; then
-  # shellcheck source=/dev/null
-  . "$SVC_HELPER"
-elif [ -f "$HUM_DATA/src/scripts/svc.sh" ]; then
-  . "$HUM_DATA/src/scripts/svc.sh"
-else
-  warn "scripts/svc.sh not found; service management will be skipped"
-fi
+# Resolve and source the cross-platform svc helper. Must run *after*
+# build_humd has cloned the repo — on a `curl | bash` install there is
+# no local scripts/svc.sh until then, so sourcing at top-level would
+# always miss and silently skip service registration.
+source_svc_helper() {
+  command -v svc_install >/dev/null 2>&1 && return 0  # already sourced
+  local local_helper="$(dirname "$0")/scripts/svc.sh"
+  if [ -f "$local_helper" ]; then
+    # shellcheck source=/dev/null
+    . "$local_helper"
+  elif [ -f "$HUM_SRC/scripts/svc.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$HUM_SRC/scripts/svc.sh"
+  else
+    warn "scripts/svc.sh not found; service management will be skipped"
+  fi
+}
 
 install_service_unit() {
   if ! command -v svc_install >/dev/null 2>&1; then
@@ -340,6 +347,7 @@ do_install() {
   flag_0_2_install
   ensure_prereqs
   if [ "${SKIP_BUILD:-0}" != "1" ]; then build_humd; fi
+  source_svc_helper
   ensure_identity
   ensure_peers_config
   ensure_hum_config
@@ -353,9 +361,9 @@ do_install() {
 
 case "$CMD" in
   install|"") do_install ;;
-  status)     show_status ;;
-  logs)       show_logs ;;
-  uninstall)  uninstall ;;
-  purge)      purge ;;
+  status)     source_svc_helper; show_status ;;
+  logs)       source_svc_helper; show_logs ;;
+  uninstall)  source_svc_helper; uninstall ;;
+  purge)      source_svc_helper; purge ;;
   *) fail "unknown command: $CMD (try: install, status, logs, uninstall, purge)" ;;
 esac
