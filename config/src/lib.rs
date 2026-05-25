@@ -1,18 +1,14 @@
 //! hum.json loader (0.3).
 //!
-//! Namespaced: humd / fs / nest / hives. Each section deserializes into
-//! its own struct so a hive's worker-bee crate can ship its own
-//! `Default` without humd's crate knowing about it.
-//!
-//! Schema-tolerant: missing sections fill with defaults, parse errors
-//! warn and fall back to defaults — never fatal at startup.
+//! Namespaced daemon policy: `humd` / `fs` / `nest`. Missing sections
+//! fill with defaults. Validity is defined by `hum.schema.json`
+//! ([`SCHEMA`]); [`validate_or_exit`] gates daemon startup on it, so an
+//! invalid config is fatal rather than silently coerced.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::warn;
 
 // ── humd ──────────────────────────────────────────────────────────────────
@@ -117,10 +113,10 @@ impl std::fmt::Display for FsDenial {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NestSection {
-    #[serde(default = "defaults::max_procs", rename = "maxProcs")]
-    pub max_procs: u32,
-    #[serde(default = "defaults::idle_threshold_ms", rename = "idleThresholdMs")]
-    pub idle_threshold_ms: u64,
+    #[serde(default = "defaults::max_active_cells", rename = "maxActiveCells")]
+    pub max_active_cells: u32,
+    #[serde(default = "defaults::cell_idle_prune_threshold_ms", rename = "cellIdlePruneThresholdMs")]
+    pub cell_idle_prune_threshold_ms: u64,
     #[serde(default = "defaults::default_hive")]
     pub default: String,
 }
@@ -128,64 +124,18 @@ pub struct NestSection {
 impl Default for NestSection {
     fn default() -> Self {
         Self {
-            max_procs: defaults::max_procs(),
-            idle_threshold_ms: defaults::idle_threshold_ms(),
+            max_active_cells: defaults::max_active_cells(),
+            cell_idle_prune_threshold_ms: defaults::cell_idle_prune_threshold_ms(),
             default: defaults::default_hive(),
         }
     }
 }
 
-// ── hives ─────────────────────────────────────────────────────────────────
-
-/// Per-hive config. Schema-loose: each hive's worker-bee crate parses
-/// the `Value` against its own `Config` struct. Common fields recognized
-/// here so the top-level loader can validate the shape of the obvious
-/// cases.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HiveConfig {
-    #[serde(default, rename = "cliPath")]
-    pub cli_path: Option<String>,
-    #[serde(default, rename = "defaultModel")]
-    pub default_model: Option<String>,
-    #[serde(default, rename = "ccFlags")]
-    pub cc_flags: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub limits: Option<HiveLimits>,
-    #[serde(default)]
-    pub budget: Option<HiveBudget>,
-    /// Anything else the hive's own deserializer handles.
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HiveLimits {
-    #[serde(default)]
-    pub rss_bytes: Option<u64>,
-    #[serde(default)]
-    pub fd_count: Option<u32>,
-    #[serde(default)]
-    pub cpu_secs: Option<u32>,
-    #[serde(default)]
-    pub wall_clock_ms: Option<u64>,
-    #[serde(default)]
-    pub nice: Option<i32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HiveBudget {
-    #[serde(default)]
-    pub tokens_per_turn: Option<u64>,
-    #[serde(default)]
-    pub tokens_per_day: Option<u64>,
-    #[serde(default)]
-    pub tool_calls_per_minute: Option<u32>,
-}
-
 // ── top-level ─────────────────────────────────────────────────────────────
 
+/// Daemon-scoped policy: `humd` knobs, `fs` grounding, and `nest`
+/// routing/capacity. A hive's own runtime (binary, models, flags) is
+/// owned by the hive process via its service env, not by humd.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HumConfig {
     #[serde(default)]
@@ -194,8 +144,6 @@ pub struct HumConfig {
     pub fs: FsSection,
     #[serde(default)]
     pub nest: NestSection,
-    #[serde(default)]
-    pub hives: BTreeMap<String, HiveConfig>,
 }
 
 // ── path resolution ───────────────────────────────────────────────────────
@@ -272,6 +220,58 @@ pub fn load() -> HumConfig {
     cfg
 }
 
+/// Surface config keys humd silently ignores. The valid top level is
+/// `$schema`, `humd`, `fs`, `nest`. Anything else parses fine and does
+/// nothing — most often a `hives`/`perches`/`nestlings` block, which is
+/// the wrong place: a hive configures itself through its service env.
+/// Returns one human-readable line per finding. Called at boot (logged
+/// as `config.lint`) and by `hum doctor`.
+/// The canonical schema, embedded at build time. The single source of
+/// truth for what a valid hum.json is.
+pub const SCHEMA: &str = include_str!("../../hum.schema.json");
+
+/// Validate raw hum.json text against [`SCHEMA`]. Returns every
+/// violation verbatim (the schema's own messages), or `Ok` if valid.
+pub fn validate(raw: &str) -> Result<(), Vec<String>> {
+    let instance: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| vec![format!("invalid JSON: {e}")])?;
+    let schema: serde_json::Value = serde_json::from_str(SCHEMA)
+        .expect("embedded hum.schema.json is itself valid JSON");
+    let validator = jsonschema::validator_for(&schema)
+        .expect("embedded hum.schema.json compiles");
+    let errors: Vec<String> = validator
+        .iter_errors(&instance)
+        .map(|e| {
+            let at = e.instance_path().to_string();
+            if at.is_empty() || at == "/" { e.to_string() } else { format!("{e} (at {at})") }
+        })
+        .collect();
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
+/// Gate daemon startup on a schema-valid config. A daemon must not boot
+/// on an invalid config; we surface the violations verbatim and exit
+/// non-zero. A missing file is fine (defaults apply).
+pub fn validate_or_exit() {
+    let path = config_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("hum.json: cannot read {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
+    if let Err(violations) = validate(&raw) {
+        eprintln!("hum.json failed schema validation ({}):", path.display());
+        for v in &violations {
+            eprintln!("  - {v}");
+        }
+        eprintln!("\nFix the file and restart. Schema: hum.schema.json");
+        std::process::exit(1);
+    }
+}
+
 mod defaults {
     use std::path::PathBuf;
 
@@ -281,10 +281,10 @@ mod defaults {
     pub fn drift_retention_days() -> u32 {
         30
     }
-    pub fn max_procs() -> u32 {
+    pub fn max_active_cells() -> u32 {
         4
     }
-    pub fn idle_threshold_ms() -> u64 {
+    pub fn cell_idle_prune_threshold_ms() -> u64 {
         300_000
     }
     pub fn default_hive() -> String {
@@ -310,36 +310,42 @@ mod tests {
     #[test]
     fn empty_yields_defaults() {
         let cfg: HumConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.nest.max_procs, 4);
-        assert_eq!(cfg.nest.idle_threshold_ms, 300_000);
+        assert_eq!(cfg.nest.max_active_cells, 4);
+        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, 300_000);
         assert_eq!(cfg.nest.default, "claude-repl");
         assert_eq!(cfg.humd.permission_dusk_ms, 60_000);
-        assert!(cfg.hives.is_empty());
     }
 
     #[test]
     fn nest_section_partial() {
         let cfg: HumConfig =
-            serde_json::from_str(r#"{"nest": {"maxProcs": 8, "default": "claude-cli"}}"#).unwrap();
-        assert_eq!(cfg.nest.max_procs, 8);
+            serde_json::from_str(r#"{"nest": {"maxActiveCells": 8, "default": "claude-cli"}}"#).unwrap();
+        assert_eq!(cfg.nest.max_active_cells, 8);
         assert_eq!(cfg.nest.default, "claude-cli");
-        assert_eq!(cfg.nest.idle_threshold_ms, 300_000); // default fills
+        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, 300_000); // default fills
     }
 
     #[test]
-    fn hives_each_have_their_own_subobject() {
-        let cfg: HumConfig = serde_json::from_str(
-            r#"{
-                "hives": {
-                    "claude-cli":  { "cliPath": "/usr/bin/claude", "defaultModel": "claude-sonnet-4-5" },
-                    "claude-repl": { "defaultModel": "claude-haiku-4-5" }
-                }
-            }"#,
-        )
-        .unwrap();
-        assert_eq!(cfg.hives["claude-cli"].cli_path.as_deref(), Some("/usr/bin/claude"));
-        assert_eq!(cfg.hives["claude-cli"].default_model.as_deref(), Some("claude-sonnet-4-5"));
-        assert_eq!(cfg.hives["claude-repl"].default_model.as_deref(), Some("claude-haiku-4-5"));
+    fn schema_accepts_canonical_config() {
+        let ok = r#"{
+            "$schema": "https://adiled.github.io/hum/hum.schema.json",
+            "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 },
+            "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] },
+            "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
+        }"#;
+        assert!(validate(ok).is_ok(), "canonical config should validate: {:?}", validate(ok));
+    }
+
+    #[test]
+    fn schema_rejects_legacy_hives_block() {
+        // The exact drift that silently broke setups before: a hives
+        // block (or perches/nestlings, or junk hive keys) must now fail
+        // validation, not parse-and-ignore.
+        let bad = r#"{
+            "nest": { "default": "claude-cli" },
+            "hives": { "claude-cli": { "bin": "claude", "flags": [], "model": "opus" } }
+        }"#;
+        assert!(validate(bad).is_err(), "legacy hives block must fail schema validation");
     }
 
     #[test]
@@ -377,13 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_section_keys_are_ignored() {
-        let cfg: Result<HumConfig, _> =
-            serde_json::from_str(r#"{"droned": true, "smallModel": "x"}"#);
-        // Old-shape keys aren't recognized at root but serde's #[serde(default)]
-        // on each section means we get a default config, not a parse error.
-        // (Strict-mode validation lives in the schema, not in serde.)
-        let cfg = cfg.unwrap();
-        assert!(!cfg.hives.contains_key("droned"));
+    fn serde_is_lenient_but_schema_is_strict() {
+        // serde with #[serde(default)] tolerates unknown keys (parses to
+        // a default config, no error) — that's why validity is enforced
+        // by the schema, not serde. The schema rejects the same input.
+        let raw = r#"{"droned": true, "smallModel": "x"}"#;
+        assert!(serde_json::from_str::<HumConfig>(raw).is_ok());
+        assert!(validate(raw).is_err());
     }
 }

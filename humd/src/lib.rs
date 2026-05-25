@@ -1479,7 +1479,7 @@ impl ToneSink for HumdSink {
 /// `pick_overflow_peer` treats `None` as "available."
 fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
     let nest_name = cfg.hum_cfg.nest.default.clone();
-    let total_slots = cfg.hum_cfg.nest.max_procs;
+    let total_slots = cfg.hum_cfg.nest.max_active_cells;
     // Initial advertise: full free, Cool. Live updates come from the
     // beat path once the pool is wired (see TODO in nest::pool::Nest).
     let headroom = ensemble::headroom::CellHeadroom::from_counts(total_slots, total_slots, None);

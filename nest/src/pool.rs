@@ -284,7 +284,7 @@ impl Nest {
         }
         if let Some(k) = evict_key {
             if let Some(slot) = slots.remove(&k) {
-                trace!(target: "nest", pool_key = %k, "nest.evicted reason=maxProcs");
+                trace!(target: "nest", pool_key = %k, "nest.evicted reason=maxActiveCells");
                 (slot.cell.kill)();
             }
         }

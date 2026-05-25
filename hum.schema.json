@@ -66,13 +66,13 @@
       "additionalProperties": false,
       "description": "The pool that hosts cells. One nest per humd.",
       "properties": {
-        "maxProcs": {
+        "maxActiveCells": {
           "type": "integer",
           "minimum": 1,
           "default": 4,
           "description": "Hard cap on concurrent cells. See nest::NestHealth for the pressure tiers it feeds."
         },
-        "idleThresholdMs": {
+        "cellIdlePruneThresholdMs": {
           "type": "integer",
           "minimum": 0,
           "default": 300000,
@@ -81,48 +81,7 @@
         "default": {
           "type": "string",
           "default": "claude-cli",
-          "description": "Hive name to route to when a chi:prompt doesn't pin one. Must appear in `hives`."
-        }
-      }
-    },
-
-    "hives": {
-      "type": "object",
-      "default": {},
-      "description": "Per-hive config. Key = hive name (claude-cli, claude-repl, future kinds). Value's shape is owned by the hive's worker-bee crate. Missing block = Default.",
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "cliPath": { "type": "string", "description": "Override the binary location. NOTE: humd currently resolves the binary from the CLAUDE_CLI_PATH env, not this field." },
-          "defaultModel": { "type": "string", "description": "Intended default model for this hive. NOTE: humd currently picks the model from the prompt's modelId and the CLAUDE_MODELS env, not this field." },
-          "ccFlags": {
-            "type": "object",
-            "additionalProperties": { "type": ["string", "number", "boolean"] },
-            "description": "Env overrides spread onto every spawn AFTER the worker's defaults."
-          },
-          "limits": {
-            "type": "object",
-            "additionalProperties": false,
-            "description": "OS-level resource caps (nest::ResourceLimits). All optional.",
-            "properties": {
-              "rssBytes":     { "type": "integer", "minimum": 0 },
-              "fdCount":      { "type": "integer", "minimum": 0 },
-              "cpuSecs":      { "type": "integer", "minimum": 0 },
-              "wallClockMs":  { "type": "integer", "minimum": 0 },
-              "nice":         { "type": "integer", "minimum": -20, "maximum": 19 }
-            }
-          },
-          "budget": {
-            "type": "object",
-            "additionalProperties": false,
-            "description": "Soft caps the budget tracker enforces. None = no cap.",
-            "properties": {
-              "tokensPerTurn":      { "type": "integer", "minimum": 0 },
-              "tokensPerDay":       { "type": "integer", "minimum": 0 },
-              "toolCallsPerMinute": { "type": "integer", "minimum": 0 }
-            }
-          }
+          "description": "Hive name humd routes to when a chi:prompt doesn't pin one. A hive configures its own runtime (binary, models) via its service env, not here."
         }
       }
     }

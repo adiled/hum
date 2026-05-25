@@ -58,9 +58,14 @@ async fn main() -> Result<()> {
         .init();
     info!(version = %THRUM_VERSION, "humd.booting");
 
+    // A daemon must not boot on an invalid config. Validate hum.json
+    // against the schema and exit non-zero (violations verbatim) before
+    // any state is built.
+    config::validate_or_exit();
+
     let cfg = DaemonConfig::from_env();
     info!(
-        max_procs = cfg.hum_cfg.nest.max_procs,
+        max_active_cells = cfg.hum_cfg.nest.max_active_cells,
         default_hive = %cfg.hum_cfg.nest.default,
         fs_roots = cfg.hum_cfg.fs.roots.len(),
         "config.loaded"

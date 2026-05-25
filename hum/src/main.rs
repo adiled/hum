@@ -316,41 +316,14 @@ fn doctor() -> Result<()> {
     // 3. hum.json lint — catches the config drift that silently breaks
     //    routing (the keys humd ignores, stale section names, a default
     //    pointing nowhere). These parse fine but do nothing.
-    println!("\n[hum.json lint]");
+    println!("\n[hum.json schema validation]");
     match std::fs::read_to_string(cfg.join("hum.json")) {
-        Err(_) => println!("  ✗ not readable"),
-        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Err(e) => println!("  ✗ INVALID JSON: {e}"),
-            Ok(v) => {
-                let mut clean = true;
-                for stale in ["perches", "nestlings"] {
-                    if v.get(stale).is_some() {
-                        println!("  ⚠ stale top-level `{stale}` — renamed to `hives`; this block is ignored");
-                        clean = false;
-                    }
-                }
-                let hive_keys: Vec<String> = v.get("hives").and_then(|h| h.as_object())
-                    .map(|o| o.keys().cloned().collect()).unwrap_or_default();
-                if let Some(obj) = v.get("hives").and_then(|h| h.as_object()) {
-                    let known = ["cliPath", "defaultModel", "ccFlags", "limits", "budget"];
-                    for (name, cfgv) in obj {
-                        if let Some(co) = cfgv.as_object() {
-                            for k in co.keys() {
-                                if !known.contains(&k.as_str()) {
-                                    println!("  ⚠ hives.{name}.{k} — unknown key, silently ignored (schema rejects it; humd drops it)");
-                                    clean = false;
-                                }
-                            }
-                        }
-                    }
-                    println!("  · note: the whole hives block is advisory — humd resolves the binary from CLAUDE_CLI_PATH and the model from the prompt + CLAUDE_MODELS, not from here");
-                }
-                match v.get("nest").and_then(|n| n.get("default")).and_then(|d| d.as_str()) {
-                    Some(d) if hive_keys.iter().any(|k| k == d) => println!("  ✓ nest.default = {d} (present in hives)"),
-                    Some(d) => { println!("  ⚠ nest.default = {d} but no hives.{d} entry"); clean = false; }
-                    None => { println!("  ⚠ nest.default unset"); clean = false; }
-                }
-                if clean { println!("  ✓ no config drift detected"); }
+        Err(_) => println!("  (no hum.json — humd runs on defaults)"),
+        Ok(raw) => match config::validate(&raw) {
+            Ok(()) => println!("  ✓ valid against hum.schema.json"),
+            Err(violations) => {
+                println!("  ✗ INVALID — humd will refuse to start:");
+                for v in &violations { println!("      - {v}"); }
             }
         },
     }

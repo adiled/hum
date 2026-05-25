@@ -287,7 +287,17 @@ async fn handle_prompt<W: WorkerBee + 'static>(
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
     if sid.is_empty() { anyhow::bail!("prompt.no-sid"); }
-    let model = tone.get("modelId").and_then(Value::as_str).unwrap_or("").to_string();
+    // Model: the prompt's modelId, else fall back to the first model
+    // this worker advertises (CLAUDE_MODELS leads with the install
+    // default), else opus 4.7. Without this an asker that omits modelId
+    // would spawn `claude --model ""`.
+    let model = tone.get("modelId").and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| std::env::var("CLAUDE_MODELS").ok()
+            .and_then(|m| m.split(',').next().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "claude-opus-4-7".into()));
     let cwd = tone.get("cwd").and_then(Value::as_str).unwrap_or("/").to_string();
     let content = tone.get("content").and_then(Value::as_str)
         .or_else(|| tone.get("text").and_then(Value::as_str))

@@ -178,18 +178,15 @@ ensure_hum_config() {
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
   "nest": {
-    "maxProcs": 4,
-    "idleThresholdMs": 300000,
+    "maxActiveCells": 4,
+    "cellIdlePruneThresholdMs": 300000,
     "default": "claude-cli"
-  },
-  "hives": {
-    "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
-    "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
   }
 }
 JSON
   log "wrote default hum.json at $CFG"
   log "  edit fs.roots to match where you actually code."
+  log "  models + binary are set per-hive via its install env (CLAUDE_MODELS, CLAUDE_CLI_PATH); opus 4.7 is the claude-cli default."
 }
 
 # ─── humd binary ─────────────────────────────────────────────────────────────

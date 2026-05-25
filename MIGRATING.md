@@ -101,7 +101,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
     "roots": [{ "path": "~/code", "mode": "rw" }, { "path": "/tmp", "mode": "rw" }],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
-  "nest": { "maxProcs": 4, "idleThresholdMs": 300000, "default": "claude-cli" },
+  "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" },
   "hives": {
     "claude-cli":  { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" },
     "claude-repl": { "cliPath": "claude", "defaultModel": "claude-sonnet-4-5" }
@@ -111,8 +111,8 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 
 | old key (clwnd.json) | new home (hum.json) |
 |---|---|
-| `maxProcs` | `nest.maxProcs` |
-| `idleTimeout` | `nest.idleThresholdMs` (same unit, renamed) |
+| `maxActiveCells` | `nest.maxActiveCells` |
+| `idleTimeout` | `nest.cellIdlePruneThresholdMs` (same unit, renamed) |
 | `permissionDusk` | `humd.permissionDuskMs` |
 | `nest` (enum `"claude-cli"` / `"claude-repl"`) | `nest.default` (free-form string; must appear in `hives`) |
 | `driftRetentionDays` | `humd.driftRetentionDays` |
