@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "bp7"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "bp7 0.10.7",
@@ -500,7 +500,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claude-cli"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "claude-repl"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "regex",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "directories",
  "serde",
@@ -1026,7 +1026,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "drift"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "drone"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "parking_lot",
  "serde",
@@ -1119,7 +1119,7 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "ensemble"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "grpc-nestling"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "gsm-modem"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1676,7 +1676,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hum"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -1695,7 +1695,7 @@ checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "humd"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1724,7 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "humfs"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "hums"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "directories",
  "parking_lot",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "ids"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "rand 0.8.6",
 ]
@@ -2465,7 +2465,7 @@ checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "mcp"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "serde",
@@ -2616,7 +2616,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "nest"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "nest-common"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3018,7 +3018,7 @@ dependencies = [
 
 [[package]]
 name = "ollama-server"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -3072,7 +3072,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "paid-oracle"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "ensemble",
@@ -3156,7 +3156,7 @@ dependencies = [
 
 [[package]]
 name = "penny"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "parking_lot",
  "serde",
@@ -4223,7 +4223,7 @@ checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 
 [[package]]
 name = "sim"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "config",
@@ -4592,7 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "codegen",
  "hex",
@@ -4606,7 +4606,7 @@ dependencies = [
 
 [[package]]
 name = "thrumd"
-version = "0.31.9"
+version = "0.31.10"
 dependencies = [
  "anyhow",
  "async-trait",
