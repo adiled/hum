@@ -1,6 +1,6 @@
 {
   "name": "@hum/recipe-opencode-tests",
-  "version": "0.31.14",
+  "version": "0.31.15",
   "private": true,
   "type": "module",
   "scripts": {
