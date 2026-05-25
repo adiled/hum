@@ -251,7 +251,7 @@ install_service_unit() {
     --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
     --env "XDG_DATA_HOME=$XDG_DATA_HOME" \
     --env "XDG_STATE_HOME=$XDG_STATE_HOME" \
-    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/hum-$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
     --env "PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
   log "service unit installed for hum ($SVC_OS)"

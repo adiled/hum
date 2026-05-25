@@ -55,7 +55,7 @@ install_unit() {
   esac
   svc_install "$UNIT_NAME" "$FORAGER_BIN" \
     --env "HUM_LOG_LEVEL=trace,penny=error" \
-    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/hum-$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
     --env "PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
   svc_restart "$UNIT_NAME" 2>/dev/null || svc_start "$UNIT_NAME" 2>/dev/null || true

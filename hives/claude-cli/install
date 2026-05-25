@@ -67,7 +67,7 @@ install_unit() {
   esac
   svc_install "$UNIT_NAME" "$WORKER_BIN" \
     --env "HUM_LOG_LEVEL=trace,penny=error" \
-    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/hum-$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
     --env "CLAUDE_CLI_PATH=$CLAUDE_BIN" \
     --env "CLAUDE_MODELS=${CLAUDE_MODELS:-claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5,claude-sonnet-4-5,claude-haiku-4-5-20251001}" \

@@ -126,7 +126,7 @@ install_unit() {
 
   svc_install "$UNIT_NAME" "$NODE_BIN $NESTDIR/dist/index.js" \
     --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
-    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/hum-$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK"
   svc_restart "$UNIT_NAME" 2>/dev/null || svc_start "$UNIT_NAME" 2>/dev/null || true
   sleep 1
