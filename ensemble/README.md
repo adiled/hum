@@ -309,7 +309,7 @@ fn humd_sock() -> std::path::PathBuf {
 
 ### 3. Get advertised — humd does it for you
 
-When the bee sends its `hello`, humd builds a `NestlingManifest`
+When the bee sends its `hello`, humd builds a `HiveManifest`
 from the handshake payload and gossips it on the
 `hum/hives/announce` topic. Every humd subscribed to that topic
 learns "humd X runs market-maker (version, propensity, chi)".
@@ -327,7 +327,7 @@ From a Rust caller embedded in humd (or any process holding an
 ```rust
 use ensemble::{Ensemble, HumdId};
 
-let mut peers = ensemble.nestling_discover("market-maker");
+let mut peers = ensemble.hive_discover("market-maker");
 while let Some((humd_id, manifest)) = peers.recv().await {
     if manifest.proto_version != thrum_core::THRUM_VERSION {
         tracing::warn!(%humd_id, manifest.proto_version, "version skew");
@@ -341,7 +341,7 @@ while let Some((humd_id, manifest)) = peers.recv().await {
 ```
 
 For the broader stream (advertise + retract envelopes) use
-`ensemble.nestling_announcements()`.
+`ensemble.bee_announcements()`.
 
 ### 5. Trade — quotes are gossip, fills are unicast
 

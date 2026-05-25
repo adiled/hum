@@ -3,7 +3,7 @@
 #
 # Single source of truth: the VERSION file at repo root. Every other
 # version-bearing file (Cargo.toml workspace.package.version, every
-# nestling's package.json, recipes/opencode/tests/package.json) is
+# bee's package.json, recipes/opencode/tests/package.json) is
 # rewritten to match. The thrum protocol version lives in
 # `thrum-core/src/chi.rs` (THRUM_VERSION) and is independent — this
 # script never touches it.
@@ -72,7 +72,7 @@ echo "$NEXT" > "$VERSION_FILE"
 sed -i.bak -E "/^\[workspace\.package\]/,/^\[/ { s/^version = \".*\"/version = \"$NEXT\"/ }" "$ROOT/Cargo.toml"
 rm -f "$ROOT/Cargo.toml.bak"
 
-# 3. every nestling's package.json
+# 3. every bee's package.json
 shopt -s nullglob
 for pkg in "$ROOT"/hives/*/package.json "$ROOT"/recipes/*/tests/package.json; do
   tmp="$(mktemp)"

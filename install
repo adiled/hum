@@ -2,13 +2,13 @@
 # hum installer — v0.3 (Rust daemon, ensemble mesh, openai-server door).
 #
 # What this does, in order:
-#   1. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo, pnpm (for nestlings).
+#   1. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo, pnpm (for bees).
 #   2. Build the Rust humd from source — `cargo install --path humd --root $HUM_BIN_ROOT`.
 #   3. Mint Ed25519 identity at $HUM_STATE/humd.key if missing.
 #   4. Seed an empty peers.json at $HUM_CONFIG/peers.json if missing.
 #   5. Seed a minimal hum.json at $HUM_CONFIG/hum.json if missing.
 #   6. Install systemd --user unit pointing at the Rust binary.
-#   7. Build and install the openai-server nestling (the 0.3 front door).
+#   7. Build and install the openai-server bee (the 0.3 front door).
 #   8. Start the daemon.
 #
 # 0.2 → 0.3 is a config-shape change; there is no migration script. Read
@@ -281,7 +281,7 @@ start_daemon() {
 
 # ─── next steps ──────────────────────────────────────────────────────────────
 
-# humd has no opinion on which nestlings you run. Each nestling is a
+# humd has no opinion on which bees you run. Each bee is a
 # separate process with its own installer under hives/<kind>/install.
 # Pick at least one to give humd an outside-world surface.
 print_next_steps() {
@@ -291,7 +291,7 @@ print_next_steps() {
   log "  hum + opencode (chat from the opencode TUI/CLI):"
   log "    ./recipes/opencode/install"
   log ""
-  log "  Other nestlings — each is a standalone install:"
+  log "  Other bees — each is a standalone install:"
   log "    hives/openai-server/install     (OpenAI-shape HTTP)"
   log "    hives/anthropic-server/install  (Anthropic-shape HTTP)"
   log "    hives/ollama-server/install     (Ollama-shape HTTP)"

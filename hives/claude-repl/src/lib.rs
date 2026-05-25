@@ -147,14 +147,14 @@ impl WorkerBee for ClaudeReplWorker {
             // thread can't fire between reads. Real implementation would
             // poll on a non-blocking fd; for v0 the glyph-match below is
             // the only readiness signal.
-            let perched_signal = '\u{276F}'; // ❯
+            let prompt_glyph = '\u{276F}'; // ❯
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let s = String::from_utf8_lossy(&buf[..n]);
                         acc.push_str(&s);
-                        if state == HarnessState::Nesting && acc.contains(perched_signal) {
+                        if state == HarnessState::Nesting && acc.contains(prompt_glyph) {
                             state = HarnessState::Perched;
                             trace!(target: "nest", "pty.state Nesting->Perched (glyph)");
                             let _ = tx_evt_out.blocking_send(json!({

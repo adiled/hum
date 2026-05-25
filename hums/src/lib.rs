@@ -279,7 +279,7 @@ pub fn nestled_id(h: &Hum) -> Option<&str> {
 }
 
 /// First nestled entry's name (`"opencode"`, etc.), or `None`.
-pub fn nestling_name(h: &Hum) -> Option<&str> {
+pub fn bee_name(h: &Hum) -> Option<&str> {
     h.nestled.first().map(|n| n.bee.as_str())
 }
 
@@ -532,7 +532,7 @@ mod tests {
         let a = h.get("sid-old").unwrap();
         assert_eq!(nest_id(&a), Some("claude-1"));
         assert_eq!(nestled_id(&a), Some("oc-1"));
-        assert_eq!(nestling_name(&a), Some("opencode"));
+        assert_eq!(bee_name(&a), Some("opencode"));
 
         let b = h.get("sid-plugin").unwrap();
         assert_eq!(b.nestled.len(), 2);

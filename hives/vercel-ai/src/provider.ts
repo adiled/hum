@@ -134,7 +134,6 @@ export class HumModel implements LanguageModelV3 {
         thrum.send({
           chi: "prompt",
           sid,
-          nestling: "vercel-ai",
           modelId: this.modelId,
           content,
           ...(systemPrompt ? { systemPrompt } : {}),

@@ -134,7 +134,7 @@ per root. The `SpawnSpec.cwd` for any spawned cell must sit inside
 some root. Empty `roots` = humd has no fs access — useful for
 inference-only nests.
 
-## Nestling config lives outside hum.json
+## Bee config lives outside hum.json
 
 `~/.config/hum/hives/<kind>.json` per bee kind. The
 installer seeds `openai-server.json`:

@@ -5,7 +5,7 @@ description: "wire-protocol primitives for Go bees"
 
 # thrum (Go)
 
-> _wire-protocol primitives for Go nestlings_
+> _wire-protocol primitives for Go bees_
 
 Go reference client for **thrum** — the NDJSON socket between humd
 and bees. Same wire as Rust (`thrum-core`), TS (`thrum`), and

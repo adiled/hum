@@ -39,7 +39,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UdpSocket, UnixStream};
 use tracing::{info, warn};
 
-const NESTLING_NAME: &str = "bp7-forager";
+const HIVE_NAME: &str = "bp7-forager";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Default DTN convergence-layer port for UDP. ION and µPCN both
@@ -170,14 +170,14 @@ async fn run_prompt(
     let mut lines = BufReader::new(rd).lines();
 
     // Persisted forager identity — humd dedupes by this fbee_ hid.
-    let hid = nest_common::load_or_mint_bee_key(NESTLING_NAME, ensemble::HidPrefix::Fbee)
+    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
     let hello = json!({
         "chi": Chi::Hello,
         "rid": format!("hello-{}", now_ms()),
-        "from": NESTLING_NAME,
+        "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
         "version": NESTLING_VERSION,

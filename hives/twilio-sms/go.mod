@@ -1,4 +1,4 @@
-module github.com/adiled/hum/nestlings/twilio-sms
+module github.com/adiled/hum/hives/twilio-sms
 
 go 1.19
 

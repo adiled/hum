@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openai-server nestling installer.
+# openai-server bee installer.
 #
 # Stands alone. Builds the TS bundle, seeds the per-kind config at
 # ~/.config/hum/hives/openai-server.json, installs a user systemd

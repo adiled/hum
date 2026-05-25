@@ -3,7 +3,7 @@ name = "gsm-modem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Hum-on-a-burner-phone — USB GSM modem nestling driven by AT commands over serial."
+description = "Hum-on-a-burner-phone — USB GSM modem bee driven by AT commands over serial."
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }

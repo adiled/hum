@@ -5,7 +5,7 @@ description: "hum by text message — Twilio SMS webhook bee"
 
 # twilio-sms (Go)
 
-> _hum by text message — Twilio SMS webhook nestling_
+> _hum by text message — Twilio SMS webhook bee_
 
 Built in Go with the stdlib `net/http`. Imports the
 [`clients/go/thrum`](../../clients/go) reference client. The

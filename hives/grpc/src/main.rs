@@ -27,7 +27,7 @@ pub mod hum {
 
 use hum::{hum_server::{Hum, HumServer}, Tone};
 
-const NESTLING_NAME: &str = "grpc";
+const HIVE_NAME: &str = "grpc";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn humd_sock_path() -> String {
@@ -50,7 +50,7 @@ async fn bridge(
 
     // Persisted forager identity — humd dedupes us by this fbee_ hid
     // across reconnects; without it every reconnect leaks a manifest.
-    let hid = nest_common::load_or_mint_bee_key(NESTLING_NAME, ensemble::HidPrefix::Fbee)
+    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
@@ -61,7 +61,7 @@ async fn bridge(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis().to_string())
             .unwrap_or_default()),
-        "from": NESTLING_NAME,
+        "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
         "version": NESTLING_VERSION,

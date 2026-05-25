@@ -5,7 +5,7 @@ description: "wire-protocol primitives for thrum, the NDJSON socket between humd
 
 # thrum
 
-> _wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings_
+> _wire-protocol primitives for thrum, the NDJSON socket between humd and bees_
 
 `thrum` is the TypeScript contract for the **thrum** protocol that
 bees (clients) and humds (daemons) speak to each other. Importing
@@ -91,7 +91,7 @@ sock.on("data", (chunk: Buffer) => {
 ## Version policy
 
 `THRUM_VERSION` is the wire-protocol version and is independent of the
-package version. Nestlings warn on mismatch.
+package version. Bees warn on mismatch.
 
 | change | THRUM_VERSION bump |
 |---|---|
@@ -103,7 +103,7 @@ package version. Nestlings warn on mismatch.
 
 - [`thrum-core`](../thrum-core) — the Rust source of truth this package
   is generated from.
-- [`ensemble`](../ensemble) — the mesh of humds. Nestlings advertise
+- [`ensemble`](../ensemble) — the mesh of humds. Bees advertise
   themselves and discover each other on the
   `hum/hives/announce` gossip topic.
 - [`hives/`](../hives) — reference implementations:

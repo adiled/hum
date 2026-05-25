@@ -1,7 +1,7 @@
 {
   "name": "thrum",
   "version": "0.7.0",
-  "description": "Wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings.",
+  "description": "Wire-protocol primitives for thrum, the NDJSON socket between humd and bees.",
   "type": "module",
   "main": "./index.ts",
   "types": "./index.ts",

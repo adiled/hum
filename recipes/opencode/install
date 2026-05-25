@@ -6,7 +6,7 @@
 #
 # Pipeline:
 #   1. invoke ./dev/deploy if present (gets humd live for HUM_DEV_USER)
-#   2. build the openai-server nestling
+#   2. build the openai-server bee
 #   3. seed ~/.config/hum/hives/openai-server.json (target user)
 #   4. seed/patch ~/.config/opencode/opencode.json with provider.hum
 #   5. install hum-openai-server systemd unit + bounce
@@ -35,7 +35,7 @@ else
   echo "                  (paradigm 0: cargo run -p humd from another terminal)"
 fi
 
-# Step 2 — build the openai-server nestling. Each nestling is a
+# Step 2 — build the openai-server bee. Each bee is a
 # standalone TS project (no root workspace).
 if command -v pnpm >/dev/null 2>&1; then
   echo "[opencode] building openai-server …"

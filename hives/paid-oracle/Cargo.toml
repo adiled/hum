@@ -3,7 +3,7 @@ name = "paid-oracle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "x402-style paid oracle nestling — sells one price per USDC payment, verified on-chain."
+description = "x402-style paid oracle bee — sells one price per USDC payment, verified on-chain."
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }

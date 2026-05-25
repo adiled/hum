@@ -99,7 +99,7 @@ single protocol.
   vocabulary (these are the tones this bee knows). One word per
   concept; never reuse `chi` for a list.
 - All other fields — optional but **strongly recommended**: humd uses
-  them to build a `NestlingManifest` and gossip it to the rest of the
+  them to build a `HiveManifest` and gossip it to the rest of the
   ensemble on the `hum/hives/announce` topic.
 - humd replies with `chi:"breath"` — a snapshot of any state relevant
   to this nestler (today: `{}`; reserved for future state sync).

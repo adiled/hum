@@ -1,9 +1,9 @@
 [package]
-name = "grpc-nestling"
+name = "grpc-forager"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only nestling."
+description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only bee."
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
@@ -24,5 +24,5 @@ libc = "0.2"
 tonic-build = "0.12"
 
 [[bin]]
-name = "grpc-nestling"
+name = "grpc-forager"
 path = "src/main.rs"

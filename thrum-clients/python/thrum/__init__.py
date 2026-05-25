@@ -1,4 +1,4 @@
-"""thrum — wire-protocol primitives for Python nestlings.
+"""thrum — wire-protocol primitives for Python bees.
 
 See WIRE.md for the protocol spec. This package re-exports:
 

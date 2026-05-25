@@ -14,8 +14,7 @@ Usage:
         await c.send({
             "chi": Chi.HELLO,
             "rid": rid(),
-            "from": "my-nestling",
-            "nestling": "my-nestling",
+            "from": "my-bee",
             "version": "0.1.0",
             "protoVersion": THRUM_VERSION,
         })

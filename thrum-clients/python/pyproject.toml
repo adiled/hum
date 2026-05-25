@@ -1,7 +1,7 @@
 [project]
 name = "thrum"
 version = "0.7.0"
-description = "Wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings."
+description = "Wire-protocol primitives for thrum, the NDJSON socket between humd and bees."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "hum contributors" }]

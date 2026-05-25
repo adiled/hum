@@ -22,7 +22,7 @@ export interface BindInfo {
 function defaultThrumPath(): string {
   // Canonical resolution mirrors thrumd::default_socket_path() in Rust.
   // HUM_THRUM_SOCK wins; HUM_SOCKET is the legacy fallback so an
-  // in-flight upgrade doesn't strand nestlings.
+  // in-flight upgrade doesn't strand bees.
   const explicit = process.env.HUM_THRUM_SOCK ?? process.env.HUM_SOCKET;
   if (explicit) return explicit;
   const runtime = process.env.XDG_RUNTIME_DIR

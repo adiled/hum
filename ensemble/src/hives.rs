@@ -41,7 +41,7 @@ pub struct HiveManifest {
     pub version: String,
     /// `THRUM_VERSION` the bee speaks. Receivers warn on mismatch.
     pub proto_version: String,
-    /// Statefulness × richness × wire-shape — see `hives/foragers.md`.
+    /// Statefulness, richness, and wire-shape. See `hives/README.md`.
     #[serde(default)]
     pub propensity: Propensity,
     /// Chi values the bee sends or expects to receive. Kebab-case,
@@ -133,7 +133,7 @@ pub struct BindAddr {
     pub scheme: Option<String>,
 }
 
-/// Three orthogonal axes from `hives/foragers.md`. Strings on the wire
+/// Three orthogonal axes from `hives/README.md`. Strings on the wire
 /// so adding a new dimension or value never breaks parsers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Propensity {
@@ -210,12 +210,12 @@ impl HiveManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum HiveAnnounce {
-    /// Nestling is live on `humd_id`.
+    /// Bee is live on `humd_id`.
     Advertise {
         humd_id: String,
         manifest: HiveManifest,
     },
-    /// Nestling has shut down on `humd_id`.
+    /// Bee has shut down on `humd_id`.
     Retract { humd_id: String, name: String },
 }
 

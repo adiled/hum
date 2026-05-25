@@ -1,4 +1,4 @@
-//! Nestling advertise/discover end-to-end over the gossip layer.
+//! Bee advertise/discover end-to-end over the gossip layer.
 //!
 //! Three humds in a line (A — B — C). A advertises a `market-maker`
 //! bee; C calls `hive_discover("market-maker")` and must

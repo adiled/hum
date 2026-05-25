@@ -5,7 +5,7 @@ package hum;
 // Bidirectional tone stream — one RPC, every chi flows through.
 //
 // Client opens Stream, sends tones (prompt, cancel, tool-result, ...).
-// Server (this nestling) bridges to humd over thrum and pumps tones back
+// Server (this bee) bridges to humd over thrum and pumps tones back
 // (chunk, finish, tool-call, pulse, breath, ...).
 //
 // Payload stays opaque on the wire: each Tone carries its full JSON shape

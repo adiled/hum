@@ -243,6 +243,7 @@ where
         capacity_override: cfg.capacity_override,
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
+        bees_snapshot_path: bees_snapshot_path(),
         sid_origins: sid_origins.clone(),
         tool_routes,
         sid_fs: sid_fs.clone(),
@@ -398,6 +399,10 @@ struct HumdSink {
     /// Live registry of every chi:"hello" we've received. Keyed by
     /// thrum client_id. Routing scans this for bee/models matches.
     manifests: Manifests,
+    /// Where to mirror `manifests` as JSON so the `hum` CLI can render
+    /// full bee info (hid, tools, models, source) without an RPC.
+    /// Rewritten on every register + disconnect.
+    bees_snapshot_path: std::path::PathBuf,
     /// Map sid → originating peer humd. Populated in the prompt arm
     /// when a prompt arrives via the ensemble pump (client_id ==
     /// "ensemble" and the tone carries a peer `from` humd id). Read
@@ -473,6 +478,16 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
+/// `$XDG_STATE_HOME/hum/bees.json` (else `~/.local/state/hum/bees.json`).
+/// The `hum` CLI reads this to render `hum bee --list` with full manifest
+/// info. Same resolution as the CLI's state-dir logic.
+fn bees_snapshot_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local").join("state")))
+        .unwrap_or_else(|| std::path::PathBuf::from(".local/state"));
+    base.join("hum").join("bees.json")
+}
+
 // humd doesn't host an MCP server — tool-call routing is purely
 // thrum-native: workers emit chi:"tool-call", humd intercepts in
 // the worker-passthrough block and routes to the matching forager
@@ -483,6 +498,24 @@ type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>
 // directly over thrum from their own process. humd just routes; see
 // the passthrough block in ToneSink::hear that re-broadcasts those
 // tones on the sigil sid claimed by the originating forager bee.)
+
+impl HumdSink {
+    /// Mirror the live manifest registry to `bees_snapshot_path` as a
+    /// JSON object (client_id → manifest) so the `hum` CLI can show full
+    /// bee info offline. Atomic write; best-effort (logs on failure).
+    fn snapshot_bees(&self) {
+        let json = {
+            let m = self.manifests.read();
+            serde_json::to_vec_pretty(&*m).unwrap_or_default()
+        };
+        let path = &self.bees_snapshot_path;
+        if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &json).and_then(|_| std::fs::rename(&tmp, path)).is_err() {
+            trace!(path = %path.display(), "bees.snapshot.write.failed");
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
@@ -500,6 +533,7 @@ impl ToneSink for HumdSink {
         self.tool_routes.write().retain(|_, originator| originator != client_id);
         if had_manifest {
             trace!(client_id, "manifest.evict.disconnect");
+            self.snapshot_bees();
         }
     }
 
@@ -936,6 +970,7 @@ impl ToneSink for HumdSink {
                         }
                         m.insert(client_id.to_string(), manifest.clone());
                         drop(m);
+                        self.snapshot_bees();
                         if bee.iter().any(|b| b == "worker") {
                             info!(client_id, ?models, "worker.registered");
                         }

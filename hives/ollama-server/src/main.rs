@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tracing::info;
 use uuid::Uuid;
 
-const NESTLING_NAME: &str = "ollama-server";
+const HIVE_NAME: &str = "ollama-server";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Shape of `~/.config/hum/hives/ollama-server.json`. All fields
@@ -220,8 +220,8 @@ async fn open_prompt(
     let mut hello = serde_json::Map::new();
     hello.insert("chi".into(), json!(Chi::Hello));
     hello.insert("rid".into(), Value::String(format!("hello-{}", Uuid::new_v4())));
-    hello.insert("from".into(), Value::String(NESTLING_NAME.into()));
-    hello.insert("bee".into(), Value::String(NESTLING_NAME.into()));
+    hello.insert("from".into(), Value::String(HIVE_NAME.into()));
+    hello.insert("bee".into(), Value::String(HIVE_NAME.into()));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
     hello.insert("protoVersion".into(), Value::String(THRUM_VERSION.into()));
     hello.insert(

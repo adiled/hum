@@ -10,8 +10,10 @@
 //!   hum                    health summary
 //!   hum status             daemon + config + service state
 //!   hum logs               tail journalctl (Linux) / launchd logs (macOS)
-//!   hum bees               list bee services
-//!   hum bees restart NAME  restart one bee (or --all) via service mgr
+//!   hum hive --list        list hive kinds (catalogue / configured / running)
+//!   hum hive <ref> install build a hive + register its bee
+//!   hum bee --list         list bees + state
+//!   hum bee <id> VERB      enter | exit | reenter a bee (start/stop/restart)
 //!   hum penny              show lifetime counters
 //!   hum recipes [name]     list recipes / point at one
 //!   hum uninstall          remove service + binary (state preserved)
@@ -41,12 +43,33 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
-    /// List bee services, or restart them. `hum bees` lists; `hum bees
-    /// restart <name>` or `hum bees restart --all` bounces them through
-    /// the service manager (graceful, same identity — unlike pkill).
-    Bees {
-        #[command(subcommand)]
-        action: Option<BeeAction>,
+    /// Hive kinds — the source a bee is commissioned from.
+    ///   hum hive --list           catalogue + configured + running
+    ///   hum hive <ref> install    build the hive + register its bee
+    /// <ref> is a bundled name, a local path, or the source URL a bee
+    /// advertises (github tree URL of a hives/<kind> dir).
+    Hive {
+        /// Hive ref (name | path | source URL). Omit with --list.
+        target: Option<String>,
+        /// Action on the hive: `install`.
+        action: Option<String>,
+        /// List the hive catalogue.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Bees — the running instances of a hive.
+    ///   hum bee --list                  list bees + state
+    ///   hum bee <name|id> enter         start a stopped bee
+    ///   hum bee <name|id> exit          stop (state preserved)
+    ///   hum bee <name|id> reenter       restart (graceful, same id)
+    Bee {
+        /// Bee name or id (hive name accepted, e.g. "claude-cli").
+        target: Option<String>,
+        /// Lifecycle verb: enter | exit | reenter.
+        verb: Option<String>,
+        /// List bees.
+        #[arg(long)]
+        list: bool,
     },
     /// Show lifetime counters from penny.json
     Penny,
@@ -67,25 +90,14 @@ enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
-enum BeeAction {
-    /// Restart one bee by name, or every bee with --all.
-    Restart {
-        /// Bee service short id (e.g. "hum-paid-oracle"). Omit with --all.
-        name: Option<String>,
-        /// Restart every installed bee service.
-        #[arg(long)]
-        all: bool,
-    },
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         None => summary(),
         Some(Cmd::Status) => status(),
         Some(Cmd::Logs { lines }) => logs(lines),
-        Some(Cmd::Bees { action }) => bees(action),
+        Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
+        Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Uninstall) => uninstall(),
@@ -269,6 +281,9 @@ fn logs(lines: u32) -> Result<()> {
     Ok(())
 }
 
+// ── hive / bee shared service plumbing ─────────────────────────────────────
+
+/// `svc_list` short-ids of installed bee services (the `hum-*` units).
 fn bee_list(svc: &std::path::Path) -> Result<Vec<String>> {
     let out = Command::new("bash")
         .arg("-c")
@@ -283,63 +298,265 @@ fn bee_list(svc: &std::path::Path) -> Result<Vec<String>> {
         .collect())
 }
 
-fn bees(action: Option<BeeAction>) -> Result<()> {
+/// True if a unit is currently running (svc_is_active exit 0).
+fn svc_active(svc: &std::path::Path, unit: &str) -> bool {
+    Command::new("bash")
+        .arg("-c")
+        .arg(format!(". {} && svc_is_active {}", svc.display(), unit))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Resolve a user-given name to installed service unit(s), tolerantly:
+///   exact unit ("hum-claude-cli-worker")
+///   → "hum-<name>" ("paid-oracle" → "hum-paid-oracle")
+///   → hive-kind prefix ("claude-cli" → "hum-claude-cli-worker"), so the
+///     kind shown by `hum hive --list` addresses its bee.
+fn resolve_units(installed: &[String], name: &str) -> Vec<String> {
+    if name == "all" { return installed.to_vec(); }
+    let prefixed = format!("hum-{name}");
+    installed.iter().filter(|b| {
+        **b == name || **b == prefixed
+            || b.strip_prefix("hum-").map(|s| s == name || s.starts_with(&format!("{name}-"))).unwrap_or(false)
+    }).cloned().collect()
+}
+
+fn hive(target: Option<String>, action: Option<String>, list: bool) -> Result<()> {
+    // hum hive --list  (or bare `hum hive`)
+    if list || target.is_none() {
+        return hive_list();
+    }
+    let ref_ = target.unwrap();
+    match action.as_deref() {
+        Some("install") => hive_install(&ref_),
+        Some(act) => anyhow::bail!("unknown hive action '{act}' for '{ref_}' (try: install)"),
+        None => anyhow::bail!("hum hive {ref_} <action> — try: hum hive {ref_} install"),
+    }
+}
+
+fn hive_list() -> Result<()> {
+    use std::collections::BTreeMap;
+    // kind -> (has installer, configured model, running)
+    let root = repo_root_or_install_dir();
+    let hives_dir = root.join("hives");
+    let mut kinds: BTreeMap<String, (bool, Option<String>, bool)> = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(&hives_dir) {
+        for e in entries.flatten() {
+            if e.path().is_dir() && e.path().join("install").exists() {
+                kinds.entry(e.file_name().to_string_lossy().to_string()).or_default().0 = true;
+            }
+        }
+    }
+    let hum_json = xdg("XDG_CONFIG_HOME", ".config")?.join("hum").join("hum.json");
+    let mut default_kind = String::new();
+    if let Ok(raw) = std::fs::read_to_string(&hum_json) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            default_kind = v.get("nest").and_then(|n| n.get("default"))
+                .and_then(|d| d.as_str()).unwrap_or("").to_string();
+            if let Some(obj) = v.get("hives").and_then(|h| h.as_object()) {
+                for (k, cfg) in obj {
+                    kinds.entry(k.clone()).or_default().1 =
+                        cfg.get("defaultModel").and_then(|m| m.as_str()).map(str::to_string);
+                }
+            }
+        }
+    }
+    if let Some(svc) = svc_helper() {
+        let catalogue: Vec<String> = kinds.keys().cloned().collect();
+        for unit in bee_list(&svc).unwrap_or_default() {
+            let sid = unit.strip_prefix("hum-").unwrap_or(&unit).to_string();
+            let kind = catalogue.iter()
+                .filter(|k| sid == **k || sid.starts_with(&format!("{k}-")))
+                .max_by_key(|k| k.len()).cloned().unwrap_or(sid);
+            kinds.entry(kind).or_default().2 = true;
+        }
+    }
+    if kinds.is_empty() {
+        println!("no hives found (looked in {})", hives_dir.display());
+        return Ok(());
+    }
+    println!("Hive kinds (catalogue: {}):\n", hives_dir.display());
+    println!("  {:<18} {:<10} {:<20} {}", "KIND", "INSTALLER", "CONFIGURED", "RUNNING");
+    for (kind, (installer, model, running)) in &kinds {
+        let configured = match (model, kind == &default_kind) {
+            (Some(m), true)  => format!("{m} (default)"),
+            (Some(m), false) => m.clone(),
+            (None, true)     => "(default)".to_string(),
+            (None, false)    => "—".to_string(),
+        };
+        println!("  {:<18} {:<10} {:<20} {}", kind,
+            if *installer { "✓" } else { "—" }, configured,
+            if *running { "✓" } else { "—" });
+    }
+    println!("\nbuild one: hum hive <name|path|source-url> install   |   bees: hum bee --list");
+    Ok(())
+}
+
+/// Resolve a hive ref to its `install` script, then run it. <ref> is the
+/// same dialect a bee advertises as its `source`:
+///   - bundled name   → <repo>/hives/<name>/install
+///   - local path     → <dir>/install  (or a direct install file)
+///   - github tree URL → https://github.com/<org>/<repo>/tree/<branch>/<sub>
+///                       our own repo maps to the local checkout; a
+///                       foreign repo is shallow-cloned to a cache.
+fn hive_install(reference: &str) -> Result<()> {
+    let install = resolve_hive_install(reference)?;
+    if !install.exists() {
+        anyhow::bail!("no install script at {}", install.display());
+    }
+    println!("installing hive from {} ...", install.display());
+    let ok = Command::new(&install).status().map(|s| s.success()).unwrap_or(false);
+    if ok { println!("✓ installed; see `hum bee --list`"); Ok(()) }
+    else { anyhow::bail!("installer failed: {}", install.display()) }
+}
+
+fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
+    // github tree URL — the form bees advertise in `source`.
+    if let Some(rest) = reference.strip_prefix("https://github.com/") {
+        // <org>/<repo>/tree/<branch>/<subpath...>
+        let parts: Vec<&str> = rest.splitn(5, '/').collect();
+        if parts.len() == 5 && parts[2] == "tree" {
+            let (org, repo, branch, sub) = (parts[0], parts[1], parts[3], parts[4]);
+            // Our own repo → use the local checkout, no network.
+            if org == "adiled" && repo == "hum" {
+                return Ok(repo_root_or_install_dir().join(sub).join("install"));
+            }
+            // Foreign repo → shallow clone into a cache, then the subpath.
+            let cache = xdg("XDG_CACHE_HOME", ".cache")?
+                .join("hum").join("hives").join(format!("{org}-{repo}-{branch}"));
+            if !cache.exists() {
+                std::fs::create_dir_all(cache.parent().unwrap()).ok();
+                let url = format!("https://github.com/{org}/{repo}");
+                println!("cloning {url} @ {branch} ...");
+                let ok = Command::new("git")
+                    .args(["clone", "--depth", "1", "--branch", branch, &url])
+                    .arg(&cache)
+                    .status().map(|s| s.success()).unwrap_or(false);
+                if !ok { anyhow::bail!("git clone failed: {url}"); }
+            }
+            return Ok(cache.join(sub).join("install"));
+        }
+        anyhow::bail!("unrecognized github source URL (want .../tree/<branch>/<path>): {reference}");
+    }
+    // Local path — dir holding an `install`, or a direct install file.
+    let p = PathBuf::from(reference);
+    if p.is_dir() { return Ok(p.join("install")); }
+    if p.is_file() { return Ok(p); }
+    // Bundled name — <repo>/hives/<name>/install.
+    let bundled = repo_root_or_install_dir().join("hives").join(reference).join("install");
+    if bundled.exists() { return Ok(bundled); }
+    anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
+}
+
+/// Render `hum bee --list` with maximum info: humd's live manifest
+/// (hid, role, models, tools, provides, wire, version, source) joined
+/// with each bee's service unit + running state.
+fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
+    let snap_path = xdg("XDG_STATE_HOME", ".local/state")?.join("hum").join("bees.json");
+    let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_object().map(|o| o.values().cloned().collect()))
+        .unwrap_or_default();
+
+    if live.is_empty() && installed.is_empty() {
+        println!("no bees connected and no bee services installed.");
+        println!("build one: hum hive <name|path|source-url> install");
+        return Ok(());
+    }
+
+    let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let arr = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
+
+    // Live bees (full info), each matched to a service unit if any.
+    let mut matched_units: Vec<String> = Vec::new();
+    for m in &live {
+        let hive = s(m, "name");
+        let unit = installed.iter().find(|u| {
+            let sid = u.strip_prefix("hum-").unwrap_or(u);
+            sid == hive || sid.starts_with(&format!("{hive}-"))
+        }).cloned();
+        if let Some(u) = &unit { matched_units.push(u.clone()); }
+
+        let role = arr(m, "bee").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>().join("+");
+        let models = arr(m, "models").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
+        let tools: Vec<String> = arr(m, "tools").iter().map(|t| s(t, "name")).filter(|x| !x.is_empty()).collect();
+        let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
+        let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
+        let state = match &unit {
+            Some(u) if svc_active(svc, u) => "in nest (service running)",
+            Some(_) => "in nest (service stopped?)",
+            None => "in nest (unmanaged)",
+        };
+
+        println!("● {hive}  —  {state}");
+        let hid = s(m, "hid");
+        if !hid.is_empty() { println!("    hid:      {}", hid); }
+        if !role.is_empty()     { println!("    role:     {role}"); }
+        if !models.is_empty()   { println!("    models:   {}", models.join(", ")); }
+        if !tools.is_empty()    { println!("    tools:    {} ({})", tools.len(), tools.join(", ")); }
+        if !provides.is_empty() { println!("    provides: {}", provides.join(", ")); }
+        if !wire.is_empty()     { println!("    wire:     {wire}"); }
+        let version = s(m, "version");
+        if !version.is_empty()  { println!("    version:  {version}"); }
+        let source = s(m, "source");
+        if !source.is_empty()   { println!("    source:   {source}"); }
+        if let Some(u) = &unit  { println!("    service:  {u}"); }
+        println!();
+    }
+
+    // Installed services with no live manifest — bee is exited / not connected.
+    for u in installed {
+        if matched_units.contains(u) { continue; }
+        let state = if svc_active(svc, u) { "service running, not handshaked" } else { "exited" };
+        println!("● {}  —  {state}", u.strip_prefix("hum-").unwrap_or(u));
+        println!("    service:  {u}");
+        println!();
+    }
+
+    println!("verbs: hum bee <id> enter | exit | reenter   (id `all` for every bee)");
+    Ok(())
+}
+
+fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
     let svc = svc_helper().context("scripts/svc.sh not found — install hum first")?;
     let installed = bee_list(&svc)?;
 
-    let restart = |name: &str| -> bool {
-        let ok = Command::new("bash")
-            .arg("-c")
-            .arg(format!(". {} && svc_restart {}", svc.display(), name))
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        println!("  {} {name}", if ok { "✓ restarted" } else { "✗ failed" });
-        ok
-    };
-
-    match action {
-        // `hum bees` — list.
-        None => {
-            if installed.is_empty() {
-                println!("no bee services installed (foragers/workers register their own under hives/<kind>/install)");
-            } else {
-                println!("bee services:");
-                for b in &installed { println!("  {b}"); }
-                println!("\nrestart: hum bees restart <name>   |   all: hum bees restart --all");
-            }
-            Ok(())
-        }
-        Some(BeeAction::Restart { all: true, .. }) => {
-            if installed.is_empty() {
-                println!("no bee services to restart");
-                return Ok(());
-            }
-            println!("restarting {} bee(s):", installed.len());
-            for b in &installed { restart(b); }
-            Ok(())
-        }
-        Some(BeeAction::Restart { name: Some(name), all: false }) => {
-            // Accept the bare hive name too (e.g. "paid-oracle" → "hum-paid-oracle").
-            let target = if installed.iter().any(|b| b == &name) {
-                name.clone()
-            } else {
-                let prefixed = format!("hum-{name}");
-                if installed.iter().any(|b| b == &prefixed) { prefixed } else { name.clone() }
-            };
-            if !installed.iter().any(|b| b == &target) {
-                anyhow::bail!(
-                    "no bee service '{target}'. installed: {}",
-                    if installed.is_empty() { "(none)".into() } else { installed.join(", ") }
-                );
-            }
-            println!("restarting bee:");
-            if restart(&target) { Ok(()) } else { anyhow::bail!("restart failed for {target}") }
-        }
-        Some(BeeAction::Restart { name: None, all: false }) => {
-            anyhow::bail!("name a bee (hum bees restart <name>) or use --all. list: hum bees");
-        }
+    // List: `hum bee --list`, or bare `hum bee`. Full info comes from
+    // humd's live manifest snapshot ($XDG_STATE_HOME/hum/bees.json);
+    // service state comes from the service manager.
+    if list || (target.is_none() && verb.is_none()) {
+        bee_list_full(&svc, &installed)?;
+        return Ok(());
     }
+
+    // Operate: `hum bee <target> <verb>`.
+    let (target, verb) = match (target, verb) {
+        (Some(t), Some(v)) => (t, v),
+        (Some(t), None) => anyhow::bail!("hum bee {t} <verb> — enter | exit | reenter"),
+        _ => anyhow::bail!("hum bee <id> <verb>, or hum bee --list"),
+    };
+    let op = match verb.as_str() {
+        "enter"   => "svc_start",
+        "exit"    => "svc_stop",
+        "reenter" => "svc_restart",
+        other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
+    };
+    let units = resolve_units(&installed, &target);
+    if units.is_empty() {
+        anyhow::bail!("no bee matching '{target}'. bees: {}",
+            if installed.is_empty() { "(none)".into() } else { installed.join(", ") });
+    }
+    let past = match verb.as_str() { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
+    let mut all_ok = true;
+    for unit in &units {
+        let ok = Command::new("bash").arg("-c")
+            .arg(format!(". {} && {} {}", svc.display(), op, unit))
+            .status().map(|s| s.success()).unwrap_or(false);
+        all_ok &= ok;
+        println!("  {} {unit}", if ok { format!("✓ {past}") } else { "✗ failed".into() });
+    }
+    if all_ok { Ok(()) } else { anyhow::bail!("one or more {verb} ops failed") }
 }
 
 fn penny() -> Result<()> {

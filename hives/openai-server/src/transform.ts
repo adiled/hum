@@ -4,7 +4,7 @@
 // the full event surface we can express in the target format, and
 // let consumers (AI-aware clients, dashboards, raw curl) extract what
 // they understand. Clients with a faithful tool_calls implementation
-// will render perch-internal tool invocations naturally; clients with
+// will render worker-internal tool invocations naturally; clients with
 // run-loops that misinterpret tool_calls deltas as actionable
 // (regardless of finish_reason) will see stalls — that's a consumer
 // bug, not a translator one.
@@ -20,7 +20,7 @@
 // Upstream tools are namespaced `mcp__<server>__<Tool>` (MCP
 // convention). Strip the prefix and lowercase the leaf so clients
 // render with their idiomatic tool vocabulary. Pure namespacing
-// normalization — no perch knowledge.
+// normalization — no worker knowledge.
 function normalizeToolName(name: string): string {
   const m = name.match(/^mcp__[^_]+__(.+)$/);
   const leaf = m ? m[1] : name;
@@ -148,11 +148,11 @@ export class OpenAITranslator {
     }
 
     // Chunk-level tool events (tool_input_start / tool_input_delta /
-    // tool_call) come from the perch executing an in-process tool —
+    // tool_call) come from the worker executing an in-process tool —
     // humd's MCP server, brokered FS/bash, etc. Surface them as
     // OpenAI tool_calls deltas so AI-aware clients can render the
     // invocation. We do NOT set finish_reason="tool_calls" because the
-    // perch already executed the tool and continues generating;
+    // worker already executed the tool and continues generating;
     // emitting both the tool_calls delta and subsequent text deltas
     // within a single finish_reason="stop" stream is the honest
     // signal: "this tool happened in-server, here's the call shape,
@@ -187,7 +187,7 @@ export class OpenAITranslator {
     }
 
     if (type === "tool_call") {
-      // Args fully received — perch executes upstream. No frame: UI
+      // Args fully received — worker executes upstream. No frame: UI
       // already shows the call via the start + delta sequence.
       return out;
     }

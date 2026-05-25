@@ -1,4 +1,4 @@
-// twilio-sms — Twilio webhook nestling. Hum-by-text-message.
+// twilio-sms — Twilio webhook bee. Hum-by-text-message.
 //
 // Twilio's "Messaging webhook URL" delivers each inbound SMS as a
 // form-urlencoded POST. We:
@@ -39,7 +39,7 @@ import (
 	thrum "github.com/adiled/hum/clients/go/thrum"
 )
 
-const nestlingVersion = "0.0.0"
+const beeVersion = "0.0.0"
 
 type config struct {
 	listen       string
@@ -111,8 +111,7 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		"hid":          beeHid("twilio-sms", "fbee"),
 		"bee":          []string{"forager"},
 		"hive":         "twilio-sms",
-		"nestling":     "twilio-sms",
-		"version":      nestlingVersion,
+		"version":      beeVersion,
 		"protoVersion": thrum.ThrumVersion,
 		"propensity": map[string]any{
 			"statefulness": "stateful",
@@ -330,7 +329,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("twilio-sms nestling — POST to /sms with Twilio webhook form data\n"))
+		_, _ = w.Write([]byte("twilio-sms bee — POST to /sms with Twilio webhook form data\n"))
 	})
 	log.Printf("twilio-sms listening on http://%s/sms", cfg.listen)
 	if err := http.ListenAndServe(cfg.listen, mux); err != nil {

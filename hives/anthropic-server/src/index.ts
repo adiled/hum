@@ -17,17 +17,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 
-interface NestlingConfig {
+interface BeeConfig {
   host?: string;
   port?: number;
   apiKey?: string;
 }
 
-function readConfigFile(): NestlingConfig {
+function readConfigFile(): BeeConfig {
   const path = join(homedir(), ".config", "hum", "hives", "anthropic-server.json");
   try {
     const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as NestlingConfig;
+    const parsed = JSON.parse(raw) as BeeConfig;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -84,7 +84,7 @@ function checkAuth(req: IncomingMessage): boolean {
 
 // ── tenant + audit + usage + rate-limit ────────────────────────────────
 // Gateway concerns. Mirror openai-server's surface so operators get a
-// uniform mental model across nestlings. Each nestling carries its own
+// uniform mental model across bees. Each bee carries its own
 // state directory to keep ledgers independent.
 
 const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/anthropic-server";
@@ -491,7 +491,7 @@ async function start(): Promise<void> {
   const boundHost = typeof addr === "object" && addr !== null ? addr.address : HOST;
   const boundPort = typeof addr === "object" && addr !== null ? addr.port : PORT;
 
-  // Persistent startup-level client announces the nestling with its
+  // Persistent startup-level client announces the bee with its
   // actual bound address. Per-request handlers use their own short-
   // lived clients.
   const registrar = new ThrumClient();

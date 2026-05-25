@@ -268,7 +268,7 @@ async fn handle(
                 Ok(Ok(tone)) => {
                     let body = translate::tone_to_mcp_result(&tone);
                     // Mirror the resolution to humd as a sid-tagged
-                    // chi:"chunk" so nestling shims (openai-server's
+                    // chi:"chunk" so bee shims (openai-server's
                     // /v1/responses, anthropic-server's server_tool_use
                     // path) can surface this tool call as
                     // provider-executed to the asker. Without this

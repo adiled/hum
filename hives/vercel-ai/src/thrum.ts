@@ -1,14 +1,14 @@
-// Minimal thrum client for the Vercel AI nestling.
+// Minimal thrum client for the Vercel AI bee.
 // Mirrors the openai-server client: connect to hum's NDJSON socket, send
 // framed tones, dispatch incoming tones to per-sid subscribers.
 
 import { createConnection, type Socket } from "node:net";
 import { beeHid } from "./identity";
 
-// Thrum protocol version this nestling targets. Bump when adopting a new
+// Thrum protocol version this bee targets. Bump when adopting a new
 // chi or envelope field that the daemon must understand.
 export const THRUM_VERSION = "0.7.0";
-export const NESTLING_NAME = "vercel-ai";
+export const HIVE_NAME = "vercel-ai";
 
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
@@ -47,12 +47,11 @@ export class ThrumClient {
         s.write(JSON.stringify({
           chi: "hello",
           rid: `hello-${Date.now().toString(36)}`,
-          from: NESTLING_NAME,
-          hid: beeHid(NESTLING_NAME, "fbee"),
+          from: HIVE_NAME,
+          hid: beeHid(HIVE_NAME, "fbee"),
           bee: ["forager"],
-          hive: NESTLING_NAME,
+          hive: HIVE_NAME,
           provides: ["session"],
-          nestling: NESTLING_NAME,
           protoVersion: THRUM_VERSION,
         }) + "\n");
         for (const line of this.pending) s.write(line);

@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 /// @title IHumdRegistry — the wire-protocol of the hum on-chain identity layer.
 /// @notice **This interface is the standard.** Anyone can deploy a
 ///         contract implementing it — vanilla, allowlisted, stake-backed,
-///         name-resolving, whatever — and humds + nestlings can read it
+///         name-resolving, whatever — and humds + bees can read it
 ///         the same way. There is no canonical hum-maintainer-deployed
 ///         registry today, and the protocol does not require one.
 ///

@@ -8,18 +8,18 @@ import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
 export { toolsFromOpenAI } from "./tools.ts";
 
-interface NestlingConfig {
+interface BeeConfig {
   host?: string;
   port?: number;
   apiKey?: string;
   models?: string[];
 }
 
-function readConfigFile(): NestlingConfig {
+function readConfigFile(): BeeConfig {
   const path = join(homedir(), ".config", "hum", "hives", "openai-server.json");
   try {
     const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as NestlingConfig;
+    const parsed = JSON.parse(raw) as BeeConfig;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -27,11 +27,11 @@ function readConfigFile(): NestlingConfig {
 }
 
 const fileConfig = readConfigFile();
-// Model IDs advertised on /v1/models come from the nestling's per-kind
+// Model IDs advertised on /v1/models come from the bee's per-kind
 // config (~/.config/hum/hives/openai-server.json). When unset, the
 // list is empty — /v1/models returns an empty array. The recipe that
-// installs this nestling is responsible for seeding the model id-set
-// it wants exposed; the nestling itself stays model-agnostic.
+// installs this bee is responsible for seeding the model id-set
+// it wants exposed; the bee itself stays model-agnostic.
 const MODEL_IDS: string[] = Array.isArray(fileConfig.models) ? fileConfig.models : [];
 
 // Precedence: env > config file > built-in defaults.
@@ -74,7 +74,7 @@ function checkAuth(req: IncomingMessage): boolean {
 
 // ── tenant + audit + usage + rate-limit ──────────────────────────────
 // Lightweight gateway concerns. None of these are kernel-level — they
-// live in the nestling because the wire format (OpenAI shape) is
+// live in the bee because the wire format (OpenAI shape) is
 // where multi-tenant routing, per-tenant billing, audit trails, and
 // quota enforcement belong. hum's kernel stays format-neutral.
 
@@ -231,8 +231,8 @@ function attachmentsFromContent(content: OpenAIMessage["content"]): ThrumAttachm
 }
 
 // Collect attachments from every message in the conversation (not
-// just the last). hum's perch sees the union; multi-turn vision is
-// then a perch-side concern (whichever perch knows how to interleave
+// just the last). hum's worker sees the union; multi-turn vision is
+// then a worker-side concern (whichever worker knows how to interleave
 // image blocks with text turns).
 function allAttachments(messages: OpenAIMessage[]): ThrumAttachment[] {
   const out: ThrumAttachment[] = [];
@@ -241,11 +241,11 @@ function allAttachments(messages: OpenAIMessage[]): ThrumAttachment[] {
 }
 
 // The OpenAI chat-completions wire is stateless: every request carries
-// the full conversation. Whatever perch humd picks behind the prompt
-// may or may not retain state — that's the perch's propensity, not
-// this nestling's concern. The neutral, always-correct move is to
-// forward the entire transcript every call; perches that are stateful
-// will see a redundant prefix and respond just fine, perches that are
+// the full conversation. Whatever worker humd picks behind the prompt
+// may or may not retain state — that's the worker's propensity, not
+// this bee's concern. The neutral, always-correct move is to
+// forward the entire transcript every call; workers that are stateful
+// will see a redundant prefix and respond just fine, workers that are
 // stateless will get the context they need.
 //
 // (A future revision can opt in to delta-mode when humd's hello-ack
@@ -277,8 +277,8 @@ function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; u
 }
 
 // Stable sid keyed on the conversation anchor — same OC chat lands
-// on the same hum sid across turns. Lets stateful perches reuse a
-// roost when humd's pool keeps one warm; stateless perches just ignore
+// on the same hum sid across turns. Lets stateful workers reuse a
+// cell when humd's pool keeps one warm; stateless workers just ignore
 // the repeat. Either way the sid is meaningful, not random.
 function sessionKey(messages: OpenAIMessage[]): string {
   const firstUser = messages.find(m => m.role === "user");
@@ -353,8 +353,8 @@ async function start(): Promise<void> {
         stream?: boolean;
         user?: string;
         tools?: OpenAITool[];
-        // Pass-through sampling knobs. nest doesn't act on them; perches
-        // that honor them (future native-API perches) read from the
+        // Pass-through sampling knobs. nest doesn't act on them; workers
+        // that honor them (future native-API workers) read from the
         // chi:"prompt" tone they're forwarded on.
         temperature?: number;
         top_p?: number;
@@ -377,15 +377,15 @@ async function start(): Promise<void> {
       if (messages.length === 0) return bad(res, "messages required");
 
       // OpenAI's `n` requests multiple completions per call — we serve
-      // one perch session per prompt, so reject explicitly instead of
+      // one worker session per prompt, so reject explicitly instead of
       // silently returning n=1.
       if (typeof body.n === "number" && body.n > 1) {
         return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
       }
-      // logprobs / top_logprobs aren't emitted by the perches we
+      // logprobs / top_logprobs aren't emitted by the workers we
       // ship today. Spec-compliant explicit reject beats silent ignore.
       if (body.logprobs === true || (typeof body.top_logprobs === "number" && body.top_logprobs > 0)) {
-        return bad(res, "logprobs unsupported by hum perches (claude-cli doesn't emit token probabilities)");
+        return bad(res, "logprobs unsupported by hum workers (claude-cli doesn't emit token probabilities)");
       }
 
       const stream = body.stream !== false; // default to streaming
@@ -406,7 +406,7 @@ async function start(): Promise<void> {
       // response_format: JSON mode. OpenAI's contract is "the model is
       // constrained to emit valid JSON." We inject the constraint into
       // the system prompt — model-side enforcement (no grammar lock
-      // available across all perches). json_schema gets the schema
+      // available across all workers). json_schema gets the schema
       // shown verbatim so the model can mirror it.
       if (body.response_format && body.response_format.type !== "text") {
         const fmt = body.response_format;
@@ -418,7 +418,7 @@ async function start(): Promise<void> {
       }
 
       // Sampling/limit knobs — pass to humd via a sampling block so
-      // perches that honor them (anthropic-native, ollama, etc.) can.
+      // workers that honor them (anthropic-native, ollama, etc.) can.
       // claude-cli today ignores them; that's fine, they're optional.
       const sampling: Record<string, unknown> = {};
       if (typeof body.temperature === "number") sampling.temperature = body.temperature;

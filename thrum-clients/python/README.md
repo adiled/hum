@@ -5,7 +5,7 @@ description: "wire-protocol primitives for Python bees"
 
 # thrum (Python)
 
-> _wire-protocol primitives for Python nestlings_
+> _wire-protocol primitives for Python bees_
 
 Python reference client for **thrum** — the NDJSON socket between
 humd and bees. Same wire as Rust (`thrum-core`) and TS

@@ -10,19 +10,19 @@ default:
 build:
     cargo build --release -p humd
 
-# Build every TS nestling standalone (no workspace coordination).
-nestlings:
+# Build every TS bee standalone (no workspace coordination).
+bees:
     #!/usr/bin/env bash
     set -euo pipefail
     for n in openai-server anthropic-server ollama-server vercel-ai; do
-      if [ -f "nestlings/$n/package.json" ]; then
-        echo "→ nestlings/$n"
-        (cd "nestlings/$n" && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
+      if [ -f "bees/$n/package.json" ]; then
+        echo "→ bees/$n"
+        (cd "bees/$n" && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
       fi
     done
 
-# Everything (Rust + TS nestlings)
-build-all: build nestlings
+# Everything (Rust + TS bees)
+build-all: build bees
 
 # Rust tests across all crates
 test:
@@ -73,7 +73,7 @@ recipe-opencode:
 clean:
     cargo clean
     rm -rf site/dist site/.astro site/src/content/docs
-    @for n in nestlings/*/dist; do rm -rf "$n" 2>/dev/null || true; done
+    @for n in bees/*/dist; do rm -rf "$n" 2>/dev/null || true; done
 
 purge: clean
     ./install purge

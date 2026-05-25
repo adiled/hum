@@ -1442,7 +1442,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "grpc-nestling"
+name = "grpc-forager"
 version = "0.31.10"
 dependencies = [
  "anyhow",
@@ -1681,6 +1681,7 @@ dependencies = [
  "anyhow",
  "clap",
  "humd",
+ "serde_json",
  "thrum-core",
  "tokio",
  "tracing",

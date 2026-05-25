@@ -38,7 +38,7 @@ use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::{Decoder, FramedRead};
 use tracing::{info, warn};
 
-const NESTLING_NAME: &str = "gsm-modem";
+const HIVE_NAME: &str = "gsm-modem";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CTRL_Z: u8 = 0x1A;
 
@@ -119,7 +119,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let mut lines = BufReader::new(rd).lines();
 
     // Persisted forager identity — humd dedupes by this fbee_ hid.
-    let hid = nest_common::load_or_mint_bee_key(NESTLING_NAME, ensemble::HidPrefix::Fbee)
+    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
@@ -127,7 +127,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let hello = json!({
         "chi": Chi::Hello,
         "rid": format!("hello-{}", now_ms()),
-        "from": NESTLING_NAME,
+        "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
         "version": NESTLING_VERSION,

@@ -93,7 +93,7 @@ The bee self-announces to the mesh as soon as it handshakes.
 Other humds in the ensemble discover it via:
 
 ```rust
-let mut found = ensemble.nestling_discover("paid-oracle");
+let mut found = ensemble.hive_discover("paid-oracle");
 while let Some((humd_id, manifest)) = found.recv().await {
     // dial them, ask for a quote, pay, settle
 }

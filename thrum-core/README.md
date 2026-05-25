@@ -5,7 +5,7 @@ description: "wire-protocol primitives for thrum, the NDJSON socket between humd
 
 # thrum-core
 
-> _wire-protocol primitives for thrum, the NDJSON socket between humd and nestlings_
+> _wire-protocol primitives for thrum, the NDJSON socket between humd and bees_
 
 `thrum-core` is the Rust contract for **thrum**, the bidirectional
 NDJSON socket protocol that bees (clients) and humds (daemons)
@@ -85,7 +85,7 @@ thrum-core = { git = "https://github.com/adiled/hum.git" }
 
 `THRUM_VERSION` is independent of crate version. Bumping the crate
 package version is a Rust release event; bumping `THRUM_VERSION` is
-a wire-protocol event. Nestlings warn on `THRUM_VERSION` mismatch.
+a wire-protocol event. Bees warn on `THRUM_VERSION` mismatch.
 
 | change | THRUM_VERSION bump |
 |---|---|
@@ -95,8 +95,8 @@ a wire-protocol event. Nestlings warn on `THRUM_VERSION` mismatch.
 
 ## See also
 
-- `ensemble/` — the mesh of humds. Nestlings discover each other
-  through `nestling_advertise` / `nestling_discover` on the
+- `ensemble/` — the mesh of humds. Bees discover each other
+  through `bee_advertise` / `hive_discover` on the
   `hum/hives/announce` gossip topic.
 - [`hives/`](../hives) — reference implementations. One
   canonical catalogue; don't enumerate them here.
