@@ -276,6 +276,41 @@ start_daemon() {
   fi
 }
 
+# ─── refresh installed bees ──────────────────────────────────────────────────
+
+# Re-run the installer for every bee service already present, so an
+# update rewrites their unit files (new env like HOME, new flags) and
+# rebuilds their binaries from the freshly-pulled source. A first-time
+# install has no bee services yet, so this is a no-op then. Units with no
+# matching in-repo hive (external/custom bees) are left untouched.
+refresh_installed_hives() {
+  command -v svc_list >/dev/null 2>&1 || return 0
+  local hives_dir
+  if [ -d "$HUM_SRC/hives" ]; then hives_dir="$HUM_SRC/hives"
+  elif [ -d "$(dirname "$0")/hives" ]; then hives_dir="$(dirname "$0")/hives"
+  else return 0; fi
+
+  local unit sid d name best
+  for unit in $(svc_list); do
+    case "$unit" in hum|hum-update) continue ;; esac
+    sid="${unit#hum-}"
+    best=""
+    for d in "$hives_dir"/*/; do
+      [ -f "${d}install" ] || continue
+      name="$(basename "$d")"
+      case "$sid" in
+        "$name"|"$name"-*) [ "${#name}" -gt "${#best}" ] && best="$name" ;;
+      esac
+    done
+    if [ -n "$best" ]; then
+      log "refreshing bee '$best' (unit $unit)"
+      "$hives_dir/$best/install" || warn "bee refresh failed: $best (continuing)"
+    else
+      log "leaving $unit untouched — no in-repo hive matches it"
+    fi
+  done
+}
+
 # ─── next steps ──────────────────────────────────────────────────────────────
 
 # humd has no opinion on which bees you run. Each bee is a
@@ -350,6 +385,7 @@ do_install() {
   ensure_hum_config
   install_service_unit
   start_daemon
+  refresh_installed_hives
   log ""
   log "humd installed. Try: ./install status   /   ./install logs"
   log ""

@@ -111,9 +111,14 @@ impl WorkerBee for ClaudeCliWorker {
         let env = build_env(&spec);
 
         let mut cmd = Command::new(&cli);
+        // Inherit the worker's environment (no env_clear): claude
+        // authenticates against the Claude Code Max plan the same
+        // implicit way it does interactively — reading ~/.claude
+        // credentials on Linux, the login Keychain on macOS. Clearing
+        // the env severed that on macOS ("Not logged in"). build_env's
+        // entries are layered on top to set claude's behavior toggles.
         cmd.args(&argv)
             .current_dir(&spec.cwd)
-            .env_clear()
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
