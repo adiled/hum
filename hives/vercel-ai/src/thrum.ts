@@ -4,11 +4,13 @@
 
 import { createConnection, type Socket } from "node:net";
 import { beeHid } from "./identity";
+import pkg from "../package.json";
 
 // Thrum protocol version this bee targets. Bump when adopting a new
 // chi or envelope field that the daemon must understand.
 export const THRUM_VERSION = "0.7.0";
 export const HIVE_NAME = "vercel-ai";
+export const BEE_VERSION = pkg.version;
 
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
@@ -52,6 +54,7 @@ export class ThrumClient {
           bee: ["forager"],
           hive: HIVE_NAME,
           provides: ["session"],
+          version: BEE_VERSION,
           protoVersion: THRUM_VERSION,
         }) + "\n");
         for (const line of this.pending) s.write(line);

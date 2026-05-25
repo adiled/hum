@@ -66,7 +66,7 @@ install_unit() {
     *) warn "service install unsupported on $SVC_OS — run '$WORKER_BIN' manually"; return 0 ;;
   esac
   svc_install "$UNIT_NAME" "$WORKER_BIN" \
-    --env "HUM_LOG_LEVEL=info" \
+    --env "HUM_LOG_LEVEL=trace,penny=error" \
     --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
     --env "CLAUDE_CLI_PATH=$CLAUDE_BIN" \

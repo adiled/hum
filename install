@@ -250,7 +250,7 @@ install_service_unit() {
     *) warn "service install not supported on $SVC_OS — run '$HUM_BIN' manually"; return 0 ;;
   esac
   svc_install hum "$HUM_BIN" \
-    --env "HUM_LOG_LEVEL=info" \
+    --env "HUM_LOG_LEVEL=trace,penny=error" \
     --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
     --env "XDG_DATA_HOME=$XDG_DATA_HOME" \
     --env "XDG_STATE_HOME=$XDG_STATE_HOME" \

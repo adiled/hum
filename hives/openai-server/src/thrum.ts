@@ -1,9 +1,10 @@
 import { createConnection, type Socket } from "node:net";
 import { beeHid } from "./identity";
+import pkg from "../package.json";
 
 export const THRUM_VERSION = "0.7.0";
 export const HIVE_NAME = "openai-server";
-export const BEE_VERSION = "0.31.3";
+export const BEE_VERSION = pkg.version;
 export const BEE_ROLE = "forager";
 export const BEE_PROVIDES = ["session"];
 

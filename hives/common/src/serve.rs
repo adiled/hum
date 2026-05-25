@@ -540,22 +540,45 @@ impl WireListener {
             }
             "result" => {
                 // Claude's wilt event — terminal of one prompt cycle.
-                // Forward as chi:"finish" so the nestler receives the
-                // canonical finish signal + usage.
-                let finish_reason = msg.get("subtype")
-                    .and_then(Value::as_str)
-                    .unwrap_or("stop")
-                    .to_string();
+                let subtype = msg.get("subtype").and_then(Value::as_str).unwrap_or("success");
                 let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
-                let mut body = json!({
-                    "chi": "finish",
-                    "sid": self.sid,
-                    "finishReason": finish_reason,
-                });
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert("usage".into(), usage);
+                // claude signals failure inside the result event, not on
+                // stderr: `is_error:true` (or an `error_*` subtype) with
+                // the human-readable reason in `result`. Surfacing it is
+                // the difference between a visible auth/model/credit
+                // error and a silent zero-token finish that looks like
+                // the worker is dead. (This was the macOS "claude exits 1
+                // with no output" wall.)
+                let is_error = msg.get("is_error").and_then(Value::as_bool).unwrap_or(false)
+                    || subtype.starts_with("error");
+                if is_error {
+                    let detail = msg.get("result").and_then(Value::as_str)
+                        .or_else(|| msg.get("error").and_then(Value::as_str))
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("claude returned an error result with no detail (check auth / model / credit)");
+                    warn!(sid = %self.sid, subtype, detail, "worker.result.error");
+                    let mut err = json!({
+                        "chi": "error",
+                        "sid": self.sid,
+                        "code": "worker_error",
+                        "subtype": subtype,
+                        "message": detail,
+                    });
+                    if let Some(obj) = err.as_object_mut() {
+                        obj.insert("usage".into(), usage);
+                    }
+                    self.send(err).await;
+                } else {
+                    let mut body = json!({
+                        "chi": "finish",
+                        "sid": self.sid,
+                        "finishReason": subtype,
+                    });
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.insert("usage".into(), usage);
+                    }
+                    self.send(body).await;
                 }
-                self.send(body).await;
                 self.finish_sent.store(true, Ordering::SeqCst);
             }
             _ => {

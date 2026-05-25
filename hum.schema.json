@@ -92,9 +92,10 @@
       "description": "Per-hive config. Key = hive name (claude-cli, claude-repl, future kinds). Value's shape is owned by the hive's worker-bee crate. Missing block = Default.",
       "additionalProperties": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "cliPath": { "type": "string", "description": "Override the binary location." },
-          "defaultModel": { "type": "string", "description": "Model id this hive's worker spawns when SpawnSpec doesn't override." },
+          "cliPath": { "type": "string", "description": "Override the binary location. NOTE: humd currently resolves the binary from the CLAUDE_CLI_PATH env, not this field." },
+          "defaultModel": { "type": "string", "description": "Intended default model for this hive. NOTE: humd currently picks the model from the prompt's modelId and the CLAUDE_MODELS env, not this field." },
           "ccFlags": {
             "type": "object",
             "additionalProperties": { "type": ["string", "number", "boolean"] },

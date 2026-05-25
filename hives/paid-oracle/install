@@ -87,7 +87,7 @@ install_unit() {
   fi
   log "chain=$PAID_ORACLE_CHAIN pay_to=$PAID_ORACLE_PAY_TO usdc=$PAID_ORACLE_USDC"
   svc_install "$UNIT_NAME" "$BIN" \
-    --env "HUM_LOG_LEVEL=info" \
+    --env "HUM_LOG_LEVEL=trace,penny=error" \
     --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
     --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
     --env "PAID_ORACLE_PAY_TO=$PAID_ORACLE_PAY_TO" \

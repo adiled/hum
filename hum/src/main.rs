@@ -10,6 +10,7 @@
 //!   hum                    health summary
 //!   hum status             daemon + config + service state
 //!   hum logs               tail journalctl (Linux) / launchd logs (macOS)
+//!   hum doctor             one-shot full diagnostic dump (run this first)
 //!   hum hive --list        list hive kinds (catalogue / configured / running)
 //!   hum hive <ref> install build a hive + register its bee
 //!   hum bee --list         list bees + state
@@ -43,6 +44,11 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
+    /// One-shot full diagnostic dump: versions, config, env sanity,
+    /// the claude binary, every bee + service state, and recent
+    /// daemon + worker logs with warnings highlighted. Run this first
+    /// when something is wrong; paste the output into a bug report.
+    Doctor,
     /// Hive kinds — the source a bee is commissioned from.
     ///   hum hive --list           catalogue + configured + running
     ///   hum hive <ref> install    build the hive + register its bee
@@ -96,6 +102,7 @@ fn main() -> Result<()> {
         None => summary(),
         Some(Cmd::Status) => status(),
         Some(Cmd::Logs { lines }) => logs(lines),
+        Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
         Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
         Some(Cmd::Penny) => penny(),
@@ -279,6 +286,159 @@ fn logs(lines: u32) -> Result<()> {
     "#, svc = svc.display());
     Command::new("bash").arg("-c").arg(script).status()?;
     Ok(())
+}
+
+fn doctor() -> Result<()> {
+    let bar = "────────────────────────────────────────────────────────";
+    println!("{bar}\nhum doctor\n{bar}");
+
+    // 1. Versions + platform.
+    println!("\n[versions]");
+    println!("  hum CLI:    {}", env!("CARGO_PKG_VERSION"));
+    if let Ok(b) = humd_bin() {
+        let v = Command::new(&b).arg("--version").output().ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string()).unwrap_or_else(|| "?".into());
+        println!("  humd:       {v}  ({})", b.display());
+    } else {
+        println!("  humd:       NOT FOUND (set HUM_BIN or run ./install)");
+    }
+    println!("  os:         {} {}", std::env::consts::OS, std::env::consts::ARCH);
+
+    // 2. Config + state files.
+    let cfg = xdg("XDG_CONFIG_HOME", ".config")?.join("hum");
+    let state = xdg("XDG_STATE_HOME", ".local/state")?.join("hum");
+    println!("\n[config + state]");
+    println!("  hum.json:   {} {}", cfg.join("hum.json").display(), yn(cfg.join("hum.json").exists()));
+    println!("  peers.json: {} {}", cfg.join("peers.json").display(), yn(cfg.join("peers.json").exists()));
+    println!("  identity:   {} {}", state.join("humd.key").display(), yn(state.join("humd.key").exists()));
+
+    // 3. hum.json lint — catches the config drift that silently breaks
+    //    routing (the keys humd ignores, stale section names, a default
+    //    pointing nowhere). These parse fine but do nothing.
+    println!("\n[hum.json lint]");
+    match std::fs::read_to_string(cfg.join("hum.json")) {
+        Err(_) => println!("  ✗ not readable"),
+        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+            Err(e) => println!("  ✗ INVALID JSON: {e}"),
+            Ok(v) => {
+                let mut clean = true;
+                for stale in ["perches", "nestlings"] {
+                    if v.get(stale).is_some() {
+                        println!("  ⚠ stale top-level `{stale}` — renamed to `hives`; this block is ignored");
+                        clean = false;
+                    }
+                }
+                let hive_keys: Vec<String> = v.get("hives").and_then(|h| h.as_object())
+                    .map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                if let Some(obj) = v.get("hives").and_then(|h| h.as_object()) {
+                    let known = ["cliPath", "defaultModel", "ccFlags", "limits", "budget"];
+                    for (name, cfgv) in obj {
+                        if let Some(co) = cfgv.as_object() {
+                            for k in co.keys() {
+                                if !known.contains(&k.as_str()) {
+                                    println!("  ⚠ hives.{name}.{k} — unknown key, silently ignored (schema rejects it; humd drops it)");
+                                    clean = false;
+                                }
+                            }
+                        }
+                    }
+                    println!("  · note: the whole hives block is advisory — humd resolves the binary from CLAUDE_CLI_PATH and the model from the prompt + CLAUDE_MODELS, not from here");
+                }
+                match v.get("nest").and_then(|n| n.get("default")).and_then(|d| d.as_str()) {
+                    Some(d) if hive_keys.iter().any(|k| k == d) => println!("  ✓ nest.default = {d} (present in hives)"),
+                    Some(d) => { println!("  ⚠ nest.default = {d} but no hives.{d} entry"); clean = false; }
+                    None => { println!("  ⚠ nest.default unset"); clean = false; }
+                }
+                if clean { println!("  ✓ no config drift detected"); }
+            }
+        },
+    }
+
+    // 4. Bee identities — the persisted keys that back hid dedup. A
+    //    missing or wrong-size key means a bee can't keep a stable hid
+    //    across reconnects (ghost-manifest accumulation).
+    println!("\n[bee identities]  ({}/bees)", state.display());
+    let bees_dir = state.join("bees");
+    match std::fs::read_dir(&bees_dir) {
+        Err(_) => println!("  (none yet — minted on first bee boot)"),
+        Ok(entries) => {
+            let mut any = false;
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("key") {
+                    any = true;
+                    let kind = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    let sz = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    println!("  {kind}: {}", if sz == 32 { "✓ 32-byte ed25519 seed".to_string() } else { format!("✗ {sz} bytes (expected 32 — corrupt key)") });
+                }
+            }
+            if !any { println!("  (none yet)"); }
+        }
+    }
+
+    // 5. Env sanity — the macOS traps live here.
+    println!("\n[env sanity]");
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
+    if runtime.is_empty() {
+        println!("  XDG_RUNTIME_DIR: (unset) — humd falls back to /tmp/hum-<uid>");
+    } else {
+        let exists = std::path::Path::new(&runtime).is_dir();
+        println!("  XDG_RUNTIME_DIR: {runtime} {}", if exists { "✓" } else { "✗ DOES NOT EXIST (penny/socket writes will fail — common macOS trap when set to a Linux /run/user path)" });
+    }
+    let sock = std::env::var_os("HUM_THRUM_SOCK").map(PathBuf::from)
+        .unwrap_or_else(|| xdg_runtime_hum().join("thrum.sock"));
+    println!("  thrum sock: {} {}", sock.display(), if std::fs::metadata(&sock).is_ok() { "✓ present" } else { "✗ MISSING (humd not running?)" });
+
+    // 4. The claude binary (worker's compute).
+    println!("\n[claude binary]");
+    let claude = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
+    match Command::new(&claude).arg("--version").output() {
+        Ok(o) if o.status.success() => println!("  {claude}: {}", String::from_utf8_lossy(&o.stdout).trim()),
+        Ok(_) | Err(_) => println!("  {claude}: ✗ NOT RUNNABLE — set CLAUDE_CLI_PATH to the real binary"),
+    }
+
+    // 5. Bees + service state (full manifest info).
+    println!("\n[bees]");
+    if let Some(svc) = svc_helper() {
+        let installed = bee_list(&svc).unwrap_or_default();
+        let _ = bee_list_full(&svc, &installed);
+    } else {
+        println!("  (svc.sh not found — can't enumerate services)");
+    }
+
+    // 6. Recent logs with warnings/errors surfaced. This is where the
+    //    real failures show (worker.result.error, bee.hid.*, spawn fails).
+    println!("\n[recent humd + worker logs — warnings/errors]");
+    print_recent_logs("hum", 60);
+    print_recent_logs("hum-claude-cli-worker", 60);
+
+    println!("\n{bar}");
+    println!("If a bee shows 0 tokens / silent finish, look for `worker.result.error`");
+    println!("above — claude reports auth/model/credit failures there, not on stderr.");
+    Ok(())
+}
+
+/// Tail a service's recent logs, platform-aware, surfacing warn/error
+/// lines (and the key hum diagnostic markers) so the dump stays short.
+fn print_recent_logs(unit: &str, lines: u32) {
+    let script = format!(r#"
+        case "$(uname -s)" in
+          Linux)  journalctl --user -u {unit} --no-pager -n {lines} 2>/dev/null ;;
+          Darwin) tail -n {lines} "$HOME/Library/Logs/sh.hum.{unit}.out.log" \
+                                  "$HOME/Library/Logs/sh.hum.{unit}.err.log" 2>/dev/null ;;
+        esac | grep -iE 'WARN|ERROR|result.error|bee\.hid|spawn|panic|fail' | tail -15
+    "#);
+    println!("  ── {unit} ──");
+    let out = Command::new("bash").arg("-c").arg(&script).output();
+    match out {
+        Ok(o) => {
+            let txt = String::from_utf8_lossy(&o.stdout);
+            if txt.trim().is_empty() { println!("    (no warnings/errors in last {lines} lines)"); }
+            else { for l in txt.lines() { println!("    {l}"); } }
+        }
+        Err(_) => println!("    (logs unavailable)"),
+    }
 }
 
 // ── hive / bee shared service plumbing ─────────────────────────────────────
