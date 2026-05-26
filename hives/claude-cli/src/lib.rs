@@ -64,9 +64,14 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
     }
+    // resume an existing session, or create one under an explicit id.
+    // resume wins; the two are mutually exclusive on claude's CLI.
     if let Some(resume) = spec.resume_id.as_deref() {
         argv.push("--resume".into());
         argv.push(resume.to_string());
+    } else if let Some(session) = spec.session_id.as_deref() {
+        argv.push("--session-id".into());
+        argv.push(session.to_string());
     }
     argv
 }

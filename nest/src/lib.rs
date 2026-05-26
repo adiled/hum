@@ -52,9 +52,14 @@ pub struct SpawnSpec {
     pub mcp_url: Option<String>,
     /// Optional path to the claude CLI binary. None → "claude" on PATH.
     pub cli_path: Option<String>,
-    /// Optional resume id — the harness uses this to pick up an existing
-    /// transcript instead of starting fresh.
+    /// Optional resume id — the harness picks up an existing transcript
+    /// (claude `--resume`) instead of starting fresh.
     pub resume_id: Option<String>,
+    /// Optional explicit session id to create the conversation under
+    /// (claude `--session-id`, must be a UUID). Used when `resume_id` is
+    /// None to bind a fresh session to a deterministic id. Ignored if
+    /// `resume_id` is set.
+    pub session_id: Option<String>,
     /// Plan mode — disables adaptive-thinking env.
     pub plan_mode: bool,
     /// Permissions allowlist names — passed to the harness's tool filter.
@@ -84,6 +89,7 @@ impl SpawnSpec {
             mcp_url: None,
             cli_path: None,
             resume_id: None,
+            session_id: None,
             plan_mode: false,
             permissions: Vec::new(),
             allowed_tools: Vec::new(),

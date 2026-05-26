@@ -34,7 +34,7 @@ use tracing::{debug, info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Listener, SpawnSpec, WorkerBee};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Listener, SpawnSpec, WorkerBee};
 use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
@@ -179,14 +179,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     // reach the right child.
     let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    // hum sid -> claude session id. `claude -p` exits after each turn,
-    // so the warm cell is gone before the next (tick-spaced) prompt. To
-    // keep a hum sid as one continuous conversation (and let prompt
-    // caching warm the shared prefix), we remember the claude session
-    // each turn produced and `--resume` it on the next prompt for that
-    // sid. Without this, every prompt is a cold, fresh session.
-    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
-
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
         if line.is_empty() { continue; }
@@ -219,11 +211,10 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
-                let sessions = sessions.clone();
                 let hive = advert.hive.clone();
                 let mcp_url = mcp_url.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(worker, write_half, cells, sessions, hive, mcp_url, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
@@ -305,11 +296,64 @@ const IDLE_TIMEOUT_MS: u64 = 300_000;
 /// when full.
 const MAX_CELLS: usize = 8;
 
+/// Fixed namespace so a hum sid maps to a stable claude session UUID
+/// (uuid5). Deterministic: the same sid always derives the same id, so
+/// it survives worker restarts without persisting anything.
+const HUM_SESSION_NS: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
+]);
+
+/// Derive the claude session id for a hum sid. claude's `--session-id`
+/// requires a UUID, so we can't pass the sid verbatim; uuid5 maps it
+/// deterministically.
+fn sid_to_session(sid: &str) -> String {
+    uuid::Uuid::new_v5(&HUM_SESSION_NS, sid.as_bytes()).to_string()
+}
+
+/// True if `v` is claude's terminal `result` event flagged `is_error`.
+/// As the *first* event it means a pre-flight failure (bad/absent
+/// session on `--resume`, id clash on `--session-id`) rather than a
+/// mid-turn error, which arrives only after content.
+fn is_preflight_error(v: &Value) -> bool {
+    let m = if v.get("type").and_then(Value::as_str) == Some("stream_event") {
+        v.get("event").unwrap_or(v)
+    } else { v };
+    m.get("type").and_then(Value::as_str) == Some("result")
+        && m.get("is_error").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Spawn one attempt: launch the cell, send the prompt, and wait for the
+/// first stream-json event. Returns the cell + that event if it's live;
+/// returns None (after killing the cell) if claude fails pre-flight
+/// (first event is an `is_error` result) or produces nothing.
+async fn attempt_spawn<W: WorkerBee + 'static>(
+    worker: &Arc<W>,
+    spec: SpawnSpec,
+    content: &str,
+) -> Option<(Cell, Value)> {
+    let cell = worker.spawn(spec).await.ok()?;
+    if cell.stdin.send(encode_prompt(content)).await.is_err() {
+        (cell.kill)();
+        return None;
+    }
+    let first = {
+        let mut ev = cell.events.lock().await;
+        match tokio::time::timeout(std::time::Duration::from_secs(180), ev.recv()).await {
+            Ok(Some(v)) => Some(v),
+            _ => None, // timeout, or the process died without emitting
+        }
+    };
+    match first {
+        Some(v) if is_preflight_error(&v) => { (cell.kill)(); None }
+        Some(v) => Some((cell, v)),
+        None => { (cell.kill)(); None }
+    }
+}
+
 async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     cells: Arc<Mutex<HashMap<String, CellBundle>>>,
-    sessions: Arc<Mutex<HashMap<String, String>>>,
     hive: String,
     mcp_url: String,
     tone: Value,
@@ -332,14 +376,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         .or_else(|| tone.get("text").and_then(Value::as_str))
         .unwrap_or("").to_string();
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
-    // Resume: an explicit `resume` on the tone wins; otherwise continue
-    // the claude session this sid produced on its previous turn, so the
-    // sid stays one conversation across (tick-spaced) prompts. The asker
-    // gets a fresh session only by using a fresh sid.
-    let resume = match tone.get("resume").and_then(Value::as_str) {
-        Some(r) => Some(r.to_string()),
-        None => sessions.lock().await.get(&sid).cloned(),
-    };
+    let explicit_resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
 
     // claude `-p --input-format stream-json` reads newline-delimited
     // user messages until stdin EOF, emitting a `result` event per
@@ -376,18 +413,38 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         }
     }
 
-    let mut spec = SpawnSpec::new(sid.clone(), model.clone(), cwd);
-    spec.system_prompt = system_prompt;
-    spec.mcp_url = Some(mcp_url);
-    spec.resume_id = resume;
+    let mut base = SpawnSpec::new(sid.clone(), model.clone(), cwd);
+    base.system_prompt = system_prompt;
+    base.mcp_url = Some(mcp_url);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
-        spec.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        base.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
     if let Some(arr) = tone.get("disallowedTools").and_then(Value::as_array) {
-        spec.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    let cell = worker.spawn(spec).await?;
+    // A hum sid is one conversation. `claude -p` exits after each turn,
+    // so the warm cell is gone before the next (tick-spaced) prompt; to
+    // keep continuity we bind the sid to a deterministic claude session
+    // (uuid5 of the sid) and resume it. Resume-first so the common case
+    // (an ongoing sid) is one spawn; on the turn where the session does
+    // not exist yet, claude's `--resume` fails fast (a `result` is_error
+    // with no output), and we fall back to `--session-id` to create it.
+    let cid = sid_to_session(&sid);
+    let (cell, first_event) = {
+        let mut s1 = base.clone();
+        s1.resume_id = Some(explicit_resume.clone().unwrap_or_else(|| cid.clone()));
+        match attempt_spawn(&worker, s1, &content).await {
+            Some(pair) => pair,
+            None => {
+                trace!(sid = %sid, "worker.resume.miss.creating");
+                let mut s2 = base.clone();
+                s2.session_id = Some(cid.clone()); // resume_id None -> --session-id
+                attempt_spawn(&worker, s2, &content).await
+                    .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
+            }
+        }
+    };
     let stdin = cell.stdin.clone();
     let events = cell.events.clone();
     let kill = cell.kill.clone();
@@ -402,11 +459,14 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         finish_sent: finish_sent.clone(),
         tool_use_blocks: tool_use_blocks.clone(),
         last_touched: last_touched.clone(),
-        sessions: sessions.clone(),
     });
 
-    // Cell-lifetime dispatch: each stream-json event flows through
-    // the listener until the child exits.
+    // The probe in attempt_spawn already consumed (and proved live) the
+    // first event; forward it before the loop picks up the rest.
+    listener.forward_raw(first_event).await;
+
+    // Cell-lifetime dispatch: each remaining stream-json event flows
+    // through the listener until the child exits.
     let listener_clone = listener.clone();
     let sid_for_loop = sid.clone();
     let events_for_loop = events.clone();
@@ -448,8 +508,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         last_touched: last_touched.clone(),
     });
 
-    stdin.send(encode_prompt(&content)).await
-        .map_err(|e| anyhow::anyhow!("stdin closed: {e}"))?;
+    // Prompt was already sent inside attempt_spawn; nothing to send here.
     trace!(sid = %sid, "worker.cell.spawned");
 
     // On child exit: drain dispatch, emit a finish if the listener
@@ -503,9 +562,6 @@ struct WireListener {
     /// Updated on every stream-json event. The idle reaper compares
     /// against this to distinguish a quiet cell from a stalled one.
     last_touched: Arc<AtomicU64>,
-    /// hum sid -> claude session id. Populated from the `init` event so
-    /// the next prompt on this sid resumes the same claude session.
-    sessions: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl WireListener {
@@ -532,18 +588,12 @@ impl WireListener {
             "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
                 // Session readiness signal. Carries claude's session_id
                 // and model so consumers can attach.
-                let session_id = msg.get("session_id").and_then(Value::as_str).map(str::to_string);
-                // Remember this sid's claude session so the next prompt on
-                // the same sid resumes it instead of cold-starting.
-                if let Some(id) = &session_id {
-                    self.sessions.lock().await.insert(self.sid.clone(), id.clone());
-                }
                 let mut body = json!({
                     "chi": "session-ready",
                     "sid": self.sid,
                 });
                 if let Some(obj) = body.as_object_mut() {
-                    obj.insert("nestId".into(), session_id.map(Value::String).unwrap_or(Value::Null));
+                    obj.insert("nestId".into(), msg.get("session_id").cloned().unwrap_or(Value::Null));
                     obj.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
                     obj.insert("tools".into(), msg.get("tools").cloned().unwrap_or(json!([])));
                 }
