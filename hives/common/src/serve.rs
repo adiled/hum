@@ -179,6 +179,14 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     // reach the right child.
     let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
 
+    // hum sid -> claude session id. `claude -p` exits after each turn,
+    // so the warm cell is gone before the next (tick-spaced) prompt. To
+    // keep a hum sid as one continuous conversation (and let prompt
+    // caching warm the shared prefix), we remember the claude session
+    // each turn produced and `--resume` it on the next prompt for that
+    // sid. Without this, every prompt is a cold, fresh session.
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
         if line.is_empty() { continue; }
@@ -211,10 +219,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
+                let sessions = sessions.clone();
                 let hive = advert.hive.clone();
                 let mcp_url = mcp_url.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, sessions, hive, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
@@ -300,6 +309,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     cells: Arc<Mutex<HashMap<String, CellBundle>>>,
+    sessions: Arc<Mutex<HashMap<String, String>>>,
     hive: String,
     mcp_url: String,
     tone: Value,
@@ -322,7 +332,14 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         .or_else(|| tone.get("text").and_then(Value::as_str))
         .unwrap_or("").to_string();
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
-    let resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
+    // Resume: an explicit `resume` on the tone wins; otherwise continue
+    // the claude session this sid produced on its previous turn, so the
+    // sid stays one conversation across (tick-spaced) prompts. The asker
+    // gets a fresh session only by using a fresh sid.
+    let resume = match tone.get("resume").and_then(Value::as_str) {
+        Some(r) => Some(r.to_string()),
+        None => sessions.lock().await.get(&sid).cloned(),
+    };
 
     // claude `-p --input-format stream-json` reads newline-delimited
     // user messages until stdin EOF, emitting a `result` event per
@@ -385,6 +402,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         finish_sent: finish_sent.clone(),
         tool_use_blocks: tool_use_blocks.clone(),
         last_touched: last_touched.clone(),
+        sessions: sessions.clone(),
     });
 
     // Cell-lifetime dispatch: each stream-json event flows through
@@ -485,6 +503,9 @@ struct WireListener {
     /// Updated on every stream-json event. The idle reaper compares
     /// against this to distinguish a quiet cell from a stalled one.
     last_touched: Arc<AtomicU64>,
+    /// hum sid -> claude session id. Populated from the `init` event so
+    /// the next prompt on this sid resumes the same claude session.
+    sessions: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl WireListener {
@@ -511,12 +532,18 @@ impl WireListener {
             "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
                 // Session readiness signal. Carries claude's session_id
                 // and model so consumers can attach.
+                let session_id = msg.get("session_id").and_then(Value::as_str).map(str::to_string);
+                // Remember this sid's claude session so the next prompt on
+                // the same sid resumes it instead of cold-starting.
+                if let Some(id) = &session_id {
+                    self.sessions.lock().await.insert(self.sid.clone(), id.clone());
+                }
                 let mut body = json!({
                     "chi": "session-ready",
                     "sid": self.sid,
                 });
                 if let Some(obj) = body.as_object_mut() {
-                    obj.insert("nestId".into(), msg.get("session_id").cloned().unwrap_or(Value::Null));
+                    obj.insert("nestId".into(), session_id.map(Value::String).unwrap_or(Value::Null));
                     obj.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
                     obj.insert("tools".into(), msg.get("tools").cloned().unwrap_or(json!([])));
                 }
