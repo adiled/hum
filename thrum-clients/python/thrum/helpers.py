@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import threading
 import time
@@ -91,10 +92,17 @@ class WaneTracker:
 
 
 def default_socket_path() -> str:
-    """Resolve the humd thrum socket per WIRE.md priority:
-    HUM_THRUM_SOCK > $XDG_STATE_HOME/hum/thrum.sock > ~/.local/state/hum/thrum.sock."""
+    """Resolve the humd thrum socket:
+    HUM_THRUM_SOCK > $XDG_STATE_HOME/hum/runtime.json (rendezvous) > $XDG_STATE_HOME/hum/thrum.sock."""
     explicit = os.environ.get("HUM_THRUM_SOCK")
     if explicit:
         return explicit
     state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    try:
+        with open(os.path.join(state, "hum", "runtime.json"), "r") as f:
+            sock = json.load(f).get("socket")
+            if sock:
+                return sock
+    except (OSError, ValueError):
+        pass
     return os.path.join(state, "hum", "thrum.sock")
