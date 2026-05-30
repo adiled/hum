@@ -116,15 +116,13 @@ impl WorkerBee for MockWorkerBee {
             let _ = tx_exit.send(0);
         });
 
-        let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
-
         Ok(Cell {
             pid: None,
             stdin: tx_in,
             events: Arc::new(Mutex::new(rx_evt)),
             exited: rx_exit,
             ephemeral: false,
-            kill,
+            cancel: tokio_util::sync::CancellationToken::new(),
         })
     }
 }

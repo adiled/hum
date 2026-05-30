@@ -16,7 +16,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 
+pub mod lifecycle; // own + supervise tokio::process::Child correctly
 pub mod mock;
 pub mod pool;
 
@@ -115,8 +117,8 @@ pub struct Cell {
     pub exited: tokio::sync::oneshot::Receiver<i32>,
     /// True for PTY/REPL-style cells the pool evicts on each `result`.
     pub ephemeral: bool,
-    /// Kill the child. Best-effort; safe to call multiple times.
-    pub kill: Arc<dyn Fn() + Send + Sync>,
+    /// `.cancel()` → SIGKILL + reap. Idempotent.
+    pub cancel: CancellationToken,
 }
 
 /// Statefulness propensity of a bee — the same axis hives carry

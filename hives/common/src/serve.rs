@@ -21,9 +21,12 @@
 //! re-handshake.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+
+use lru::LruCache;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -94,7 +97,8 @@ pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAd
                 }
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let jitter = rand::random::<f32>() * 0.75;
+        tokio::time::sleep(std::time::Duration::from_secs_f32(2.0 + jitter)).await;
     }
 }
 
@@ -160,7 +164,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
     // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
-    let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
+    let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
@@ -204,12 +209,12 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "cancel" => {
                 if !sid.is_empty() {
-                    let r = cells.lock().await;
+                    let mut r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                             let _ = bundle.stdin.send(encode_cancel(rid)).await;
                         }
-                        (bundle.kill)();
+                        bundle.cancel.cancel();
                     }
                 }
             }
@@ -224,7 +229,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
                 if !resolved_by_bridge && !sid.is_empty() {
-                    let r = cells.lock().await;
+                    let mut r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let (Some(call_id), Some(result)) = (
                             tone.get("callId").and_then(Value::as_str),
@@ -248,10 +253,14 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
 struct CellBundle {
     stdin: mpsc::Sender<String>,
-    kill: Arc<dyn Fn() + Send + Sync>,
+    cancel: tokio_util::sync::CancellationToken,
     finish_sent: Arc<AtomicBool>,
     tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
     last_touched: Arc<AtomicU64>,
+}
+
+impl Drop for CellBundle {
+    fn drop(&mut self) { self.cancel.cancel(); }
 }
 
 /// Build a `ToolDef` from a wire tone entry. MCP standard field is
@@ -316,27 +325,27 @@ async fn attempt_spawn<W: WorkerBee + 'static>(
 ) -> Option<(Cell, Value)> {
     let cell = worker.spawn(spec).await.ok()?;
     if cell.stdin.send(encode_prompt(content)).await.is_err() {
-        (cell.kill)();
+        cell.cancel.cancel();
         return None;
     }
     let first = {
         let mut ev = cell.events.lock().await;
         match tokio::time::timeout(std::time::Duration::from_secs(180), ev.recv()).await {
             Ok(Some(v)) => Some(v),
-            _ => None, // timeout, or the process died without emitting
+            _ => None,
         }
     };
     match first {
-        Some(v) if is_preflight_error(&v) => { (cell.kill)(); None }
+        Some(v) if is_preflight_error(&v) => { cell.cancel.cancel(); None }
         Some(v) => Some((cell, v)),
-        None => { (cell.kill)(); None }
+        None => { cell.cancel.cancel(); None }
     }
 }
 
 async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    cells: Arc<Mutex<HashMap<String, CellBundle>>>,
+    cells: Arc<Mutex<LruCache<String, CellBundle>>>,
     hive: String,
     mcp_url: String,
     tone: Value,
@@ -366,7 +375,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     // turn. Reuse the warm cell for the sid; per-turn state lives in
     // finish_sent + tool_use_blocks and must reset before re-entry.
     {
-        let g = cells.lock().await;
+        let mut g = cells.lock().await;
         if let Some(bundle) = g.get(&sid) {
             bundle.finish_sent.store(false, Ordering::SeqCst);
             bundle.tool_use_blocks.lock().await.clear();
@@ -380,20 +389,15 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         }
     }
 
-    // No warm cell — evict LRU if at cap, then spawn fresh.
     {
         let mut g = cells.lock().await;
         if g.len() >= MAX_CELLS {
-            let evict_sid = g.iter()
-                .min_by_key(|(_, b)| b.last_touched.load(Ordering::SeqCst))
-                .map(|(k, _)| k.clone());
-            if let Some(esid) = evict_sid {
-                if let Some(bundle) = g.remove(&esid) {
-                    warn!(evicted_sid = %esid, "worker.cell.evict.lru");
-                    (bundle.kill)();
-                }
+            if let Some((esid, _evicted)) = g.pop_lru() {
+                warn!(evicted_sid = %esid, "worker.cell.evict.lru");
+                metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
             }
         }
+        metrics::gauge!("hum_cells_active").set(g.len() as f64);
     }
 
     let mut base = SpawnSpec::new(sid.clone(), model.clone(), cwd);
@@ -430,7 +434,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     };
     let stdin = cell.stdin.clone();
     let events = cell.events.clone();
-    let kill = cell.kill.clone();
+    let cancel = cell.cancel.clone();
     let finish_sent = Arc::new(AtomicBool::new(false));
     let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
@@ -464,7 +468,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     // Idle reaper — kills the cell if last_touched stays below the
     // IDLE_TIMEOUT_MS threshold.
     let cells_for_idle = cells.clone();
-    let kill_for_idle = kill.clone();
     let sid_for_idle = sid.clone();
     let last_for_idle = last_touched.clone();
     let idle_task = tokio::spawn(async move {
@@ -474,18 +477,17 @@ async fn handle_prompt<W: WorkerBee + 'static>(
             let age = now_ms().saturating_sub(last);
             if age >= IDLE_TIMEOUT_MS {
                 let mut g = cells_for_idle.lock().await;
-                if g.remove(&sid_for_idle).is_some() {
+                if g.pop(&sid_for_idle).is_some() {
                     warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
-                    (kill_for_idle)();
                 }
                 return;
             }
         }
     });
 
-    cells.lock().await.insert(sid.clone(), CellBundle {
+    cells.lock().await.put(sid.clone(), CellBundle {
         stdin: stdin.clone(),
-        kill: kill.clone(),
+        cancel: cancel.clone(),
         finish_sent: finish_sent.clone(),
         tool_use_blocks: tool_use_blocks.clone(),
         last_touched: last_touched.clone(),
@@ -514,7 +516,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
             let line = format!("{}\n", finish);
             let _ = write_for_cleanup.lock().await.write_all(line.as_bytes()).await;
         }
-        cells_for_cleanup.lock().await.remove(&sid_for_cleanup);
+        cells_for_cleanup.lock().await.pop(&sid_for_cleanup);
         trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
     });
 

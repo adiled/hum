@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde_json::{json, Value};
 use thrum_core::THRUM_VERSION;
+use governor::{Quota, RateLimiter};
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
@@ -217,7 +218,10 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
         .with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
 
+    let limiter = RateLimiter::direct(Quota::per_second(std::num::NonZeroU32::new(100).unwrap()));
+
     loop {
+        limiter.until_ready().await;
         match listener.accept().await {
             Ok((sock, _)) => {
                 let thrum = thrum.clone();

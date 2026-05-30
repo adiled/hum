@@ -243,7 +243,7 @@ impl Nest {
             if let Some(slot) = slots.get(&pk) {
                 if slot.listeners.lock().await.is_empty() {
                     trace!(target: "nest", pool_key = %pk, "nest.idle");
-                    (slot.cell.kill)();
+                    slot.cell.cancel.cancel();
                     slots.remove(&pk);
                 }
             }
@@ -256,7 +256,7 @@ impl Nest {
         let mut slots = self.slots.write().await;
         if let Some(slot) = slots.remove(pool_key) {
             trace!(target: "nest", %pool_key, "nest.felled");
-            (slot.cell.kill)();
+            slot.cell.cancel.cancel();
         }
     }
 
@@ -264,7 +264,7 @@ impl Nest {
     pub async fn silence(&self) {
         let mut slots = self.slots.write().await;
         for (_, slot) in slots.drain() {
-            (slot.cell.kill)();
+            slot.cell.cancel.cancel();
         }
     }
 
@@ -285,7 +285,7 @@ impl Nest {
         if let Some(k) = evict_key {
             if let Some(slot) = slots.remove(&k) {
                 trace!(target: "nest", pool_key = %k, "nest.evicted reason=maxActiveCells");
-                (slot.cell.kill)();
+                slot.cell.cancel.cancel();
             }
         }
     }

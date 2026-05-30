@@ -13,8 +13,9 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use command_group::AsyncCommandGroup;
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
 use nest::{Propensity, Cell, SpawnSpec, WorkerBee};
@@ -127,18 +128,16 @@ impl WorkerBee for ClaudeCliWorker {
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().with_context(|| format!("spawn {cli}"))?;
-        let pid = child.id();
-        let mut stdin = child.stdin.take().context("missing stdin")?;
-        let stdout = child.stdout.take().context("missing stdout")?;
-        let stderr = child.stderr.take().context("missing stderr")?;
+        let mut child = cmd.group_spawn().with_context(|| format!("spawn {cli}"))?;
+        let pid = child.inner().id();
+        let mut stdin = child.inner().stdin.take().context("missing stdin")?;
+        let stdout = child.inner().stdout.take().context("missing stdout")?;
+        let stderr = child.inner().stderr.take().context("missing stderr")?;
 
         let (tx_in, mut rx_in) = mpsc::channel::<String>(64);
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(256);
-        let (tx_exit, rx_exit) = oneshot::channel::<i32>();
 
         // stdin pump — append `\n` for NDJSON framing.
         tokio::spawn(async move {
@@ -196,30 +195,7 @@ impl WorkerBee for ClaudeCliWorker {
             }
         });
 
-        // exit watcher — keep Child alive behind an async-safe mutex so
-        // both the wait task and the kill closure can reach it.
-        let kill_arc: std::sync::Arc<dyn Fn() + Send + Sync> = {
-            let child_holder = std::sync::Arc::new(Mutex::new(Some(child)));
-            let holder_for_wait = child_holder.clone();
-            tokio::spawn(async move {
-                let code = {
-                    let mut guard = holder_for_wait.lock().await;
-                    match guard.as_mut() {
-                        Some(c) => c.wait().await.map(|s| s.code().unwrap_or(1)).unwrap_or(1),
-                        None => 1,
-                    }
-                };
-                let _ = tx_exit.send(code);
-            });
-            let holder_for_kill = child_holder.clone();
-            std::sync::Arc::new(move || {
-                if let Ok(mut guard) = holder_for_kill.try_lock() {
-                    if let Some(c) = guard.as_mut() {
-                        let _ = c.start_kill();
-                    }
-                }
-            })
-        };
+        let (rx_exit, cancel) = nest::lifecycle::supervise(child);
 
         trace!(target: "claude-cli", "spawned pid={:?}", pid);
 
@@ -229,7 +205,7 @@ impl WorkerBee for ClaudeCliWorker {
             events: std::sync::Arc::new(Mutex::new(rx_evt)),
             exited: rx_exit,
             ephemeral: false,
-            kill: kill_arc,
+            cancel,
         })
     }
 }

@@ -139,6 +139,16 @@ where
         "humd.sockets"
     );
 
+    if let Some(addr) = metrics_listen_addr() {
+        match metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(addr)
+            .install()
+        {
+            Ok(()) => info!(%addr, "humd.metrics.listening"),
+            Err(e) => warn!(%addr, err = %e, "humd.metrics.install_failed"),
+        }
+    }
+
     let _hums = hums::Hums::load();
     let penny = penny::Penny::load(&cfg.penny_path);
     penny.clone().spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
@@ -357,6 +367,12 @@ async fn autoupdate_check_once() -> Result<bool> {
         anyhow::bail!("installer exited with {status}");
     }
     Ok(true)
+}
+
+fn metrics_listen_addr() -> Option<std::net::SocketAddr> {
+    std::env::var("HUM_METRICS_ADDR").ok()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| "127.0.0.1:9909".parse().ok())
 }
 
 fn parse_tag_name(body: &str) -> Option<String> {

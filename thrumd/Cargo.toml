@@ -16,3 +16,4 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
+governor = "0.6"

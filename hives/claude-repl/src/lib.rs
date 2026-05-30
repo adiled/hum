@@ -192,17 +192,13 @@ impl WorkerBee for ClaudeReplWorker {
             let _ = tx_exit.send(code);
         });
 
-        // master must outlive the writer; stash it behind Arc<Mutex<_>>
-        // through a kill closure. We move the master into the closure.
-        let master = std::sync::Arc::new(std::sync::Mutex::new(Some(pair.master)));
-        let master_for_kill = master.clone();
-        let kill_arc: std::sync::Arc<dyn Fn() + Send + Sync> =
-            std::sync::Arc::new(move || {
-                if let Ok(mut g) = master_for_kill.lock() {
-                    // Dropping the master closes the PTY → child gets SIGHUP.
-                    *g = None;
-                }
-            });
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_watch = cancel.clone();
+        let mut master_holder = Some(pair.master);
+        tokio::spawn(async move {
+            cancel_watch.cancelled().await;
+            master_holder.take();
+        });
 
         trace!(target: "nest", "pty.spawned pid={:?}", pid);
 
@@ -212,7 +208,7 @@ impl WorkerBee for ClaudeReplWorker {
             events: std::sync::Arc::new(Mutex::new(rx_evt)),
             exited: rx_exit,
             ephemeral: true,
-            kill: kill_arc,
+            cancel,
         })
     }
 }
