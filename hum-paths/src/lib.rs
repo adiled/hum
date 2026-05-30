@@ -127,10 +127,11 @@ pub fn macos_log(unit: &str) -> (PathBuf, PathBuf) {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn xdg(var: &str) -> PathBuf {
-    PathBuf::from(
-        std::env::var_os(var)
-            .unwrap_or_else(|| panic!("{var} not set — call hum_paths::init() at process startup")),
-    )
+    if let Some(v) = std::env::var_os(var) {
+        return PathBuf::from(v);
+    }
+    init();
+    PathBuf::from(std::env::var_os(var).expect("init() set the var"))
 }
 
 fn home() -> PathBuf {

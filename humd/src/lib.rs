@@ -132,6 +132,8 @@ pub async fn run<F>(mut cfg: DaemonConfig, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send,
 {
+    hum_paths::init();
+
     info!(
         thrum = %cfg.thrum_path.display(),
         http = %cfg.http_path.display(),
