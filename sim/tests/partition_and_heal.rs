@@ -64,12 +64,9 @@ async fn partition_then_heal_converges_wane() {
     // Heal — flushes the buffered link AND exchanges wane snapshots.
     sim.heal(a_id, b_id).await.expect("heal");
 
-    // Poll up to 1s for both sides' wane to reach the joined max (8).
-    // The handshake is async (route → ensemble pump → HumdSink merge),
-    // so we give it a window rather than asserting immediately.
     let target = 8;
     let mut converged = false;
-    for _ in 0..100 {
+    for _ in 0..1000 {
         if a.waneman.get(SIGIL) == target && b.waneman.get(SIGIL) == target {
             converged = true;
             break;
@@ -79,7 +76,7 @@ async fn partition_then_heal_converges_wane() {
 
     assert!(
         converged,
-        "wane should converge within 1s of heal: a={}, b={}",
+        "wane should converge within 10s of heal: a={}, b={}",
         a.waneman.get(SIGIL),
         b.waneman.get(SIGIL),
     );

@@ -13,6 +13,7 @@ name = "humd"
 path = "src/main.rs"
 
 [dependencies]
+hum-paths = { path = "../hum-paths" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -37,11 +38,15 @@ hex = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 
 [[example]]
 name = "smoke"

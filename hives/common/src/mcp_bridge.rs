@@ -42,11 +42,8 @@ pub struct McpBridge {
     ship_tool_call: Arc<dyn Fn(Value) + Send + Sync>,
 }
 
-/// Catalogue for a session — set by the worker on each chi:"prompt"
-/// arrival from the asker forager.
 #[derive(Debug, Clone, Default)]
 struct CatalogueSlot {
-    sid: String,
     tools: Vec<ToolDef>,
 }
 
@@ -66,13 +63,12 @@ impl McpBridge {
     /// merge can filter capability-overlapping nestler tools).
     pub fn set_catalogue(
         &self,
-        sid: impl Into<String>,
         forager_tools: Vec<ToolDef>,
         nestler_tools: Vec<ToolDef>,
         provided: &[String],
     ) {
         let merged = catalogue::merge(forager_tools, nestler_tools, provided);
-        *self.catalogue.write() = CatalogueSlot { sid: sid.into(), tools: merged };
+        *self.catalogue.write() = CatalogueSlot { tools: merged };
     }
 
     /// Resolve a pending `tools/call` with the result from a
@@ -123,7 +119,7 @@ mod tests {
         let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
         let shipped_for_closure = shipped.clone();
         let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
-        bridge.set_catalogue("hum-test", vec![def("humfs_read")], vec![], &["fs".into()]);
+        bridge.set_catalogue(vec![def("humfs_read")], vec![], &["fs".into()]);
         let addr = spawn_local_mcp(bridge).await.expect("bind");
         let client = reqwest_get_post();
         let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
@@ -140,7 +136,7 @@ mod tests {
         let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
         let shipped_for_closure = shipped.clone();
         let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
-        bridge.set_catalogue("hum-test", vec![def("humfs_read")], vec![], &["fs".into()]);
+        bridge.set_catalogue(vec![def("humfs_read")], vec![], &["fs".into()]);
         let addr = spawn_local_mcp(bridge.clone()).await.expect("bind");
         let client = reqwest_get_post();
         // Fire-and-park: post tools/call in a task; after a moment,

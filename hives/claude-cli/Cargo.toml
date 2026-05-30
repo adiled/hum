@@ -10,9 +10,11 @@ name = "claude-cli-worker"
 path = "src/main.rs"
 
 [dependencies]
+hum-paths = { path = "../../hum-paths" }
 nest = { path = "../../nest" }
 nest-common = { path = "../common" }
 tokio = { workspace = true, features = ["full"] }
+command-group = { version = "5", features = ["with-tokio"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

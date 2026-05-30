@@ -26,24 +26,8 @@ use ensemble::HumdKey;
 use rand::RngCore;
 use tracing::{info, trace};
 
-/// `$XDG_STATE_HOME/hum/humd.key`. Falls back to `$HOME/.local/state/hum/humd.key`,
-/// then `.local/state/hum/humd.key` if neither env var is set.
 pub fn key_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("humd.key");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".local")
-                .join("state")
-                .join("hum")
-                .join("humd.key");
-        }
-    }
-    PathBuf::from(".local/state/hum/humd.key")
+    hum_paths::humd_key()
 }
 
 /// Load the persisted key, minting + persisting a fresh one on first boot.

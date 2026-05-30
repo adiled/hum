@@ -6,7 +6,7 @@
 //! runtime via the `bee:["worker"]` hello.
 //!
 //! Env knobs:
-//!   HUM_THRUM_SOCK     thrum socket (default `$XDG_RUNTIME_DIR/hum/thrum.sock`)
+//!   HUM_THRUM_SOCK     thrum socket (default `$XDG_STATE_HOME/hum/thrum.sock`)
 //!   CLAUDE_CLI_PATH    claude binary (default `claude` on PATH)
 //!   CLAUDE_MODELS      comma-separated models advertised on hello
 //!                       (default: claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5)
@@ -19,6 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     let filter = EnvFilter::try_from_env("HUM_LOG_LEVEL")
         .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()

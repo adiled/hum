@@ -107,7 +107,7 @@ In **local dev** you run `cargo run -p humd` and then launch your bee binary. Bo
 
 In the **ensemble**, a bee on one machine reaches a humd on another over the ensemble transport. The remote humd sees the same hello and routes normally. A `peers.json` with one bootstrap entry turns this on. Nothing installs on the remote humd's disk, and the `source` URL stays purely informational.
 
-As a **managed service** you keep a bee alive across reboots. Ship a `hives/<kind>/install` modeled on [`paid-oracle/install`](paid-oracle/install), which registers a service through [`scripts/svc.sh`](../scripts/svc.sh) as `hum-<kind>`. From there the CLI drives it.
+As a **managed service** you keep a bee alive across reboots. Ship an `Orchfile` at your hive root declaring the SERVICE + RUN + RESTART (see any bundled hive for a template). `hum hive install <target>` resolves the target, builds the binary (Cargo / pnpm / Go / `build` script — detected from the marker file present), copies the Orchfile into `~/.config/hum/orch.d/`, and asks [orchd](https://github.com/adiled/orchd) to bring the bee up as a user systemd unit (Linux) or launchd agent (macOS). orchd is the supervisor; from there the CLI drives it.
 
 ```
 hum hive --list                   # catalogue: installer, configured, running
@@ -118,7 +118,7 @@ hum bee  <name|id> exit            # stop it, preserving state
 hum bee  <name|id> reenter         # graceful restart with the same identity
 ```
 
-`hum bee reenter` is the supported replacement for `pkill`, because it restarts through the service manager and the bee keeps its persisted identity. `hum hive install` accepts the same dialect a bee advertises in its `source`: a bundled name, a local path, or a `github.com/<org>/<repo>/tree/<branch>/<path>` URL. Our own repo resolves to the local checkout, and a foreign one is shallow-cloned.
+`hum bee reenter` is the supported replacement for `pkill`, because it restarts through orchd and the bee keeps its persisted identity. `hum hive install` accepts the same dialect a bee advertises in its `source`: a bundled name, a local path, or a `github.com/<org>/<repo>/tree/<branch>/<path>` URL. Our own repo resolves to the local checkout, and a foreign one is shallow-cloned. The target must contain an `Orchfile`.
 
 ## Discovery, optional
 
@@ -130,6 +130,6 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 ## See also
 
-- [`nest/`](../nest) defines `WorkerBee`, `ForagerBee`, `Cell`, `SpawnSpec`, and the encoders.
+- [`nest/`](../nest) defines `WorkerBee`, `Cell`, `SpawnSpec`, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `nest::lifecycle`.
 - [WIRE.md](../WIRE.md) explains what the wire sees of nests and cells.
 - [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, bee, worker, forager, nestler, and nestled.

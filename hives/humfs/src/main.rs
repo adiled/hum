@@ -28,6 +28,7 @@ use dispatch::HumfsDispatcher;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("HUM_LOG_LEVEL")

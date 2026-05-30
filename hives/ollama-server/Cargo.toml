@@ -19,7 +19,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
-libc = "0.2"
+hum-paths = { path = "../../hum-paths" }
 
 [[bin]]
 name = "ollama-server"

@@ -439,6 +439,7 @@ fn render_py_helpers() -> String {
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import threading
 import time
@@ -524,13 +525,20 @@ class WaneTracker:
 
 
 def default_socket_path() -> str:
-    """Resolve the humd thrum socket per WIRE.md priority:
-    HUM_THRUM_SOCK > $XDG_RUNTIME_DIR/hum/thrum.sock > /run/user/<uid>/hum/thrum.sock."""
+    """Resolve the humd thrum socket:
+    HUM_THRUM_SOCK > $XDG_STATE_HOME/hum/runtime.json (rendezvous) > $XDG_STATE_HOME/hum/thrum.sock."""
     explicit = os.environ.get("HUM_THRUM_SOCK")
     if explicit:
         return explicit
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.geteuid()}"
-    return os.path.join(runtime, "hum", "thrum.sock")
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    try:
+        with open(os.path.join(state, "hum", "runtime.json"), "r") as f:
+            sock = json.load(f).get("socket")
+            if sock:
+                return sock
+    except (OSError, ValueError):
+        pass
+    return os.path.join(state, "hum", "thrum.sock")
 "#;
     SRC.to_string()
 }
@@ -598,6 +606,7 @@ package thrum
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -689,17 +698,26 @@ func (w *WaneTracker) Behind(sigil string, remote int64) bool {
 	return remote > w.counters[sigil]
 }
 
-// DefaultSocketPath resolves the humd thrum socket per WIRE.md priority:
-// HUM_THRUM_SOCK > $XDG_RUNTIME_DIR/hum/thrum.sock > /run/user/<uid>/hum/thrum.sock.
+// DefaultSocketPath resolves the humd thrum socket:
+// HUM_THRUM_SOCK > $XDG_STATE_HOME/hum/runtime.json (rendezvous) > $XDG_STATE_HOME/hum/thrum.sock.
 func DefaultSocketPath() string {
 	if explicit := os.Getenv("HUM_THRUM_SOCK"); explicit != "" {
 		return explicit
 	}
-	runtime := os.Getenv("XDG_RUNTIME_DIR")
-	if runtime == "" {
-		runtime = fmt.Sprintf("/run/user/%d", os.Geteuid())
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		home, _ := os.UserHomeDir()
+		state = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(runtime, "hum", "thrum.sock")
+	if data, err := os.ReadFile(filepath.Join(state, "hum", "runtime.json")); err == nil {
+		var rt struct {
+			Socket string `json:"socket"`
+		}
+		if json.Unmarshal(data, &rt) == nil && rt.Socket != "" {
+			return rt.Socket
+		}
+	}
+	return filepath.Join(state, "hum", "thrum.sock")
 }
 "#;
     SRC.to_string()

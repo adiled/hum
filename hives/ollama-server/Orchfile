@@ -1,0 +1,3 @@
+SERVICE ollama-server
+RUN ${HOME}/.local/bin/ollama-server
+RESTART always

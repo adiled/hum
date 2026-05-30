@@ -3,11 +3,13 @@ resolver = "2"
 members = [
     "thrum-core",
     "thrumd",
+    "hum-paths",
     "ids",
     "config",
     "codegen",
     "drift",
     "humd",
+    "humctl",
     "hum",
     "mcp",
     "nest",

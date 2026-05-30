@@ -17,7 +17,7 @@ use anyhow::Result;
 use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
 use parking_lot::RwLock;
 use serde_json::Value;
-use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
+use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
 
@@ -80,12 +80,11 @@ pub struct DaemonConfig {
 
 impl DaemonConfig {
     pub fn from_env() -> Self {
-        let runtime_dir = runtime_dir();
         // Canonical thrum socket path — honors HUM_THRUM_SOCK (and the
         // legacy HUM_SOCKET fallback). thrumd owns the source of truth;
         // humd just reuses it so binary + protocol agree.
         let thrum_path = thrumd::default_socket_path();
-        let http_path = runtime_dir.join("hum.sock.http");
+        let http_path = hum_paths::http_sock();
         let mcp_port: u16 = std::env::var("HUM_MCP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -104,7 +103,7 @@ impl DaemonConfig {
             thrum_path,
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
-            penny_path: runtime_dir.join("penny.json"),
+            penny_path: hum_paths::penny(),
             hum_cfg: config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
@@ -119,12 +118,6 @@ impl DaemonConfig {
     }
 }
 
-fn runtime_dir() -> PathBuf {
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum")
-}
 
 
 // ── Public entry point ─────────────────────────────────────────────────────
@@ -139,6 +132,8 @@ pub async fn run<F>(mut cfg: DaemonConfig, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send,
 {
+    hum_paths::init();
+
     info!(
         thrum = %cfg.thrum_path.display(),
         http = %cfg.http_path.display(),
@@ -146,12 +141,24 @@ where
         "humd.sockets"
     );
 
+    if let Ok(addr) = cfg.hum_cfg.humd.metrics_addr.parse::<std::net::SocketAddr>() {
+        match metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(addr)
+            .install()
+        {
+            Ok(()) => info!(%addr, "humd.metrics.listening"),
+            Err(e) => warn!(%addr, err = %e, "humd.metrics.install_failed"),
+        }
+    } else {
+        warn!(addr = %cfg.hum_cfg.humd.metrics_addr, "humd.metrics.addr_parse_failed");
+    }
+
     let _hums = hums::Hums::load();
     let penny = penny::Penny::load(&cfg.penny_path);
     penny.clone().spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
 
     let waneman = cfg.waneman.clone().unwrap_or_else(|| Arc::new(WaneTracker::new()));
-    let _drift = drift::Drift::new();
+    let _drift = drift::Drift::with_store_dir(hum_paths::drift_dir());
     let _drone = drone::Drone::new();
 
     // Bring up an Ensemble from the persisted identity when the caller
@@ -237,7 +244,6 @@ where
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
-        cli_path: cfg.cli_path.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
@@ -255,10 +261,29 @@ where
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
+        let humd_version = env!("CARGO_PKG_VERSION").to_string();
         tokio::spawn(async move {
-            if let Err(e) = thrum_serve(thrum, &path).await {
+            let res = thrum_serve_with_hook(thrum, &path, move |bound| {
+                let info = hum_paths::RuntimeInfo {
+                    socket: bound.to_path_buf(),
+                    pid: std::process::id(),
+                    version: humd_version,
+                    thrum_version: thrum_core::THRUM_VERSION.to_string(),
+                    bound_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0),
+                    ensemble_addrs: Vec::new(),
+                };
+                if let Err(e) = info.write() {
+                    warn!(err = %e, "humd.runtime_info.write_failed");
+                } else {
+                    info!(path = %hum_paths::runtime_info().display(), "humd.runtime_info.published");
+                }
+            }).await;
+            if let Err(e) = res {
                 warn!(err = %e, "thrum.exit");
             }
+            hum_paths::RuntimeInfo::remove();
         });
     } else {
         trace!("thrum.override.installed");
@@ -380,7 +405,6 @@ fn parse_tag_name(body: &str) -> Option<String> {
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    cli_path: String,
     /// When present, tones with a `to:` hex addressed to a *different*
     /// humd are routed through here instead of being dispatched locally.
     ensemble: Option<Arc<Ensemble>>,
@@ -478,14 +502,8 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
-/// `$XDG_STATE_HOME/hum/bees.json` (else `~/.local/state/hum/bees.json`).
-/// The `hum` CLI reads this to render `hum bee --list` with full manifest
-/// info. Same resolution as the CLI's state-dir logic.
 fn bees_snapshot_path() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local").join("state")))
-        .unwrap_or_else(|| std::path::PathBuf::from(".local/state"));
-    base.join("hum").join("bees.json")
+    hum_paths::bees_snapshot()
 }
 
 // humd doesn't host an MCP server — tool-call routing is purely

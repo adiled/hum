@@ -107,27 +107,13 @@ pub struct Hums {
 }
 
 impl Hums {
-    /// State directory: `${XDG_STATE_HOME or HOME/.local/state}/hum`.
     pub fn state_dir() -> PathBuf {
-        if let Ok(p) = std::env::var("XDG_STATE_HOME") {
-            return PathBuf::from(p).join("hum");
-        }
-        if let Some(p) = directories::ProjectDirs::from("", "", "hum") {
-            // ProjectDirs.state_dir() is only populated on Linux; fall back
-            // to ~/.local/state/hum elsewhere via home_dir below.
-            if let Some(s) = p.state_dir() {
-                return s.to_path_buf();
-            }
-        }
-        let home = directories::BaseDirs::new()
-            .map(|b| b.home_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        home.join(".local/state/hum")
+        hum_paths::state_dir()
     }
 
     /// Default file path: `<state_dir>/hums.json`.
     pub fn default_file() -> PathBuf {
-        Self::state_dir().join("hums.json")
+        hum_paths::hums_json()
     }
 
     /// Load the registry from the default path, applying legacy backfill.

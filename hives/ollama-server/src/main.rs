@@ -47,12 +47,7 @@ struct FileConfig {
 }
 
 fn config_file_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home)
-        .join(".config")
-        .join("hum")
-        .join("bees")
-        .join("ollama-server.json")
+    hum_paths::bee_config("ollama-server")
 }
 
 fn read_file_config() -> FileConfig {
@@ -77,9 +72,6 @@ struct Config {
 impl Config {
     fn load() -> Self {
         let file = read_file_config();
-        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-            format!("/run/user/{}", unsafe { libc::geteuid() })
-        });
         let port: u16 = match std::env::var("OLLAMA_SERVER_PORT") {
             Ok(s) => s.parse().unwrap_or(11434),
             Err(_) => file.port.unwrap_or(11434),
@@ -103,8 +95,7 @@ impl Config {
             }),
         };
         Self {
-            sock_path: std::env::var("HUM_THRUM_SOCK")
-                .unwrap_or_else(|_| format!("{runtime}/hum/thrum.sock")),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             listen: format!("{host}:{port}"),
             models,
             bind: None,
@@ -563,6 +554,7 @@ fn error_resp(code: StatusCode, msg: &str) -> Response {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

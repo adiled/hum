@@ -1,32 +1,21 @@
 #!/usr/bin/env bash
-# hum installer — v0.3 (Rust daemon, ensemble mesh, openai-server door).
+# hum installer.
 #
-# What this does, in order:
-#   1. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo, pnpm (for bees).
-#   2. Build the Rust humd from source — `cargo install --path humd --root $HUM_BIN_ROOT`.
-#   3. Mint Ed25519 identity at $HUM_STATE/humd.key if missing.
-#   4. Seed an empty peers.json at $HUM_CONFIG/peers.json if missing.
-#   5. Seed a minimal hum.json at $HUM_CONFIG/hum.json if missing.
-#   6. Install systemd --user unit pointing at the Rust binary.
-#   7. Build and install the openai-server bee (the 0.3 front door).
-#   8. Start the daemon.
-#
-# 0.2 → 0.3 is a config-shape change; there is no migration script. Read
-# MIGRATING.md for the old-key → new-home table. Re-run this installer
-# after editing $HUM_CONFIG/hum.json into the new shape.
+# Builds + registers humd as a user service. Pulls orch + orchd binaries
+# (bee supervisor). After this, `hum hive install <kind>` brings up bees
+# via orchd; no per-bee bash scripts.
 #
 # Idempotent — re-running upgrades in place.
 #
 # Usage:
 #   ./install              # from a cloned repo
-#   ./install status       # daemon health
-#   ./install logs         # journalctl tail
-#   ./install uninstall    # remove binary + unit (keeps state)
+#   ./install status       # humd state + paths
+#   ./install logs         # tail humd logs
+#   ./install uninstall    # stop + remove humd unit (state preserved)
 #   ./install purge        # remove everything INCLUDING state
-#
+
 set -euo pipefail
 
-# ─── XDG dirs ────────────────────────────────────────────────────────────────
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -34,63 +23,40 @@ HUM_CONFIG="$XDG_CONFIG_HOME/hum"
 HUM_DATA="$XDG_DATA_HOME/hum"
 HUM_STATE="$XDG_STATE_HOME/hum"
 HUM_BIN_ROOT="$HOME/.local"
-HUM_BIN="$HUM_BIN_ROOT/bin/humd"
+HUMD_BIN="$HUM_BIN_ROOT/bin/humd"
+HUMCTL_BIN="$HUM_BIN_ROOT/bin/humctl"
+HUM_CLI_BIN="$HUM_BIN_ROOT/bin/hum"
+ORCH_BIN="$HUM_BIN_ROOT/bin/orch"
+ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 
-if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-  HUM_RUNTIME="$XDG_RUNTIME_DIR/hum"
-else
-  HUM_RUNTIME="/tmp/hum-$(id -u)"
-fi
-# Canonical per WIRE.md. All clients (thrum-core / thrum-clients/{ts,python,go})
-# resolve here. Override at runtime via HUM_THRUM_SOCK env if you must.
-THRUM_SOCK="$HUM_RUNTIME/thrum.sock"
-
-OPENCODE_CONFIG="$XDG_CONFIG_HOME/opencode/opencode.json"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
-
 MIN_CLAUDE="2.1.86"
 
 CMD="${1:-install}"
 OS="$(uname -s)"
-
-# ─── helpers ─────────────────────────────────────────────────────────────────
 
 log()  { printf '\033[1m[hum]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[hum]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[hum]\033[0m %s\n' "$*" >&2; exit 1; }
 
 version_gte() { printf '%s\n%s\n' "$2" "$1" | sort -V -C; }
-
-read_version() {
-  "$1" --version 2>/dev/null | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1
-}
+read_version() { "$1" --version 2>/dev/null | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1; }
 
 ensure_min_version() {
   local NAME="$1" BIN="$2" MIN="$3"
-  if ! command -v "$BIN" >/dev/null 2>&1; then
-    fail "$NAME not found on PATH. Install it and re-run."
-  fi
+  if ! command -v "$BIN" >/dev/null 2>&1; then fail "$NAME not found on PATH."; fi
   local CUR; CUR="$(read_version "$BIN" || true)"
   if [ -z "$CUR" ]; then fail "$NAME found but couldn't read version."; fi
-  if version_gte "$CUR" "$MIN"; then
-    log "$NAME ${CUR} ≥ ${MIN} ✓"
-  else
-    fail "$NAME ${CUR} < ${MIN} — upgrade and re-run."
-  fi
+  if version_gte "$CUR" "$MIN"; then log "$NAME ${CUR} ≥ ${MIN} ✓"
+  else fail "$NAME ${CUR} < ${MIN} — upgrade and re-run."; fi
 }
-
-# ─── prerequisite checks ─────────────────────────────────────────────────────
 
 ensure_prereqs() {
   ensure_min_version "claude CLI" "claude" "$MIN_CLAUDE"
   if ! command -v cargo >/dev/null 2>&1; then
-    # Dev paradigm: if a pre-built humd is already at $HUM_BIN (e.g.
-    # placed by ./dev/deploy from a root user), allow proceeding so the
-    # installer can still write the systemd unit + hum.json. Otherwise
-    # building from source is required.
-    if [ -x "$HUM_BIN" ]; then
-      warn "cargo not found; using pre-built humd at $HUM_BIN"
+    if [ -x "$HUMD_BIN" ] && [ -x "$HUMCTL_BIN" ] && [ -x "$HUM_CLI_BIN" ] && [ -x "$ORCHD_BIN" ]; then
+      warn "cargo not found; using pre-built binaries in $HUM_BIN_ROOT/bin"
       SKIP_BUILD=1
     else
       fail "cargo (rustup) not found. Install rustup: https://rustup.rs"
@@ -98,39 +64,11 @@ ensure_prereqs() {
   fi
 }
 
-# ─── 0.2 detection — guide, don't migrate ───────────────────────────────────
-
-flag_0_2_install() {
-  local LANDMARK_TS="$HUM_DATA/src/humd/humd.ts"
-  local LANDMARK_UNIT
-  LANDMARK_UNIT="$(systemctl --user cat hum 2>/dev/null | grep -E '^ExecStart=' | head -1 || true)"
-  local IS_OLD=false
-  [ -f "$LANDMARK_TS" ] && IS_OLD=true
-  case "$LANDMARK_UNIT" in *humd.ts*|*tsx*) IS_OLD=true ;; esac
-  $IS_OLD || return 0
-
-  warn "v0.2 install detected (TS daemon landmarks present)."
-  warn ""
-  warn "  0.3 has no migration script — config shape changed too much."
-  warn "  Read MIGRATING.md for the old-key → new-home table."
-  warn ""
-  warn "  Quick path: stop the old service, remove $HUM_DATA/src, edit"
-  warn "  $HUM_CONFIG/hum.json into the namespaced 0.3 shape, re-run this script."
-  warn ""
-  warn "  Continuing the install will overwrite the systemd unit and"
-  warn "  binary; your hum.json stays untouched."
-}
-
-# ─── identity ────────────────────────────────────────────────────────────────
-
 ensure_identity() {
   mkdir -p "$HUM_STATE"
   local KEY="$HUM_STATE/humd.key"
-  if [ -s "$KEY" ]; then
-    log "humd identity: $KEY ✓"
-    return 0
-  fi
-  log "minting humd identity at $KEY (Ed25519, 32 bytes)"
+  if [ -s "$KEY" ]; then log "humd identity: $KEY ✓"; return 0; fi
+  log "minting humd identity at $KEY"
   if command -v openssl >/dev/null 2>&1; then
     openssl genpkey -algorithm Ed25519 -outform DER -out "$KEY.tmp" 2>/dev/null
     tail -c 32 "$KEY.tmp" > "$KEY"
@@ -141,35 +79,22 @@ ensure_identity() {
   chmod 600 "$KEY"
 }
 
-# ─── peers.json ──────────────────────────────────────────────────────────────
-
 ensure_peers_config() {
   mkdir -p "$HUM_CONFIG"
   local PEERS="$HUM_CONFIG/peers.json"
-  if [ -s "$PEERS" ]; then
-    log "peers.json: $PEERS ✓"
-    return 0
-  fi
+  if [ -s "$PEERS" ]; then log "peers.json: $PEERS ✓"; return 0; fi
   echo "[]" > "$PEERS"
   log "wrote empty peers.json at $PEERS"
 }
 
-# ─── hum.json (0.3 namespaced) ──────────────────────────────────────────────
-
 ensure_hum_config() {
   mkdir -p "$HUM_CONFIG"
   local CFG="$HUM_CONFIG/hum.json"
-  if [ -s "$CFG" ]; then
-    log "hum.json: $CFG ✓"
-    return 0
-  fi
+  if [ -s "$CFG" ]; then log "hum.json: $CFG ✓"; return 0; fi
   cat > "$CFG" <<JSON
 {
   "\$schema": "https://adiled.github.io/hum/hum.schema.json",
-  "humd": {
-    "permissionDuskMs": 60000,
-    "driftRetentionDays": 30
-  },
+  "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 },
   "fs": {
     "roots": [
       { "path": "~/code", "mode": "rw" },
@@ -177,23 +102,19 @@ ensure_hum_config() {
     ],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
-  "nest": {
-    "maxActiveCells": 4,
-    "cellIdlePruneThresholdMs": 300000,
-    "default": "claude-cli"
-  }
+  "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
 }
 JSON
   log "wrote default hum.json at $CFG"
-  log "  edit fs.roots to match where you actually code."
-  log "  models + binary are set per-hive via its install env (CLAUDE_MODELS, CLAUDE_CLI_PATH); opus 4.7 is the claude-cli default."
 }
 
-# ─── humd binary ─────────────────────────────────────────────────────────────
+ensure_orch_overlay_dir() {
+  mkdir -p "$HUM_CONFIG/orch.d"
+  : > "$HUM_CONFIG/Orchfile"
+  log "orch overlay dir: $HUM_CONFIG/orch.d/"
+}
 
-HUM_CLI_BIN="$HUM_BIN_ROOT/bin/hum"
-
-build_humd() {
+build_binaries() {
   local SRC
   if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
     SRC="$(dirname "$0")"
@@ -208,195 +129,153 @@ build_humd() {
     fi
     SRC="$HUM_SRC"
   fi
-  log "building Rust binaries via cargo install (may take a few minutes)"
-  cargo install --quiet --locked --path "$SRC/humd" --root "$HUM_BIN_ROOT" --force
-  cargo install --quiet --locked --path "$SRC/hum"  --root "$HUM_BIN_ROOT" --force
-  [ -x "$HUM_BIN" ]     || fail "humd binary not at $HUM_BIN after build"
-  [ -x "$HUM_CLI_BIN" ] || fail "hum binary not at $HUM_CLI_BIN after build"
-  log "humd installed at $HUM_BIN"
-  log "hum  installed at $HUM_CLI_BIN"
+  log "building Rust binaries"
+  cargo install --quiet --locked --path "$SRC/humd"   --root "$HUM_BIN_ROOT" --force
+  cargo install --quiet --locked --path "$SRC/humctl" --root "$HUM_BIN_ROOT" --force
+  cargo install --quiet --locked --path "$SRC/hum"    --root "$HUM_BIN_ROOT" --force
+  log "installing orch + orchd (bee supervisor) from git"
+  cargo install --quiet --git https://github.com/adiled/orch.git  --root "$HUM_BIN_ROOT" --force
+  cargo install --quiet --git https://github.com/adiled/orchd.git --root "$HUM_BIN_ROOT" --force
+  [ -x "$HUMD_BIN" ]    || fail "humd not at $HUMD_BIN after build"
+  [ -x "$HUMCTL_BIN" ]  || fail "humctl not at $HUMCTL_BIN after build"
+  [ -x "$HUM_CLI_BIN" ] || fail "hum not at $HUM_CLI_BIN after build"
+  [ -x "$ORCH_BIN" ]    || fail "orch not at $ORCH_BIN after build"
+  [ -x "$ORCHD_BIN" ]   || fail "orchd not at $ORCHD_BIN after build"
+  log "humd $HUMD_BIN ; humctl $HUMCTL_BIN ; hum $HUM_CLI_BIN ; orch $ORCH_BIN ; orchd $ORCHD_BIN"
 }
 
-# ─── service unit (Linux systemd / macOS launchd via scripts/svc.sh) ───────
+linux_unit_dir="${XDG_CONFIG_HOME}/systemd/user"
+darwin_unit_dir="$HOME/Library/LaunchAgents"
 
-# Resolve and source the cross-platform svc helper. Must run *after*
-# build_humd has cloned the repo — on a `curl | bash` install there is
-# no local scripts/svc.sh until then, so sourcing at top-level would
-# always miss and silently skip service registration.
-source_svc_helper() {
-  command -v svc_install >/dev/null 2>&1 && return 0  # already sourced
-  local local_helper="$(dirname "$0")/scripts/svc.sh"
-  if [ -f "$local_helper" ]; then
-    # shellcheck source=/dev/null
-    . "$local_helper"
-  elif [ -f "$HUM_SRC/scripts/svc.sh" ]; then
-    # shellcheck source=/dev/null
-    . "$HUM_SRC/scripts/svc.sh"
-  else
-    warn "scripts/svc.sh not found; service management will be skipped"
-  fi
+write_linux_unit() {
+  mkdir -p "$linux_unit_dir"
+  cat > "$linux_unit_dir/humd.service" <<EOF
+[Unit]
+Description=hum router daemon
+
+[Service]
+Type=simple
+ExecStart=$HUMD_BIN
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable humd.service >/dev/null 2>&1 || true
+  systemctl --user restart humd.service
 }
 
-install_service_unit() {
-  if ! command -v svc_install >/dev/null 2>&1; then
-    warn "svc helper unavailable — run '$HUM_BIN' manually"
-    return 0
-  fi
-  case "$SVC_OS" in
-    Linux|Darwin) ;;
-    *) warn "service install not supported on $SVC_OS — run '$HUM_BIN' manually"; return 0 ;;
+write_darwin_unit() {
+  mkdir -p "$darwin_unit_dir"
+  cat > "$darwin_unit_dir/humd.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>humd</string>
+  <key>Program</key><string>$HUMD_BIN</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/sh.hum.humd.out.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/sh.hum.humd.err.log</string>
+</dict></plist>
+EOF
+  local uid; uid="$(id -u)"
+  launchctl bootout "gui/$uid/humd" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humd.plist"
+}
+
+start_daemons() {
+  case "$OS" in
+    Linux)  write_linux_unit ;;
+    Darwin) write_darwin_unit ;;
+    *) warn "service install not supported on $OS — run '$HUMD_BIN' manually"; return 0 ;;
   esac
-  svc_install hum "$HUM_BIN" \
-    --env "HUM_LOG_LEVEL=trace,penny=error" \
-    --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
-    --env "XDG_DATA_HOME=$XDG_DATA_HOME" \
-    --env "XDG_STATE_HOME=$XDG_STATE_HOME" \
-    --env "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/hum-$(id -u)}" \
-    --env "HUM_THRUM_SOCK=$THRUM_SOCK" \
-    --env "PATH=$HUM_BIN_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
-  log "service unit installed for hum ($SVC_OS)"
-  # humd does its own daily auto-update check in-process — no separate
-  # timer / cron / launchd interval to maintain.
-  # Hives are NOT installed here — each hive ships its own installer
-  # under hives/<kind>/install. humd just routes; whichever bee you
-  # bring up registers itself via thrum bee:["worker"] (or "forager").
-}
-
-start_daemon() {
-  if ! command -v svc_restart >/dev/null 2>&1; then
-    warn "svc helper unavailable — start '$HUM_BIN' manually"
-    return 0
-  fi
-  svc_restart hum 2>/dev/null || svc_start hum 2>/dev/null || true
+  log "humd registered + started ($OS)"
   sleep 1
-  if svc_is_active hum; then
-    log "hum service running ✓"
-  else
-    warn "hum service did not start — \`./install logs\` to inspect."
-  fi
 }
 
-# ─── refresh installed bees ──────────────────────────────────────────────────
-
-# Re-run the installer for every bee service already present, so an
-# update rewrites their unit files (new env like HOME, new flags) and
-# rebuilds their binaries from the freshly-pulled source. A first-time
-# install has no bee services yet, so this is a no-op then. Units with no
-# matching in-repo hive (external/custom bees) are left untouched.
-refresh_installed_hives() {
-  command -v svc_list >/dev/null 2>&1 || return 0
-  local hives_dir
-  if [ -d "$HUM_SRC/hives" ]; then hives_dir="$HUM_SRC/hives"
-  elif [ -d "$(dirname "$0")/hives" ]; then hives_dir="$(dirname "$0")/hives"
-  else return 0; fi
-
-  local unit sid d name best
-  for unit in $(svc_list); do
-    case "$unit" in hum|hum-update) continue ;; esac
-    sid="${unit#hum-}"
-    best=""
-    for d in "$hives_dir"/*/; do
-      [ -f "${d}install" ] || continue
-      name="$(basename "$d")"
-      case "$sid" in
-        "$name"|"$name"-*) [ "${#name}" -gt "${#best}" ] && best="$name" ;;
-      esac
-    done
-    if [ -n "$best" ]; then
-      log "refreshing bee '$best' (unit $unit)"
-      "$hives_dir/$best/install" || warn "bee refresh failed: $best (continuing)"
-    else
-      log "leaving $unit untouched — no in-repo hive matches it"
-    fi
-  done
-}
-
-# ─── next steps ──────────────────────────────────────────────────────────────
-
-# humd has no opinion on which bees you run. Each bee is a
-# separate process with its own installer under hives/<kind>/install.
-# Pick at least one to give humd an outside-world surface.
 print_next_steps() {
   log ""
-  log "humd is up. Pick a recipe to give it an outside-world surface:"
+  log "humd is up. Add a bee:"
+  log "  hum hive install claude-cli       # claude worker (cargo build + register)"
+  log "  hum hive install humfs            # filesystem forager"
+  log "  hum hive install paid-oracle      # x402 paid price oracle"
   log ""
-  log "  hum + opencode (chat from the opencode TUI/CLI):"
-  log "    ./recipes/opencode/install"
-  log ""
-  log "  Other bees — each is a standalone install:"
-  log "    hives/openai-server/install     (OpenAI-shape HTTP)"
-  log "    hives/anthropic-server/install  (Anthropic-shape HTTP)"
-  log "    hives/ollama-server/install     (Ollama-shape HTTP)"
-  log ""
-  log "Health checks:"
-  log "    ./install status                    (is humd alive)"
-  log "    ./install logs                      (recent humd journal)"
+  log "Bee state: hum bee --list   /   hum nest"
+  log "humd state: hum status   /   hum doctor   /   humctl logs"
 }
 
-# ─── status / logs / uninstall ───────────────────────────────────────────────
-
 show_status() {
-  echo "humd binary:  $HUM_BIN"
-  echo "  version:    $($HUM_BIN --version 2>&1 || echo 'not installed')"
-  echo "identity:     $HUM_STATE/humd.key $([ -s "$HUM_STATE/humd.key" ] && echo ✓ || echo MISSING)"
-  echo "peers.json:   $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
-  echo "hum.json:     $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
-  echo "thrum socket: $THRUM_SOCK $([ -S "$THRUM_SOCK" ] && echo ✓ || echo absent)"
-  if command -v svc_status >/dev/null 2>&1; then
-    echo "service ($SVC_OS):"
-    svc_status hum 2>&1 | head -6 || true
+  echo "humd binary:    $HUMD_BIN"
+  echo "  version:      $($HUMD_BIN --version 2>&1 || echo 'not installed')"
+  echo "orchd binary:   $ORCHD_BIN"
+  echo "  version:      $($ORCHD_BIN --version 2>&1 || echo 'not installed')"
+  echo "identity:       $HUM_STATE/humd.key $([ -s "$HUM_STATE/humd.key" ] && echo ✓ || echo MISSING)"
+  echo "peers.json:     $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
+  echo "hum.json:       $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
+  case "$OS" in
+    Linux)  systemctl --user status humd --no-pager 2>&1 | head -6 || true ;;
+    Darwin) launchctl print "gui/$(id -u)/humd" 2>&1 | head -6 || true ;;
+  esac
+  if [ -x "$ORCHD_BIN" ]; then
+    echo "--- bees ---"
+    "$ORCHD_BIN" --orchfile "$HUM_CONFIG/Orchfile" --user --namespace hum status 2>&1 || true
   fi
 }
 
 show_logs() {
-  case "$SVC_OS" in
-    Linux)  journalctl --user -u hum --no-pager -n 200 ;;
-    Darwin) tail -n 200 "$HOME/Library/Logs/sh.hum.hum.out.log" "$HOME/Library/Logs/sh.hum.hum.err.log" 2>/dev/null ;;
-    *) warn "logs command unavailable on $SVC_OS" ;;
-  esac
+  if [ -x "$HUMCTL_BIN" ]; then
+    "$HUMCTL_BIN" logs -n 100
+  else
+    warn "humctl not installed"
+  fi
 }
 
 uninstall() {
-  if command -v svc_uninstall >/dev/null 2>&1; then
-    svc_uninstall hum-update || true
-    svc_uninstall hum || true
-  fi
-  rm -f "$HUM_BIN" "$HUM_CLI_BIN"
-  log "uninstalled. State preserved in $HUM_STATE + $HUM_CONFIG."
+  case "$OS" in
+    Linux)
+      systemctl --user stop    humd.service 2>/dev/null || true
+      systemctl --user disable humd.service 2>/dev/null || true
+      rm -f "$linux_unit_dir/humd.service"
+      systemctl --user daemon-reload 2>/dev/null || true
+      ;;
+    Darwin)
+      local uid; uid="$(id -u)"
+      launchctl bootout "gui/$uid/humd" 2>/dev/null || true
+      rm -f "$darwin_unit_dir/humd.plist"
+      ;;
+  esac
+  rm -f "$HUMD_BIN" "$HUMCTL_BIN" "$HUM_CLI_BIN"
+  log "uninstalled humd. orch/orchd left in place. State preserved in $HUM_STATE + $HUM_CONFIG."
   log "  run \`./install purge\` to remove state too."
 }
 
 purge() {
   uninstall
   rm -rf "$HUM_STATE" "$HUM_CONFIG" "$HUM_DATA"
-  log "purged all hum state."
+  log "purged."
 }
 
-# ─── dispatch ────────────────────────────────────────────────────────────────
-
 do_install() {
-  log "hum installer — v0.3"
-  flag_0_2_install
+  log "hum installer"
   ensure_prereqs
-  if [ "${SKIP_BUILD:-0}" != "1" ]; then build_humd; fi
-  source_svc_helper
+  if [ "${SKIP_BUILD:-0}" != "1" ]; then build_binaries; fi
   ensure_identity
   ensure_peers_config
   ensure_hum_config
-  install_service_unit
-  start_daemon
-  refresh_installed_hives
-  log ""
-  log "humd installed. Try: ./install status   /   ./install logs"
+  ensure_orch_overlay_dir
+  start_daemons
   log ""
   print_next_steps
 }
 
 case "$CMD" in
   install|"") do_install ;;
-  status)     source_svc_helper; show_status ;;
-  logs)       source_svc_helper; show_logs ;;
-  uninstall)  source_svc_helper; uninstall ;;
-  purge)      source_svc_helper; purge ;;
+  status)     show_status ;;
+  logs)       show_logs ;;
+  uninstall)  uninstall ;;
+  purge)      purge ;;
   *) fail "unknown command: $CMD (try: install, status, logs, uninstall, purge)" ;;
 esac

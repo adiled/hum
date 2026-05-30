@@ -6,6 +6,7 @@ license.workspace = true
 description = "NDJSON unix-socket thrum server — listens, dispatches, broadcasts."
 
 [dependencies]
+hum-paths = { path = "../hum-paths" }
 thrum-core = { path = "../thrum-core" }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -15,3 +16,7 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
+governor = "0.6"
+
+[dev-dependencies]
+tokio = { workspace = true }

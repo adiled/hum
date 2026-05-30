@@ -22,6 +22,11 @@
           "minimum": 0,
           "default": 30,
           "description": "Days of drift-ring samples kept on disk."
+        },
+        "metricsAddr": {
+          "type": "string",
+          "default": "127.0.0.1:9909",
+          "description": "host:port the Prometheus exporter binds. Empty / unparseable disables the endpoint."
         }
       }
     },

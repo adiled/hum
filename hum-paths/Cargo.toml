@@ -1,0 +1,10 @@
+[package]
+name = "hum-paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Single source of truth for every on-disk path hum writes or reads."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

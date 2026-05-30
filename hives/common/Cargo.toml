@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared building blocks for nests — regex Classifier for the drone's context-loss heuristic, common spawn glue, bee identity helpers, MCP bridge for worker bees."
 
 [dependencies]
+hum-paths = { path = "../../hum-paths" }
 drone = { path = "../../drone" }
 ensemble = { path = "../../ensemble" }
 mcp = { path = "../../mcp" }
@@ -20,6 +21,9 @@ regex = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "sync", "macros", "rt", "rt-multi-thread", "time"] }
+tokio-util = "0.7"
+lru = "0.12"
+metrics = "0.23"
 tracing = { workspace = true }
 anyhow = { workspace = true }
 futures = "0.3"

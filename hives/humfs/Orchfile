@@ -1,0 +1,3 @@
+SERVICE humfs
+RUN ${HOME}/.local/bin/humfs-forager
+RESTART always

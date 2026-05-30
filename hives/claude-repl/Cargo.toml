@@ -10,9 +10,11 @@ name = "claude-repl-worker"
 path = "src/main.rs"
 
 [dependencies]
+hum-paths = { path = "../../hum-paths" }
 nest = { path = "../../nest" }
 nest-common = { path = "../common" }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7"
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

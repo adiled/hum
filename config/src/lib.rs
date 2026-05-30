@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -19,6 +18,8 @@ pub struct HumdSection {
     pub permission_dusk_ms: u64,
     #[serde(default = "defaults::drift_retention_days", rename = "driftRetentionDays")]
     pub drift_retention_days: u32,
+    #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
+    pub metrics_addr: String,
 }
 
 impl Default for HumdSection {
@@ -26,6 +27,7 @@ impl Default for HumdSection {
         Self {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             drift_retention_days: defaults::drift_retention_days(),
+            metrics_addr: defaults::metrics_addr(),
         }
     }
 }
@@ -149,15 +151,7 @@ pub struct HumConfig {
 // ── path resolution ───────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("hum.json");
-        }
-    }
-    if let Some(base) = BaseDirs::new() {
-        return base.config_dir().join("hum").join("hum.json");
-    }
-    PathBuf::from(".config/hum/hum.json")
+    hum_paths::hum_json()
 }
 
 /// Expand `~` against `$HOME`. Leaves absolute / non-tilde paths alone.
@@ -280,6 +274,9 @@ mod defaults {
     }
     pub fn drift_retention_days() -> u32 {
         30
+    }
+    pub fn metrics_addr() -> String {
+        "127.0.0.1:9909".into()
     }
     pub fn max_active_cells() -> u32 {
         4

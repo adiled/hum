@@ -79,10 +79,6 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self> {
-        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-            format!("/run/user/{}", unsafe { libc::geteuid() })
-        });
-        let default_sock = format!("{runtime}/hum/thrum.sock");
         let pay_kind = match std::env::var("PAID_ORACLE_PAY_KIND")
             .unwrap_or_else(|_| "native".into())
             .to_ascii_lowercase()
@@ -101,7 +97,7 @@ impl Config {
                 PayKind::Erc20 => 6,
             });
         Ok(Self {
-            sock_path: std::env::var("HUM_THRUM_SOCK").unwrap_or(default_sock),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             pay_to: std::env::var("PAID_ORACLE_PAY_TO")
                 .context("PAID_ORACLE_PAY_TO (your EVM address) is required")?,
             rpc_url: std::env::var("PAID_ORACLE_RPC")
@@ -148,6 +144,7 @@ struct State {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")))

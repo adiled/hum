@@ -21,7 +21,7 @@
 //!   hum version            print version
 //!   hum help               print this surface
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -77,6 +77,8 @@ enum Cmd {
         #[arg(long)]
         list: bool,
     },
+    /// List orchd-managed bees (delegates to `orchd status`).
+    Nest,
     /// Show lifetime counters from penny.json
     Penny,
     /// List available recipes (recipes/*) or run one
@@ -97,6 +99,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    hum_paths::init();
     let cli = Cli::parse();
     match cli.cmd {
         None => summary(),
@@ -105,6 +108,7 @@ fn main() -> Result<()> {
         Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
         Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
+        Some(Cmd::Nest) => nest(),
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Uninstall) => uninstall(),
@@ -173,39 +177,35 @@ fn latest_release_tag() -> Option<String> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
-fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).context("HOME unset")
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn xdg(var: &str, default_suffix: &str) -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os(var) {
-        return Ok(PathBuf::from(v));
+fn probe_thrum(sock: &Path) -> Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+    if !sock.exists() {
+        anyhow::bail!("socket file missing (humd not running)");
     }
-    Ok(home()?.join(default_suffix))
-}
-
-fn xdg_runtime_hum() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(|v| PathBuf::from(v).join("hum"))
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/hum-{}", libc_getuid())))
-}
-
-fn unsafe_libc_getuid_fallback() -> u32 { 0 }
-fn libc_getuid() -> u32 {
-    // Avoid pulling in the libc crate — shell out to `id -u`. Cheap;
-    // only called when XDG_RUNTIME_DIR isn't set.
-    Command::new("id").arg("-u").output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or_else(unsafe_libc_getuid_fallback)
+    let mut s = UnixStream::connect(sock)
+        .map_err(|e| anyhow::anyhow!("connect refused ({e}) — stale socket, humd crashed"))?;
+    s.set_read_timeout(Some(Duration::from_secs(1)))?;
+    s.set_write_timeout(Some(Duration::from_secs(1)))?;
+    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"hum-doctor-probe\",\"bee\":[\"worker\"]}\n")?;
+    let mut buf = [0u8; 256];
+    match s.read(&mut buf) {
+        Ok(0) => anyhow::bail!("socket closed without breath"),
+        Ok(_) => Ok(()),
+        Err(e) => anyhow::bail!("no breath within 1s ({e})"),
+    }
 }
 
 fn humd_bin() -> Result<PathBuf> {
-    // Convention: $HUM_DATA/bin/humd or $HOME/.local/bin/humd.
     let candidates = [
         std::env::var_os("HUM_BIN").map(PathBuf::from),
-        home().ok().map(|h| h.join(".local").join("bin").join("humd")),
+        Some(hum_paths::humd_bin()),
     ];
     for c in candidates.into_iter().flatten() {
         if c.exists() { return Ok(c); }
@@ -219,7 +219,7 @@ fn svc_helper() -> Option<PathBuf> {
         std::env::current_exe().ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .map(|p| p.join("../../scripts/svc.sh")),
-        home().ok().map(|h| h.join(".local/share/hum/src/scripts/svc.sh")),
+        Some(hum_paths::src_dir().join("scripts/svc.sh")),
         Some(PathBuf::from("./scripts/svc.sh")),
     ];
     candidates.into_iter().flatten().find(|p| p.exists())
@@ -233,12 +233,7 @@ fn summary() -> Result<()> {
 }
 
 fn status() -> Result<()> {
-    let cfg = xdg("XDG_CONFIG_HOME", ".config")?.join("hum");
-    let state = xdg("XDG_STATE_HOME", ".local/state")?.join("hum");
-    let runtime = xdg_runtime_hum();
-    let thrum_sock = std::env::var_os("HUM_THRUM_SOCK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| runtime.join("thrum.sock"));
+    let thrum_sock = hum_paths::thrum_sock_resolved();
 
     let bin = humd_bin().ok();
     let bin_display = bin.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(missing)".into());
@@ -252,12 +247,12 @@ fn status() -> Result<()> {
             .unwrap_or_else(|| "?".into());
         println!("  version:    {v}");
     }
-    println!("identity:     {} {}", state.join("humd.key").display(),
-             yn(state.join("humd.key").exists()));
-    println!("peers.json:   {} {}", cfg.join("peers.json").display(),
-             yn(cfg.join("peers.json").exists()));
-    println!("hum.json:     {} {}", cfg.join("hum.json").display(),
-             yn(cfg.join("hum.json").exists()));
+    let humd_key = hum_paths::humd_key();
+    let peers_json = hum_paths::peers_json();
+    let hum_json = hum_paths::hum_json();
+    println!("identity:     {} {}", humd_key.display(), yn(humd_key.exists()));
+    println!("peers.json:   {} {}", peers_json.display(), yn(peers_json.exists()));
+    println!("hum.json:     {} {}", hum_json.display(), yn(hum_json.exists()));
     println!("thrum socket: {} {}", thrum_sock.display(),
              yn(std::fs::metadata(&thrum_sock).is_ok()));
 
@@ -274,17 +269,17 @@ fn status() -> Result<()> {
 fn yn(b: bool) -> &'static str { if b { "✓" } else { "missing" } }
 
 fn logs(lines: u32) -> Result<()> {
-    let svc = svc_helper().context("scripts/svc.sh not found — install hum first")?;
-    let script = format!(r#"
-        . {svc}
-        case "$SVC_OS" in
-          Linux)  journalctl --user -u hum --no-pager -n {lines} ;;
-          Darwin) tail -n {lines} "$HOME/Library/Logs/sh.hum.hum.out.log" \
-                                  "$HOME/Library/Logs/sh.hum.hum.err.log" 2>/dev/null ;;
-          *) echo "logs unavailable on $SVC_OS" >&2; exit 1 ;;
-        esac
-    "#, svc = svc.display());
-    Command::new("bash").arg("-c").arg(script).status()?;
+    match hum_paths::daemon_logs("humd") {
+        hum_paths::DaemonLogs::Journald { unit } => {
+            Command::new("journalctl")
+                .args(["--user", "-u", &unit, "--no-pager", "-n", &lines.to_string()])
+                .status()?;
+        }
+        hum_paths::DaemonLogs::Files { stdout, stderr } => {
+            Command::new("tail").args(["-n", &lines.to_string()])
+                .arg(stdout).arg(stderr).status()?;
+        }
+    }
     Ok(())
 }
 
@@ -306,18 +301,19 @@ fn doctor() -> Result<()> {
     println!("  os:         {} {}", std::env::consts::OS, std::env::consts::ARCH);
 
     // 2. Config + state files.
-    let cfg = xdg("XDG_CONFIG_HOME", ".config")?.join("hum");
-    let state = xdg("XDG_STATE_HOME", ".local/state")?.join("hum");
+    let hum_json = hum_paths::hum_json();
+    let peers_json = hum_paths::peers_json();
+    let humd_key = hum_paths::humd_key();
     println!("\n[config + state]");
-    println!("  hum.json:   {} {}", cfg.join("hum.json").display(), yn(cfg.join("hum.json").exists()));
-    println!("  peers.json: {} {}", cfg.join("peers.json").display(), yn(cfg.join("peers.json").exists()));
-    println!("  identity:   {} {}", state.join("humd.key").display(), yn(state.join("humd.key").exists()));
+    println!("  hum.json:   {} {}", hum_json.display(), yn(hum_json.exists()));
+    println!("  peers.json: {} {}", peers_json.display(), yn(peers_json.exists()));
+    println!("  identity:   {} {}", humd_key.display(), yn(humd_key.exists()));
 
     // 3. hum.json lint — catches the config drift that silently breaks
     //    routing (the keys humd ignores, stale section names, a default
     //    pointing nowhere). These parse fine but do nothing.
     println!("\n[hum.json schema validation]");
-    match std::fs::read_to_string(cfg.join("hum.json")) {
+    match std::fs::read_to_string(&hum_json) {
         Err(_) => println!("  (no hum.json — humd runs on defaults)"),
         Ok(raw) => match config::validate(&raw) {
             Ok(()) => println!("  ✓ valid against hum.schema.json"),
@@ -331,8 +327,8 @@ fn doctor() -> Result<()> {
     // 4. Bee identities — the persisted keys that back hid dedup. A
     //    missing or wrong-size key means a bee can't keep a stable hid
     //    across reconnects (ghost-manifest accumulation).
-    println!("\n[bee identities]  ({}/bees)", state.display());
-    let bees_dir = state.join("bees");
+    let bees_dir = hum_paths::bees_dir();
+    println!("\n[bee identities]  ({})", bees_dir.display());
     match std::fs::read_dir(&bees_dir) {
         Err(_) => println!("  (none yet — minted on first bee boot)"),
         Ok(entries) => {
@@ -353,15 +349,27 @@ fn doctor() -> Result<()> {
     // 5. Env sanity — the macOS traps live here.
     println!("\n[env sanity]");
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
-    if runtime.is_empty() {
-        println!("  XDG_RUNTIME_DIR: (unset) — humd falls back to /tmp/hum-<uid>");
-    } else {
-        let exists = std::path::Path::new(&runtime).is_dir();
-        println!("  XDG_RUNTIME_DIR: {runtime} {}", if exists { "✓" } else { "✗ DOES NOT EXIST (penny/socket writes will fail — common macOS trap when set to a Linux /run/user path)" });
+    let runtime_exists = std::path::Path::new(&runtime).is_dir();
+    println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (penny writes will fail — common macOS trap when set to a Linux /run/user path)" });
+
+    match hum_paths::RuntimeInfo::read() {
+        Some(rt) => {
+            let age_s = (now_ms() as i64 - rt.bound_at_ms as i64).max(0) / 1000;
+            println!("  runtime.json: ✓ pid={} version={} bound {}s ago", rt.pid, rt.version, age_s);
+        }
+        None => println!("  runtime.json: ✗ MISSING (humd has not published a rendezvous; either not running, or pre-0.31.19)"),
     }
-    let sock = std::env::var_os("HUM_THRUM_SOCK").map(PathBuf::from)
-        .unwrap_or_else(|| xdg_runtime_hum().join("thrum.sock"));
-    println!("  thrum sock: {} {}", sock.display(), if std::fs::metadata(&sock).is_ok() { "✓ present" } else { "✗ MISSING (humd not running?)" });
+
+    let sock = hum_paths::thrum_sock_resolved();
+    match probe_thrum(&sock) {
+        Ok(()) => println!("  thrum sock: {} ✓ live", sock.display()),
+        Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
+    }
+
+    match Command::new("orchd").arg("--version").output() {
+        Ok(o) if o.status.success() => println!("  orchd:      ✓ {}", String::from_utf8_lossy(&o.stdout).trim()),
+        _ => println!("  orchd:      ✗ NOT FOUND in PATH (run ./install to build it)"),
+    }
 
     // 4. The claude binary (worker's compute).
     println!("\n[claude binary]");
@@ -392,16 +400,16 @@ fn doctor() -> Result<()> {
     Ok(())
 }
 
-/// Tail a service's recent logs, platform-aware, surfacing warn/error
-/// lines (and the key hum diagnostic markers) so the dump stays short.
 fn print_recent_logs(unit: &str, lines: u32) {
-    let script = format!(r#"
-        case "$(uname -s)" in
-          Linux)  journalctl --user -u {unit} --no-pager -n {lines} 2>/dev/null ;;
-          Darwin) tail -n {lines} "$HOME/Library/Logs/sh.hum.{unit}.out.log" \
-                                  "$HOME/Library/Logs/sh.hum.{unit}.err.log" 2>/dev/null ;;
-        esac | grep -iE 'WARN|ERROR|result.error|bee\.hid|spawn|panic|fail' | tail -15
-    "#);
+    let raw_cmd = match hum_paths::daemon_logs(unit) {
+        hum_paths::DaemonLogs::Journald { unit: u } =>
+            format!("journalctl --user -u {u} --no-pager -n {lines} 2>/dev/null"),
+        hum_paths::DaemonLogs::Files { stdout, stderr } =>
+            format!("tail -n {lines} {} {} 2>/dev/null", stdout.display(), stderr.display()),
+    };
+    let script = format!(
+        "{raw_cmd} | grep -iE 'WARN|ERROR|result.error|bee\\.hid|spawn|panic|fail' | tail -15"
+    );
     println!("  ── {unit} ──");
     let out = Command::new("bash").arg("-c").arg(&script).output();
     match out {
@@ -439,6 +447,17 @@ fn svc_active(svc: &std::path::Path, unit: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Last exit code reported by the service manager. None if unknown.
+/// Non-zero with `!svc_active` means crash-loop.
+fn svc_last_exit(svc: &std::path::Path, unit: &str) -> Option<i32> {
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(format!(". {} && svc_last_exit {}", svc.display(), unit))
+        .output().ok()?;
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    raw.parse().ok()
 }
 
 /// Resolve a user-given name to installed service unit(s), tolerantly:
@@ -481,7 +500,7 @@ fn hive_list() -> Result<()> {
             }
         }
     }
-    let hum_json = xdg("XDG_CONFIG_HOME", ".config")?.join("hum").join("hum.json");
+    let hum_json = hum_paths::hum_json();
     let mut default_kind = String::new();
     if let Ok(raw) = std::fs::read_to_string(&hum_json) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -534,50 +553,171 @@ fn hive_list() -> Result<()> {
 ///                       our own repo maps to the local checkout; a
 ///                       foreign repo is shallow-cloned to a cache.
 fn hive_install(reference: &str) -> Result<()> {
-    let install = resolve_hive_install(reference)?;
-    if !install.exists() {
-        anyhow::bail!("no install script at {}", install.display());
+    let dir = resolve_hive_dir(reference)?;
+    let orchfile = dir.join("Orchfile");
+    if !orchfile.exists() {
+        anyhow::bail!("no Orchfile at {}", orchfile.display());
     }
-    println!("installing hive from {} ...", install.display());
-    let ok = Command::new(&install).status().map(|s| s.success()).unwrap_or(false);
-    if ok { println!("✓ installed; see `hum bee --list`"); Ok(()) }
-    else { anyhow::bail!("installer failed: {}", install.display()) }
+    let kind = read_orchfile_service(&orchfile)?
+        .ok_or_else(|| anyhow::anyhow!("no SERVICE directive in {}", orchfile.display()))?;
+
+    build_hive(&dir, &kind)?;
+
+    let orch_d = hum_paths::config_dir().join("orch.d");
+    std::fs::create_dir_all(&orch_d)?;
+    let dest = orch_d.join(format!("{kind}.orch"));
+    std::fs::copy(&orchfile, &dest)?;
+    println!("registered {kind} ({})", dest.display());
+
+    rewrite_hum_orchfile(&orch_d)?;
+
+    let s = orchd_cmd().arg("up").arg(&kind).status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !s.success() { anyhow::bail!("orchd up {kind} failed"); }
+    println!("✓ {kind} entered; see `hum bee --list`");
+    Ok(())
 }
 
-fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
-    // github tree URL — the form bees advertise in `source`.
+fn build_hive(dir: &Path, kind: &str) -> Result<()> {
+    let custom = dir.join("build");
+    if custom.is_file() {
+        println!("building {kind} (./build in {}) ...", dir.display());
+        let s = Command::new("bash").arg(&custom).current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("custom build script failed: {}", custom.display()); }
+        return Ok(());
+    }
+    if dir.join("Cargo.toml").exists() { return build_cargo(dir, kind); }
+    if dir.join("package.json").exists() { return build_node(dir, kind); }
+    if dir.join("go.mod").exists() { return build_go(dir, kind); }
+    anyhow::bail!("no Cargo.toml / package.json / go.mod / build in {}", dir.display());
+}
+
+fn build_cargo(dir: &Path, kind: &str) -> Result<()> {
+    println!("building {kind} (cargo install --path {}) ...", dir.display());
+    let s = Command::new("cargo")
+        .args(["install", "--quiet", "--locked", "--path"]).arg(dir)
+        .args(["--root"]).arg(home_local())
+        .arg("--force")
+        .status()?;
+    if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
+    Ok(())
+}
+
+fn build_node(dir: &Path, kind: &str) -> Result<()> {
+    let dist = dir.join("dist").join("index.js");
+    let pkg_mgr = ["pnpm", "npm"].iter().find(|m| which(m)).copied();
+    if let Some(mgr) = pkg_mgr {
+        println!("building {kind} ({mgr} install + build) in {}", dir.display());
+        let s = Command::new(mgr).arg("install").current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("{mgr} install failed"); }
+        let s = Command::new(mgr).args(["run", "build"]).current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("{mgr} run build failed"); }
+    } else if dist.exists() {
+        println!("using pre-built {} (no pnpm/npm in PATH)", dist.display());
+    } else {
+        anyhow::bail!("no pnpm/npm in PATH and no prebuilt {}", dist.display());
+    }
+    if !dist.exists() {
+        anyhow::bail!("build did not produce {}", dist.display());
+    }
+    let node = which_first(&["node", "/usr/local/bin/node"])
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/fnm/aliases/default/bin/node")).filter(|p| p.exists()))
+        .ok_or_else(|| anyhow::anyhow!("node not in PATH; install Node 22+"))?;
+    let bin = home_local().join("bin").join(kind);
+    std::fs::create_dir_all(bin.parent().unwrap())?;
+    let wrapper = format!(
+        "#!/usr/bin/env bash\nexec {} {} \"$@\"\n",
+        node.display(), dist.display(),
+    );
+    std::fs::write(&bin, wrapper)?;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(&bin)?.permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&bin, perm)?;
+    println!("wrote node wrapper at {}", bin.display());
+    Ok(())
+}
+
+fn build_go(dir: &Path, kind: &str) -> Result<()> {
+    if !which("go") { anyhow::bail!("go not in PATH; install Go"); }
+    let bin = home_local().join("bin").join(kind);
+    std::fs::create_dir_all(bin.parent().unwrap())?;
+    println!("building {kind} (go build) in {}", dir.display());
+    let s = Command::new("go").args(["build", "-o"]).arg(&bin).arg(".").current_dir(dir).status()?;
+    if !s.success() { anyhow::bail!("go build failed"); }
+    Ok(())
+}
+
+fn which(name: &str) -> bool {
+    Command::new("sh").args(["-c", &format!("command -v {name} >/dev/null 2>&1")])
+        .status().map(|s| s.success()).unwrap_or(false)
+}
+
+fn which_first(candidates: &[&str]) -> Option<PathBuf> {
+    for c in candidates {
+        if c.starts_with('/') {
+            let p = PathBuf::from(c);
+            if p.exists() { return Some(p); }
+        } else if which(c) {
+            return Some(PathBuf::from(c));
+        }
+    }
+    None
+}
+
+fn read_orchfile_service(path: &Path) -> Result<Option<String>> {
+    let raw = std::fs::read_to_string(path)?;
+    Ok(raw.lines()
+        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
+        .next())
+}
+
+fn rewrite_hum_orchfile(orch_d: &Path) -> Result<()> {
+    let mut combined = String::new();
+    let mut entries: Vec<_> = std::fs::read_dir(orch_d)?.flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("orch"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let body = std::fs::read_to_string(e.path())?;
+        combined.push_str(&body);
+        if !combined.ends_with('\n') { combined.push('\n'); }
+        combined.push('\n');
+    }
+    std::fs::write(hum_orchfile(), combined)?;
+    Ok(())
+}
+
+fn home_local() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+}
+
+fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
     if let Some(rest) = reference.strip_prefix("https://github.com/") {
-        // <org>/<repo>/tree/<branch>/<subpath...>
         let parts: Vec<&str> = rest.splitn(5, '/').collect();
         if parts.len() == 5 && parts[2] == "tree" {
             let (org, repo, branch, sub) = (parts[0], parts[1], parts[3], parts[4]);
-            // Our own repo → use the local checkout, no network.
             if org == "adiled" && repo == "hum" {
-                return Ok(repo_root_or_install_dir().join(sub).join("install"));
+                return Ok(repo_root_or_install_dir().join(sub));
             }
-            // Foreign repo → shallow clone into a cache, then the subpath.
-            let cache = xdg("XDG_CACHE_HOME", ".cache")?
-                .join("hum").join("hives").join(format!("{org}-{repo}-{branch}"));
+            let cache = hum_paths::cache_dir().join("hives").join(format!("{org}-{repo}-{branch}"));
             if !cache.exists() {
                 std::fs::create_dir_all(cache.parent().unwrap()).ok();
                 let url = format!("https://github.com/{org}/{repo}");
                 println!("cloning {url} @ {branch} ...");
                 let ok = Command::new("git")
                     .args(["clone", "--depth", "1", "--branch", branch, &url])
-                    .arg(&cache)
-                    .status().map(|s| s.success()).unwrap_or(false);
+                    .arg(&cache).status().map(|s| s.success()).unwrap_or(false);
                 if !ok { anyhow::bail!("git clone failed: {url}"); }
             }
-            return Ok(cache.join(sub).join("install"));
+            return Ok(cache.join(sub));
         }
         anyhow::bail!("unrecognized github source URL (want .../tree/<branch>/<path>): {reference}");
     }
-    // Local path — dir holding an `install`, or a direct install file.
     let p = PathBuf::from(reference);
-    if p.is_dir() { return Ok(p.join("install")); }
-    if p.is_file() { return Ok(p); }
-    // Bundled name — <repo>/hives/<name>/install.
-    let bundled = repo_root_or_install_dir().join("hives").join(reference).join("install");
+    if p.is_dir() { return Ok(p); }
+    let bundled = repo_root_or_install_dir().join("hives").join(reference);
     if bundled.exists() { return Ok(bundled); }
     anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
 }
@@ -586,7 +726,7 @@ fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
 /// (hid, role, models, tools, provides, wire, version, source) joined
 /// with each bee's service unit + running state.
 fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
-    let snap_path = xdg("XDG_STATE_HOME", ".local/state")?.join("hum").join("bees.json");
+    let snap_path = hum_paths::bees_snapshot();
     let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.as_object().map(|o| o.values().cloned().collect()))
@@ -617,9 +757,12 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
         let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
         let state = match &unit {
-            Some(u) if svc_active(svc, u) => "in nest (service running)",
-            Some(_) => "in nest (service stopped?)",
-            None => "in nest (unmanaged)",
+            Some(u) if svc_active(svc, u) => "in nest (service running)".to_string(),
+            Some(u) => match svc_last_exit(svc, u) {
+                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
+                _ => "in nest (service stopped?)".to_string(),
+            },
+            None => "in nest (unmanaged)".to_string(),
         };
 
         println!("● {hive}  —  {state}");
@@ -638,10 +781,16 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
         println!();
     }
 
-    // Installed services with no live manifest — bee is exited / not connected.
     for u in installed {
         if matched_units.contains(u) { continue; }
-        let state = if svc_active(svc, u) { "service running, not handshaked" } else { "exited" };
+        let state = if svc_active(svc, u) {
+            "service running, not handshaked".to_string()
+        } else {
+            match svc_last_exit(svc, u) {
+                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
+                _ => "exited".to_string(),
+            }
+        };
         println!("● {}  —  {state}", u.strip_prefix("hum-").unwrap_or(u));
         println!("    service:  {u}");
         println!();
@@ -669,6 +818,12 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
         (Some(t), None) => anyhow::bail!("hum bee {t} <verb> — enter | exit | reenter"),
         _ => anyhow::bail!("hum bee <id> <verb>, or hum bee --list"),
     };
+    // Prefer humnest for any kind it knows about; fall back to svc.sh for
+    // legacy units or unknown targets (svc_active/svc_last_exit helpers
+    // stay live so `hum bee --list` keeps working).
+    if target != "all" && orch_route_verb(&target, &verb)? {
+        return Ok(());
+    }
     let op = match verb.as_str() {
         "enter"   => "svc_start",
         "exit"    => "svc_stop",
@@ -693,7 +848,7 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
 }
 
 fn penny() -> Result<()> {
-    let path = xdg("XDG_STATE_HOME", ".local/state")?.join("hum").join("penny.json");
+    let path = hum_paths::penny();
     if !path.exists() {
         println!("no penny.json yet ({})", path.display());
         return Ok(());
@@ -747,11 +902,63 @@ fn repo_root_or_install_dir() -> PathBuf {
             p = parent.to_path_buf();
         }
     }
-    if let Ok(h) = home() {
-        let candidate = h.join(".local/share/hum/src");
+    {
+        let candidate = hum_paths::src_dir();
         if candidate.exists() { return candidate; }
     }
     PathBuf::from(".")
+}
+
+// ── orchd shell-outs (bee lifecycle) ─────────────────────────────────────
+
+fn hum_orchfile() -> PathBuf { hum_paths::config_dir().join("Orchfile") }
+
+fn orchd_cmd() -> Command {
+    let mut c = Command::new("orchd");
+    c.arg("--orchfile").arg(hum_orchfile())
+     .arg("--user")
+     .arg("--namespace").arg("hum");
+    c
+}
+
+/// Service names declared in hum's Orchfile.
+fn orch_catalog() -> Vec<String> {
+    let path = hum_orchfile();
+    let Ok(raw) = std::fs::read_to_string(&path) else { return Vec::new(); };
+    raw.lines()
+        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
+        .collect()
+}
+
+fn nest() -> Result<()> {
+    let status = orchd_cmd().arg("status").status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("orchd status failed");
+    }
+    Ok(())
+}
+
+/// Route enter/exit/reenter through orchd. Returns Ok(true) if orchd
+/// handled the verb, Ok(false) if the kind is not in orchd's catalog.
+fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
+    if !orch_catalog().iter().any(|k| k == kind) {
+        return Ok(false);
+    }
+    let verb_arg = match verb {
+        "enter"   => "up",
+        "exit"    => "down",
+        "reenter" => "restart",
+        other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
+    };
+    let past = match verb { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
+    let status = orchd_cmd().arg(verb_arg).arg(kind).status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("orchd {verb_arg} {kind} failed");
+    }
+    println!("  ✓ {past} {kind} (orchd)");
+    Ok(true)
 }
 
 fn uninstall() -> Result<()> {

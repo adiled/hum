@@ -52,22 +52,8 @@ struct RawPeer {
     alias: Option<String>,
 }
 
-/// Resolve `${XDG_CONFIG_HOME or $HOME/.config}/hum/peers.json`.
 pub fn peers_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("peers.json");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".config")
-                .join("hum")
-                .join("peers.json");
-        }
-    }
-    PathBuf::from(".config/hum/peers.json")
+    hum_paths::peers_json()
 }
 
 /// Best-effort load of the peers file.

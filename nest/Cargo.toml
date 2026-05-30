@@ -7,6 +7,11 @@ description = "LLM subprocess pool. Defines WorkerBee + ForagerBee traits, Cell 
 
 [dependencies]
 tokio = { workspace = true }
+tokio-util = "0.7"
+command-group = { version = "5", features = ["with-tokio"] }
+lru = "0.12"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+metrics = "0.23"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -17,4 +22,7 @@ parking_lot = { workspace = true }
 portable-pty = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
 libc = "0.2"

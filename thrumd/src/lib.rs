@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde_json::{json, Value};
 use thrum_core::THRUM_VERSION;
+use governor::{Quota, RateLimiter};
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
@@ -47,24 +48,9 @@ pub trait ToneSink: Send + Sync + 'static {
     async fn forget(&self, _client_id: &str) {}
 }
 
-/// Default socket path — `$XDG_RUNTIME_DIR/hum/thrum.sock`, or
-/// `/tmp/hum/thrum.sock` if XDG_RUNTIME_DIR isn't set.
-///
-/// Canonical per `WIRE.md`. Env override: `HUM_THRUM_SOCK`. Legacy
-/// `HUM_SOCKET` is also accepted so an in-flight upgrade doesn't break
-/// already-running clients pointing at the old name — drop the
-/// fallback after 0.4.
+/// Canonical thrum socket path. Delegates to `hum_paths::thrum_sock()`.
 pub fn default_socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
-        return PathBuf::from(p);
-    }
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum").join("thrum.sock")
+    hum_paths::thrum_sock()
 }
 
 /// The thrum's living state — registry plus optional handler. Cloning is
@@ -217,9 +203,15 @@ impl Default for Thrum {
     }
 }
 
-/// Bind the unix socket and run the accept loop forever. Removes any
-/// stale socket file at `path` before binding. Returns on listener error.
 pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
+    serve_with_hook(thrum, path, |_| {}).await
+}
+
+/// Like [`serve`], but `on_bound` fires after `bind()` succeeds and
+/// before the accept loop starts. humd uses this to publish its
+/// `runtime.json` rendezvous file.
+pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
+where F: FnOnce(&Path) + Send + 'static {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -231,8 +223,12 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
     let listener = UnixListener::bind(path)
         .with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
+    on_bound(path);
+
+    let limiter = RateLimiter::direct(Quota::per_second(std::num::NonZeroU32::new(100).unwrap()));
 
     loop {
+        limiter.until_ready().await;
         match listener.accept().await {
             Ok((sock, _)) => {
                 let thrum = thrum.clone();

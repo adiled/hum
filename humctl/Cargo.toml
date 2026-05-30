@@ -1,0 +1,15 @@
+[package]
+name = "humctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "humctl — humd operator. Start, stop, status, logs, health checks for the humd daemon."
+
+[[bin]]
+name = "humctl"
+path = "src/main.rs"
+
+[dependencies]
+service-manager = "0.7"
+anyhow = { workspace = true }
+hum-paths = { path = "../hum-paths" }

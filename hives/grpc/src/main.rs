@@ -31,12 +31,7 @@ const HIVE_NAME: &str = "grpc";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn humd_sock_path() -> String {
-    if let Ok(s) = std::env::var("HUM_THRUM_SOCK") {
-        return s;
-    }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::geteuid() }));
-    format!("{runtime}/hum/thrum.sock")
+    hum_paths::thrum_sock_resolved().to_string_lossy().into_owned()
 }
 
 /// One bidi stream's bridge: open a thrum connection, pump tones both ways.
@@ -161,6 +156,7 @@ impl Hum for HumBridge {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
