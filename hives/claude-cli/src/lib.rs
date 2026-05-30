@@ -130,6 +130,9 @@ impl WorkerBee for ClaudeCliWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        spec.resource_limits.apply_pre_exec(cmd.as_std_mut())
+            .with_context(|| "apply resource limits")?;
+
         let mut child = cmd.group_spawn().with_context(|| format!("spawn {cli}"))?;
         let pid = child.inner().id();
         let mut stdin = child.inner().stdin.take().context("missing stdin")?;

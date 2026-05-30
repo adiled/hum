@@ -460,31 +460,6 @@ fn study_image(path: &Path) -> ToolResult {
     }
 }
 
-// ── code file detection ─────────────────────────────────────────────────
-
-fn is_code_file(path: &Path) -> bool {
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(
-        ext.as_str(),
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs"
-        | "py" | "pyi"
-        | "go"
-        | "rs"
-        | "java"
-        | "c" | "cc" | "cpp" | "cxx" | "h" | "hpp" | "hxx"
-        | "rb"
-        | "php"
-        | "cs"
-        | "kt" | "kts"
-        | "swift"
-        | "scala"
-        | "lua"
-        | "sh" | "bash" | "zsh" | "fish"
-        | "vue" | "svelte"
-        | "sql"
-    )
-}
-
 // ── helpers ─────────────────────────────────────────────────────────────
 
 fn safe_line_count(p: &Path) -> usize {
@@ -529,12 +504,4 @@ mod tests {
         assert!(!r2.is_match("test_xx.py"));
     }
 
-    #[test]
-    fn is_code_file_known_exts() {
-        assert!(is_code_file(Path::new("/x/y.ts")));
-        assert!(is_code_file(Path::new("/x/y.rs")));
-        assert!(is_code_file(Path::new("/x/y.py")));
-        assert!(!is_code_file(Path::new("/x/y.md")));
-        assert!(!is_code_file(Path::new("/x/y.json")));
-    }
 }

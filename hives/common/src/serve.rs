@@ -193,7 +193,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .map(|a| a.iter().filter_map(parse_tool_def).collect())
                     .unwrap_or_default();
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
-                    bridge.set_catalogue(&sid, forager_tools, nestler_tools, &provided);
+                    bridge.set_catalogue(forager_tools, nestler_tools, &provided);
                 }
                 let worker = worker.clone();
                 let write_half = write_half.clone();
