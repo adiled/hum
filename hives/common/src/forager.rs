@@ -114,7 +114,7 @@ impl Default for ForagerAdvert {
 }
 
 fn default_socket_path() -> PathBuf {
-    hum_paths::thrum_sock()
+    hum_paths::thrum_sock_resolved()
 }
 
 /// Run the forager service loop. Blocks until shutdown; reconnects

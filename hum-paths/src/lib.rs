@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 /// Set unset XDG env vars to HOME-relative defaults.
 ///
 /// Must be called once at startup in humd, hum CLI, and every hive worker.
@@ -58,11 +60,22 @@ pub fn runtime_dir() -> PathBuf {
 
 // ── Named files ──────────────────────────────────────────────────────────────
 
-/// Thrum socket: `$XDG_STATE_HOME/hum/thrum.sock`.
-/// Respects `HUM_THRUM_SOCK` and the legacy `HUM_SOCKET` override.
+/// Default thrum socket path. The path humd would BIND if nothing
+/// overrides it. Use this from the daemon; clients should call
+/// [`thrum_sock_resolved`] instead so they honor whatever path humd
+/// actually published in `runtime.json`.
 pub fn thrum_sock() -> PathBuf {
     if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") { return PathBuf::from(p); }
     if let Some(p) = std::env::var_os("HUM_SOCKET")     { return PathBuf::from(p); }
+    state_dir().join("thrum.sock")
+}
+
+/// What clients (bees, CLI) should connect to. Honors humd's
+/// rendezvous file first, then env overrides, then the default.
+pub fn thrum_sock_resolved() -> PathBuf {
+    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") { return PathBuf::from(p); }
+    if let Some(p) = std::env::var_os("HUM_SOCKET")     { return PathBuf::from(p); }
+    if let Some(rt) = RuntimeInfo::read() { return rt.socket; }
     state_dir().join("thrum.sock")
 }
 
@@ -89,6 +102,74 @@ pub fn bees_snapshot() -> PathBuf { state_dir().join("bees.json") }
 /// Rendezvous file: running daemon publishes its socket path, pid, and version here.
 pub fn runtime_info() -> PathBuf { state_dir().join("runtime.json") }
 
+pub fn humnest_sock() -> PathBuf { state_dir().join("humnest.sock") }
+pub fn humnest_runtime() -> PathBuf { state_dir().join("humnest_runtime.json") }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeInfo {
+    pub socket: PathBuf,
+    pub pid: u32,
+    pub version: String,
+    pub thrum_version: String,
+    pub bound_at_ms: u64,
+    #[serde(default)]
+    pub ensemble_addrs: Vec<String>,
+}
+
+impl RuntimeInfo {
+    pub fn read() -> Option<Self> {
+        let raw = std::fs::read_to_string(runtime_info()).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    pub fn write(&self) -> std::io::Result<()> {
+        let path = runtime_info();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        let body = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, path)
+    }
+
+    pub fn remove() {
+        let _ = std::fs::remove_file(runtime_info());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumnestRuntimeInfo {
+    pub socket: PathBuf,
+    pub pid: u32,
+    pub version: String,
+    pub bound_at_ms: u64,
+}
+
+impl HumnestRuntimeInfo {
+    pub fn read() -> Option<Self> {
+        let raw = std::fs::read_to_string(humnest_runtime()).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    pub fn write(&self) -> std::io::Result<()> {
+        let path = humnest_runtime();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        let body = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, path)
+    }
+
+    pub fn remove() {
+        let _ = std::fs::remove_file(humnest_runtime());
+    }
+}
+
 /// `hum.json` (daemon policy).
 pub fn hum_json() -> PathBuf { config_dir().join("hum.json") }
 
@@ -98,7 +179,7 @@ pub fn peers_json() -> PathBuf { config_dir().join("peers.json") }
 /// Drift rings directory (`drift/YYYY-MM-DD.ndjson`).
 pub fn drift_dir() -> PathBuf { state_dir().join("drift") }
 
-/// Cloned hum source tree (recipes + svc.sh helpers).
+/// Cloned hum source tree (recipes + hive installers).
 pub fn src_dir() -> PathBuf { data_dir().join("src") }
 
 /// Installed humd binary location.

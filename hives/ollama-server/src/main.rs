@@ -95,7 +95,7 @@ impl Config {
             }),
         };
         Self {
-            sock_path: hum_paths::thrum_sock().to_string_lossy().into_owned(),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             listen: format!("{host}:{port}"),
             models,
             bind: None,

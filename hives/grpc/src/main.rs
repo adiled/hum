@@ -31,7 +31,7 @@ const HIVE_NAME: &str = "grpc";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn humd_sock_path() -> String {
-    hum_paths::thrum_sock().to_string_lossy().into_owned()
+    hum_paths::thrum_sock_resolved().to_string_lossy().into_owned()
 }
 
 /// One bidi stream's bridge: open a thrum connection, pump tones both ways.

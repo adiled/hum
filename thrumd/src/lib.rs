@@ -203,9 +203,15 @@ impl Default for Thrum {
     }
 }
 
-/// Bind the unix socket and run the accept loop forever. Removes any
-/// stale socket file at `path` before binding. Returns on listener error.
 pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
+    serve_with_hook(thrum, path, |_| {}).await
+}
+
+/// Like [`serve`], but `on_bound` fires after `bind()` succeeds and
+/// before the accept loop starts. humd uses this to publish its
+/// `runtime.json` rendezvous file.
+pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
+where F: FnOnce(&Path) + Send + 'static {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -217,6 +223,7 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
     let listener = UnixListener::bind(path)
         .with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
+    on_bound(path);
 
     let limiter = RateLimiter::direct(Quota::per_second(std::num::NonZeroU32::new(100).unwrap()));
 

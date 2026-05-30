@@ -43,7 +43,7 @@ use crate::identity::load_or_mint_bee_key;
 use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
 
 fn default_socket_path() -> PathBuf {
-    hum_paths::thrum_sock()
+    hum_paths::thrum_sock_resolved()
 }
 
 /// What the host advertises on hello. Drives both routing (humd maps

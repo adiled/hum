@@ -97,7 +97,7 @@ impl Config {
                 PayKind::Erc20 => 6,
             });
         Ok(Self {
-            sock_path: hum_paths::thrum_sock().to_string_lossy().into_owned(),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             pay_to: std::env::var("PAID_ORACLE_PAY_TO")
                 .context("PAID_ORACLE_PAY_TO (your EVM address) is required")?,
             rpc_url: std::env::var("PAID_ORACLE_RPC")

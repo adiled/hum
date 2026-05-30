@@ -68,7 +68,7 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1500),
-            sock_path: hum_paths::thrum_sock().to_string_lossy().into_owned(),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
         }
     }
 }

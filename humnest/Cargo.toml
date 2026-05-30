@@ -1,0 +1,33 @@
+[package]
+name = "humnest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bee supervisor daemon. Reads hum.json humnest.bees, spawns each as a supervised child (nest::lifecycle), restarts per policy. Sibling to humd."
+
+[[bin]]
+name = "humnest"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+hum-paths = { path = "../hum-paths" }
+config = { path = "../config" }
+nest = { path = "../nest" }
+thrum-core = { path = "../thrum-core" }
+thrumd = { path = "../thrumd" }
+tokio = { workspace = true }
+tokio-util = "0.7"
+command-group = { version = "5", features = ["with-tokio"] }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+metrics = "0.23"
+
+[dev-dependencies]
+tempfile = "3"

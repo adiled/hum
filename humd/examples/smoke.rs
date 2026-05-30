@@ -23,7 +23,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn socket_path() -> PathBuf {
-    hum_paths::thrum_sock()
+    hum_paths::thrum_sock_resolved()
 }
 
 #[tokio::main(flavor = "current_thread")]

@@ -107,7 +107,7 @@ In **local dev** you run `cargo run -p humd` and then launch your bee binary. Bo
 
 In the **ensemble**, a bee on one machine reaches a humd on another over the ensemble transport. The remote humd sees the same hello and routes normally. A `peers.json` with one bootstrap entry turns this on. Nothing installs on the remote humd's disk, and the `source` URL stays purely informational.
 
-As a **managed service** you keep a bee alive across reboots. Ship a `hives/<kind>/install` modeled on [`paid-oracle/install`](paid-oracle/install), which registers a service through [`scripts/svc.sh`](../scripts/svc.sh) as `hum-<kind>`. From there the CLI drives it.
+As a **managed service** you keep a bee alive across reboots. Ship a `hives/<kind>/install` modeled on [`paid-oracle/install`](paid-oracle/install), which appends the bee to `hum.json` `humnest.bees` and bounces humnest. humnest then supervises the child; from there the CLI drives it.
 
 ```
 hum hive --list                   # catalogue: installer, configured, running

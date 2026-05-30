@@ -21,7 +21,7 @@
 //!   hum version            print version
 //!   hum help               print this surface
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -77,6 +77,8 @@ enum Cmd {
         #[arg(long)]
         list: bool,
     },
+    /// List humnest-supervised bees with status (kind, pid, state, restart_count).
+    Nest,
     /// Show lifetime counters from penny.json
     Penny,
     /// List available recipes (recipes/*) or run one
@@ -106,6 +108,7 @@ fn main() -> Result<()> {
         Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
         Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
+        Some(Cmd::Nest) => nest(),
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Uninstall) => uninstall(),
@@ -174,6 +177,31 @@ fn latest_release_tag() -> Option<String> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn probe_thrum(sock: &Path) -> Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+    if !sock.exists() {
+        anyhow::bail!("socket file missing (humd not running)");
+    }
+    let mut s = UnixStream::connect(sock)
+        .map_err(|e| anyhow::anyhow!("connect refused ({e}) — stale socket, humd crashed"))?;
+    s.set_read_timeout(Some(Duration::from_secs(1)))?;
+    s.set_write_timeout(Some(Duration::from_secs(1)))?;
+    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"hum-doctor-probe\",\"bee\":[\"worker\"]}\n")?;
+    let mut buf = [0u8; 256];
+    match s.read(&mut buf) {
+        Ok(0) => anyhow::bail!("socket closed without breath"),
+        Ok(_) => Ok(()),
+        Err(e) => anyhow::bail!("no breath within 1s ({e})"),
+    }
+}
+
 fn humd_bin() -> Result<PathBuf> {
     let candidates = [
         std::env::var_os("HUM_BIN").map(PathBuf::from),
@@ -205,7 +233,7 @@ fn summary() -> Result<()> {
 }
 
 fn status() -> Result<()> {
-    let thrum_sock = hum_paths::thrum_sock();
+    let thrum_sock = hum_paths::thrum_sock_resolved();
 
     let bin = humd_bin().ok();
     let bin_display = bin.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(missing)".into());
@@ -323,8 +351,25 @@ fn doctor() -> Result<()> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
     let runtime_exists = std::path::Path::new(&runtime).is_dir();
     println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (penny writes will fail — common macOS trap when set to a Linux /run/user path)" });
-    let sock = hum_paths::thrum_sock();
-    println!("  thrum sock: {} {}", sock.display(), if std::fs::metadata(&sock).is_ok() { "✓ present" } else { "✗ MISSING (humd not running?)" });
+
+    match hum_paths::RuntimeInfo::read() {
+        Some(rt) => {
+            let age_s = (now_ms() as i64 - rt.bound_at_ms as i64).max(0) / 1000;
+            println!("  runtime.json: ✓ pid={} version={} bound {}s ago", rt.pid, rt.version, age_s);
+        }
+        None => println!("  runtime.json: ✗ MISSING (humd has not published a rendezvous; either not running, or pre-0.31.19)"),
+    }
+
+    let sock = hum_paths::thrum_sock_resolved();
+    match probe_thrum(&sock) {
+        Ok(()) => println!("  thrum sock: {} ✓ live", sock.display()),
+        Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
+    }
+
+    match hum_paths::HumnestRuntimeInfo::read() {
+        Some(rt) => println!("  humnest:    ✓ pid={} version={} sock={}", rt.pid, rt.version, rt.socket.display()),
+        None => println!("  humnest:    ✗ MISSING (no humnest_runtime.json — humnest not running)"),
+    }
 
     // 4. The claude binary (worker's compute).
     println!("\n[claude binary]");
@@ -402,6 +447,17 @@ fn svc_active(svc: &std::path::Path, unit: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Last exit code reported by the service manager. None if unknown.
+/// Non-zero with `!svc_active` means crash-loop.
+fn svc_last_exit(svc: &std::path::Path, unit: &str) -> Option<i32> {
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(format!(". {} && svc_last_exit {}", svc.display(), unit))
+        .output().ok()?;
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    raw.parse().ok()
 }
 
 /// Resolve a user-given name to installed service unit(s), tolerantly:
@@ -580,9 +636,12 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
         let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
         let state = match &unit {
-            Some(u) if svc_active(svc, u) => "in nest (service running)",
-            Some(_) => "in nest (service stopped?)",
-            None => "in nest (unmanaged)",
+            Some(u) if svc_active(svc, u) => "in nest (service running)".to_string(),
+            Some(u) => match svc_last_exit(svc, u) {
+                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
+                _ => "in nest (service stopped?)".to_string(),
+            },
+            None => "in nest (unmanaged)".to_string(),
         };
 
         println!("● {hive}  —  {state}");
@@ -601,10 +660,16 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
         println!();
     }
 
-    // Installed services with no live manifest — bee is exited / not connected.
     for u in installed {
         if matched_units.contains(u) { continue; }
-        let state = if svc_active(svc, u) { "service running, not handshaked" } else { "exited" };
+        let state = if svc_active(svc, u) {
+            "service running, not handshaked".to_string()
+        } else {
+            match svc_last_exit(svc, u) {
+                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
+                _ => "exited".to_string(),
+            }
+        };
         println!("● {}  —  {state}", u.strip_prefix("hum-").unwrap_or(u));
         println!("    service:  {u}");
         println!();
@@ -632,6 +697,12 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
         (Some(t), None) => anyhow::bail!("hum bee {t} <verb> — enter | exit | reenter"),
         _ => anyhow::bail!("hum bee <id> <verb>, or hum bee --list"),
     };
+    // Prefer humnest for any kind it knows about; fall back to svc.sh for
+    // legacy units or unknown targets (svc_active/svc_last_exit helpers
+    // stay live so `hum bee --list` keeps working).
+    if target != "all" && humnest_route_verb(&target, &verb)? {
+        return Ok(());
+    }
     let op = match verb.as_str() {
         "enter"   => "svc_start",
         "exit"    => "svc_stop",
@@ -715,6 +786,93 @@ fn repo_root_or_install_dir() -> PathBuf {
         if candidate.exists() { return candidate; }
     }
     PathBuf::from(".")
+}
+
+// ── humnest RPC ──────────────────────────────────────────────────────────
+
+/// Single-shot NDJSON exchange with humnest over its unix socket.
+fn humnest_rpc(tone: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    use std::io::{Write, BufRead, BufReader};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+    let sock = hum_paths::humnest_sock();
+    let mut s = UnixStream::connect(&sock)
+        .map_err(|e| anyhow::anyhow!("connect humnest at {}: {e}", sock.display()))?;
+    s.set_read_timeout(Some(Duration::from_secs(2)))?;
+    s.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let line = format!("{}\n", tone);
+    s.write_all(line.as_bytes())?;
+    let mut reader = BufReader::new(s);
+    let mut buf = String::new();
+    reader.read_line(&mut buf)?;
+    let reply: serde_json::Value = serde_json::from_str(buf.trim())?;
+    Ok(reply)
+}
+
+/// Kinds humnest knows about (hum.json humnest.bees[].kind).
+fn humnest_catalog() -> Vec<String> {
+    let hum_json = hum_paths::hum_json();
+    let Ok(raw) = std::fs::read_to_string(&hum_json) else { return Vec::new(); };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return Vec::new(); };
+    v.get("humnest").and_then(|h| h.get("bees")).and_then(|b| b.as_array())
+        .map(|arr| arr.iter()
+            .filter_map(|b| b.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+            .collect())
+        .unwrap_or_default()
+}
+
+fn nest() -> Result<()> {
+    let reply = humnest_rpc(serde_json::json!({"chi":"humnest-list"}))?;
+    if reply.get("chi").and_then(|c| c.as_str()) == Some("humnest-err") {
+        let msg = reply.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
+        anyhow::bail!("humnest: {msg}");
+    }
+    let bees = reply.get("bees").and_then(|b| b.as_array()).cloned().unwrap_or_default();
+    if bees.is_empty() {
+        println!("no bees in humnest (configure hum.json humnest.bees).");
+        return Ok(());
+    }
+    println!("  {:<18} {:<8} {:<12} {:<8} {}", "KIND", "PID", "STATE", "RESTARTS", "LAST_EXIT");
+    for b in &bees {
+        let kind = b.get("kind").and_then(|x| x.as_str()).unwrap_or("?");
+        let pid = b.get("pid").and_then(|x| x.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "—".into());
+        let state = b.get("state").and_then(|x| x.as_str()).unwrap_or("?");
+        let restarts = b.get("restart_count").and_then(|x| x.as_u64()).unwrap_or(0);
+        let last = b.get("last_exit_code").and_then(|x| x.as_i64()).map(|n| n.to_string()).unwrap_or_else(|| "—".into());
+        println!("  {:<18} {:<8} {:<12} {:<8} {}", kind, pid, state, restarts, last);
+    }
+    Ok(())
+}
+
+/// Route enter/exit/reenter through humnest. Returns Ok(true) if humnest
+/// handled the verb, Ok(false) if the kind is not in humnest's catalog.
+fn humnest_route_verb(kind: &str, verb: &str) -> Result<bool> {
+    if !humnest_catalog().iter().any(|k| k == kind) {
+        return Ok(false);
+    }
+    let tones: Vec<serde_json::Value> = match verb {
+        "enter"   => vec![serde_json::json!({"chi":"humnest-spawn","kind":kind})],
+        "exit"    => vec![serde_json::json!({"chi":"humnest-kill","kind":kind})],
+        "reenter" => vec![
+            serde_json::json!({"chi":"humnest-kill","kind":kind}),
+            serde_json::json!({"chi":"humnest-spawn","kind":kind}),
+        ],
+        other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
+    };
+    let past = match verb { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
+    for tone in tones {
+        let reply = humnest_rpc(tone)?;
+        match reply.get("chi").and_then(|c| c.as_str()) {
+            Some("humnest-ok") => {}
+            Some("humnest-err") => {
+                let msg = reply.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
+                anyhow::bail!("humnest: {msg}");
+            }
+            other => anyhow::bail!("humnest: unexpected reply chi={:?}", other),
+        }
+    }
+    println!("  ✓ {past} {kind} (humnest)");
+    Ok(true)
 }
 
 fn uninstall() -> Result<()> {

@@ -133,6 +133,29 @@ impl Default for NestSection {
     }
 }
 
+// ── humnest ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HumnestSection {
+    #[serde(default)]
+    pub bees: Vec<BeeConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeeConfig {
+    pub kind: String,
+    #[serde(default)]
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default = "defaults::restart")]
+    pub restart: String,
+    #[serde(default = "defaults::max_retries", rename = "maxRetries")]
+    pub max_retries: u32,
+    #[serde(default = "defaults::backoff_ms", rename = "backoffMs")]
+    pub backoff_ms: u64,
+}
+
 // ── top-level ─────────────────────────────────────────────────────────────
 
 /// Daemon-scoped policy: `humd` knobs, `fs` grounding, and `nest`
@@ -146,6 +169,8 @@ pub struct HumConfig {
     pub fs: FsSection,
     #[serde(default)]
     pub nest: NestSection,
+    #[serde(default)]
+    pub humnest: HumnestSection,
 }
 
 // ── path resolution ───────────────────────────────────────────────────────
@@ -287,6 +312,9 @@ mod defaults {
     pub fn default_hive() -> String {
         "claude-repl".into()
     }
+    pub fn restart() -> String { "always".into() }
+    pub fn max_retries() -> u32 { 10 }
+    pub fn backoff_ms() -> u64 { 1_000 }
     pub fn denied() -> Vec<PathBuf> {
         [
             "~/.ssh",

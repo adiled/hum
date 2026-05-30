@@ -64,7 +64,7 @@ impl Config {
             node_eid: std::env::var("BP7_NODE_EID")
                 .unwrap_or_else(|_| "dtn://hum.local/inference".into()),
             model: std::env::var("BP7_MODEL").unwrap_or_else(|_| "claude-sonnet-4".into()),
-            sock_path: hum_paths::thrum_sock().to_string_lossy().into_owned(),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
         })
     }
 }

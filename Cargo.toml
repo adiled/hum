@@ -9,6 +9,8 @@ members = [
     "codegen",
     "drift",
     "humd",
+    "humnest",
+    "humctl",
     "hum",
     "mcp",
     "nest",

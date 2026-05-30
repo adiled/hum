@@ -17,7 +17,7 @@ use anyhow::Result;
 use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
 use parking_lot::RwLock;
 use serde_json::Value;
-use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
+use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
 
@@ -261,10 +261,29 @@ where
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
+        let humd_version = env!("CARGO_PKG_VERSION").to_string();
         tokio::spawn(async move {
-            if let Err(e) = thrum_serve(thrum, &path).await {
+            let res = thrum_serve_with_hook(thrum, &path, move |bound| {
+                let info = hum_paths::RuntimeInfo {
+                    socket: bound.to_path_buf(),
+                    pid: std::process::id(),
+                    version: humd_version,
+                    thrum_version: thrum_core::THRUM_VERSION.to_string(),
+                    bound_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0),
+                    ensemble_addrs: Vec::new(),
+                };
+                if let Err(e) = info.write() {
+                    warn!(err = %e, "humd.runtime_info.write_failed");
+                } else {
+                    info!(path = %hum_paths::runtime_info().display(), "humd.runtime_info.published");
+                }
+            }).await;
+            if let Err(e) = res {
                 warn!(err = %e, "thrum.exit");
             }
+            hum_paths::RuntimeInfo::remove();
         });
     } else {
         trace!("thrum.override.installed");
