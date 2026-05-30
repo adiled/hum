@@ -7,7 +7,7 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CellMetrics {
+pub struct Vitals {
     pub pid: Option<u32>,
     pub rss_bytes: Option<u64>,
     pub cpu_ms: Option<u64>,
@@ -16,10 +16,10 @@ pub struct CellMetrics {
     pub sampled_at_ms: i64,
 }
 
-pub fn sample(pid: u32, spawned_at_ms: i64) -> CellMetrics {
+pub fn sample(pid: u32, spawned_at_ms: i64) -> Vitals {
     let sampled_at_ms = now_ms();
     let age_ms = sampled_at_ms.saturating_sub(spawned_at_ms).max(0) as u64;
-    let mut m = CellMetrics {
+    let mut m = Vitals {
         pid: Some(pid),
         age_ms,
         sampled_at_ms,
@@ -47,7 +47,7 @@ pub fn spawn_sampler(
     pid: u32,
     spawned_at_ms: i64,
     interval: std::time::Duration,
-) -> (mpsc::UnboundedReceiver<CellMetrics>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::UnboundedReceiver<Vitals>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
         let mut tick = tokio::time::interval(interval);

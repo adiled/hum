@@ -13,12 +13,9 @@ pub mod lifecycle;
 pub mod metrics;
 pub mod limits;
 
-/// High-level spec the daemon hands to a worker bee. The bee is
-/// responsible for turning this into whatever command line / process
-/// invocation its underlying harness needs — CLI args, env vars, etc.
-/// The daemon stays harness-agnostic.
+/// An egg — what a worker bee needs to raise a cell.
 #[derive(Debug, Clone)]
-pub struct SpawnSpec {
+pub struct Egg {
     /// hum session id for this cell.
     pub sid: String,
     /// Model id to run on (e.g. "claude-sonnet-4-6", "claude-haiku-4-5").
@@ -58,10 +55,10 @@ pub struct SpawnSpec {
     /// OS-level caps the WorkerBee impl applies to the spawned child via
     /// `Command::pre_exec` (Linux) or no-op (other platforms).
     /// Default: empty — child inherits the parent's limits.
-    pub resource_limits: limits::ResourceLimits,
+    pub bounds: limits::Bounds,
 }
 
-impl SpawnSpec {
+impl Egg {
     pub fn new(sid: impl Into<String>, model_id: impl Into<String>, cwd: impl Into<String>) -> Self {
         Self {
             sid: sid.into(),
@@ -77,28 +74,24 @@ impl SpawnSpec {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             env: HashMap::new(),
-            resource_limits: limits::ResourceLimits::default(),
+            bounds: limits::Bounds::default(),
         }
     }
 }
 
-/// A Cell is one live subprocess seen from the daemon side. Pipe and
-/// PTY worker bees both produce this same shape.
+/// One brood cell — a living subprocess raised inside a bee.
 pub struct Cell {
-    pub pid: Option<u32>,
-    /// Send raw NDJSON lines (already serialized, no trailing newline) to the
-    /// child's stdin. Pipe-mode workers write them straight through;
-    /// PTY workers translate `{type:"user",...}` into typed text + Enter.
-    pub stdin: mpsc::Sender<String>,
-    /// Parsed stream events. Each Value is one JSON message off
-    /// stdout. The daemon binary turns these into thrum petals.
-    pub events: Arc<Mutex<mpsc::Receiver<Value>>>,
-    /// Resolves with the child's exit code once it terminates.
-    pub exited: tokio::sync::oneshot::Receiver<i32>,
-    /// True for PTY/REPL-style cells the pool evicts on each `result`.
+    pub mark: Option<u32>,
+    pub feed: mpsc::Sender<String>,
+    pub mmm: Arc<Mutex<mpsc::Receiver<Value>>>,
+    pub emerged: tokio::sync::oneshot::Receiver<i32>,
     pub ephemeral: bool,
-    /// `.cancel()` → SIGKILL + reap. Idempotent.
-    pub cancel: CancellationToken,
+    pub silence: CancellationToken,
+}
+
+impl Cell {
+    /// Still the cell — SIGKILL + reap, idempotent.
+    pub fn still(&self) { self.silence.cancel(); }
 }
 
 /// Statefulness propensity of a bee — the same axis hives carry
@@ -124,28 +117,21 @@ pub enum Propensity {
     EphemeralPerCall,
 }
 
-/// A WorkerBee produces compute — it spawns a cell (subprocess or
-/// in-process inference) when handed a `SpawnSpec`. This is the trait
-/// any compute-side bee implements to be commissioned by a hive.
+/// A WorkerBee raises cells from eggs — the compute-side trait every
+/// commissioned hive implements.
 #[async_trait]
 pub trait WorkerBee: Send + Sync {
     fn ephemeral(&self) -> bool;
-    /// What kind of state machine does this worker run? Default
-    /// implementation is conservative (`EphemeralPerCall`) so any new
-    /// worker that forgets to override gets correct full-history
-    /// behavior at the cost of perf, not the other way around.
     fn propensity(&self) -> Propensity {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
     }
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell>;
+    async fn raise(&self, egg: Egg) -> Result<Cell>;
 }
 
-/// A non-text addition to a prompt — image, audio, pdf, etc. Carried
-/// alongside the text content so workers can hand the model both at
-/// once. `data` is base64 for inline; `url` is the alternative (worker
-/// dereferences). Exactly one of `data` / `url` should be set.
+/// Pollen — what a forager bee carries back alongside the text:
+/// images, audio, pdf, video, files.
 #[derive(Debug, Clone)]
-pub struct Attachment {
+pub struct Pollen {
     /// Content category. "image" / "audio" / "pdf" / "video" / "file".
     /// Workers decide which kinds they can route to the model.
     pub kind: String,
@@ -159,9 +145,9 @@ pub struct Attachment {
 
 /// Encode a user prompt for stream-json stdin. Wraps the text in the
 /// content-block shape stream-json workers expect. Use
-/// `encode_prompt_with_attachments` for multimodal prompts.
+/// `encode_prompt_with_pollen` for multimodal prompts.
 pub fn encode_prompt(text: &str) -> String {
-    encode_prompt_with_attachments(text, &[])
+    encode_prompt_with_pollen(text, &[])
 }
 
 /// Encode a user prompt with non-text attachments alongside. Image
@@ -170,17 +156,17 @@ pub fn encode_prompt(text: &str) -> String {
 /// workers can opt-in as their model surface grows. Unknown kinds
 /// without a known encoding fall back to a text annotation so the
 /// model at least sees that an attachment was present.
-pub fn encode_prompt_with_attachments(text: &str, attachments: &[Attachment]) -> String {
+pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
     let mut content: Vec<Value> = vec![serde_json::json!({"type": "text", "text": text})];
-    for att in attachments {
-        match att.kind.as_str() {
+    for grain in pollen {
+        match grain.kind.as_str() {
             "image" => {
-                if let Some(data) = att.data.as_ref() {
+                if let Some(data) = grain.data.as_ref() {
                     content.push(serde_json::json!({
                         "type": "image",
-                        "source": { "type": "base64", "media_type": att.media_type, "data": data }
+                        "source": { "type": "base64", "media_type": grain.media_type, "data": data }
                     }));
-                } else if let Some(url) = att.url.as_ref() {
+                } else if let Some(url) = grain.url.as_ref() {
                     content.push(serde_json::json!({
                         "type": "image",
                         "source": { "type": "url", "url": url }
@@ -193,12 +179,12 @@ pub fn encode_prompt_with_attachments(text: &str, attachments: &[Attachment]) ->
                 // rather than silently dropping. Workers that learn
                 // to handle new kinds (audio, pdf) take over the
                 // proper translation later.
-                let where_clause = att.url.as_deref()
+                let where_clause = grain.url.as_deref()
                     .map(|u| format!(" ({u})"))
                     .unwrap_or_default();
                 content.push(serde_json::json!({
                     "type": "text",
-                    "text": format!("[attachment: kind={other} media_type={}{where_clause}]", att.media_type)
+                    "text": format!("[attachment: kind={other} media_type={}{where_clause}]", grain.media_type)
                 }));
             }
         }

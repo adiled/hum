@@ -1,7 +1,7 @@
 //! claude-cli — the pipe-mode WorkerBee for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
-//! Takes a [`nest::SpawnSpec`], builds the CLI invocation, runs the
+//! Takes a [`nest::Egg`], builds the CLI invocation, runs the
 //! subprocess, exposes stdin/stdout/exit through [`nest::Cell`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
 
@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Propensity, Cell, SpawnSpec, WorkerBee};
+use nest::{Propensity, Cell, Egg, WorkerBee};
 
 pub struct ClaudeCliWorker;
 
@@ -26,11 +26,11 @@ impl Default for ClaudeCliWorker {
     fn default() -> Self { Self }
 }
 
-/// Build the claude CLI argv from a [`SpawnSpec`].
+/// Build the claude CLI argv from a [`Egg`].
 ///
 /// Public so it can be unit-tested without spawning a real process. Pure
 /// function — no IO.
-pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
+pub fn build_argv(spec: &Egg) -> Vec<String> {
     let mut argv = vec![
         "-p".to_string(),
         "--verbose".to_string(),
@@ -79,7 +79,7 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
 
 /// Build the spawn env. claude is sensitive to a small set of toggles;
 /// callers can override anything via `spec.env`.
-pub fn build_env(spec: &SpawnSpec) -> Vec<(String, String)> {
+pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![
         ("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into()),
         ("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into()),
@@ -109,7 +109,7 @@ impl WorkerBee for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
+    async fn raise(&self, spec: Egg) -> Result<Cell> {
         let cli = spec.cli_path.clone()
             .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
             .unwrap_or_else(|| "claude".into());
@@ -130,7 +130,7 @@ impl WorkerBee for ClaudeCliWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        spec.resource_limits.apply_pre_exec(cmd.as_std_mut())
+        spec.bounds.apply_pre_exec(cmd.as_std_mut())
             .with_context(|| "apply resource limits")?;
 
         let mut child = cmd.group_spawn().with_context(|| format!("spawn {cli}"))?;
@@ -198,17 +198,17 @@ impl WorkerBee for ClaudeCliWorker {
             }
         });
 
-        let (rx_exit, cancel) = nest::lifecycle::supervise(child);
+        let (rx_exit, cancel) = nest::lifecycle::tend(child);
 
         trace!(target: "claude-cli", "spawned pid={:?}", pid);
 
         Ok(Cell {
-            pid,
-            stdin: tx_in,
-            events: std::sync::Arc::new(Mutex::new(rx_evt)),
-            exited: rx_exit,
+            mark: pid,
+            feed: tx_in,
+            mmm: std::sync::Arc::new(Mutex::new(rx_evt)),
+            emerged: rx_exit,
             ephemeral: false,
-            cancel,
+            silence: cancel,
         })
     }
 }
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn argv_includes_basics() {
-        let spec = SpawnSpec::new("sid-1", "claude-haiku-4-5", "/tmp");
+        let spec = Egg::new("sid-1", "claude-haiku-4-5", "/tmp");
         let argv = build_argv(&spec);
         assert!(argv.contains(&"-p".to_string()));
         assert!(argv.contains(&"--verbose".to_string()));
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn argv_omits_mcp_when_no_url() {
-        let spec = SpawnSpec::new("s", "m", "/");
+        let spec = Egg::new("s", "m", "/");
         let argv = build_argv(&spec);
         assert!(!argv.iter().any(|a| a == "--mcp-config"));
         assert!(!argv.iter().any(|a| a == "--strict-mcp-config"));
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn argv_includes_mcp_when_url_set() {
-        let mut spec = SpawnSpec::new("sid-9", "m", "/");
+        let mut spec = Egg::new("sid-9", "m", "/");
         spec.mcp_url = Some("http://127.0.0.1:29147".into());
         let argv = build_argv(&spec);
         let idx = argv.iter().position(|a| a == "--mcp-config").expect("mcp-config flag");
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn argv_includes_system_prompt() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new("s", "m", "/");
         spec.system_prompt = Some("Be terse.".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--system-prompt").unwrap();
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn argv_includes_resume() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new("s", "m", "/");
         spec.resume_id = Some("abc-123".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--resume").unwrap();
@@ -270,14 +270,14 @@ mod tests {
 
     #[test]
     fn env_disables_adaptive_thinking_when_not_planning() {
-        let spec = SpawnSpec::new("s", "m", "/");
+        let spec = Egg::new("s", "m", "/");
         let env = build_env(&spec);
         assert!(env.iter().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING" && v == "1"));
     }
 
     #[test]
     fn env_keeps_adaptive_thinking_in_plan_mode() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new("s", "m", "/");
         spec.plan_mode = true;
         let env = build_env(&spec);
         assert!(!env.iter().any(|(k, _)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"));
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn env_user_override_wins() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new("s", "m", "/");
         spec.env.insert("CLAUDE_CODE_DISABLE_FAST_MODE".into(), "0".into());
         let env = build_env(&spec);
         let positions: Vec<(usize, &str)> = env.iter().enumerate()

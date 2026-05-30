@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Cell, SpawnSpec, WorkerBee};
+use nest::{Cell, Egg, WorkerBee};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -42,7 +42,7 @@ impl Default for ClaudeReplWorker {
 
 /// Build the claude args for REPL/PTY mode. No `-p`, no `--input-format` —
 /// interactive Ink TUI mode. Pure function for unit testing.
-pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
+pub fn build_argv(spec: &Egg) -> Vec<String> {
     let mut argv = vec![
         "--verbose".to_string(),
         "--model".to_string(), spec.model_id.clone(),
@@ -76,7 +76,7 @@ impl WorkerBee for ClaudeReplWorker {
         true
     }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
+    async fn raise(&self, spec: Egg) -> Result<Cell> {
         let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -203,12 +203,12 @@ impl WorkerBee for ClaudeReplWorker {
         trace!(target: "nest", "pty.spawned pid={:?}", pid);
 
         Ok(Cell {
-            pid,
-            stdin: tx_in,
-            events: std::sync::Arc::new(Mutex::new(rx_evt)),
-            exited: rx_exit,
+            mark: pid,
+            feed: tx_in,
+            mmm: std::sync::Arc::new(Mutex::new(rx_evt)),
+            emerged: rx_exit,
             ephemeral: true,
-            cancel,
+            silence: cancel,
         })
     }
 }

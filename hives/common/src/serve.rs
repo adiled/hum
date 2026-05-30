@@ -36,7 +36,7 @@ use tracing::{debug, info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, SpawnSpec, WorkerBee};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
@@ -319,25 +319,25 @@ fn is_preflight_error(v: &Value) -> bool {
 /// (first event is an `is_error` result) or produces nothing.
 async fn attempt_spawn<W: WorkerBee + 'static>(
     worker: &Arc<W>,
-    spec: SpawnSpec,
+    spec: Egg,
     content: &str,
 ) -> Option<(Cell, Value)> {
-    let cell = worker.spawn(spec).await.ok()?;
-    if cell.stdin.send(encode_prompt(content)).await.is_err() {
-        cell.cancel.cancel();
+    let cell = worker.raise(spec).await.ok()?;
+    if cell.feed.send(encode_prompt(content)).await.is_err() {
+        cell.silence.cancel();
         return None;
     }
     let first = {
-        let mut ev = cell.events.lock().await;
+        let mut ev = cell.mmm.lock().await;
         match tokio::time::timeout(std::time::Duration::from_secs(180), ev.recv()).await {
             Ok(Some(v)) => Some(v),
             _ => None,
         }
     };
     match first {
-        Some(v) if is_preflight_error(&v) => { cell.cancel.cancel(); None }
+        Some(v) if is_preflight_error(&v) => { cell.silence.cancel(); None }
         Some(v) => Some((cell, v)),
-        None => { cell.cancel.cancel(); None }
+        None => { cell.silence.cancel(); None }
     }
 }
 
@@ -399,7 +399,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
-    let mut base = SpawnSpec::new(sid.clone(), model.clone(), cwd);
+    let mut base = Egg::new(sid.clone(), model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
@@ -431,9 +431,9 @@ async fn handle_prompt<W: WorkerBee + 'static>(
             }
         }
     };
-    let stdin = cell.stdin.clone();
-    let events = cell.events.clone();
-    let cancel = cell.cancel.clone();
+    let stdin = cell.feed.clone();
+    let events = cell.mmm.clone();
+    let cancel = cell.silence.clone();
     let finish_sent = Arc::new(AtomicBool::new(false));
     let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
@@ -502,7 +502,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let sid_for_cleanup = sid.clone();
     let finish_for_cleanup = finish_sent.clone();
     tokio::spawn(async move {
-        let exit_code = cell.exited.await.unwrap_or(1);
+        let exit_code = cell.emerged.await.unwrap_or(1);
         let _ = dispatch.await;
         idle_task.abort();
         if !finish_for_cleanup.load(Ordering::SeqCst) {

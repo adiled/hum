@@ -13,7 +13,7 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 const SIGKILL_EXIT: i32 = 137;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 
-pub fn supervise(mut child: AsyncGroupChild) -> (oneshot::Receiver<i32>, CancellationToken) {
+pub fn tend(mut child: AsyncGroupChild) -> (oneshot::Receiver<i32>, CancellationToken) {
     let cancel = CancellationToken::new();
     let cancel_for_task = cancel.clone();
     let (tx_exit, rx_exit) = oneshot::channel();
@@ -88,7 +88,7 @@ mod tests {
         let child = Command::new("sleep").arg("60")
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .group_spawn().expect("spawn sleep");
-        let (rx_exit, cancel) = supervise(child);
+        let (rx_exit, cancel) = tend(child);
         let start = Instant::now();
         cancel.cancel();
         let code = tokio::time::timeout(Duration::from_secs(REAP_TIMEOUT.as_secs() + 1), rx_exit)
@@ -102,7 +102,7 @@ mod tests {
         let child = Command::new("sh").arg("-c").arg("exit 42")
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .group_spawn().expect("spawn sh");
-        let (rx_exit, _cancel) = supervise(child);
+        let (rx_exit, _cancel) = tend(child);
         let code = tokio::time::timeout(Duration::from_secs(5), rx_exit)
             .await.expect("stuck").expect("dropped");
         assert_eq!(code, 42);
@@ -117,7 +117,7 @@ mod tests {
         let child = Command::new("sh").arg("-c").arg(&script)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .group_spawn().expect("spawn sh");
-        let (_rx, cancel) = supervise(child);
+        let (_rx, cancel) = tend(child);
         for _ in 0..30 {
             if marker.exists() { break; }
             tokio::time::sleep(Duration::from_millis(100)).await;
