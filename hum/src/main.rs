@@ -561,19 +561,7 @@ fn hive_install(reference: &str) -> Result<()> {
     let kind = read_orchfile_service(&orchfile)?
         .ok_or_else(|| anyhow::anyhow!("no SERVICE directive in {}", orchfile.display()))?;
 
-    if dir.join("Cargo.toml").exists() {
-        println!("building {kind} (cargo install --path {} ...)", dir.display());
-        let s = Command::new("cargo")
-            .args(["install", "--quiet", "--locked", "--path"]).arg(&dir)
-            .args(["--root"]).arg(home_local())
-            .arg("--force")
-            .status()?;
-        if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
-    } else if dir.join("package.json").exists() {
-        anyhow::bail!("TS hive install not yet automated; run `pnpm install && pnpm build` in {}", dir.display());
-    } else {
-        anyhow::bail!("no Cargo.toml or package.json in {} — don't know how to build", dir.display());
-    }
+    build_hive(&dir, &kind)?;
 
     let orch_d = hum_paths::config_dir().join("orch.d");
     std::fs::create_dir_all(&orch_d)?;
@@ -588,6 +576,93 @@ fn hive_install(reference: &str) -> Result<()> {
     if !s.success() { anyhow::bail!("orchd up {kind} failed"); }
     println!("✓ {kind} entered; see `hum bee --list`");
     Ok(())
+}
+
+fn build_hive(dir: &Path, kind: &str) -> Result<()> {
+    let custom = dir.join("build");
+    if custom.is_file() {
+        println!("building {kind} (./build in {}) ...", dir.display());
+        let s = Command::new("bash").arg(&custom).current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("custom build script failed: {}", custom.display()); }
+        return Ok(());
+    }
+    if dir.join("Cargo.toml").exists() { return build_cargo(dir, kind); }
+    if dir.join("package.json").exists() { return build_node(dir, kind); }
+    if dir.join("go.mod").exists() { return build_go(dir, kind); }
+    anyhow::bail!("no Cargo.toml / package.json / go.mod / build in {}", dir.display());
+}
+
+fn build_cargo(dir: &Path, kind: &str) -> Result<()> {
+    println!("building {kind} (cargo install --path {}) ...", dir.display());
+    let s = Command::new("cargo")
+        .args(["install", "--quiet", "--locked", "--path"]).arg(dir)
+        .args(["--root"]).arg(home_local())
+        .arg("--force")
+        .status()?;
+    if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
+    Ok(())
+}
+
+fn build_node(dir: &Path, kind: &str) -> Result<()> {
+    let dist = dir.join("dist").join("index.js");
+    let pkg_mgr = ["pnpm", "npm"].iter().find(|m| which(m)).copied();
+    if let Some(mgr) = pkg_mgr {
+        println!("building {kind} ({mgr} install + build) in {}", dir.display());
+        let s = Command::new(mgr).arg("install").current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("{mgr} install failed"); }
+        let s = Command::new(mgr).args(["run", "build"]).current_dir(dir).status()?;
+        if !s.success() { anyhow::bail!("{mgr} run build failed"); }
+    } else if dist.exists() {
+        println!("using pre-built {} (no pnpm/npm in PATH)", dist.display());
+    } else {
+        anyhow::bail!("no pnpm/npm in PATH and no prebuilt {}", dist.display());
+    }
+    if !dist.exists() {
+        anyhow::bail!("build did not produce {}", dist.display());
+    }
+    let node = which_first(&["node", "/usr/local/bin/node"])
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/fnm/aliases/default/bin/node")).filter(|p| p.exists()))
+        .ok_or_else(|| anyhow::anyhow!("node not in PATH; install Node 22+"))?;
+    let bin = home_local().join("bin").join(kind);
+    std::fs::create_dir_all(bin.parent().unwrap())?;
+    let wrapper = format!(
+        "#!/usr/bin/env bash\nexec {} {} \"$@\"\n",
+        node.display(), dist.display(),
+    );
+    std::fs::write(&bin, wrapper)?;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(&bin)?.permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&bin, perm)?;
+    println!("wrote node wrapper at {}", bin.display());
+    Ok(())
+}
+
+fn build_go(dir: &Path, kind: &str) -> Result<()> {
+    if !which("go") { anyhow::bail!("go not in PATH; install Go"); }
+    let bin = home_local().join("bin").join(kind);
+    std::fs::create_dir_all(bin.parent().unwrap())?;
+    println!("building {kind} (go build) in {}", dir.display());
+    let s = Command::new("go").args(["build", "-o"]).arg(&bin).arg(".").current_dir(dir).status()?;
+    if !s.success() { anyhow::bail!("go build failed"); }
+    Ok(())
+}
+
+fn which(name: &str) -> bool {
+    Command::new("sh").args(["-c", &format!("command -v {name} >/dev/null 2>&1")])
+        .status().map(|s| s.success()).unwrap_or(false)
+}
+
+fn which_first(candidates: &[&str]) -> Option<PathBuf> {
+    for c in candidates {
+        if c.starts_with('/') {
+            let p = PathBuf::from(c);
+            if p.exists() { return Some(p); }
+        } else if which(c) {
+            return Some(PathBuf::from(c));
+        }
+    }
+    None
 }
 
 fn read_orchfile_service(path: &Path) -> Result<Option<String>> {

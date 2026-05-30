@@ -1,0 +1,3 @@
+SERVICE vercel-ai
+RUN ${HOME}/.local/bin/vercel-ai
+RESTART always

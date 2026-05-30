@@ -1,0 +1,3 @@
+SERVICE anthropic-server
+RUN ${HOME}/.local/bin/anthropic-server
+RESTART always
