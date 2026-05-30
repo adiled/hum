@@ -7,14 +7,46 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::metrics;
+
 const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 const SIGKILL_EXIT: i32 = 137;
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn supervise(mut child: AsyncGroupChild) -> (oneshot::Receiver<i32>, CancellationToken) {
     let cancel = CancellationToken::new();
     let cancel_for_task = cancel.clone();
     let (tx_exit, rx_exit) = oneshot::channel();
     let pid = child.inner().id();
+
+    if let Some(pid) = pid {
+        let spawned_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64).unwrap_or(0);
+        let (mut rx, sampler) = metrics::spawn_sampler(pid, spawned_at_ms, SAMPLE_INTERVAL);
+        let cancel_for_sampler = cancel_for_task.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel_for_sampler.cancelled() => break,
+                    snap = rx.recv() => match snap {
+                        Some(s) => {
+                            if let Some(rss) = s.rss_bytes {
+                                ::metrics::gauge!("hum_cell_rss_bytes", "pid" => pid.to_string()).set(rss as f64);
+                            }
+                            if let Some(cpu) = s.cpu_ms {
+                                ::metrics::gauge!("hum_cell_cpu_ms", "pid" => pid.to_string()).set(cpu as f64);
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            }
+            sampler.abort();
+            ::metrics::gauge!("hum_cell_rss_bytes", "pid" => pid.to_string()).set(0.0);
+        });
+    }
 
     tokio::spawn(async move {
         let code = tokio::select! {
@@ -32,7 +64,7 @@ pub fn supervise(mut child: AsyncGroupChild) -> (oneshot::Receiver<i32>, Cancell
 }
 
 async fn kill_and_reap(child: &mut AsyncGroupChild, pid: Option<u32>) -> i32 {
-    metrics::counter!("hum_cell_kills_total").increment(1);
+    ::metrics::counter!("hum_cell_kills_total").increment(1);
     if let Err(e) = child.kill().await {
         warn!(target: "nest::lifecycle", pid = ?pid, err = %e, "cell.kill.signal_failed");
     }
@@ -81,26 +113,19 @@ mod tests {
         let marker = std::env::temp_dir().join(format!("hum-tree-kill-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let marker_path = marker.to_string_lossy().to_string();
-        let script = format!(
-            "sh -c 'sleep 60 & echo $! > {marker_path}; wait'"
-        );
+        let script = format!("sh -c 'sleep 60 & echo $! > {marker_path}; wait'");
         let child = Command::new("sh").arg("-c").arg(&script)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .group_spawn().expect("spawn sh");
         let (_rx, cancel) = supervise(child);
-
-        // wait for the grandchild pid to appear
         for _ in 0..30 {
             if marker.exists() { break; }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let grandchild_pid: u32 = std::fs::read_to_string(&marker)
             .expect("grandchild marker").trim().parse().expect("pid parse");
-
         cancel.cancel();
         tokio::time::sleep(Duration::from_millis(300)).await;
-
-        // Sending signal 0 returns ESRCH if the process is gone.
         let alive = unsafe { libc::kill(grandchild_pid as i32, 0) } == 0;
         let _ = std::fs::remove_file(&marker);
         assert!(!alive, "grandchild {grandchild_pid} survived tree-kill");

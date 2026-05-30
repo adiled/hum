@@ -141,7 +141,7 @@ where
         "humd.sockets"
     );
 
-    if let Some(addr) = metrics_listen_addr() {
+    if let Ok(addr) = cfg.hum_cfg.humd.metrics_addr.parse::<std::net::SocketAddr>() {
         match metrics_exporter_prometheus::PrometheusBuilder::new()
             .with_http_listener(addr)
             .install()
@@ -149,6 +149,8 @@ where
             Ok(()) => info!(%addr, "humd.metrics.listening"),
             Err(e) => warn!(%addr, err = %e, "humd.metrics.install_failed"),
         }
+    } else {
+        warn!(addr = %cfg.hum_cfg.humd.metrics_addr, "humd.metrics.addr_parse_failed");
     }
 
     let _hums = hums::Hums::load();
@@ -242,7 +244,6 @@ where
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
-        cli_path: cfg.cli_path.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
@@ -371,12 +372,6 @@ async fn autoupdate_check_once() -> Result<bool> {
     Ok(true)
 }
 
-fn metrics_listen_addr() -> Option<std::net::SocketAddr> {
-    std::env::var("HUM_METRICS_ADDR").ok()
-        .and_then(|s| s.parse().ok())
-        .or_else(|| "127.0.0.1:9909".parse().ok())
-}
-
 fn parse_tag_name(body: &str) -> Option<String> {
     let needle = "\"tag_name\":";
     let start = body.find(needle)? + needle.len();
@@ -391,7 +386,6 @@ fn parse_tag_name(body: &str) -> Option<String> {
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    cli_path: String,
     /// When present, tones with a `to:` hex addressed to a *different*
     /// humd are routed through here instead of being dispatched locally.
     ensemble: Option<Arc<Ensemble>>,

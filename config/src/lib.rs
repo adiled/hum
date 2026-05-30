@@ -18,6 +18,8 @@ pub struct HumdSection {
     pub permission_dusk_ms: u64,
     #[serde(default = "defaults::drift_retention_days", rename = "driftRetentionDays")]
     pub drift_retention_days: u32,
+    #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
+    pub metrics_addr: String,
 }
 
 impl Default for HumdSection {
@@ -25,6 +27,7 @@ impl Default for HumdSection {
         Self {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             drift_retention_days: defaults::drift_retention_days(),
+            metrics_addr: defaults::metrics_addr(),
         }
     }
 }
@@ -271,6 +274,9 @@ mod defaults {
     }
     pub fn drift_retention_days() -> u32 {
         30
+    }
+    pub fn metrics_addr() -> String {
+        "127.0.0.1:9909".into()
     }
     pub fn max_active_cells() -> u32 {
         4

@@ -1,13 +1,4 @@
-//! nest — bee crates: traits for WorkerBee (produce compute) and
-//! ForagerBee (translate outside wire ↔ thrum). A `Nest` keyed by
-//! `pool_key` (== sid) holds at most one `Cell` per key. Each cell
-//! wraps a child process spawned via a `WorkerBee` impl. The daemon
-//! binary registers `Listener`s on a cell to receive parsed stream
-//! events.
-//!
-//! These traits are the Rust SDK for building bees that handshake with
-//! humd over thrum. Authors who don't want Rust can implement the same
-//! wire role directly via the thrum-clients libs.
+//! WorkerBee trait + Cell shape + lifecycle/limits/metrics submodules.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,20 +9,9 @@ use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-pub mod lifecycle; // own + supervise tokio::process::Child correctly
-pub mod mock;
-pub mod pool;
-
-// Resource-oriented primitives for the Cell as a system resource.
-// Filled in by parallel work; declared together so contributors don't race
-// on this file. See each module's docstring for scope.
-pub mod metrics;   // per-cell observability (RSS, CPU, fds)
-pub mod limits;    // per-cell OS-level caps (rlimit, cgroups)
-pub mod budget;    // per-cell soft caps (tokens, tool-call rates)
-pub mod health;    // pool-wide pressure tiers + eviction policy
-
-pub use mock::MockWorkerBee;
-pub use pool::Nest;
+pub mod lifecycle;
+pub mod metrics;
+pub mod limits;
 
 /// High-level spec the daemon hands to a worker bee. The bee is
 /// responsible for turning this into whatever command line / process
@@ -158,32 +138,6 @@ pub trait WorkerBee: Send + Sync {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
     }
     async fn spawn(&self, spec: SpawnSpec) -> Result<Cell>;
-}
-
-/// A ForagerBee translates an outside wire (OpenAI, Anthropic, custom
-/// HTTP, etc.) into thrum tones and back. It carries `chi:"prompt"` in
-/// and `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"` out, against
-/// some external surface.
-///
-/// Hybrid bees that are both worker and forager simply implement both
-/// traits — there is no constraint against it.
-#[async_trait]
-pub trait ForagerBee: Send + Sync {
-    /// Symbolic name for the external surface this forager translates
-    /// (e.g. "openai-v1", "anthropic-messages").
-    fn surface(&self) -> &str;
-}
-
-/// Listener receives parsed stream events for one session bound to a
-/// cell. The daemon binary is responsible for translating Petals into
-/// thrum chunks.
-#[async_trait]
-pub trait Listener: Send + Sync {
-    fn session_id(&self) -> &str;
-    async fn on_petal(&self, kind: &str, payload: Value);
-    async fn on_cell(&self, nest_id: &str, model: &str, tools: Vec<String>);
-    async fn on_wilt(&self, finish_reason: &str, usage: Option<Value>, provider_meta: Value);
-    async fn on_thorn(&self, wound: &str);
 }
 
 /// A non-text addition to a prompt — image, audio, pdf, etc. Carried

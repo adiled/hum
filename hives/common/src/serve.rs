@@ -20,7 +20,6 @@
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
 
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,7 +36,7 @@ use tracing::{debug, info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Listener, SpawnSpec, WorkerBee};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, SpawnSpec, WorkerBee};
 use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
@@ -397,7 +396,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
                 metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
             }
         }
-        metrics::gauge!("hum_cells_active").set(g.len() as f64);
+        metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
     let mut base = SpawnSpec::new(sid.clone(), model.clone(), cwd);
@@ -693,11 +692,63 @@ impl WireListener {
     }
 }
 
-#[async_trait::async_trait]
-impl Listener for WireListener {
-    fn session_id(&self) -> &str { &self.sid }
-    async fn on_petal(&self, _kind: &str, _payload: Value) {}
-    async fn on_cell(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
-    async fn on_wilt(&self, _finish_reason: &str, _usage: Option<Value>, _provider_meta: Value) {}
-    async fn on_thorn(&self, _wound: &str) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    fn bundle(cancel: CancellationToken) -> CellBundle {
+        let (tx_in, _rx_in) = mpsc::channel::<String>(1);
+        CellBundle {
+            stdin: tx_in,
+            cancel,
+            finish_sent: Arc::new(AtomicBool::new(false)),
+            tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            last_touched: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_cancels_token() {
+        let cancel = CancellationToken::new();
+        let watch = cancel.clone();
+        let b = bundle(cancel);
+        assert!(!watch.is_cancelled());
+        drop(b);
+        assert!(watch.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn lru_pop_drops_bundle_and_cancels() {
+        let mut cache: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let c1 = CancellationToken::new();
+        let watch1 = c1.clone();
+        let c2 = CancellationToken::new();
+        let watch2 = c2.clone();
+        cache.put("a".into(), bundle(c1));
+        cache.put("b".into(), bundle(c2));
+        assert!(!watch1.is_cancelled());
+        assert!(!watch2.is_cancelled());
+
+        let popped = cache.pop_lru().expect("non-empty");
+        assert_eq!(popped.0, "a");
+        drop(popped);
+        assert!(watch1.is_cancelled(), "evicted bundle should have cancelled on drop");
+        assert!(!watch2.is_cancelled(), "remaining bundle untouched");
+    }
+
+    #[tokio::test]
+    async fn map_clear_cancels_all() {
+        let mut cache: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let watchers: Vec<_> = (0..3).map(|i| {
+            let c = CancellationToken::new();
+            let w = c.clone();
+            cache.put(format!("s{i}"), bundle(c));
+            w
+        }).collect();
+        cache.clear();
+        for w in watchers {
+            assert!(w.is_cancelled());
+        }
+    }
 }

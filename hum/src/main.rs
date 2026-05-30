@@ -174,10 +174,6 @@ fn latest_release_tag() -> Option<String> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
-fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).context("HOME unset")
-}
-
 fn humd_bin() -> Result<PathBuf> {
     let candidates = [
         std::env::var_os("HUM_BIN").map(PathBuf::from),
