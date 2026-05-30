@@ -1991,28 +1991,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "humnest"
-version = "0.31.18"
-dependencies = [
- "anyhow",
- "command-group",
- "config",
- "hum-paths",
- "metrics",
- "nest",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "thrum-core",
- "thrumd",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "hums"
 version = "0.31.18"
 dependencies = [

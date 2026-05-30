@@ -1,0 +1,3 @@
+SERVICE claude-repl
+RUN ${HOME}/.local/bin/claude-repl-worker
+RESTART always

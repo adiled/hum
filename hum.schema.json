@@ -89,31 +89,6 @@
           "description": "Hive name humd routes to when a chi:prompt doesn't pin one. A hive configures its own runtime (binary, models) via its service env, not here."
         }
       }
-    },
-
-    "humnest": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Bee supervisor — humnest reads bees[] and spawns each.",
-      "properties": {
-        "bees": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["kind"],
-            "properties": {
-              "kind": { "type": "string", "description": "Hive kind, e.g. 'claude-cli'." },
-              "argv": { "type": "array", "items": { "type": "string" }, "default": [] },
-              "env":  { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
-              "restart": { "type": "string", "enum": ["always", "on-failure", "never"], "default": "always" },
-              "maxRetries": { "type": "integer", "minimum": 0, "default": 10 },
-              "backoffMs":  { "type": "integer", "minimum": 0, "default": 1000 }
-            }
-          }
-        }
-      }
     }
   }
 }

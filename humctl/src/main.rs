@@ -1,6 +1,6 @@
 //! humctl — humd operator. Bootstrap registers humd as a user service; humctl
-//! drives it after that. humnest is opaque here; observe it through `hum nest`
-//! and `hum bee info`.
+//! drives it after that. Bee supervision lives in orchd; use `hum bee` /
+//! `hum hive` to talk to it.
 
 use std::process::{Command, ExitCode};
 

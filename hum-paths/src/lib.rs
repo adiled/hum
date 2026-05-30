@@ -102,9 +102,6 @@ pub fn bees_snapshot() -> PathBuf { state_dir().join("bees.json") }
 /// Rendezvous file: running daemon publishes its socket path, pid, and version here.
 pub fn runtime_info() -> PathBuf { state_dir().join("runtime.json") }
 
-pub fn humnest_sock() -> PathBuf { state_dir().join("humnest.sock") }
-pub fn humnest_runtime() -> PathBuf { state_dir().join("humnest_runtime.json") }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeInfo {
     pub socket: PathBuf,
@@ -136,37 +133,6 @@ impl RuntimeInfo {
 
     pub fn remove() {
         let _ = std::fs::remove_file(runtime_info());
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HumnestRuntimeInfo {
-    pub socket: PathBuf,
-    pub pid: u32,
-    pub version: String,
-    pub bound_at_ms: u64,
-}
-
-impl HumnestRuntimeInfo {
-    pub fn read() -> Option<Self> {
-        let raw = std::fs::read_to_string(humnest_runtime()).ok()?;
-        serde_json::from_str(&raw).ok()
-    }
-
-    pub fn write(&self) -> std::io::Result<()> {
-        let path = humnest_runtime();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        let body = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(tmp, path)
-    }
-
-    pub fn remove() {
-        let _ = std::fs::remove_file(humnest_runtime());
     }
 }
 

@@ -77,7 +77,7 @@ enum Cmd {
         #[arg(long)]
         list: bool,
     },
-    /// List humnest-supervised bees with status (kind, pid, state, restart_count).
+    /// List orchd-managed bees (delegates to `orchd status`).
     Nest,
     /// Show lifetime counters from penny.json
     Penny,
@@ -366,9 +366,9 @@ fn doctor() -> Result<()> {
         Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
     }
 
-    match hum_paths::HumnestRuntimeInfo::read() {
-        Some(rt) => println!("  humnest:    ✓ pid={} version={} sock={}", rt.pid, rt.version, rt.socket.display()),
-        None => println!("  humnest:    ✗ MISSING (no humnest_runtime.json — humnest not running)"),
+    match Command::new("orchd").arg("--version").output() {
+        Ok(o) if o.status.success() => println!("  orchd:      ✓ {}", String::from_utf8_lossy(&o.stdout).trim()),
+        _ => println!("  orchd:      ✗ NOT FOUND in PATH (run ./install to build it)"),
     }
 
     // 4. The claude binary (worker's compute).
@@ -553,50 +553,96 @@ fn hive_list() -> Result<()> {
 ///                       our own repo maps to the local checkout; a
 ///                       foreign repo is shallow-cloned to a cache.
 fn hive_install(reference: &str) -> Result<()> {
-    let install = resolve_hive_install(reference)?;
-    if !install.exists() {
-        anyhow::bail!("no install script at {}", install.display());
+    let dir = resolve_hive_dir(reference)?;
+    let orchfile = dir.join("Orchfile");
+    if !orchfile.exists() {
+        anyhow::bail!("no Orchfile at {}", orchfile.display());
     }
-    println!("installing hive from {} ...", install.display());
-    let ok = Command::new(&install).status().map(|s| s.success()).unwrap_or(false);
-    if ok { println!("✓ installed; see `hum bee --list`"); Ok(()) }
-    else { anyhow::bail!("installer failed: {}", install.display()) }
+    let kind = read_orchfile_service(&orchfile)?
+        .ok_or_else(|| anyhow::anyhow!("no SERVICE directive in {}", orchfile.display()))?;
+
+    if dir.join("Cargo.toml").exists() {
+        println!("building {kind} (cargo install --path {} ...)", dir.display());
+        let s = Command::new("cargo")
+            .args(["install", "--quiet", "--locked", "--path"]).arg(&dir)
+            .args(["--root"]).arg(home_local())
+            .arg("--force")
+            .status()?;
+        if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
+    } else if dir.join("package.json").exists() {
+        anyhow::bail!("TS hive install not yet automated; run `pnpm install && pnpm build` in {}", dir.display());
+    } else {
+        anyhow::bail!("no Cargo.toml or package.json in {} — don't know how to build", dir.display());
+    }
+
+    let orch_d = hum_paths::config_dir().join("orch.d");
+    std::fs::create_dir_all(&orch_d)?;
+    let dest = orch_d.join(format!("{kind}.orch"));
+    std::fs::copy(&orchfile, &dest)?;
+    println!("registered {kind} ({})", dest.display());
+
+    rewrite_hum_orchfile(&orch_d)?;
+
+    let s = orchd_cmd().arg("up").arg(&kind).status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !s.success() { anyhow::bail!("orchd up {kind} failed"); }
+    println!("✓ {kind} entered; see `hum bee --list`");
+    Ok(())
 }
 
-fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
-    // github tree URL — the form bees advertise in `source`.
+fn read_orchfile_service(path: &Path) -> Result<Option<String>> {
+    let raw = std::fs::read_to_string(path)?;
+    Ok(raw.lines()
+        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
+        .next())
+}
+
+fn rewrite_hum_orchfile(orch_d: &Path) -> Result<()> {
+    let mut combined = String::new();
+    let mut entries: Vec<_> = std::fs::read_dir(orch_d)?.flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("orch"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let body = std::fs::read_to_string(e.path())?;
+        combined.push_str(&body);
+        if !combined.ends_with('\n') { combined.push('\n'); }
+        combined.push('\n');
+    }
+    std::fs::write(hum_orchfile(), combined)?;
+    Ok(())
+}
+
+fn home_local() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+}
+
+fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
     if let Some(rest) = reference.strip_prefix("https://github.com/") {
-        // <org>/<repo>/tree/<branch>/<subpath...>
         let parts: Vec<&str> = rest.splitn(5, '/').collect();
         if parts.len() == 5 && parts[2] == "tree" {
             let (org, repo, branch, sub) = (parts[0], parts[1], parts[3], parts[4]);
-            // Our own repo → use the local checkout, no network.
             if org == "adiled" && repo == "hum" {
-                return Ok(repo_root_or_install_dir().join(sub).join("install"));
+                return Ok(repo_root_or_install_dir().join(sub));
             }
-            // Foreign repo → shallow clone into a cache, then the subpath.
-            let cache = hum_paths::cache_dir()
-                .join("hives").join(format!("{org}-{repo}-{branch}"));
+            let cache = hum_paths::cache_dir().join("hives").join(format!("{org}-{repo}-{branch}"));
             if !cache.exists() {
                 std::fs::create_dir_all(cache.parent().unwrap()).ok();
                 let url = format!("https://github.com/{org}/{repo}");
                 println!("cloning {url} @ {branch} ...");
                 let ok = Command::new("git")
                     .args(["clone", "--depth", "1", "--branch", branch, &url])
-                    .arg(&cache)
-                    .status().map(|s| s.success()).unwrap_or(false);
+                    .arg(&cache).status().map(|s| s.success()).unwrap_or(false);
                 if !ok { anyhow::bail!("git clone failed: {url}"); }
             }
-            return Ok(cache.join(sub).join("install"));
+            return Ok(cache.join(sub));
         }
         anyhow::bail!("unrecognized github source URL (want .../tree/<branch>/<path>): {reference}");
     }
-    // Local path — dir holding an `install`, or a direct install file.
     let p = PathBuf::from(reference);
-    if p.is_dir() { return Ok(p.join("install")); }
-    if p.is_file() { return Ok(p); }
-    // Bundled name — <repo>/hives/<name>/install.
-    let bundled = repo_root_or_install_dir().join("hives").join(reference).join("install");
+    if p.is_dir() { return Ok(p); }
+    let bundled = repo_root_or_install_dir().join("hives").join(reference);
     if bundled.exists() { return Ok(bundled); }
     anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
 }
@@ -700,7 +746,7 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
     // Prefer humnest for any kind it knows about; fall back to svc.sh for
     // legacy units or unknown targets (svc_active/svc_last_exit helpers
     // stay live so `hum bee --list` keeps working).
-    if target != "all" && humnest_route_verb(&target, &verb)? {
+    if target != "all" && orch_route_verb(&target, &verb)? {
         return Ok(());
     }
     let op = match verb.as_str() {
@@ -788,90 +834,55 @@ fn repo_root_or_install_dir() -> PathBuf {
     PathBuf::from(".")
 }
 
-// ── humnest RPC ──────────────────────────────────────────────────────────
+// ── orchd shell-outs (bee lifecycle) ─────────────────────────────────────
 
-/// Single-shot NDJSON exchange with humnest over its unix socket.
-fn humnest_rpc(tone: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    use std::io::{Write, BufRead, BufReader};
-    use std::os::unix::net::UnixStream;
-    use std::time::Duration;
-    let sock = hum_paths::humnest_sock();
-    let mut s = UnixStream::connect(&sock)
-        .map_err(|e| anyhow::anyhow!("connect humnest at {}: {e}", sock.display()))?;
-    s.set_read_timeout(Some(Duration::from_secs(2)))?;
-    s.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let line = format!("{}\n", tone);
-    s.write_all(line.as_bytes())?;
-    let mut reader = BufReader::new(s);
-    let mut buf = String::new();
-    reader.read_line(&mut buf)?;
-    let reply: serde_json::Value = serde_json::from_str(buf.trim())?;
-    Ok(reply)
+fn hum_orchfile() -> PathBuf { hum_paths::config_dir().join("Orchfile") }
+
+fn orchd_cmd() -> Command {
+    let mut c = Command::new("orchd");
+    c.arg("--orchfile").arg(hum_orchfile())
+     .arg("--user")
+     .arg("--namespace").arg("hum");
+    c
 }
 
-/// Kinds humnest knows about (hum.json humnest.bees[].kind).
-fn humnest_catalog() -> Vec<String> {
-    let hum_json = hum_paths::hum_json();
-    let Ok(raw) = std::fs::read_to_string(&hum_json) else { return Vec::new(); };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return Vec::new(); };
-    v.get("humnest").and_then(|h| h.get("bees")).and_then(|b| b.as_array())
-        .map(|arr| arr.iter()
-            .filter_map(|b| b.get("kind").and_then(|k| k.as_str()).map(str::to_string))
-            .collect())
-        .unwrap_or_default()
+/// Service names declared in hum's Orchfile.
+fn orch_catalog() -> Vec<String> {
+    let path = hum_orchfile();
+    let Ok(raw) = std::fs::read_to_string(&path) else { return Vec::new(); };
+    raw.lines()
+        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
+        .collect()
 }
 
 fn nest() -> Result<()> {
-    let reply = humnest_rpc(serde_json::json!({"chi":"humnest-list"}))?;
-    if reply.get("chi").and_then(|c| c.as_str()) == Some("humnest-err") {
-        let msg = reply.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
-        anyhow::bail!("humnest: {msg}");
-    }
-    let bees = reply.get("bees").and_then(|b| b.as_array()).cloned().unwrap_or_default();
-    if bees.is_empty() {
-        println!("no bees in humnest (configure hum.json humnest.bees).");
-        return Ok(());
-    }
-    println!("  {:<18} {:<8} {:<12} {:<8} {}", "KIND", "PID", "STATE", "RESTARTS", "LAST_EXIT");
-    for b in &bees {
-        let kind = b.get("kind").and_then(|x| x.as_str()).unwrap_or("?");
-        let pid = b.get("pid").and_then(|x| x.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "—".into());
-        let state = b.get("state").and_then(|x| x.as_str()).unwrap_or("?");
-        let restarts = b.get("restart_count").and_then(|x| x.as_u64()).unwrap_or(0);
-        let last = b.get("last_exit_code").and_then(|x| x.as_i64()).map(|n| n.to_string()).unwrap_or_else(|| "—".into());
-        println!("  {:<18} {:<8} {:<12} {:<8} {}", kind, pid, state, restarts, last);
+    let status = orchd_cmd().arg("status").status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("orchd status failed");
     }
     Ok(())
 }
 
-/// Route enter/exit/reenter through humnest. Returns Ok(true) if humnest
-/// handled the verb, Ok(false) if the kind is not in humnest's catalog.
-fn humnest_route_verb(kind: &str, verb: &str) -> Result<bool> {
-    if !humnest_catalog().iter().any(|k| k == kind) {
+/// Route enter/exit/reenter through orchd. Returns Ok(true) if orchd
+/// handled the verb, Ok(false) if the kind is not in orchd's catalog.
+fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
+    if !orch_catalog().iter().any(|k| k == kind) {
         return Ok(false);
     }
-    let tones: Vec<serde_json::Value> = match verb {
-        "enter"   => vec![serde_json::json!({"chi":"humnest-spawn","kind":kind})],
-        "exit"    => vec![serde_json::json!({"chi":"humnest-kill","kind":kind})],
-        "reenter" => vec![
-            serde_json::json!({"chi":"humnest-kill","kind":kind}),
-            serde_json::json!({"chi":"humnest-spawn","kind":kind}),
-        ],
+    let verb_arg = match verb {
+        "enter"   => "up",
+        "exit"    => "down",
+        "reenter" => "restart",
         other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
     };
     let past = match verb { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
-    for tone in tones {
-        let reply = humnest_rpc(tone)?;
-        match reply.get("chi").and_then(|c| c.as_str()) {
-            Some("humnest-ok") => {}
-            Some("humnest-err") => {
-                let msg = reply.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
-                anyhow::bail!("humnest: {msg}");
-            }
-            other => anyhow::bail!("humnest: unexpected reply chi={:?}", other),
-        }
+    let status = orchd_cmd().arg(verb_arg).arg(kind).status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("orchd {verb_arg} {kind} failed");
     }
-    println!("  ✓ {past} {kind} (humnest)");
+    println!("  ✓ {past} {kind} (orchd)");
     Ok(true)
 }
 
