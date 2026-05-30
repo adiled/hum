@@ -269,17 +269,17 @@ fn status() -> Result<()> {
 fn yn(b: bool) -> &'static str { if b { "✓" } else { "missing" } }
 
 fn logs(lines: u32) -> Result<()> {
-    let svc = svc_helper().context("scripts/svc.sh not found — install hum first")?;
-    let script = format!(r#"
-        . {svc}
-        case "$SVC_OS" in
-          Linux)  journalctl --user -u hum --no-pager -n {lines} ;;
-          Darwin) tail -n {lines} "$HOME/Library/Logs/sh.hum.hum.out.log" \
-                                  "$HOME/Library/Logs/sh.hum.hum.err.log" 2>/dev/null ;;
-          *) echo "logs unavailable on $SVC_OS" >&2; exit 1 ;;
-        esac
-    "#, svc = svc.display());
-    Command::new("bash").arg("-c").arg(script).status()?;
+    match hum_paths::daemon_logs("humd") {
+        hum_paths::DaemonLogs::Journald { unit } => {
+            Command::new("journalctl")
+                .args(["--user", "-u", &unit, "--no-pager", "-n", &lines.to_string()])
+                .status()?;
+        }
+        hum_paths::DaemonLogs::Files { stdout, stderr } => {
+            Command::new("tail").args(["-n", &lines.to_string()])
+                .arg(stdout).arg(stderr).status()?;
+        }
+    }
     Ok(())
 }
 
@@ -400,16 +400,16 @@ fn doctor() -> Result<()> {
     Ok(())
 }
 
-/// Tail a service's recent logs, platform-aware, surfacing warn/error
-/// lines (and the key hum diagnostic markers) so the dump stays short.
 fn print_recent_logs(unit: &str, lines: u32) {
-    let script = format!(r#"
-        case "$(uname -s)" in
-          Linux)  journalctl --user -u {unit} --no-pager -n {lines} 2>/dev/null ;;
-          Darwin) tail -n {lines} "$HOME/Library/Logs/sh.hum.{unit}.out.log" \
-                                  "$HOME/Library/Logs/sh.hum.{unit}.err.log" 2>/dev/null ;;
-        esac | grep -iE 'WARN|ERROR|result.error|bee\.hid|spawn|panic|fail' | tail -15
-    "#);
+    let raw_cmd = match hum_paths::daemon_logs(unit) {
+        hum_paths::DaemonLogs::Journald { unit: u } =>
+            format!("journalctl --user -u {u} --no-pager -n {lines} 2>/dev/null"),
+        hum_paths::DaemonLogs::Files { stdout, stderr } =>
+            format!("tail -n {lines} {} {} 2>/dev/null", stdout.display(), stderr.display()),
+    };
+    let script = format!(
+        "{raw_cmd} | grep -iE 'WARN|ERROR|result.error|bee\\.hid|spawn|panic|fail' | tail -15"
+    );
     println!("  ── {unit} ──");
     let out = Command::new("bash").arg("-c").arg(&script).output();
     match out {

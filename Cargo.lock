@@ -1926,6 +1926,7 @@ name = "humctl"
 version = "0.31.18"
 dependencies = [
  "anyhow",
+ "hum-paths",
  "service-manager",
 ]
 

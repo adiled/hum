@@ -195,14 +195,23 @@ pub fn bee_config(kind: &str) -> PathBuf {
     config_dir().join("bees").join(format!("{kind}.json"))
 }
 
-/// macOS log paths for a launchd unit short id (e.g. `"hum"`, `"hum-claude-cli-worker"`).
-/// Returns `(stdout, stderr)`.
-pub fn macos_log(unit: &str) -> (PathBuf, PathBuf) {
-    let base = home().join("Library/Logs");
-    (
-        base.join(format!("sh.hum.{unit}.out.log")),
-        base.join(format!("sh.hum.{unit}.err.log")),
-    )
+/// Where a hum daemon's logs live, by platform.
+pub enum DaemonLogs {
+    Journald { unit: String },
+    Files { stdout: PathBuf, stderr: PathBuf },
+}
+
+pub fn daemon_logs(name: &str) -> DaemonLogs {
+    #[cfg(target_os = "macos")]
+    {
+        let base = home().join("Library/Logs");
+        return DaemonLogs::Files {
+            stdout: base.join(format!("sh.hum.{name}.out.log")),
+            stderr: base.join(format!("sh.hum.{name}.err.log")),
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    DaemonLogs::Journald { unit: name.to_string() }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

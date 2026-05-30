@@ -8,7 +8,6 @@ async fn main() -> Result<()> {
     let filter = EnvFilter::try_from_env("HUM_LOG_LEVEL")
         .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).with_target(false).compact().init();
-
     humnest::run(wait_for_shutdown()).await
 }
 

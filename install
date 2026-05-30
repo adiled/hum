@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# hum installer — v0.4 (humd + humnest, both supervised via humctl).
+# hum installer.
 #
-# What this does, in order:
-#   1. Ensure prerequisites: claude CLI (≥ MIN_CLAUDE), cargo.
-#   2. Build the three Rust binaries via `cargo install --root $HOME/.local`:
-#        humd     — router daemon
-#        humnest  — bee supervisor
-#        humctl   — tiny service-manager wrapper this script drives
-#   3. Mint Ed25519 identity at $HUM_STATE/humd.key if missing.
-#   4. Seed an empty peers.json at $HUM_CONFIG/peers.json if missing.
-#   5. Seed a minimal hum.json at $HUM_CONFIG/hum.json if missing.
-#   6. Install + start humd as a user service via humctl.
-#   7. Install + start humnest as a user service via humctl.
+# Builds humd, humnest, humctl, hum. Registers humd + humnest as user
+# services (systemd Linux / launchd macOS); humd's unit wants humnest's
+# so the two come up together. humctl operates humd at runtime;
+# humnest is reached via `hum nest` / `hum bee`.
 #
 # Bees are NOT installed as separate user units. humnest reads
 # hum.json humnest.bees and supervises each child itself. Per-hive
@@ -204,28 +197,86 @@ build_binaries() {
   log "hum     installed at $HUM_CLI_BIN"
 }
 
-# ─── service unit registration via humctl ───────────────────────────────────
+# ─── service unit registration (inline; the install script's concern) ──────
 
-# humctl owns OS dispatch (systemd on Linux, launchd on macOS) via the
-# service-manager crate. The two units here are user-level; binary paths
-# resolve from $HOME/.local/bin/<name> inside humctl.
-install_and_start() {
-  local name="$1"
-  case "$OS" in
-    Linux|Darwin) ;;
-    *) warn "service install not supported on $OS — run '$HUM_BIN_ROOT/bin/$name' manually"; return 0 ;;
-  esac
-  "$HUMCTL_BIN" install "$name" || warn "humctl install $name failed"
-  # restart so re-running the installer picks up new binaries / env
-  "$HUMCTL_BIN" restart "$name" 2>/dev/null \
-    || "$HUMCTL_BIN" start "$name" \
-    || warn "humctl start $name failed"
-  log "$name service registered + started ($OS)"
+linux_unit_dir="${XDG_CONFIG_HOME}/systemd/user"
+darwin_unit_dir="$HOME/Library/LaunchAgents"
+
+write_linux_units() {
+  mkdir -p "$linux_unit_dir"
+  cat > "$linux_unit_dir/humd.service" <<EOF
+[Unit]
+Description=hum router daemon
+Wants=humnest.service
+
+[Service]
+Type=simple
+ExecStart=$HUMD_BIN
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+  cat > "$linux_unit_dir/humnest.service" <<EOF
+[Unit]
+Description=hum bee supervisor
+PartOf=humd.service
+
+[Service]
+Type=simple
+ExecStart=$HUMNEST_BIN
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable humd.service humnest.service >/dev/null 2>&1 || true
+  systemctl --user restart humd.service humnest.service
+}
+
+write_darwin_units() {
+  mkdir -p "$darwin_unit_dir"
+  cat > "$darwin_unit_dir/humd.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>humd</string>
+  <key>Program</key><string>$HUMD_BIN</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/sh.hum.humd.out.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/sh.hum.humd.err.log</string>
+</dict></plist>
+EOF
+  cat > "$darwin_unit_dir/humnest.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>humnest</string>
+  <key>Program</key><string>$HUMNEST_BIN</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/sh.hum.humnest.out.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/sh.hum.humnest.err.log</string>
+</dict></plist>
+EOF
+  local uid; uid="$(id -u)"
+  launchctl bootout "gui/$uid/humd"    2>/dev/null || true
+  launchctl bootout "gui/$uid/humnest" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humd.plist"
+  launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humnest.plist"
 }
 
 start_daemons() {
-  install_and_start humd
-  install_and_start humnest
+  case "$OS" in
+    Linux)  write_linux_units ;;
+    Darwin) write_darwin_units ;;
+    *) warn "service install not supported on $OS — run '$HUMD_BIN' and '$HUMNEST_BIN' manually"; return 0 ;;
+  esac
+  log "humd + humnest registered + started ($OS)"
   sleep 1
 }
 
@@ -261,14 +312,16 @@ show_status() {
   echo "peers.json:     $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
   echo "hum.json:       $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
   echo "thrum socket:   $THRUM_SOCK $([ -S "$THRUM_SOCK" ] && echo ✓ || echo absent)"
-  if [ -x "$HUMCTL_BIN" ]; then
-    echo "service (humd):"
-    "$HUMCTL_BIN" status humd 2>&1 | head -6 || true
-    echo "service (humnest):"
-    "$HUMCTL_BIN" status humnest 2>&1 | head -6 || true
-  else
-    echo "humctl not installed — cannot query service status"
-  fi
+  case "$OS" in
+    Linux)
+      systemctl --user status humd    --no-pager 2>&1 | head -6 || true
+      systemctl --user status humnest --no-pager 2>&1 | head -6 || true
+      ;;
+    Darwin)
+      launchctl print "gui/$(id -u)/humd"    2>&1 | head -6 || true
+      launchctl print "gui/$(id -u)/humnest" 2>&1 | head -6 || true
+      ;;
+  esac
 }
 
 show_logs() {
@@ -288,12 +341,20 @@ show_logs() {
 }
 
 uninstall() {
-  if [ -x "$HUMCTL_BIN" ]; then
-    "$HUMCTL_BIN" stop humnest 2>/dev/null || true
-    "$HUMCTL_BIN" stop humd    2>/dev/null || true
-    "$HUMCTL_BIN" uninstall humnest 2>/dev/null || true
-    "$HUMCTL_BIN" uninstall humd    2>/dev/null || true
-  fi
+  case "$OS" in
+    Linux)
+      systemctl --user stop    humnest.service humd.service 2>/dev/null || true
+      systemctl --user disable humnest.service humd.service 2>/dev/null || true
+      rm -f "$linux_unit_dir/humd.service" "$linux_unit_dir/humnest.service"
+      systemctl --user daemon-reload 2>/dev/null || true
+      ;;
+    Darwin)
+      local uid; uid="$(id -u)"
+      launchctl bootout "gui/$uid/humnest" 2>/dev/null || true
+      launchctl bootout "gui/$uid/humd"    2>/dev/null || true
+      rm -f "$darwin_unit_dir/humnest.plist" "$darwin_unit_dir/humd.plist"
+      ;;
+  esac
   rm -f "$HUMD_BIN" "$HUMNEST_BIN" "$HUM_CLI_BIN" "$HUMCTL_BIN"
   log "uninstalled. State preserved in $HUM_STATE + $HUM_CONFIG."
   log "  run \`./install purge\` to remove state too."

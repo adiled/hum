@@ -16,11 +16,10 @@ where F: std::future::Future<Output = ()> + Send,
 {
     hum_paths::init();
     let cfg = config::load();
-    let bees = cfg.humnest.bees.clone();
-    info!(count = bees.len(), "humnest.boot");
+    info!(count = cfg.humnest.bees.len(), "humnest.boot");
 
     let supervisor = Arc::new(Supervisor::new());
-    supervisor.clone().spawn_all(bees).await;
+    supervisor.clone().spawn_all(cfg.humnest.bees).await;
 
     let socket = hum_paths::humnest_sock();
     let _ctl = control::serve(socket, supervisor.clone()).await?;
