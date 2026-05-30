@@ -97,6 +97,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    hum_paths::init();
     let cli = Cli::parse();
     match cli.cmd {
         None => summary(),
@@ -177,35 +178,10 @@ fn home() -> Result<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).context("HOME unset")
 }
 
-fn xdg(var: &str, default_suffix: &str) -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os(var) {
-        return Ok(PathBuf::from(v));
-    }
-    Ok(home()?.join(default_suffix))
-}
-
-fn xdg_runtime_hum() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(|v| PathBuf::from(v).join("hum"))
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/hum-{}", libc_getuid())))
-}
-
-fn unsafe_libc_getuid_fallback() -> u32 { 0 }
-fn libc_getuid() -> u32 {
-    // Avoid pulling in the libc crate — shell out to `id -u`. Cheap;
-    // only called when XDG_RUNTIME_DIR isn't set.
-    Command::new("id").arg("-u").output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or_else(unsafe_libc_getuid_fallback)
-}
-
 fn humd_bin() -> Result<PathBuf> {
-    // Convention: $HUM_DATA/bin/humd or $HOME/.local/bin/humd.
     let candidates = [
         std::env::var_os("HUM_BIN").map(PathBuf::from),
-        home().ok().map(|h| h.join(".local").join("bin").join("humd")),
+        Some(hum_paths::humd_bin()),
     ];
     for c in candidates.into_iter().flatten() {
         if c.exists() { return Ok(c); }
@@ -219,7 +195,7 @@ fn svc_helper() -> Option<PathBuf> {
         std::env::current_exe().ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .map(|p| p.join("../../scripts/svc.sh")),
-        home().ok().map(|h| h.join(".local/share/hum/src/scripts/svc.sh")),
+        Some(hum_paths::src_dir().join("scripts/svc.sh")),
         Some(PathBuf::from("./scripts/svc.sh")),
     ];
     candidates.into_iter().flatten().find(|p| p.exists())
@@ -233,12 +209,7 @@ fn summary() -> Result<()> {
 }
 
 fn status() -> Result<()> {
-    let cfg = xdg("XDG_CONFIG_HOME", ".config")?.join("hum");
-    let state = xdg("XDG_STATE_HOME", ".local/state")?.join("hum");
-    let runtime = xdg_runtime_hum();
-    let thrum_sock = std::env::var_os("HUM_THRUM_SOCK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| runtime.join("thrum.sock"));
+    let thrum_sock = hum_paths::thrum_sock();
 
     let bin = humd_bin().ok();
     let bin_display = bin.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(missing)".into());
@@ -252,12 +223,12 @@ fn status() -> Result<()> {
             .unwrap_or_else(|| "?".into());
         println!("  version:    {v}");
     }
-    println!("identity:     {} {}", state.join("humd.key").display(),
-             yn(state.join("humd.key").exists()));
-    println!("peers.json:   {} {}", cfg.join("peers.json").display(),
-             yn(cfg.join("peers.json").exists()));
-    println!("hum.json:     {} {}", cfg.join("hum.json").display(),
-             yn(cfg.join("hum.json").exists()));
+    let humd_key = hum_paths::humd_key();
+    let peers_json = hum_paths::peers_json();
+    let hum_json = hum_paths::hum_json();
+    println!("identity:     {} {}", humd_key.display(), yn(humd_key.exists()));
+    println!("peers.json:   {} {}", peers_json.display(), yn(peers_json.exists()));
+    println!("hum.json:     {} {}", hum_json.display(), yn(hum_json.exists()));
     println!("thrum socket: {} {}", thrum_sock.display(),
              yn(std::fs::metadata(&thrum_sock).is_ok()));
 
@@ -306,18 +277,19 @@ fn doctor() -> Result<()> {
     println!("  os:         {} {}", std::env::consts::OS, std::env::consts::ARCH);
 
     // 2. Config + state files.
-    let cfg = xdg("XDG_CONFIG_HOME", ".config")?.join("hum");
-    let state = xdg("XDG_STATE_HOME", ".local/state")?.join("hum");
+    let hum_json = hum_paths::hum_json();
+    let peers_json = hum_paths::peers_json();
+    let humd_key = hum_paths::humd_key();
     println!("\n[config + state]");
-    println!("  hum.json:   {} {}", cfg.join("hum.json").display(), yn(cfg.join("hum.json").exists()));
-    println!("  peers.json: {} {}", cfg.join("peers.json").display(), yn(cfg.join("peers.json").exists()));
-    println!("  identity:   {} {}", state.join("humd.key").display(), yn(state.join("humd.key").exists()));
+    println!("  hum.json:   {} {}", hum_json.display(), yn(hum_json.exists()));
+    println!("  peers.json: {} {}", peers_json.display(), yn(peers_json.exists()));
+    println!("  identity:   {} {}", humd_key.display(), yn(humd_key.exists()));
 
     // 3. hum.json lint — catches the config drift that silently breaks
     //    routing (the keys humd ignores, stale section names, a default
     //    pointing nowhere). These parse fine but do nothing.
     println!("\n[hum.json schema validation]");
-    match std::fs::read_to_string(cfg.join("hum.json")) {
+    match std::fs::read_to_string(&hum_json) {
         Err(_) => println!("  (no hum.json — humd runs on defaults)"),
         Ok(raw) => match config::validate(&raw) {
             Ok(()) => println!("  ✓ valid against hum.schema.json"),
@@ -331,8 +303,8 @@ fn doctor() -> Result<()> {
     // 4. Bee identities — the persisted keys that back hid dedup. A
     //    missing or wrong-size key means a bee can't keep a stable hid
     //    across reconnects (ghost-manifest accumulation).
-    println!("\n[bee identities]  ({}/bees)", state.display());
-    let bees_dir = state.join("bees");
+    let bees_dir = hum_paths::bees_dir();
+    println!("\n[bee identities]  ({})", bees_dir.display());
     match std::fs::read_dir(&bees_dir) {
         Err(_) => println!("  (none yet — minted on first bee boot)"),
         Ok(entries) => {
@@ -353,14 +325,9 @@ fn doctor() -> Result<()> {
     // 5. Env sanity — the macOS traps live here.
     println!("\n[env sanity]");
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
-    if runtime.is_empty() {
-        println!("  XDG_RUNTIME_DIR: (unset) — humd falls back to /tmp/hum-<uid>");
-    } else {
-        let exists = std::path::Path::new(&runtime).is_dir();
-        println!("  XDG_RUNTIME_DIR: {runtime} {}", if exists { "✓" } else { "✗ DOES NOT EXIST (penny/socket writes will fail — common macOS trap when set to a Linux /run/user path)" });
-    }
-    let sock = std::env::var_os("HUM_THRUM_SOCK").map(PathBuf::from)
-        .unwrap_or_else(|| xdg_runtime_hum().join("thrum.sock"));
+    let runtime_exists = std::path::Path::new(&runtime).is_dir();
+    println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (penny writes will fail — common macOS trap when set to a Linux /run/user path)" });
+    let sock = hum_paths::thrum_sock();
     println!("  thrum sock: {} {}", sock.display(), if std::fs::metadata(&sock).is_ok() { "✓ present" } else { "✗ MISSING (humd not running?)" });
 
     // 4. The claude binary (worker's compute).
@@ -481,7 +448,7 @@ fn hive_list() -> Result<()> {
             }
         }
     }
-    let hum_json = xdg("XDG_CONFIG_HOME", ".config")?.join("hum").join("hum.json");
+    let hum_json = hum_paths::hum_json();
     let mut default_kind = String::new();
     if let Ok(raw) = std::fs::read_to_string(&hum_json) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -556,8 +523,8 @@ fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
                 return Ok(repo_root_or_install_dir().join(sub).join("install"));
             }
             // Foreign repo → shallow clone into a cache, then the subpath.
-            let cache = xdg("XDG_CACHE_HOME", ".cache")?
-                .join("hum").join("hives").join(format!("{org}-{repo}-{branch}"));
+            let cache = hum_paths::cache_dir()
+                .join("hives").join(format!("{org}-{repo}-{branch}"));
             if !cache.exists() {
                 std::fs::create_dir_all(cache.parent().unwrap()).ok();
                 let url = format!("https://github.com/{org}/{repo}");
@@ -586,7 +553,7 @@ fn resolve_hive_install(reference: &str) -> Result<PathBuf> {
 /// (hid, role, models, tools, provides, wire, version, source) joined
 /// with each bee's service unit + running state.
 fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
-    let snap_path = xdg("XDG_STATE_HOME", ".local/state")?.join("hum").join("bees.json");
+    let snap_path = hum_paths::bees_snapshot();
     let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.as_object().map(|o| o.values().cloned().collect()))
@@ -693,7 +660,7 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
 }
 
 fn penny() -> Result<()> {
-    let path = xdg("XDG_STATE_HOME", ".local/state")?.join("hum").join("penny.json");
+    let path = hum_paths::penny();
     if !path.exists() {
         println!("no penny.json yet ({})", path.display());
         return Ok(());
@@ -747,8 +714,8 @@ fn repo_root_or_install_dir() -> PathBuf {
             p = parent.to_path_buf();
         }
     }
-    if let Ok(h) = home() {
-        let candidate = h.join(".local/share/hum/src");
+    {
+        let candidate = hum_paths::src_dir();
         if candidate.exists() { return candidate; }
     }
     PathBuf::from(".")

@@ -47,24 +47,9 @@ pub trait ToneSink: Send + Sync + 'static {
     async fn forget(&self, _client_id: &str) {}
 }
 
-/// Default socket path — `$XDG_RUNTIME_DIR/hum/thrum.sock`, or
-/// `/tmp/hum/thrum.sock` if XDG_RUNTIME_DIR isn't set.
-///
-/// Canonical per `WIRE.md`. Env override: `HUM_THRUM_SOCK`. Legacy
-/// `HUM_SOCKET` is also accepted so an in-flight upgrade doesn't break
-/// already-running clients pointing at the old name — drop the
-/// fallback after 0.4.
+/// Canonical thrum socket path. Delegates to `hum_paths::thrum_sock()`.
 pub fn default_socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
-        return PathBuf::from(p);
-    }
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum").join("thrum.sock")
+    hum_paths::thrum_sock()
 }
 
 /// The thrum's living state — registry plus optional handler. Cloning is

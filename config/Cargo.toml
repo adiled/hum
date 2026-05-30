@@ -8,6 +8,6 @@ description = "hum.json loader — XDG-located, best-effort, defaults fill missi
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-directories = { workspace = true }
 tracing = { workspace = true }
 jsonschema = "0.46.5"
+hum-paths = { path = "../hum-paths" }

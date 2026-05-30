@@ -37,24 +37,8 @@ impl BeeKey {
     }
 }
 
-/// Resolve `$XDG_STATE_HOME/hum/bees/<kind>.key`. Falls back to
-/// `$HOME/.local/state/hum/bees/<kind>.key`, then to a relative
-/// `.local/state/hum/bees/<kind>.key` if neither env is set.
 pub fn bee_key_path(kind: &str) -> PathBuf {
-    let leaf = format!("{kind}.key");
-    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("bees").join(leaf);
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".local").join("state").join("hum")
-                .join("bees").join(leaf);
-        }
-    }
-    PathBuf::from(format!(".local/state/hum/bees/{kind}.key"))
+    hum_paths::bee_key(kind)
 }
 
 /// Load the bee's persisted key, minting + persisting a fresh one

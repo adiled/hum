@@ -40,25 +40,8 @@ use tokio::sync::mpsc;
 use crate::identity::load_or_mint_bee_key;
 use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
 
-/// Resolve the canonical thrum socket path. Mirrors `thrumd::default_socket_path`.
 fn default_socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
-        return PathBuf::from(p);
-    }
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("/tmp/hum-{}", unsafe_uid())));
-    runtime.join("hum").join("thrum.sock")
-}
-
-fn unsafe_uid() -> u32 {
-    std::process::Command::new("id").arg("-u").output().ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+    hum_paths::thrum_sock()
 }
 
 /// What the host advertises on hello. Drives both routing (humd maps

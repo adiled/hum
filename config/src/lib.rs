@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -149,15 +148,7 @@ pub struct HumConfig {
 // ── path resolution ───────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("hum.json");
-        }
-    }
-    if let Some(base) = BaseDirs::new() {
-        return base.config_dir().join("hum").join("hum.json");
-    }
-    PathBuf::from(".config/hum/hum.json")
+    hum_paths::hum_json()
 }
 
 /// Expand `~` against `$HOME`. Leaves absolute / non-tilde paths alone.

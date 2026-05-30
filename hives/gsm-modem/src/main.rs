@@ -54,9 +54,6 @@ struct Config {
 
 impl Config {
     fn from_env() -> Self {
-        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-            format!("/run/user/{}", unsafe { libc::geteuid() })
-        });
         Self {
             device: std::env::var("HUM_GSM_DEVICE").unwrap_or_else(|_| "/dev/ttyUSB0".into()),
             baud: std::env::var("HUM_GSM_BAUD")
@@ -71,8 +68,7 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1500),
-            sock_path: std::env::var("HUM_THRUM_SOCK")
-                .unwrap_or_else(|_| format!("{runtime}/hum/thrum.sock")),
+            sock_path: hum_paths::thrum_sock().to_string_lossy().into_owned(),
         }
     }
 }
@@ -231,6 +227,7 @@ async fn init_modem(writer: &Arc<Mutex<SerialStream>>) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

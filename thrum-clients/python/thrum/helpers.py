@@ -92,9 +92,9 @@ class WaneTracker:
 
 def default_socket_path() -> str:
     """Resolve the humd thrum socket per WIRE.md priority:
-    HUM_THRUM_SOCK > $XDG_RUNTIME_DIR/hum/thrum.sock > /run/user/<uid>/hum/thrum.sock."""
+    HUM_THRUM_SOCK > $XDG_STATE_HOME/hum/thrum.sock > ~/.local/state/hum/thrum.sock."""
     explicit = os.environ.get("HUM_THRUM_SOCK")
     if explicit:
         return explicit
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.geteuid()}"
-    return os.path.join(runtime, "hum", "thrum.sock")
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "hum", "thrum.sock")

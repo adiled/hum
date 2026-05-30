@@ -80,12 +80,11 @@ pub struct DaemonConfig {
 
 impl DaemonConfig {
     pub fn from_env() -> Self {
-        let runtime_dir = runtime_dir();
         // Canonical thrum socket path — honors HUM_THRUM_SOCK (and the
         // legacy HUM_SOCKET fallback). thrumd owns the source of truth;
         // humd just reuses it so binary + protocol agree.
         let thrum_path = thrumd::default_socket_path();
-        let http_path = runtime_dir.join("hum.sock.http");
+        let http_path = hum_paths::http_sock();
         let mcp_port: u16 = std::env::var("HUM_MCP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -104,7 +103,7 @@ impl DaemonConfig {
             thrum_path,
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
-            penny_path: runtime_dir.join("penny.json"),
+            penny_path: hum_paths::penny(),
             hum_cfg: config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
@@ -119,12 +118,6 @@ impl DaemonConfig {
     }
 }
 
-fn runtime_dir() -> PathBuf {
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum")
-}
 
 
 // ── Public entry point ─────────────────────────────────────────────────────
@@ -151,7 +144,7 @@ where
     penny.clone().spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
 
     let waneman = cfg.waneman.clone().unwrap_or_else(|| Arc::new(WaneTracker::new()));
-    let _drift = drift::Drift::new();
+    let _drift = drift::Drift::with_store_dir(hum_paths::drift_dir());
     let _drone = drone::Drone::new();
 
     // Bring up an Ensemble from the persisted identity when the caller
@@ -478,14 +471,8 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
-/// `$XDG_STATE_HOME/hum/bees.json` (else `~/.local/state/hum/bees.json`).
-/// The `hum` CLI reads this to render `hum bee --list` with full manifest
-/// info. Same resolution as the CLI's state-dir logic.
 fn bees_snapshot_path() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local").join("state")))
-        .unwrap_or_else(|| std::path::PathBuf::from(".local/state"));
-    base.join("hum").join("bees.json")
+    hum_paths::bees_snapshot()
 }
 
 // humd doesn't host an MCP server — tool-call routing is purely

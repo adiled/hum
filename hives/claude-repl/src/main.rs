@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     let filter = EnvFilter::try_from_env("HUM_LOG_LEVEL")
         .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()

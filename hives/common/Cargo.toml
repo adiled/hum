@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared building blocks for nests — regex Classifier for the drone's context-loss heuristic, common spawn glue, bee identity helpers, MCP bridge for worker bees."
 
 [dependencies]
+hum-paths = { path = "../../hum-paths" }
 drone = { path = "../../drone" }
 ensemble = { path = "../../ensemble" }
 mcp = { path = "../../mcp" }

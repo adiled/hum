@@ -6,6 +6,7 @@ license.workspace = true
 description = "humfs — hum's native filesystem forager hive. Symbol-aware code surface (read/do_code/do_noncode/bash/task), AST-grounded via tree-sitter. Translates chi:tool-call ↔ filesystem ops; humd routes other foragers' tool-calls here."
 
 [dependencies]
+hum-paths = { path = "../../hum-paths" }
 nest-common = { path = "../common" }
 thrum-core = { path = "../../thrum-core" }
 nest = { path = "../../nest" }

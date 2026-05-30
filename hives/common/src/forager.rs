@@ -114,23 +114,7 @@ impl Default for ForagerAdvert {
 }
 
 fn default_socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
-        return PathBuf::from(p);
-    }
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("/tmp/hum-{}", unsafe_uid())));
-    runtime.join("hum").join("thrum.sock")
-}
-
-fn unsafe_uid() -> u32 {
-    std::process::Command::new("id").arg("-u").output().ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+    hum_paths::thrum_sock()
 }
 
 /// Run the forager service loop. Blocks until shutdown; reconnects

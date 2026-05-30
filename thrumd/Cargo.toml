@@ -6,6 +6,7 @@ license.workspace = true
 description = "NDJSON unix-socket thrum server — listens, dispatches, broadcasts."
 
 [dependencies]
+hum-paths = { path = "../hum-paths" }
 thrum-core = { path = "../thrum-core" }
 tokio = { workspace = true }
 serde = { workspace = true }

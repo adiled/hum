@@ -6,8 +6,8 @@ license.workspace = true
 description = "Hum state persistence — registry of sessions, atomic JSON load/save under XDG_STATE_HOME."
 
 [dependencies]
+hum-paths = { path = "../hum-paths" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = "0.12"
-directories = "5"
 tracing = { workspace = true }
