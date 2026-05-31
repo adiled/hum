@@ -205,6 +205,24 @@ print_next_steps() {
   log ""
   log "Bee state: hum bee --list   /   hum nest"
   log "humd state: hum status   /   hum doctor   /   humctl logs"
+  check_path_hint
+}
+
+# Warn loudly when ~/.local/bin isn't on $PATH. Without it,
+# `hum`/`humd`/`humctl`/`orch`/`orchd` aren't reachable by bare name
+# from a fresh shell, and `hum hive install` fails late with confusing
+# errors. hum's own orchd lookup now prefers the absolute path, but
+# the user still needs `hum` itself on PATH.
+check_path_hint() {
+  case ":$PATH:" in
+    *":$HUM_BIN_ROOT/bin:"*) return 0 ;;
+  esac
+  log ""
+  warn "$HUM_BIN_ROOT/bin is not on \$PATH."
+  warn "Add this to your shell config (\$HOME/.bashrc, \$HOME/.zshrc, \$HOME/.profile):"
+  warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+  warn "Then open a new shell. Until then, invoke binaries by absolute path:"
+  warn "    $HUM_CLI_BIN status"
 }
 
 show_status() {

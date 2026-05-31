@@ -1021,7 +1021,12 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 
 fn orchd_cmd() -> Command {
-    let mut c = Command::new("orchd");
+    // Prefer the absolute path the installer wrote, so a missing
+    // ~/.local/bin on $PATH doesn't break `hum hive install` /
+    // `hum bee` / `hum nest`. Fall back to bare "orchd" so users who
+    // installed orchd elsewhere (or via a package manager) still work.
+    let abs = hum_paths::hum_bin("orchd");
+    let mut c = if abs.exists() { Command::new(&abs) } else { Command::new("orchd") };
     c.arg("--orchfile").arg(hum_paths::orchfile())
      .arg("--user")
      .arg("--namespace").arg("hum");
