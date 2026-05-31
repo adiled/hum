@@ -20,6 +20,11 @@ pub struct HumdSection {
     pub drift_retention_days: u32,
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
+    /// host:port the ensemble TCP transport binds on. None / empty
+    /// means dial-only — humd can reach `tcp:` peers but no peer can
+    /// reach it over TCP. iroh is unaffected (independent transport).
+    #[serde(default, rename = "tcpListen")]
+    pub tcp_listen: Option<String>,
 }
 
 impl Default for HumdSection {
@@ -28,6 +33,7 @@ impl Default for HumdSection {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             drift_retention_days: defaults::drift_retention_days(),
             metrics_addr: defaults::metrics_addr(),
+            tcp_listen: None,
         }
     }
 }

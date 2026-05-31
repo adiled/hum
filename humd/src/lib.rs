@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
+use ensemble::{Ensemble, Hid, HumdKey, PeerCapabilities};
 use parking_lot::RwLock;
 use serde_json::Value;
 use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
@@ -22,8 +22,9 @@ use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
 
 mod identity;
+mod peer_transport;
 mod peers;
-pub use identity::{key_path, load_or_mint_key};
+pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
 
 /// Per-sid observer roster. Maps a hum's `sid` to a list of peer humds
@@ -195,36 +196,38 @@ where
         }),
     };
 
-    // Dial-on-boot. Each peer attempt is independently fallible — one
-    // dead host shouldn't sink startup. TcpTransport is the only wired
-    // transport today; other hint prefixes ("iroh:") are skipped with a
-    // log line until their transports land.
-    if let (Some(ens), Some(_key)) = (&ensemble_opt, &cfg.humd_key) {
+    // Bring up the transport surfaces — iroh always, tcp when
+    // configured — dial peers across both, detach accept loops. Each
+    // accepted/dialed connection lands at Ensemble::install (signed)
+    // so the peer registry stays transport-agnostic. Failures are
+    // logged and non-fatal.
+    let mut peer_reach: Vec<String> = Vec::new();
+    if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
         let my_caps = my_capabilities(&cfg);
-        for peer in &cfg.bootstrap_peers {
-            let tcp_hint = peer
-                .hints
-                .iter()
-                .find_map(|h| h.strip_prefix("tcp:"));
-            let Some(addr) = tcp_hint else {
-                trace!(peer = %peer.humd_id.short(), "peers.skip.no-tcp-hint");
-                continue;
-            };
-            let peer_addr = {
-                let mut a = HumdAddr::new(peer.humd_id);
-                for h in &peer.hints { a.hints.push(h.clone()); }
-                a
-            };
-            match ensemble::TcpEndpoint::connect(addr, peer_addr, PeerCapabilities::default()).await {
-                Ok(conn) => {
-                    info!(peer = %peer.humd_id.short(), addr, "peer.dial.ok");
-                    ens.add_peer_with_caps(conn as Arc<dyn ensemble::PeerConnection>, my_caps.clone());
-                }
-                Err(e) => {
-                    warn!(peer = %peer.humd_id.short(), addr, err = %e, "peer.dial.failed");
-                }
+
+        match peer_transport::iroh::bind(key).await {
+            Ok((transport, hints)) => {
+                let transport = Arc::new(transport);
+                peer_transport::iroh::dial_all(&transport, ens, key, &cfg.bootstrap_peers, &my_caps).await;
+                peer_transport::iroh::spawn_listener(
+                    transport,
+                    ens.clone(),
+                    key.clone(),
+                    my_caps.clone(),
+                );
+                peer_reach.extend(hints);
+            }
+            Err(e) => warn!(err = %e, "peer.iroh.bind_failed"),
+        }
+
+        if let Some(addr) = cfg.hum_cfg.humd.tcp_listen.as_deref().filter(|s| !s.is_empty()) {
+            match peer_transport::tcp::spawn_listener(addr, ens.clone(), key.clone(), my_caps.clone()).await {
+                Ok((_bound, hints)) => peer_reach.extend(hints),
+                Err(e) => warn!(addr, err = %e, "peer.tcp.bind_failed"),
             }
         }
+
+        peer_transport::tcp::dial_all(ens, key, &cfg.bootstrap_peers, &my_caps).await;
     } else if !cfg.bootstrap_peers.is_empty() {
         warn!(
             count = cfg.bootstrap_peers.len(),
@@ -326,6 +329,7 @@ where
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
         let humd_version = env!("CARGO_PKG_VERSION").to_string();
+        let peer_reach = peer_reach.clone();
         tokio::spawn(async move {
             let res = thrum_serve_with_hook(thrum, &path, move |bound| {
                 let info = hum_paths::RuntimeInfo {
@@ -336,7 +340,7 @@ where
                     bound_at_ms: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64).unwrap_or(0),
-                    ensemble_addrs: Vec::new(),
+                    ensemble_addrs: peer_reach.clone(),
                 };
                 if let Err(e) = info.write() {
                     warn!(err = %e, "humd.runtime_info.write_failed");

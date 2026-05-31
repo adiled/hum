@@ -27,6 +27,10 @@
           "type": "string",
           "default": "127.0.0.1:9909",
           "description": "host:port the Prometheus exporter binds. Empty / unparseable disables the endpoint."
+        },
+        "tcpListen": {
+          "type": "string",
+          "description": "host:port the ensemble TCP transport binds for inbound peers. Omit / empty for dial-only (no listener). Plaintext — the signed ensemble hello is the only authentication on the wire; use iroh for non-LAN."
         }
       }
     },

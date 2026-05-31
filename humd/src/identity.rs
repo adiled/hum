@@ -63,6 +63,28 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
     Ok(key)
 }
 
+/// Load the persisted key without minting. Returns `Ok(None)` when no
+/// key file exists yet — for inspect-only callers (`hum` CLI) that
+/// shouldn't mutate state.
+pub fn read_key() -> Result<Option<HumdKey>> {
+    let path = key_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path)
+        .with_context(|| format!("read humd key {}", path.display()))?;
+    if bytes.len() != 32 {
+        return Err(anyhow!(
+            "humd key at {} is {} bytes, expected 32",
+            path.display(),
+            bytes.len()
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(Some(HumdKey(SigningKey::from_bytes(&arr))))
+}
+
 /// Write 32 bytes atomically (tmp + rename) with mode 0o600.
 fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
     if let Some(parent) = path.parent() {

@@ -95,6 +95,16 @@ enum Cmd {
         #[command(subcommand)]
         verb: ThehumVerb,
     },
+    /// Inspect or edit the peer-mesh state.
+    ///   hum ensemble                          show our identity + reach + configured peers
+    ///   hum ensemble peer add <humd_id>       append an entry to peers.json
+    ///       --hint <tcp:host:port|iroh:hex>   (repeatable)
+    ///       --alias <name>                    optional human-friendly name
+    ///   hum ensemble peer rm <humd_id|alias>  drop matching entries
+    Ensemble {
+        #[command(subcommand)]
+        verb: Option<EnsembleVerb>,
+    },
     /// Stop the service and remove the humd binary. State preserved.
     Uninstall,
     /// Check for a newer release and self-update. Compares the local
@@ -104,6 +114,36 @@ enum Cmd {
         /// Update even when versions match (force reinstall).
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum EnsembleVerb {
+    /// Manage entries in peers.json — bootstrap peers humd dials on boot.
+    Peer {
+        #[command(subcommand)]
+        action: PeerAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PeerAction {
+    /// Append a peer to peers.json. Repeated `--hint` flags accumulate.
+    /// Existing entries with the same humd_id are replaced (idempotent).
+    Add {
+        /// Peer humd_id (hex, with or without `humd_` prefix).
+        humd_id: String,
+        /// Dial hint, e.g. `tcp:host:port` or `iroh:<64-hex>`. Repeat for multiple.
+        #[arg(long)]
+        hint: Vec<String>,
+        /// Optional alias for `hum://<alias>/path` URI resolution.
+        #[arg(long)]
+        alias: Option<String>,
+    },
+    /// Remove all entries matching `target` (by humd_id or alias).
+    Rm {
+        /// humd_id (full hex, with/without prefix) or alias.
+        target: String,
     },
 }
 
@@ -149,6 +189,7 @@ fn main() -> Result<()> {
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
+        Some(Cmd::Ensemble { verb }) => ensemble(verb),
         Some(Cmd::Uninstall) => uninstall(),
         Some(Cmd::Update { force }) => update(force),
     }
@@ -286,6 +327,174 @@ fn status() -> Result<()> {
 }
 
 fn yn(b: bool) -> &'static str { if b { "✓" } else { "missing" } }
+
+/// `hum ensemble` — inspect or edit on-disk peer-mesh state.
+fn ensemble(verb: Option<EnsembleVerb>) -> Result<()> {
+    match verb {
+        None => ensemble_show(),
+        Some(EnsembleVerb::Peer { action }) => match action {
+            PeerAction::Add { humd_id, hint, alias } => ensemble_peer_add(&humd_id, hint, alias),
+            PeerAction::Rm { target } => ensemble_peer_rm(&target),
+        },
+    }
+}
+
+/// Default display — our identity + reach hints + configured peers.
+/// Live peer state lives in the running daemon and needs an admin-tone
+/// RPC that isn't wired yet.
+fn ensemble_show() -> Result<()> {
+    match humd::read_key()? {
+        Some(key) => println!("me:      {}", key.hid()),
+        None => println!("me:      (no identity — humd has never booted)"),
+    }
+
+    let reach = hum_paths::RuntimeInfo::read()
+        .map(|info| info.ensemble_addrs)
+        .unwrap_or_default();
+    if reach.is_empty() {
+        println!("reach:   (humd not running, or no transport bound)");
+    } else {
+        println!("reach:   (paste into a peer's peers.json hints)");
+        for h in &reach {
+            println!("           {h}");
+        }
+    }
+
+    let peers_json = hum_paths::peers_json();
+    if !peers_json.exists() {
+        println!("peers:   (peers.json not present at {})", peers_json.display());
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&peers_json)?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {}", peers_json.display()))?;
+    let entries = parsed.get("peers").and_then(|v| v.as_array());
+    match entries {
+        Some(es) if !es.is_empty() => {
+            println!("peers:   ({} configured in {})", es.len(), peers_json.display());
+            for (i, e) in es.iter().enumerate() {
+                let id = e.get("humd_id").and_then(|v| v.as_str()).unwrap_or("(no id)");
+                let alias = e.get("alias").and_then(|v| v.as_str()).unwrap_or("");
+                let hints: Vec<&str> = e.get("hints")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|h| h.as_str()).collect())
+                    .unwrap_or_default();
+                let label = if alias.is_empty() { id.to_string() } else { format!("{alias}  {id}") };
+                println!("  [{i}] {label}");
+                for h in &hints {
+                    println!("        {h}");
+                }
+            }
+        }
+        _ => println!("peers:   (none configured in {})", peers_json.display()),
+    }
+    Ok(())
+}
+
+/// Read peers.json into `(file, peers_array)`. Returns an empty file
+/// shape if peers.json is missing — the caller will create it on write.
+fn peers_load() -> Result<(serde_json::Map<String, serde_json::Value>, Vec<serde_json::Value>)> {
+    let path = hum_paths::peers_json();
+    if !path.exists() {
+        return Ok((serde_json::Map::new(), Vec::new()));
+    }
+    let raw = std::fs::read_to_string(&path)?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {}", path.display()))?;
+    let mut obj = parsed.as_object().cloned().unwrap_or_default();
+    let peers = obj
+        .remove("peers")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    Ok((obj, peers))
+}
+
+/// Atomic write — tmp + rename, mkdir -p, preserves unknown top-level
+/// keys the caller carried over from peers_load.
+fn peers_save(
+    mut other_fields: serde_json::Map<String, serde_json::Value>,
+    peers: Vec<serde_json::Value>,
+) -> Result<()> {
+    let path = hum_paths::peers_json();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    other_fields.insert("peers".into(), serde_json::Value::Array(peers));
+    let body = serde_json::to_string_pretty(&serde_json::Value::Object(other_fields))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+fn normalize_humd_id(s: &str) -> String {
+    // Strip a leading `humd_` if present; humd's loader accepts both
+    // shapes, but storing one canonical form keeps the file readable.
+    s.strip_prefix("humd_").unwrap_or(s).to_string()
+}
+
+fn ensemble_peer_add(humd_id: &str, hints: Vec<String>, alias: Option<String>) -> Result<()> {
+    if hints.is_empty() {
+        anyhow::bail!("at least one --hint required (e.g. --hint tcp:host:port or --hint iroh:<64-hex>)");
+    }
+    let canonical_id = normalize_humd_id(humd_id);
+    let hex_only = canonical_id.chars().all(|c| c.is_ascii_hexdigit());
+    if !hex_only || canonical_id.len() != 64 {
+        anyhow::bail!(
+            "humd_id `{humd_id}` doesn't look like 64-hex (optionally prefixed `humd_`)"
+        );
+    }
+
+    let (other_fields, mut peers) = peers_load()?;
+    let before = peers.len();
+    peers.retain(|p| p.get("humd_id").and_then(|v| v.as_str()) != Some(&canonical_id));
+    let replaced = before != peers.len();
+
+    let mut entry = serde_json::Map::new();
+    entry.insert("humd_id".into(), serde_json::Value::String(canonical_id.clone()));
+    entry.insert(
+        "hints".into(),
+        serde_json::Value::Array(hints.into_iter().map(serde_json::Value::String).collect()),
+    );
+    if let Some(a) = alias {
+        entry.insert("alias".into(), serde_json::Value::String(a));
+    }
+    peers.push(serde_json::Value::Object(entry));
+    peers_save(other_fields, peers)?;
+
+    let path = hum_paths::peers_json();
+    if replaced {
+        println!("peers.json: replaced entry for humd_{} in {}", &canonical_id[..16], path.display());
+    } else {
+        println!("peers.json: added humd_{} → {}", &canonical_id[..16], path.display());
+    }
+    println!("(restart humd for the new entry to take effect)");
+    Ok(())
+}
+
+fn ensemble_peer_rm(target: &str) -> Result<()> {
+    let canonical = normalize_humd_id(target);
+    let (other_fields, peers) = peers_load()?;
+    let before = peers.len();
+    let kept: Vec<_> = peers
+        .into_iter()
+        .filter(|p| {
+            let id = p.get("humd_id").and_then(|v| v.as_str()).unwrap_or("");
+            let alias = p.get("alias").and_then(|v| v.as_str()).unwrap_or("");
+            id != canonical && alias != target
+        })
+        .collect();
+    let removed = before - kept.len();
+    peers_save(other_fields, kept)?;
+    let path = hum_paths::peers_json();
+    if removed == 0 {
+        println!("peers.json: no entry matching `{target}` in {}", path.display());
+    } else {
+        println!("peers.json: removed {removed} entr{} from {}", if removed == 1 { "y" } else { "ies" }, path.display());
+        println!("(restart humd for the removal to take effect)");
+    }
+    Ok(())
+}
 
 fn logs(lines: u32) -> Result<()> {
     match hum_paths::daemon_logs("humd") {
