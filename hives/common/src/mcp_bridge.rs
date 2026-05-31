@@ -175,23 +175,23 @@ mod tests {
         use std::io::{Read, Write};
         use std::net::TcpStream;
 
-        pub struct Client;
+        pub(crate) struct Client;
         impl Client {
-            pub fn new() -> Self { Self }
-            pub fn post(self, url: String) -> RequestBuilder {
+            pub(crate) fn new() -> Self { Self }
+            pub(crate) fn post(self, url: String) -> RequestBuilder {
                 RequestBuilder { url, body: None }
             }
         }
-        pub struct RequestBuilder {
+        pub(crate) struct RequestBuilder {
             url: String,
             body: Option<String>,
         }
         impl RequestBuilder {
-            pub fn json<T: Serialize>(mut self, v: &T) -> Self {
+            pub(crate) fn json<T: Serialize>(mut self, v: &T) -> Self {
                 self.body = Some(serde_json::to_string(v).unwrap());
                 self
             }
-            pub async fn send(self) -> Result<Response, std::io::Error> {
+            pub(crate) async fn send(self) -> Result<Response, std::io::Error> {
                 let url = self.url;
                 let body = self.body.unwrap_or_default();
                 tokio::task::spawn_blocking(move || -> Result<Response, std::io::Error> {
@@ -212,9 +212,9 @@ mod tests {
                 }).await.unwrap()
             }
         }
-        pub struct Response { body: String }
+        pub(crate) struct Response { body: String }
         impl Response {
-            pub async fn json(self) -> Result<Value, serde_json::Error> {
+            pub(crate) async fn json(self) -> Result<Value, serde_json::Error> {
                 serde_json::from_str(&self.body)
             }
         }

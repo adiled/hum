@@ -257,25 +257,25 @@ pub fn validate_or_exit() {
 mod defaults {
     use std::path::PathBuf;
 
-    pub fn permission_dusk_ms() -> u64 {
+    pub(crate) fn permission_dusk_ms() -> u64 {
         60_000
     }
-    pub fn drift_retention_days() -> u32 {
+    pub(crate) fn drift_retention_days() -> u32 {
         30
     }
-    pub fn metrics_addr() -> String {
+    pub(crate) fn metrics_addr() -> String {
         "127.0.0.1:9909".into()
     }
-    pub fn max_active_cells() -> u32 {
+    pub(crate) fn max_active_cells() -> u32 {
         4
     }
-    pub fn cell_idle_prune_threshold_ms() -> u64 {
+    pub(crate) fn cell_idle_prune_threshold_ms() -> u64 {
         300_000
     }
-    pub fn default_hive() -> String {
+    pub(crate) fn default_hive() -> String {
         "claude-repl".into()
     }
-    pub fn denied() -> Vec<PathBuf> {
+    pub(crate) fn denied() -> Vec<PathBuf> {
         vec![
             PathBuf::from("~/.ssh"),
             PathBuf::from("~/.aws"),

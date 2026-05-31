@@ -15,7 +15,7 @@ use crate::{
     breath_tone, chi_of, echo_tone, rid_of, short, tone_is_dusk, validate_envelope, Thrum,
 };
 
-pub async fn run(thrum: Thrum, sock: UnixStream) {
+pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
     let client_id = ids::HumId::mint().to_string();
     let (reach, rx) = Reach::new(client_id.clone());
     let reach = Arc::new(reach);

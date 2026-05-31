@@ -46,7 +46,7 @@ struct Args {
     replace: Option<String>,
 }
 
-pub fn def() -> ToolDef {
+pub(crate) fn def() -> ToolDef {
     ToolDef {
         name: "humfs_do_noncode".into(),
         description: "Author non-code files using linguistic scope. Four scopes (pass exactly one): word (format-agnostic token swap), phrase (structural name — JSON/YAML key, env var, markdown heading, TOML section — or exact text), sentence (smallest independent unit), paragraph (full block). Omit 'replace' to delete the scope; no scope param creates/overwrites the whole file. Handles configs, docs, markup, stylesheets, data, plain text. Code files route to humfs_do_code.".into(),
@@ -65,7 +65,7 @@ pub fn def() -> ToolDef {
     }
 }
 
-pub async fn run(args: Value) -> ToolResult {
+pub(crate) async fn run(args: Value) -> ToolResult {
     let args: Args = match serde_json::from_value(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(format!("invalid args: {e}")),

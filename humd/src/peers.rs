@@ -61,7 +61,7 @@ pub fn peers_path() -> PathBuf {
 /// Missing file → empty vec. Parse errors on the outer object → empty vec
 /// (warn). Malformed rows inside `peers[]` → skipped (warn), good rows
 /// kept.
-pub fn load() -> Vec<PeerConfig> {
+pub(crate) fn load() -> Vec<PeerConfig> {
     let path = peers_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,

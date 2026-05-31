@@ -7,7 +7,7 @@
 
 use crate::ast::Symbol;
 
-pub fn format_symbols(symbols: &[Symbol]) -> String {
+pub(crate) fn format_symbols(symbols: &[Symbol]) -> String {
     if symbols.is_empty() {
         return "(no symbols detected)".into();
     }

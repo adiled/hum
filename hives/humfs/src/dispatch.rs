@@ -10,12 +10,12 @@ use serde_json::Value;
 
 use crate::tools::{bash, do_code, do_noncode, read};
 
-pub struct HumfsDispatcher {
+pub(crate) struct HumfsDispatcher {
     // Future: SessionState here (cwd, fs.roots, permission cache).
 }
 
 impl HumfsDispatcher {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {}
     }
 }

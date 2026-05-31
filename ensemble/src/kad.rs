@@ -398,7 +398,7 @@ pub(crate) struct LookupShortlist {
 }
 
 impl LookupShortlist {
-    pub fn new(target: Hid, seed: Vec<HumdAddr>) -> Self {
+    pub(crate) fn new(target: Hid, seed: Vec<HumdAddr>) -> Self {
         let mut s = Self {
             shortlist: Vec::new(),
             queried: std::collections::HashSet::new(),
@@ -410,7 +410,7 @@ impl LookupShortlist {
         s
     }
 
-    pub fn insert(&mut self, addr: HumdAddr) {
+    pub(crate) fn insert(&mut self, addr: HumdAddr) {
         if self.shortlist.iter().any(|a| a.id == addr.id) {
             return;
         }
@@ -423,7 +423,7 @@ impl LookupShortlist {
     }
 
     /// Up to α not-yet-queried entries from the closest end of the shortlist.
-    pub fn next_unqueried(&self, alpha: usize) -> Vec<HumdAddr> {
+    pub(crate) fn next_unqueried(&self, alpha: usize) -> Vec<HumdAddr> {
         self.shortlist
             .iter()
             .filter(|a| !self.queried.contains(&a.id))
@@ -432,19 +432,19 @@ impl LookupShortlist {
             .collect()
     }
 
-    pub fn mark_queried(&mut self, id: Hid) {
+    pub(crate) fn mark_queried(&mut self, id: Hid) {
         self.queried.insert(id);
     }
 
     /// Closest distance seen so far (or all-ones sentinel if empty).
-    pub fn closest_distance(&self) -> [u8; 32] {
+    pub(crate) fn closest_distance(&self) -> [u8; 32] {
         self.shortlist
             .first()
             .map(|a| XorDistance::distance(&self.target, &a.id))
             .unwrap_or([0xff; 32])
     }
 
-    pub fn closest(&self) -> Option<&HumdAddr> {
+    pub(crate) fn closest(&self) -> Option<&HumdAddr> {
         self.shortlist.first()
     }
 }

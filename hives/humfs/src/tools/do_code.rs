@@ -42,7 +42,7 @@ struct Args {
 
 fn default_op() -> String { "replace".into() }
 
-pub fn def() -> ToolDef {
+pub(crate) fn def() -> ToolDef {
     ToolDef {
         name: "humfs_do_code".into(),
         description: "Author code — AST-grounded, symbol-scoped. Operations: create | replace (symbol OR whole-file) | insert_before | insert_after | delete. The top-of-file import block is addressable as the synthetic 'imports' symbol. Sub-symbol walks (body/when/otherwise/loop/try/return/call) compose with dots and disambiguate with #N (P6). Languages: ts/tsx/js/jsx/mjs/cjs/py/pyi/go/rs (AST-backed today). Every write is re-parsed; a syntax-error result aborts the write. Non-code files route to humfs_do_noncode.".into(),
@@ -59,7 +59,7 @@ pub fn def() -> ToolDef {
     }
 }
 
-pub async fn run(args: Value) -> ToolResult {
+pub(crate) async fn run(args: Value) -> ToolResult {
     let args: Args = match serde_json::from_value(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(format!("invalid args: {e}")),
