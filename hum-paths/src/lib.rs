@@ -178,10 +178,6 @@ pub fn thehum_dir() -> PathBuf { state_dir().join("thehum") }
 /// Cloned hum source tree (recipes + hive installers).
 pub fn src_dir() -> PathBuf { data_dir().join("src") }
 
-/// Helper script ship with hum's source clone — used by the CLI when
-/// running cross-platform service operations (systemctl / launchctl wrap).
-pub fn svc_script() -> PathBuf { src_dir().join("scripts/svc.sh") }
-
 /// `$HOME/.local` — the base for HOME-anchored installs that aren't
 /// resolved through XDG (cargo install --root, .local/bin, etc).
 pub fn local_dir() -> PathBuf { home().join(".local") }

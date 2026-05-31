@@ -176,7 +176,7 @@ fn update(force: bool) -> Result<()> {
     }
     println!("updating to {upstream_trim} …");
     // Canonical installer URL is the single source of truth. It pulls
-    // source, builds, bounces the service via scripts/svc.sh.
+    // source, builds, bounces the service via the installer.
     let url = "https://raw.githubusercontent.com/adiled/hum/main/install";
     let status = Command::new("bash")
         .arg("-c")
@@ -251,18 +251,6 @@ fn humd_bin() -> Result<PathBuf> {
     anyhow::bail!("humd binary not found (set HUM_BIN or run ./install)")
 }
 
-fn svc_helper() -> Option<PathBuf> {
-    // Look next to this binary's repo root or in the rsynced source.
-    let candidates = [
-        std::env::current_exe().ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .map(|p| p.join("../../scripts/svc.sh")),
-        Some(hum_paths::svc_script()),
-        Some(PathBuf::from("./scripts/svc.sh")),
-    ];
-    candidates.into_iter().flatten().find(|p| p.exists())
-}
-
 // ─── subcommands ─────────────────────────────────────────────────────────
 
 fn summary() -> Result<()> {
@@ -294,13 +282,6 @@ fn status() -> Result<()> {
     println!("thrum socket: {} {}", thrum_sock.display(),
              yn(std::fs::metadata(&thrum_sock).is_ok()));
 
-    if let Some(svc) = svc_helper() {
-        println!();
-        let _ = Command::new("bash")
-            .arg("-c")
-            .arg(format!(". {} && svc_status hum", svc.display()))
-            .status();
-    }
     Ok(())
 }
 
@@ -417,14 +398,8 @@ fn doctor() -> Result<()> {
         Ok(_) | Err(_) => println!("  {claude}: ✗ NOT RUNNABLE — set CLAUDE_CLI_PATH to the real binary"),
     }
 
-    // 5. Bees + service state (full manifest info).
     println!("\n[bees]");
-    if let Some(svc) = svc_helper() {
-        let installed = bee_list(&svc).unwrap_or_default();
-        let _ = bee_list_full(&svc, &installed);
-    } else {
-        println!("  (svc.sh not found — can't enumerate services)");
-    }
+    let _ = bee_list_full(&orch_catalog());
 
     // 6. Recent logs with warnings/errors surfaced. This is where the
     //    real failures show (worker.result.error, bee.hid.*, spawn fails).
@@ -460,57 +435,7 @@ fn print_recent_logs(unit: &str, lines: u32) {
     }
 }
 
-// ── hive / bee shared service plumbing ─────────────────────────────────────
-
-/// `svc_list` short-ids of installed bee services (the `hum-*` units).
-fn bee_list(svc: &std::path::Path) -> Result<Vec<String>> {
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(format!(". {} && svc_list", svc.display()))
-        .output()
-        .context("run svc_list")?;
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect())
-}
-
-/// True if a unit is currently running (svc_is_active exit 0).
-fn svc_active(svc: &std::path::Path, unit: &str) -> bool {
-    Command::new("bash")
-        .arg("-c")
-        .arg(format!(". {} && svc_is_active {}", svc.display(), unit))
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Last exit code reported by the service manager. None if unknown.
-/// Non-zero with `!svc_active` means crash-loop.
-fn svc_last_exit(svc: &std::path::Path, unit: &str) -> Option<i32> {
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(format!(". {} && svc_last_exit {}", svc.display(), unit))
-        .output().ok()?;
-    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    raw.parse().ok()
-}
-
-/// Resolve a user-given name to installed service unit(s), tolerantly:
-///   exact unit ("hum-claude-cli-worker")
-///   → "hum-<name>" ("paid-oracle" → "hum-paid-oracle")
-///   → hive-kind prefix ("claude-cli" → "hum-claude-cli-worker"), so the
-///     kind shown by `hum hive --list` addresses its bee.
-fn resolve_units(installed: &[String], name: &str) -> Vec<String> {
-    if name == "all" { return installed.to_vec(); }
-    let prefixed = format!("hum-{name}");
-    installed.iter().filter(|b| {
-        **b == name || **b == prefixed
-            || b.strip_prefix("hum-").map(|s| s == name || s.starts_with(&format!("{name}-"))).unwrap_or(false)
-    }).cloned().collect()
-}
+// ── hive / bee plumbing ─────────────────────────────────────────────────
 
 fn hive(target: Option<String>, action: Option<String>, list: bool) -> Result<()> {
     // hum hive --list  (or bare `hum hive`)
@@ -552,15 +477,8 @@ fn hive_list() -> Result<()> {
             }
         }
     }
-    if let Some(svc) = svc_helper() {
-        let catalogue: Vec<String> = kinds.keys().cloned().collect();
-        for unit in bee_list(&svc).unwrap_or_default() {
-            let sid = unit.strip_prefix("hum-").unwrap_or(&unit).to_string();
-            let kind = catalogue.iter()
-                .filter(|k| sid == **k || sid.starts_with(&format!("{k}-")))
-                .max_by_key(|k| k.len()).cloned().unwrap_or(sid);
-            kinds.entry(kind).or_default().2 = true;
-        }
+    for kind in orch_catalog() {
+        kinds.entry(kind).or_default().2 = true;
     }
     if kinds.is_empty() {
         println!("no hives found (looked in {})", hives_dir.display());
@@ -755,10 +673,7 @@ fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
     anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
 }
 
-/// Render `hum bee --list` with maximum info: humd's live manifest
-/// (hid, role, models, tools, provides, wire, version, source) joined
-/// with each bee's service unit + running state.
-fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
+fn bee_list_full(installed: &[String]) -> Result<()> {
     let snap_path = hum_paths::bees_snapshot();
     let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -774,29 +689,18 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
     let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
     let arr = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
 
-    // Live bees (full info), each matched to a service unit if any.
-    let mut matched_units: Vec<String> = Vec::new();
+    let mut matched_kinds: Vec<String> = Vec::new();
     for m in &live {
         let hive = s(m, "name");
-        let unit = installed.iter().find(|u| {
-            let sid = u.strip_prefix("hum-").unwrap_or(u);
-            sid == hive || sid.starts_with(&format!("{hive}-"))
-        }).cloned();
-        if let Some(u) = &unit { matched_units.push(u.clone()); }
+        let managed = installed.iter().any(|k| k == &hive || hive.starts_with(&format!("{k}-")));
+        if managed { matched_kinds.push(hive.clone()); }
 
         let role = arr(m, "bee").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>().join("+");
         let models = arr(m, "models").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let tools: Vec<String> = arr(m, "tools").iter().map(|t| s(t, "name")).filter(|x| !x.is_empty()).collect();
         let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
-        let state = match &unit {
-            Some(u) if svc_active(svc, u) => "in nest (service running)".to_string(),
-            Some(u) => match svc_last_exit(svc, u) {
-                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
-                _ => "in nest (service stopped?)".to_string(),
-            },
-            None => "in nest (unmanaged)".to_string(),
-        };
+        let state = if managed { "in nest (orchd-managed)" } else { "in nest (unmanaged)" };
 
         println!("● {hive}  —  {state}");
         let hid = s(m, "hid");
@@ -810,22 +714,12 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
         if !version.is_empty()  { println!("    version:  {version}"); }
         let source = s(m, "source");
         if !source.is_empty()   { println!("    source:   {source}"); }
-        if let Some(u) = &unit  { println!("    service:  {u}"); }
         println!();
     }
 
-    for u in installed {
-        if matched_units.contains(u) { continue; }
-        let state = if svc_active(svc, u) {
-            "service running, not handshaked".to_string()
-        } else {
-            match svc_last_exit(svc, u) {
-                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
-                _ => "exited".to_string(),
-            }
-        };
-        println!("● {}  —  {state}", u.strip_prefix("hum-").unwrap_or(u));
-        println!("    service:  {u}");
+    for kind in installed {
+        if matched_kinds.contains(kind) { continue; }
+        println!("● {kind}  —  installed, not handshaked");
         println!();
     }
 
@@ -834,50 +728,22 @@ fn bee_list_full(svc: &std::path::Path, installed: &[String]) -> Result<()> {
 }
 
 fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
-    let svc = svc_helper().context("scripts/svc.sh not found — install hum first")?;
-    let installed = bee_list(&svc)?;
+    let installed = orch_catalog();
 
-    // List: `hum bee --list`, or bare `hum bee`. Full info comes from
-    // humd's live manifest snapshot (`hum_paths::bees_snapshot()`);
-    // service state comes from the service manager.
     if list || (target.is_none() && verb.is_none()) {
-        bee_list_full(&svc, &installed)?;
-        return Ok(());
+        return bee_list_full(&installed);
     }
 
-    // Operate: `hum bee <target> <verb>`.
     let (target, verb) = match (target, verb) {
         (Some(t), Some(v)) => (t, v),
         (Some(t), None) => anyhow::bail!("hum bee {t} <verb> — enter | exit | reenter"),
         _ => anyhow::bail!("hum bee <id> <verb>, or hum bee --list"),
     };
-    // Prefer humnest for any kind it knows about; fall back to svc.sh for
-    // legacy units or unknown targets (svc_active/svc_last_exit helpers
-    // stay live so `hum bee --list` keeps working).
-    if target != "all" && orch_route_verb(&target, &verb)? {
-        return Ok(());
-    }
-    let op = match verb.as_str() {
-        "enter"   => "svc_start",
-        "exit"    => "svc_stop",
-        "reenter" => "svc_restart",
-        other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
-    };
-    let units = resolve_units(&installed, &target);
-    if units.is_empty() {
+    if !orch_route_verb(&target, &verb)? {
         anyhow::bail!("no bee matching '{target}'. bees: {}",
             if installed.is_empty() { "(none)".into() } else { installed.join(", ") });
     }
-    let past = match verb.as_str() { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
-    let mut all_ok = true;
-    for unit in &units {
-        let ok = Command::new("bash").arg("-c")
-            .arg(format!(". {} && {} {}", svc.display(), op, unit))
-            .status().map(|s| s.success()).unwrap_or(false);
-        all_ok &= ok;
-        println!("  {} {unit}", if ok { format!("✓ {past}") } else { "✗ failed".into() });
-    }
-    if all_ok { Ok(()) } else { anyhow::bail!("one or more {verb} ops failed") }
+    Ok(())
 }
 
 fn penny() -> Result<()> {
@@ -994,12 +860,7 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
 }
 
 fn uninstall() -> Result<()> {
-    let svc = svc_helper().context("scripts/svc.sh not found")?;
-    let script = format!(r#"
-        . {}
-        svc_uninstall hum || true
-    "#, svc.display());
-    Command::new("bash").arg("-c").arg(script).status()?;
+    let _ = Command::new("humctl").arg("stop").status();
     if let Ok(bin) = humd_bin() {
         let _ = std::fs::remove_file(&bin);
         println!("removed {}", bin.display());
