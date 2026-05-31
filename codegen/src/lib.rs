@@ -7,10 +7,14 @@
 //! without creating a cycle.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Context};
 use regex::Regex;
+
+pub mod paths;
+
+pub use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct Variant {
@@ -106,39 +110,6 @@ pub fn emit_go_helpers(output: &Path) -> Result<()> {
     }
     fs::write(output, s).with_context(|| format!("write {}", output.display()))?;
     Ok(())
-}
-
-/// Default lookup of repo files relative to the codegen crate's manifest dir.
-pub fn default_chi_rs() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-core/src/chi.rs")
-}
-
-pub fn default_lib_rs() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-core/src/lib.rs")
-}
-
-pub fn default_ts_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/ts/chi.ts")
-}
-
-pub fn default_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/ts/helpers.ts")
-}
-
-pub fn default_py_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/python/thrum/chi.py")
-}
-
-pub fn default_py_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/python/thrum/helpers.py")
-}
-
-pub fn default_go_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/go/thrum/chi.go")
-}
-
-pub fn default_go_helpers_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../thrum-clients/go/thrum/helpers.go")
 }
 
 // ── parsing ────────────────────────────────────────────────────────────────
