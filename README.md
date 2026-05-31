@@ -1,4 +1,6 @@
 <p align="center">
+  <img src="./logo.png" alt="hum" width="200">
+  <br>
   <strong>﹏ hum ﹏</strong>
   <br>
   The only AI stack nestled on a biodiverse agentic kernel framework.

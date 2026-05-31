@@ -103,7 +103,17 @@ export default defineConfig({
     starlight({
       title: "hum",
       description: "The only AI stack nestled on a biodiverse agentic kernel framework.",
-      logo: { src: "./src/assets/hum-glyph.svg" },
+      logo: { src: "./src/assets/hum-logo.png" },
+      favicon: "/favicon-32.png",
+      head: [
+        { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "16x16", href: `${base}favicon-16.png` } },
+        { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "32x32", href: `${base}favicon-32.png` } },
+        { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: `${base}favicon-192.png` } },
+        { tag: "link", attrs: { rel: "apple-touch-icon", sizes: "180x180", href: `${base}apple-touch-icon.png` } },
+        { tag: "meta", attrs: { property: "og:image", content: `${site}${base}social-card.png` } },
+        { tag: "meta", attrs: { name: "twitter:image", content: `${site}${base}social-card.png` } },
+        { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
+      ],
       social: { github: "https://github.com/adiled/hum" },
       customCss: ["./src/styles/spacecraft.css"],
       sidebar: [
