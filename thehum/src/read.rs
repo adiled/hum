@@ -45,7 +45,7 @@ fn scan_all(dir: &Path) -> Result<Vec<Event>> {
         .context("readdir thehum")?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("ndjson"))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some(hum_paths::THEHUM_NDJSON_EXT))
         .collect();
     files.sort();
 

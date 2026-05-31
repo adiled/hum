@@ -57,7 +57,7 @@ fn daily_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(std::fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("ndjson"))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some(hum_paths::THEHUM_NDJSON_EXT))
         .collect())
 }
 
@@ -91,7 +91,7 @@ mod tests {
         let r = t.enforce_retention().unwrap();
         assert_eq!(r.removed_files, 0);
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().filter(|e| {
-            e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("ndjson")
+            e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some(hum_paths::THEHUM_NDJSON_EXT)
         }).count(), 3);
     }
 

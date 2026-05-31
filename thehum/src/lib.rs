@@ -24,7 +24,7 @@ use tokio::sync::broadcast;
 pub mod anchor;
 pub mod append;
 pub mod canon;
-pub mod layout;
+
 pub mod read;
 pub mod retention;
 pub mod sign;
@@ -142,8 +142,8 @@ impl TheHum {
     pub fn open(dir: &Path, signing_key: SigningKey, cfg: Config) -> Result<Self> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("create thehum dir {}", dir.display()))?;
-        std::fs::create_dir_all(layout::snapshots_dir(dir))
-            .with_context(|| format!("create snapshots dir {}", layout::snapshots_dir(dir).display()))?;
+        std::fs::create_dir_all(hum_paths::thehum_snapshots_dir(dir))
+            .with_context(|| format!("create snapshots dir {}", hum_paths::thehum_snapshots_dir(dir).display()))?;
 
         let pubkey = signing_key.verifying_key();
         let author_hid = ensemble::Hid::from_pubkey(

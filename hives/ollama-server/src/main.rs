@@ -106,9 +106,6 @@ impl Config {
 struct OllamaMessage {
     role: String,
     content: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

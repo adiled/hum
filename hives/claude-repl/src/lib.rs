@@ -1,12 +1,8 @@
-//! claude-repl — interactive `claude` over a PTY. v0 stub.
+//! claude-repl — interactive `claude` over a PTY.
 //!
-//! Real behavior in TS lives in `nests/claude-repl/harness.ts`: a FSM
-//! (NESTING → PERCHED → HUNTING → WILTING → HUSHED/FELLED), an ANSI/DEC
-//! responder, hook FIFO, and JSONL transcript synth into stream-json.
-//!
-//! v0: spawn the PTY, watch stdout, mark PERCHED when the prompt glyph
-//! `❯` shows up. No transcript synth, no hooks, no classifier. The cell
-//! compiles and runs — it just can't carry a turn.
+//! Spawns the PTY, watches stdout, marks PERCHED when the prompt glyph
+//! `❯` shows up. No transcript synth, no hooks, no classifier yet — the
+//! cell compiles and runs but can't carry a turn.
 
 use std::io::Read;
 
@@ -23,12 +19,6 @@ use nest::{Cell, Egg, WorkerBee};
 enum HarnessState {
     Nesting,
     Perched,
-    #[allow(dead_code)]
-    Hunting,
-    #[allow(dead_code)]
-    Wilting,
-    #[allow(dead_code)]
-    Hushed,
     Felled,
 }
 

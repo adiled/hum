@@ -8,14 +8,12 @@
 //!   `propensity`. humd registers `{model_id → client_id}` mappings.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
-//!   `WorkerBee::spawn(spec)`, then murmurs the prompt text on the
-//!   cell's stdin.
-//! - **Chunks out**: each event from `Cell.events` becomes a
+//!   `WorkerBee::raise(egg)`, then feeds the prompt text on `cell.feed`.
+//! - **Chunks out**: each event from `cell.mmm` becomes a
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
-//! - **Cancel**: `chi:"cancel"` triggers `Cell.kill()` for the sid.
-//! - **Tool result**: `chi:"tool-result"` feeds into the cell stdin
-//!   via the worker's tool-result encoder (currently
-//!   `nest::encode_tool_result`).
+//! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
+//! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
+//!   worker's tool-result encoder (`nest::encode_tool_result`).
 //!
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.

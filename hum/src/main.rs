@@ -917,7 +917,7 @@ fn thehum_status() -> Result<()> {
         return Ok(());
     }
     let files = thehum_ndjson_files(&dir)?;
-    let seq = std::fs::read(thehum::layout::seq_file(&dir)).ok().and_then(|b| {
+    let seq = std::fs::read(hum_paths::thehum_seq_file(&dir)).ok().and_then(|b| {
         if b.len() == 8 {
             let mut a = [0u8; 8];
             a.copy_from_slice(&b);

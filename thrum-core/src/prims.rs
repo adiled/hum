@@ -64,9 +64,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sigil_matches_ts_shape() {
-        // sha256("claude:abc")[..12] hex, computed once: humd and the TS daemon
-        // MUST agree byte-for-byte or sigils desync.
+    fn sigil_is_stable() {
+        // sha256("claude:abc")[..12] hex — pinned so peers can't desync.
         let s = sigil("abc", "claude");
         assert_eq!(s.len(), 12);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));

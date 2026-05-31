@@ -81,7 +81,7 @@ fn write_line(path: &Path, line: &str, fsync: bool) -> Result<()> {
 
 /// Atomic seq persistence: tmp + rename.
 fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
-    let final_path = crate::layout::seq_file(dir);
+    let final_path = hum_paths::thehum_seq_file(dir);
     let tmp = final_path.with_extension("bin.tmp");
     std::fs::write(&tmp, seq.to_le_bytes())?;
     std::fs::rename(&tmp, &final_path).context("rename seq.bin")?;
@@ -90,7 +90,7 @@ fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
 
 /// Cold-boot recovery: read seq.bin and the last line's pre-sig hash.
 pub fn recover_state(dir: &Path) -> Result<(Seq, Hash32)> {
-    let seq = std::fs::read(crate::layout::seq_file(dir))
+    let seq = std::fs::read(hum_paths::thehum_seq_file(dir))
         .ok()
         .and_then(|b| {
             if b.len() == 8 {
@@ -119,7 +119,7 @@ fn last_line_in_dir(dir: &Path) -> Result<Option<String>> {
         .context("readdir thehum")?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("ndjson"))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some(hum_paths::THEHUM_NDJSON_EXT))
         .collect();
     files.sort();
     for path in files.iter().rev() {

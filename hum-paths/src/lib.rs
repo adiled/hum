@@ -175,6 +175,18 @@ pub fn drift_dir() -> PathBuf { state_dir().join("drift") }
 /// thehum chi-log directory (`thehum/YYYY-MM-DD.ndjson` + seq.bin + snapshots/).
 pub fn thehum_dir() -> PathBuf { state_dir().join("thehum") }
 
+pub const THEHUM_SEQ_BASENAME: &str = "seq.bin";
+pub const THEHUM_SNAPSHOTS_SUBDIR: &str = "snapshots";
+pub const THEHUM_ROOT_BASENAME: &str = "root.txt";
+pub const THEHUM_NDJSON_EXT: &str = "ndjson";
+
+/// `<dir>/seq.bin` — last-persisted seq counter for a thehum at `dir`.
+pub fn thehum_seq_file(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_SEQ_BASENAME) }
+/// `<dir>/snapshots` — snapshot store inside a thehum at `dir`.
+pub fn thehum_snapshots_dir(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_SNAPSHOTS_SUBDIR) }
+/// `<dir>/root.txt` — most recent state-root hex.
+pub fn thehum_root_file(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_ROOT_BASENAME) }
+
 /// Cloned hum source tree (recipes + hive installers).
 pub fn src_dir() -> PathBuf { data_dir().join("src") }
 

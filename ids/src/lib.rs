@@ -246,8 +246,7 @@ mod tests {
 
     #[test]
     fn ts_parity_vectors() {
-        // Reference vectors produced by lib/id.ts encodeBase32() in Node.
-        // Keeps the Rust encoder bit-identical to the TS implementation.
+        // Fixed reference vectors so encoder output stays bit-stable.
         let zero = [0u8; 32];
         assert_eq!(encode(&zero), "0".repeat(52));
 

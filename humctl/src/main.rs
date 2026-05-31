@@ -148,14 +148,14 @@ fn thehum() -> Result<()> {
     ndjson.sort();
     let latest = ndjson.last().cloned().unwrap_or_else(|| "(none)".to_string());
 
-    let seq: u64 = std::fs::read(thehum::layout::seq_file(&dir))
+    let seq: u64 = std::fs::read(hum_paths::thehum_seq_file(&dir))
         .ok()
         .and_then(|b| if b.len() == 8 {
             let mut a = [0u8; 8]; a.copy_from_slice(&b); Some(u64::from_le_bytes(a))
         } else { None })
         .unwrap_or(0);
 
-    let snap_dir = thehum::layout::snapshots_dir(&dir);
+    let snap_dir = hum_paths::thehum_snapshots_dir(&dir);
     let snap_count = match std::fs::read_dir(&snap_dir) {
         Ok(it) => {
             let mut n: usize = 0;
@@ -173,7 +173,7 @@ fn thehum() -> Result<()> {
         }
     }
 
-    let root = std::fs::read_to_string(thehum::layout::root_file(&dir))
+    let root = std::fs::read_to_string(hum_paths::thehum_root_file(&dir))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

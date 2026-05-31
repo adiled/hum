@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn load_skips_non_numeric_fields() {
-        // Mirrors the TS shape that included a `started: <ms>` timestamp alongside counters.
+        // Loader must skip non-numeric fields (e.g. legacy `started`, `label`).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(hum_paths::PENNY_BASENAME);
         std::fs::write(
