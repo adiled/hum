@@ -1,11 +1,5 @@
 //! `hum` — main user-facing CLI.
 //!
-//! Inspection-only for 0.3: every subcommand reads cross-platform
-//! state (filesystem + service manager via scripts/svc.sh). Daemon-
-//! internal queries (peers, drift, drone, sessions) will land when
-//! humd exposes an RPC control socket; until then, those live as
-//! `humd <subcommand>` arguments inside the daemon binary's own CLI.
-//!
 //! Subcommands:
 //!   hum                    health summary
 //!   hum status             daemon + config + service state
@@ -15,8 +9,10 @@
 //!   hum hive <ref> install build a hive + register its bee
 //!   hum bee --list         list bees + state
 //!   hum bee <id> VERB      enter | exit | reenter a bee (start/stop/restart)
+//!   hum nest               list orchd-managed bees (delegates to `orchd status`)
 //!   hum penny              show lifetime counters
 //!   hum recipes [name]     list recipes / point at one
+//!   hum update             self-update from latest GitHub release
 //!   hum uninstall          remove service + binary (state preserved)
 //!   hum version            print version
 //!   hum help               print this surface
@@ -805,7 +801,7 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
     let installed = bee_list(&svc)?;
 
     // List: `hum bee --list`, or bare `hum bee`. Full info comes from
-    // humd's live manifest snapshot ($XDG_STATE_HOME/hum/bees.json);
+    // humd's live manifest snapshot (`hum_paths::bees_snapshot()`);
     // service state comes from the service manager.
     if list || (target.is_none() && verb.is_none()) {
         bee_list_full(&svc, &installed)?;

@@ -7,3 +7,9 @@ description = "hum-native 256-bit Crockford-base32 identifiers: 48-bit ms timest
 
 [dependencies]
 rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

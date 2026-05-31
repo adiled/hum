@@ -56,7 +56,7 @@ async fn eggs_on_the_hum() {
     // Mock worker on the SERVER. Emits one chi:tool-call after
     // receiving the prompt, then chi:finish after the tool-result.
     let server_thrum = server.thrum.clone();
-    let worker_cid = format!("sim-worker-{}", uuid::Uuid::new_v4());
+    let worker_cid = ids::HumId::mint().to_string();
     let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
     let worker_hello = serde_json::json!({
         "chi": "hello",

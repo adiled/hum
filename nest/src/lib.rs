@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use ids::HumId;
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -16,8 +17,9 @@ pub mod limits;
 /// An egg — what a worker bee needs to raise a cell.
 #[derive(Debug, Clone)]
 pub struct Egg {
-    /// hum session id for this cell.
-    pub sid: String,
+    /// Canonical hum session id. Foreign-format projections (claude
+    /// `--session-id`) derive from this via `sid.to_uuid_v5(NS_*)`.
+    pub sid: HumId,
     /// Model id to run on (e.g. "claude-sonnet-4-6", "claude-haiku-4-5").
     pub model_id: String,
     /// Working directory for the spawned process. Drives transcript
@@ -31,14 +33,14 @@ pub struct Egg {
     pub mcp_url: Option<String>,
     /// Optional path to the claude CLI binary. None → "claude" on PATH.
     pub cli_path: Option<String>,
-    /// Optional resume id — the harness picks up an existing transcript
-    /// (claude `--resume`) instead of starting fresh.
+    /// Foreign resume id — a claude session UUID the harness should pick
+    /// up instead of the sid-derived one. Stays String because it's a
+    /// foreign identifier hum did not mint.
     pub resume_id: Option<String>,
-    /// Optional explicit session id to create the conversation under
-    /// (claude `--session-id`, must be a UUID). Used when `resume_id` is
-    /// None to bind a fresh session to a deterministic id. Ignored if
-    /// `resume_id` is set.
-    pub session_id: Option<String>,
+    /// True = create a new claude session under the sid-derived UUID.
+    /// False = try to resume that UUID. Worker flips to true on resume
+    /// miss. Ignored when `resume_id` is set.
+    pub fresh: bool,
     /// Plan mode — disables adaptive-thinking env.
     pub plan_mode: bool,
     /// Permissions allowlist names — passed to the harness's tool filter.
@@ -59,16 +61,16 @@ pub struct Egg {
 }
 
 impl Egg {
-    pub fn new(sid: impl Into<String>, model_id: impl Into<String>, cwd: impl Into<String>) -> Self {
+    pub fn new(sid: HumId, model_id: impl Into<String>, cwd: impl Into<String>) -> Self {
         Self {
-            sid: sid.into(),
+            sid,
             model_id: model_id.into(),
             cwd: cwd.into(),
             system_prompt: None,
             mcp_url: None,
             cli_path: None,
             resume_id: None,
-            session_id: None,
+            fresh: false,
             plan_mode: false,
             permissions: Vec::new(),
             allowed_tools: Vec::new(),

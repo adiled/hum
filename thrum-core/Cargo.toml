@@ -16,6 +16,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+ids = { path = "../ids" }
 thiserror = { workspace = true }
 parking_lot = "0.12"
 strum = { version = "0.26", features = ["derive"] }

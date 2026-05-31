@@ -288,15 +288,12 @@ mod defaults {
         "claude-repl".into()
     }
     pub fn denied() -> Vec<PathBuf> {
-        [
-            "~/.ssh",
-            "~/.aws",
-            "~/.gnupg",
-            "~/.config/hum",
+        vec![
+            PathBuf::from("~/.ssh"),
+            PathBuf::from("~/.aws"),
+            PathBuf::from("~/.gnupg"),
+            hum_paths::config_dir(),
         ]
-        .iter()
-        .map(PathBuf::from)
-        .collect()
     }
 }
 

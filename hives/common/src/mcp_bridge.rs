@@ -254,7 +254,7 @@ async fn handle(
                 ))));
             }
             let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
-            let call_id = format!("call-{}", thrum_core::rid());
+            let call_id = thrum_core::rid();
             let (tx, rx) = oneshot::channel::<Value>();
             bridge.pending.lock().insert(call_id.clone(), tx);
             let tone = translate::mcp_call_to_tone(&sid, &call_id, &params);

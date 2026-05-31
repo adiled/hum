@@ -1,6 +1,5 @@
 //! Primitives — sigil, rid, dusk, echo.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
@@ -32,30 +31,9 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-static RID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Correlation id — monotonic counter joined with a base36 ms timestamp.
-///
-/// Format matches the TS legacy: `"{tsBase36}-{counterBase36}"`.
-pub fn rid() -> String {
-    let ts = now_ms().max(0) as u64;
-    let n = RID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{}", to_base36(ts), to_base36(n))
-}
-
-fn to_base36(mut n: u64) -> String {
-    if n == 0 {
-        return "0".into();
-    }
-    const A: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut out = Vec::with_capacity(13);
-    while n > 0 {
-        out.push(A[(n % 36) as usize]);
-        n /= 36;
-    }
-    out.reverse();
-    String::from_utf8(out).expect("base36 alphabet is ascii")
-}
+/// Correlation id — canonical HumId. Ts-prefixed inside, so freshly
+/// minted rids are lex-sortable by mint time.
+pub fn rid() -> String { ids::HumId::mint().to_string() }
 
 /// Absolute ms timestamp at which a tone with `dusk = dusk_in(ms)` expires.
 pub fn dusk_in(ms: i64) -> i64 {
@@ -95,11 +73,12 @@ mod tests {
     }
 
     #[test]
-    fn rid_is_unique_and_monotonic_within_ms() {
+    fn rid_is_unique_and_canonical() {
         let a = rid();
         let b = rid();
         assert_ne!(a, b);
-        assert!(a.contains('-') && b.contains('-'));
+        assert!(ids::HumId::parse(&a).is_ok());
+        assert!(ids::HumId::parse(&b).is_ok());
     }
 
     #[test]

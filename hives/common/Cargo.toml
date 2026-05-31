@@ -11,6 +11,7 @@ drone = { path = "../../drone" }
 ensemble = { path = "../../ensemble" }
 mcp = { path = "../../mcp" }
 nest = { path = "../../nest" }
+ids = { path = "../../ids" }
 thrum-core = { path = "../../thrum-core" }
 async-trait = "0.1"
 axum = "0.7"

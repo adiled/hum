@@ -10,15 +10,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
-use uuid::Uuid;
-
 use crate::registry::Reach;
 use crate::{
     breath_tone, chi_of, echo_tone, rid_of, short, tone_is_dusk, validate_envelope, Thrum,
 };
 
 pub async fn run(thrum: Thrum, sock: UnixStream) {
-    let client_id = Uuid::new_v4().to_string();
+    let client_id = ids::HumId::mint().to_string();
     let (reach, rx) = Reach::new(client_id.clone());
     let reach = Arc::new(reach);
 

@@ -207,7 +207,7 @@ async fn main() -> Result<()> {
 fn hello(cfg: &Config, hid: &str) -> Value {
     json!({
         "chi": Chi::Hello,
-        "rid": format!("hello-{}", uuid::Uuid::new_v4()),
+        "rid": ids::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],

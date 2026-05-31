@@ -7,6 +7,7 @@ description = "hum ensemble — the mesh of humds. Peer identity, transport trai
 
 [dependencies]
 thrum-core = { path = "../thrum-core" }
+ids = { path = "../ids" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

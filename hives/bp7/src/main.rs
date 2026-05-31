@@ -173,7 +173,7 @@ async fn run_prompt(
 
     let hello = json!({
         "chi": Chi::Hello,
-        "rid": format!("hello-{}", now_ms()),
+        "rid": ids::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],

@@ -389,7 +389,7 @@ pub enum HelloParse {
 pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
-        "rid": format!("hello-{}", me.short()),
+        "rid": ids::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "proto_version": caps.proto_version,
@@ -414,7 +414,7 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let sig: Signature = key.0.sign(&msg);
     serde_json::json!({
         "chi": "hello",
-        "rid": format!("hello-{}", me.short()),
+        "rid": ids::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "pubkey": hex::encode(key.pubkey_bytes()),

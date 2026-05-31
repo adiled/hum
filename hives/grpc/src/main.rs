@@ -52,10 +52,7 @@ async fn bridge(
     // Send hello on connect so humd advertises us to the mesh.
     let hello = serde_json::json!({
         "chi": Chi::Hello,
-        "rid": format!("hello-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis().to_string())
-            .unwrap_or_default()),
+        "rid": ids::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],

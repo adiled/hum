@@ -287,20 +287,6 @@ const IDLE_TIMEOUT_MS: u64 = 300_000;
 /// when full.
 const MAX_CELLS: usize = 8;
 
-/// Fixed namespace so a hum sid maps to a stable claude session UUID
-/// (uuid5). Deterministic: the same sid always derives the same id, so
-/// it survives worker restarts without persisting anything.
-const HUM_SESSION_NS: uuid::Uuid = uuid::Uuid::from_bytes([
-    0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
-]);
-
-/// Derive the claude session id for a hum sid. claude's `--session-id`
-/// requires a UUID, so we can't pass the sid verbatim; uuid5 maps it
-/// deterministically.
-fn sid_to_session(sid: &str) -> String {
-    uuid::Uuid::new_v5(&HUM_SESSION_NS, sid.as_bytes()).to_string()
-}
-
 /// True if `v` is claude's terminal `result` event flagged `is_error`.
 /// As the *first* event it means a pre-flight failure (bad/absent
 /// session on `--resume`, id clash on `--session-id`) rather than a
@@ -399,7 +385,8 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
-    let mut base = Egg::new(sid.clone(), model.clone(), cwd);
+    let hum_sid = ids::HumId::parse(&sid).unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+    let mut base = Egg::new(hum_sid, model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
@@ -409,23 +396,20 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    // A hum sid is one conversation. `claude -p` exits after each turn,
-    // so the warm cell is gone before the next (tick-spaced) prompt; to
-    // keep continuity we bind the sid to a deterministic claude session
-    // (uuid5 of the sid) and resume it. Resume-first so the common case
-    // (an ongoing sid) is one spawn; on the turn where the session does
-    // not exist yet, claude's `--resume` fails fast (a `result` is_error
-    // with no output), and we fall back to `--session-id` to create it.
-    let cid = sid_to_session(&sid);
+    // Resume-first: claude `-p` exits after each turn, so the warm cell
+    // is gone before the next prompt. The sid-derived session UUID
+    // (computed inside claude-cli from base.sid) keeps continuity. On
+    // first turn `--resume` fails fast (a `result` is_error with no
+    // output) and we retry with `fresh: true` → --session-id.
     let (cell, first_event) = {
         let mut s1 = base.clone();
-        s1.resume_id = Some(explicit_resume.clone().unwrap_or_else(|| cid.clone()));
+        s1.resume_id = explicit_resume.clone();
         match attempt_spawn(&worker, s1, &content).await {
             Some(pair) => pair,
             None => {
                 trace!(sid = %sid, "worker.resume.miss.creating");
                 let mut s2 = base.clone();
-                s2.session_id = Some(cid.clone()); // resume_id None -> --session-id
+                s2.fresh = true;
                 attempt_spawn(&worker, s2, &content).await
                     .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
             }
