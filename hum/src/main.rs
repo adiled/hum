@@ -12,6 +12,8 @@
 //!   hum nest               list orchd-managed bees (delegates to `orchd status`)
 //!   hum penny              show lifetime counters
 //!   hum recipes [name]     list recipes / point at one
+//!   hum thehum <verb>      inspect the persistent chi log
+//!                          (status | tail | range | verify | replay)
 //!   hum update             self-update from latest GitHub release
 //!   hum uninstall          remove service + binary (state preserved)
 //!   hum version            print version
@@ -82,6 +84,17 @@ enum Cmd {
         /// Recipe name (e.g. "opencode"). Omit to list.
         name: Option<String>,
     },
+    /// Inspect the persistent chi log (thehum).
+    ///   hum thehum status                       dir, file count, seq, snapshot
+    ///   hum thehum tail [-n N]                  most recent daily file (default 20)
+    ///   hum thehum range --author <hid>         filter by author + seq range
+    ///                    --from <seq> [--to <seq>]
+    ///   hum thehum verify                       check hash chain + signatures
+    ///   hum thehum replay                       count events by chi kind
+    Thehum {
+        #[command(subcommand)]
+        verb: ThehumVerb,
+    },
     /// Stop the service and remove the humd binary. State preserved.
     Uninstall,
     /// Check for a newer release and self-update. Compares the local
@@ -92,6 +105,34 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ThehumVerb {
+    /// Print dir, file count, total seq, latest snapshot height + ts.
+    Status,
+    /// Tail the most recent daily file as compact JSON, one event per line.
+    Tail {
+        /// Number of trailing events to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        n: usize,
+    },
+    /// Filter events by author hid and seq range.
+    Range {
+        /// Author humd hid (hex).
+        #[arg(long)]
+        author: String,
+        /// Inclusive lower bound on seq.
+        #[arg(long)]
+        from: u64,
+        /// Inclusive upper bound on seq.
+        #[arg(long)]
+        to: Option<u64>,
+    },
+    /// Verify hash chain + signatures across the whole log.
+    Verify,
+    /// Replay the log, counting events by chi kind.
+    Replay,
 }
 
 fn main() -> Result<()> {
@@ -107,6 +148,7 @@ fn main() -> Result<()> {
         Some(Cmd::Nest) => nest(),
         Some(Cmd::Penny) => penny(),
         Some(Cmd::Recipes { name }) => recipes(name),
+        Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Uninstall) => uninstall(),
         Some(Cmd::Update { force }) => update(force),
     }
@@ -970,4 +1012,180 @@ fn uninstall() -> Result<()> {
     }
     println!("state preserved. `./install purge` to wipe.");
     Ok(())
+}
+
+// ── thehum: persistent chi-log inspector ─────────────────────────────────
+
+fn thehum_cmd(verb: ThehumVerb) -> Result<()> {
+    match verb {
+        ThehumVerb::Status => thehum_status(),
+        ThehumVerb::Tail { n } => thehum_tail(n),
+        ThehumVerb::Range { author, from, to } => thehum_range(&author, from, to),
+        ThehumVerb::Verify => thehum_verify(),
+        ThehumVerb::Replay => thehum_replay(),
+    }
+}
+
+/// Ndjson files in the thehum dir, sorted lexicographically (YYYY-MM-DD).
+fn thehum_ndjson_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("readdir {}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("ndjson"))
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Deserialize every well-formed ndjson line into a thehum::Event.
+fn thehum_load_all(dir: &Path) -> Result<Vec<thehum::Event>> {
+    let mut out = Vec::new();
+    for path in thehum_ndjson_files(dir)? {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        for (i, line) in content.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let ev: thehum::Event = serde_json::from_str(line)
+                .with_context(|| format!("{}:{}: malformed event", path.display(), i + 1))?;
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
+
+fn thehum_status() -> Result<()> {
+    let dir = hum_paths::thehum_dir();
+    if !dir.exists() {
+        println!("thehum dir:    {} (does not exist yet)", dir.display());
+        return Ok(());
+    }
+    let files = thehum_ndjson_files(&dir)?;
+    let seq = std::fs::read(thehum::layout::seq_file(&dir)).ok().and_then(|b| {
+        if b.len() == 8 {
+            let mut a = [0u8; 8];
+            a.copy_from_slice(&b);
+            Some(u64::from_le_bytes(a))
+        } else { None }
+    }).unwrap_or(0);
+
+    // Last chi=="snapshot" wins.
+    let mut latest_height: Option<u64> = None;
+    let mut latest_ts_ms: Option<i64> = None;
+    let events = thehum_load_all(&dir).unwrap_or_default();
+    for e in &events {
+        if e.chi == "snapshot" {
+            latest_height = e.body.get("height").and_then(|v| v.as_u64()).or(latest_height);
+            latest_ts_ms = Some(e.ts_ms);
+        }
+    }
+
+    println!("thehum dir:        {}", dir.display());
+    println!("daily files:       {}", files.len());
+    println!("total seq:         {seq}");
+    match (latest_height, latest_ts_ms) {
+        (Some(h), Some(ts)) => println!("latest snapshot:   height={h} ts_ms={ts} ({})", fmt_ts_ms(ts)),
+        _ => println!("latest snapshot:   (none)"),
+    }
+    Ok(())
+}
+
+fn thehum_tail(n: usize) -> Result<()> {
+    let dir = hum_paths::thehum_dir();
+    let files = thehum_ndjson_files(&dir)?;
+    let Some(last) = files.last() else {
+        println!("(no ndjson files in {})", dir.display());
+        return Ok(());
+    };
+    let content = std::fs::read_to_string(last)
+        .with_context(|| format!("read {}", last.display()))?;
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    let start = lines.len().saturating_sub(n);
+    for line in &lines[start..] {
+        // Re-emit compactly via Event round-trip.
+        match serde_json::from_str::<thehum::Event>(line) {
+            Ok(ev) => println!("{}", serde_json::to_string(&ev).unwrap_or_else(|_| (*line).to_string())),
+            Err(_) => println!("{line}"),
+        }
+    }
+    Ok(())
+}
+
+fn thehum_range(author: &str, from: u64, to: Option<u64>) -> Result<()> {
+    let dir = hum_paths::thehum_dir();
+    let events = thehum_load_all(&dir)?;
+    let mut matched: Vec<&thehum::Event> = events.iter()
+        .filter(|e| e.author == author && e.seq >= from && to.map(|hi| e.seq <= hi).unwrap_or(true))
+        .collect();
+    matched.sort_by_key(|e| e.seq);
+    if matched.is_empty() {
+        println!("(no events matching author={author} from={from}{})",
+            to.map(|t| format!(" to={t}")).unwrap_or_default());
+        return Ok(());
+    }
+    println!("  {:>8}  {:<10}  {:<13}  {}", "SEQ", "CHI", "TS_MS", "RID");
+    for e in &matched {
+        println!("  {:>8}  {:<10}  {:<13}  {}", e.seq, e.chi, e.ts_ms, e.rid);
+    }
+    println!("\n{} event(s).", matched.len());
+    Ok(())
+}
+
+fn thehum_verify() -> Result<()> {
+    let dir = hum_paths::thehum_dir();
+    let mut events = thehum_load_all(&dir)?;
+    events.sort_by_key(|e| (e.author.clone(), e.seq));
+    if events.is_empty() {
+        println!("OK (empty log)");
+        return Ok(());
+    }
+
+    let key_path = hum_paths::humd_key();
+    let bytes = std::fs::read(&key_path)
+        .with_context(|| format!("read {}", key_path.display()))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("humd.key is {} bytes, expected 32", bytes.len());
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes);
+    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let pubkey = signing.verifying_key();
+
+    match thehum::read::verify_chain(&events, &pubkey) {
+        Ok(()) => {
+            println!("OK ({} events verified)", events.len());
+            Ok(())
+        }
+        Err(e) => {
+            println!("VIOLATION: {e}");
+            Err(e)
+        }
+    }
+}
+
+fn thehum_replay() -> Result<()> {
+    use std::collections::BTreeMap;
+    let dir = hum_paths::thehum_dir();
+    let mut events = thehum_load_all(&dir)?;
+    events.sort_by_key(|e| (e.author.clone(), e.seq));
+
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for e in &events {
+        *counts.entry(e.chi.clone()).or_default() += 1;
+    }
+
+    println!("  {:<16}  {}", "CHI", "COUNT");
+    for (chi, n) in &counts {
+        println!("  {:<16}  {}", chi, n);
+    }
+    println!("\n{} event(s) across {} kind(s).", events.len(), counts.len());
+    Ok(())
+}
+
+fn fmt_ts_ms(ts_ms: i64) -> String {
+    use chrono::DateTime;
+    DateTime::from_timestamp_millis(ts_ms)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| ts_ms.to_string())
 }

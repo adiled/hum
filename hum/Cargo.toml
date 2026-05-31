@@ -11,6 +11,7 @@ path = "src/main.rs"
 hum-paths = { path = "../hum-paths" }
 humd = { path = "../humd" }
 config = { path = "../config" }
+thehum = { path = "../thehum" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
@@ -18,3 +19,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thrum-core = { path = "../thrum-core" }
+ed25519-dalek = "2"
+chrono = { workspace = true }

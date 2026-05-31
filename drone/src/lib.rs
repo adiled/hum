@@ -622,6 +622,7 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::KadFindNode => "kad-find-node",
         Chi::KadFindNodeResp => "kad-find-node-resp",
         Chi::ToolInfo => "tool-info",
+        Chi::Backfill => "backfill",
     }
 }
 

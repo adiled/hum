@@ -75,6 +75,8 @@ export const Chi = {
   kadFindNode: "kad-find-node",
   /** Kademlia DHT FIND_NODE response — `{ query_id, from: <Hid hex>, closest: [<HumdAddr JSON>, ...] }`. Matched to the originating `kad-find-node` by `query_id`. The lookup driver inserts every advertised HumdAddr into its routing table and re-queries the α closest unqueried peers until no closer node is returned. */
   kadFindNodeResp: "kad-find-node-resp",
+  /** thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author. */
+  backfill: "backfill",
 } as const;
 export type ChiKind = typeof Chi[keyof typeof Chi];
 

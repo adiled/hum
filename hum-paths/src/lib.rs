@@ -145,6 +145,9 @@ pub fn peers_json() -> PathBuf { config_dir().join("peers.json") }
 /// Drift rings directory (`drift/YYYY-MM-DD.ndjson`).
 pub fn drift_dir() -> PathBuf { state_dir().join("drift") }
 
+/// thehum chi-log directory (`thehum/YYYY-MM-DD.ndjson` + seq.bin + snapshots/).
+pub fn thehum_dir() -> PathBuf { state_dir().join("thehum") }
+
 /// Cloned hum source tree (recipes + hive installers).
 pub fn src_dir() -> PathBuf { data_dir().join("src") }
 
@@ -152,9 +155,6 @@ pub fn src_dir() -> PathBuf { data_dir().join("src") }
 pub fn humd_bin() -> PathBuf {
     home().join(".local/bin/humd")
 }
-
-/// hums.json (session registry).
-pub fn hums_json() -> PathBuf { state_dir().join("hums.json") }
 
 /// Per-bee config file for a given hive kind (e.g. `ollama-server.json`).
 pub fn bee_config(kind: &str) -> PathBuf {

@@ -1,0 +1,29 @@
+[package]
+name = "thehum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-humd authored chi log. The sustained signal that captures everything the network ever did."
+
+[dependencies]
+hum-paths = { path = "../hum-paths" }
+ids = { path = "../ids" }
+thrum-core = { path = "../thrum-core" }
+ensemble = { path = "../ensemble" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+rand = { workspace = true }

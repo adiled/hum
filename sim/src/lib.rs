@@ -169,6 +169,7 @@ impl Sim {
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
+            thehum_cfg: None,
         };
 
         let shutdown_fut = async move {
@@ -304,6 +305,7 @@ impl Sim {
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
+            thehum_cfg: None,
         };
 
         let shutdown_fut = async move { let _ = shutdown_rx.await; };

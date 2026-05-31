@@ -433,6 +433,7 @@ dependencies = [
  "bp7 0.10.7",
  "ensemble",
  "hum-paths",
+ "ids",
  "nest-common",
  "serde",
  "serde_json",
@@ -571,6 +572,7 @@ dependencies = [
  "async-trait",
  "command-group",
  "hum-paths",
+ "ids",
  "nest",
  "nest-common",
  "serde_json",
@@ -1243,6 +1245,7 @@ dependencies = [
  "async-trait",
  "ed25519-dalek 2.2.0",
  "hex",
+ "ids",
  "iroh",
  "lru 0.12.5",
  "parking_lot",
@@ -1631,6 +1634,7 @@ dependencies = [
  "async-stream",
  "ensemble",
  "hum-paths",
+ "ids",
  "nest-common",
  "prost",
  "serde_json",
@@ -1653,6 +1657,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hum-paths",
+ "ids",
  "nest-common",
  "serde",
  "serde_json",
@@ -1896,11 +1901,14 @@ name = "hum"
 version = "0.31.18"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "config",
+ "ed25519-dalek 2.2.0",
  "hum-paths",
  "humd",
  "serde_json",
+ "thehum",
  "thrum-core",
  "tokio",
  "tracing",
@@ -1928,6 +1936,7 @@ dependencies = [
  "anyhow",
  "hum-paths",
  "service-manager",
+ "thehum",
 ]
 
 [[package]]
@@ -1943,7 +1952,6 @@ dependencies = [
  "ensemble",
  "hex",
  "hum-paths",
- "hums",
  "ids",
  "mcp",
  "metrics",
@@ -1955,6 +1963,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thehum",
  "thrum-core",
  "thrumd",
  "tokio",
@@ -1988,17 +1997,6 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
-]
-
-[[package]]
-name = "hums"
-version = "0.31.18"
-dependencies = [
- "hum-paths",
- "parking_lot",
- "serde",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -2234,6 +2232,10 @@ name = "ids"
 version = "0.31.18"
 dependencies = [
  "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "uuid",
 ]
 
 [[package]]
@@ -2958,6 +2960,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "command-group",
+ "ids",
  "libc",
  "lru 0.12.5",
  "metrics",
@@ -2984,6 +2987,7 @@ dependencies = [
  "ensemble",
  "futures",
  "hum-paths",
+ "ids",
  "lru 0.12.5",
  "mcp",
  "metrics",
@@ -3484,6 +3488,7 @@ dependencies = [
  "bytes",
  "chrono",
  "hum-paths",
+ "ids",
  "serde",
  "serde_json",
  "thrum-core",
@@ -3492,7 +3497,6 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -3537,6 +3541,7 @@ dependencies = [
  "ensemble",
  "hex",
  "hum-paths",
+ "ids",
  "nest-common",
  "parking_lot",
  "reqwest 0.12.28",
@@ -4781,6 +4786,7 @@ dependencies = [
  "config",
  "ensemble",
  "humd",
+ "ids",
  "mcp",
  "nest",
  "parking_lot",
@@ -4790,7 +4796,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -5122,6 +5127,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "thehum"
+version = "0.31.18"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "ensemble",
+ "hex",
+ "hum-paths",
+ "ids",
+ "parking_lot",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 1.0.69",
+ "thrum-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5176,6 +5205,7 @@ version = "0.31.18"
 dependencies = [
  "codegen",
  "hex",
+ "ids",
  "parking_lot",
  "serde",
  "serde_json",
@@ -5192,13 +5222,13 @@ dependencies = [
  "async-trait",
  "governor",
  "hum-paths",
+ "ids",
  "parking_lot",
  "serde",
  "serde_json",
  "thrum-core",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]

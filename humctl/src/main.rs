@@ -19,6 +19,7 @@ Usage:
   humctl status
   humctl logs   [-n LINES]
   humctl health
+  humctl thehum
 ";
 
 fn main() -> ExitCode {
@@ -39,6 +40,7 @@ fn run() -> Result<()> {
         "status"  => status(),
         "logs"    => logs(parse_lines(args.collect::<Vec<_>>())),
         "health"  => health(),
+        "thehum"  => thehum(),
         other     => bail!("unknown verb '{other}'\n{USAGE}"),
     }
 }
@@ -113,6 +115,77 @@ fn health() -> Result<()> {
         Ok(_) => { println!("humd: ✓ live at {}", sock.display()); Ok(()) }
         Err(e) => bail!("no breath within 1s: {e}"),
     }
+}
+
+fn thehum() -> Result<()> {
+    let dir = hum_paths::thehum_dir();
+    println!("thehum dir:    {}", dir.display());
+    if !dir.exists() {
+        println!("files:         0");
+        println!("seq:           0");
+        println!("latest day:    (none)");
+        println!("snapshots:     0");
+        println!("most recent root: (none)");
+        println!("total bytes:   0");
+        return Ok(());
+    }
+
+    let mut ndjson: Vec<String> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for ent in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+        let ent = ent?;
+        let ft = ent.file_type()?;
+        if ft.is_file() {
+            total_bytes += ent.metadata().map(|m| m.len()).unwrap_or(0);
+            let path = ent.path();
+            if path.extension().and_then(|x| x.to_str()) == Some("ndjson") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ndjson.push(stem.to_string());
+                }
+            }
+        }
+    }
+    ndjson.sort();
+    let latest = ndjson.last().cloned().unwrap_or_else(|| "(none)".to_string());
+
+    let seq: u64 = std::fs::read(thehum::layout::seq_file(&dir))
+        .ok()
+        .and_then(|b| if b.len() == 8 {
+            let mut a = [0u8; 8]; a.copy_from_slice(&b); Some(u64::from_le_bytes(a))
+        } else { None })
+        .unwrap_or(0);
+
+    let snap_dir = thehum::layout::snapshots_dir(&dir);
+    let snap_count = match std::fs::read_dir(&snap_dir) {
+        Ok(it) => {
+            let mut n: usize = 0;
+            for e in it { if e.is_ok() { n += 1; } }
+            n
+        }
+        Err(_) => 0,
+    };
+    // snapshots/ bytes count toward total too.
+    if let Ok(it) = std::fs::read_dir(&snap_dir) {
+        for e in it.flatten() {
+            if e.file_type().map(|f| f.is_file()).unwrap_or(false) {
+                total_bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+
+    let root = std::fs::read_to_string(thehum::layout::root_file(&dir))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(none)".to_string());
+
+    println!("files:         {}", ndjson.len());
+    println!("seq:           {seq}");
+    println!("latest day:    {latest}");
+    println!("snapshots:     {snap_count}");
+    println!("most recent root: {root}");
+    println!("total bytes:   {total_bytes}");
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

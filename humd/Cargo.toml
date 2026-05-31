@@ -27,8 +27,8 @@ config = { path = "../config" }
 ids = { path = "../ids" }
 drift = { path = "../drift" }
 nest = { path = "../nest" }
-hums = { path = "../hums" }
 penny = { path = "../penny" }
+thehum = { path = "../thehum" }
 drone = { path = "../drone" }
 ensemble = { path = "../ensemble" }
 serde = { workspace = true }

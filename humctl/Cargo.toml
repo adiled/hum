@@ -13,3 +13,4 @@ path = "src/main.rs"
 service-manager = "0.7"
 anyhow = { workspace = true }
 hum-paths = { path = "../hum-paths" }
+thehum = { path = "../thehum" }
