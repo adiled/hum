@@ -49,7 +49,7 @@ A forager picks a contract that already exists in the wild and hides the rest of
 
 ### 1. Speak thrum
 
-Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `nest_common::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any `src/thrum.ts`, `clients/python`, or `clients/go`. humd does not care what language the process is written in.
+Connect to the humd socket at `$XDG_RUNTIME_DIR/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `nest_common::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.
 
 ### 2. Handshake, the hello contract
 
@@ -87,7 +87,7 @@ Forward each incoming `chi:"tool-call"` to your tool surface, then reply with `c
 
 ### chi cheatsheet
 
-`clients/ts/chi.ts` owns the full registry. Most bees pick a subset.
+`thrum-clients/ts/chi.ts` owns the full registry (the Rust enum at `thrum-core/src/chi.rs` is the source of truth; codegen emits the rest). Most bees pick a subset.
 
 | subset | chi values |
 |---|---|
@@ -126,7 +126,7 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 ## Versioning
 
-`THRUM_VERSION` lives in `clients/ts/chi.ts` and is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
+`THRUM_VERSION` is defined in `thrum-core/src/lib.rs` (the Rust source of truth) and propagates verbatim through `thrum-clients/{ts,python,go}/chi.*` via codegen on every cargo build. It is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
 
 ## See also
 

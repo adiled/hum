@@ -8,9 +8,10 @@ description: "the language-neutral protocol bees speak to humd. Implementable in
 > _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
 This is the **canonical wire spec**. Rust (`thrum-core`), TypeScript
-(`thrum`), Python (`clients/python`), and Go (`clients/go`) are
-reference clients — they all conform to the rules below. If a client
-disagrees with this document, the document wins.
+(`thrum-clients/ts`), Python (`thrum-clients/python`), and Go
+(`thrum-clients/go`) are reference clients — they all conform to the
+rules below. If a client disagrees with this document, the document
+wins.
 
 ## Transport
 
@@ -292,9 +293,10 @@ A clean port to a new language takes ~80 LoC. The minimum:
 5. Serialize outbound tones with newline termination (`json.dumps(t) + "\n"`).
 6. On close: drop any pending writes, surface the disconnect to handlers.
 
-Reference: [`thrum-core`](../thrum-core), [`thrum`](.),
-[`clients/python`](../clients/python),
-[`clients/go`](../clients/go).
+Reference: [`thrum-core`](../thrum-core),
+[`thrum-clients/ts`](../thrum-clients/ts),
+[`thrum-clients/python`](../thrum-clients/python),
+[`thrum-clients/go`](../thrum-clients/go).
 
 ## Version history
 
@@ -310,8 +312,8 @@ Reference: [`thrum-core`](../thrum-core), [`thrum`](.),
 ## See also
 
 - [`thrum-core`](../thrum-core) — Rust source of truth (chi enum, helpers).
-- [`thrum`](./) — TypeScript reference client.
-- [`clients/python`](../clients/python), [`clients/go`](../clients/go) — Python + Go reference clients.
+- [`thrum-clients/ts`](../thrum-clients/ts) — TypeScript reference client.
+- [`thrum-clients/python`](../thrum-clients/python), [`thrum-clients/go`](../thrum-clients/go) — Python + Go reference clients.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
 - [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

@@ -82,7 +82,7 @@ hand-edit them. The `__init__.py` and `client.py` are hand-written.
 ## See also
 
 - [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
-- [`thrum`](../../thrum) — TypeScript reference client.
+- [`thrum-clients/ts`](../ts) — TypeScript reference client.
 - [`thrum-core`](../../thrum-core) — Rust reference client.
-- [`clients/go`](../go) — Go reference client.
+- [`thrum-clients/go`](../go) — Go reference client.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.
