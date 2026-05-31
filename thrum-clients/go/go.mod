@@ -1,3 +1,3 @@
-module github.com/adiled/hum/clients/go
+module github.com/adiled/hum/thrum-clients/go
 
 go 1.19
