@@ -154,20 +154,8 @@ pub fn config_path() -> PathBuf {
     hum_paths::hum_json()
 }
 
-/// Expand `~` against `$HOME`. Leaves absolute / non-tilde paths alone.
 fn expand_tilde(p: &Path) -> PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    if s == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
-    }
-    p.to_path_buf()
+    hum_paths::expand_tilde(p)
 }
 
 fn canonical_or_self(p: &Path) -> PathBuf {

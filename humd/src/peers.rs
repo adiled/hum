@@ -114,8 +114,7 @@ mod tests {
     fn load_parses_fixture_and_skips_bad_rows() {
         let tmp = TempDir::new().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        let dir = tmp.path().join("hum");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(hum_paths::config_dir()).unwrap();
 
         let good_a = "a".repeat(64);
         let good_b = "b".repeat(64);
@@ -129,7 +128,7 @@ mod tests {
               ]
             }}"#
         );
-        std::fs::write(dir.join("peers.json"), body).unwrap();
+        std::fs::write(hum_paths::peers_json(), body).unwrap();
 
         let loaded = load();
         assert_eq!(loaded.len(), 2, "bad row dropped");

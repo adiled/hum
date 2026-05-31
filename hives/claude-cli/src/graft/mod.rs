@@ -36,13 +36,8 @@ fn cwd_hash(cwd: &Path) -> String {
     out
 }
 
-fn claude_base() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".claude")
-}
-
 pub fn session_dir(cwd: &Path) -> PathBuf {
-    claude_base().join("projects").join(cwd_hash(cwd))
+    hum_paths::claude_session_dir(&cwd_hash(cwd))
 }
 
 pub fn session_path(cwd: &Path, session_id: &str) -> PathBuf {

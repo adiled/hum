@@ -3622,6 +3622,7 @@ dependencies = [
 name = "penny"
 version = "0.31.18"
 dependencies = [
+ "hum-paths",
  "parking_lot",
  "serde",
  "serde_json",
@@ -4785,6 +4786,7 @@ dependencies = [
  "anyhow",
  "config",
  "ensemble",
+ "hum-paths",
  "humd",
  "ids",
  "mcp",

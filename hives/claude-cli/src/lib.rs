@@ -99,9 +99,7 @@ pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
     if let Ok(path) = std::env::var("PATH") {
         env.push(("PATH".into(), path));
     }
-    if let Ok(home) = std::env::var("HOME") {
-        env.push(("HOME".into(), home));
-    }
+    env.push(("HOME".into(), hum_paths::home().to_string_lossy().into_owned()));
     for (k, v) in &spec.env {
         env.push((k.clone(), v.clone()));
     }

@@ -257,7 +257,7 @@ fn svc_helper() -> Option<PathBuf> {
         std::env::current_exe().ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .map(|p| p.join("../../scripts/svc.sh")),
-        Some(hum_paths::src_dir().join("scripts/svc.sh")),
+        Some(hum_paths::svc_script()),
         Some(PathBuf::from("./scripts/svc.sh")),
     ];
     candidates.into_iter().flatten().find(|p| p.exists())
@@ -529,11 +529,11 @@ fn hive_list() -> Result<()> {
     use std::collections::BTreeMap;
     // kind -> (has installer, configured model, running)
     let root = repo_root_or_install_dir();
-    let hives_dir = root.join("hives");
+    let hives_dir = root.join(hum_paths::HIVES_SUBDIR);
     let mut kinds: BTreeMap<String, (bool, Option<String>, bool)> = BTreeMap::new();
     if let Ok(entries) = std::fs::read_dir(&hives_dir) {
         for e in entries.flatten() {
-            if e.path().is_dir() && e.path().join("install").exists() {
+            if e.path().is_dir() && e.path().join(hum_paths::HIVE_INSTALL_SCRIPT).exists() {
                 kinds.entry(e.file_name().to_string_lossy().to_string()).or_default().0 = true;
             }
         }
@@ -592,7 +592,7 @@ fn hive_list() -> Result<()> {
 ///                       foreign repo is shallow-cloned to a cache.
 fn hive_install(reference: &str) -> Result<()> {
     let dir = resolve_hive_dir(reference)?;
-    let orchfile = dir.join("Orchfile");
+    let orchfile = dir.join(hum_paths::ORCHFILE_BASENAME);
     if !orchfile.exists() {
         anyhow::bail!("no Orchfile at {}", orchfile.display());
     }
@@ -601,7 +601,7 @@ fn hive_install(reference: &str) -> Result<()> {
 
     build_hive(&dir, &kind)?;
 
-    let orch_d = hum_paths::config_dir().join("orch.d");
+    let orch_d = hum_paths::orch_d_dir();
     std::fs::create_dir_all(&orch_d)?;
     let dest = orch_d.join(format!("{kind}.orch"));
     std::fs::copy(&orchfile, &dest)?;
@@ -634,7 +634,7 @@ fn build_cargo(dir: &Path, kind: &str) -> Result<()> {
     println!("building {kind} (cargo install --path {}) ...", dir.display());
     let s = Command::new("cargo")
         .args(["install", "--quiet", "--locked", "--path"]).arg(dir)
-        .args(["--root"]).arg(home_local())
+        .args(["--root"]).arg(hum_paths::local_dir())
         .arg("--force")
         .status()?;
     if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
@@ -659,9 +659,9 @@ fn build_node(dir: &Path, kind: &str) -> Result<()> {
         anyhow::bail!("build did not produce {}", dist.display());
     }
     let node = which_first(&["node", "/usr/local/bin/node"])
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/fnm/aliases/default/bin/node")).filter(|p| p.exists()))
+        .or_else(|| Some(hum_paths::fnm_node_bin()).filter(|p| p.exists()))
         .ok_or_else(|| anyhow::anyhow!("node not in PATH; install Node 22+"))?;
-    let bin = home_local().join("bin").join(kind);
+    let bin = hum_paths::hum_bin(kind);
     std::fs::create_dir_all(bin.parent().unwrap())?;
     let wrapper = format!(
         "#!/usr/bin/env bash\nexec {} {} \"$@\"\n",
@@ -678,7 +678,7 @@ fn build_node(dir: &Path, kind: &str) -> Result<()> {
 
 fn build_go(dir: &Path, kind: &str) -> Result<()> {
     if !which("go") { anyhow::bail!("go not in PATH; install Go"); }
-    let bin = home_local().join("bin").join(kind);
+    let bin = hum_paths::hum_bin(kind);
     std::fs::create_dir_all(bin.parent().unwrap())?;
     println!("building {kind} (go build) in {}", dir.display());
     let s = Command::new("go").args(["build", "-o"]).arg(&bin).arg(".").current_dir(dir).status()?;
@@ -722,13 +722,8 @@ fn rewrite_hum_orchfile(orch_d: &Path) -> Result<()> {
         if !combined.ends_with('\n') { combined.push('\n'); }
         combined.push('\n');
     }
-    std::fs::write(hum_orchfile(), combined)?;
+    std::fs::write(hum_paths::orchfile(), combined)?;
     Ok(())
-}
-
-fn home_local() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
-        .join(".local")
 }
 
 fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
@@ -739,7 +734,7 @@ fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
             if org == "adiled" && repo == "hum" {
                 return Ok(repo_root_or_install_dir().join(sub));
             }
-            let cache = hum_paths::cache_dir().join("hives").join(format!("{org}-{repo}-{branch}"));
+            let cache = hum_paths::foreign_hive_cache(org, repo, branch);
             if !cache.exists() {
                 std::fs::create_dir_all(cache.parent().unwrap()).ok();
                 let url = format!("https://github.com/{org}/{repo}");
@@ -755,7 +750,7 @@ fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
     }
     let p = PathBuf::from(reference);
     if p.is_dir() { return Ok(p); }
-    let bundled = repo_root_or_install_dir().join("hives").join(reference);
+    let bundled = repo_root_or_install_dir().join(hum_paths::HIVES_SUBDIR).join(reference);
     if bundled.exists() { return Ok(bundled); }
     anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
 }
@@ -899,7 +894,7 @@ fn penny() -> Result<()> {
 
 fn recipes(name: Option<String>) -> Result<()> {
     let root = repo_root_or_install_dir();
-    let recipes_dir = root.join("recipes");
+    let recipes_dir = root.join(hum_paths::RECIPES_SUBDIR);
     if !recipes_dir.exists() {
         println!("no recipes/ dir at {}", recipes_dir.display());
         return Ok(());
@@ -917,7 +912,7 @@ fn recipes(name: Option<String>) -> Result<()> {
             println!("Run one with: hum recipes <name>");
         }
         Some(n) => {
-            let install = recipes_dir.join(&n).join("install");
+            let install = recipes_dir.join(&n).join(hum_paths::HIVE_INSTALL_SCRIPT);
             if !install.exists() {
                 anyhow::bail!("recipes/{n}/install not found");
             }
@@ -949,11 +944,10 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 // ── orchd shell-outs (bee lifecycle) ─────────────────────────────────────
 
-fn hum_orchfile() -> PathBuf { hum_paths::config_dir().join("Orchfile") }
 
 fn orchd_cmd() -> Command {
     let mut c = Command::new("orchd");
-    c.arg("--orchfile").arg(hum_orchfile())
+    c.arg("--orchfile").arg(hum_paths::orchfile())
      .arg("--user")
      .arg("--namespace").arg("hum");
     c
@@ -961,7 +955,7 @@ fn orchd_cmd() -> Command {
 
 /// Service names declared in hum's Orchfile.
 fn orch_catalog() -> Vec<String> {
-    let path = hum_orchfile();
+    let path = hum_paths::orchfile();
     let Ok(raw) = std::fs::read_to_string(&path) else { return Vec::new(); };
     raw.lines()
         .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))

@@ -137,7 +137,7 @@ impl Sim {
         // is supplied, but DaemonConfig wants something to hold.
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join("penny.json");
+        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
 
         // Drain any pre-spawn capacity hint and reuse it for both the
         // daemon's overflow policy AND the SimHumd's published atomic so
@@ -155,8 +155,8 @@ impl Sim {
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
-            thrum_path: tmp.join("thrum.sock"),
-            http_path: tmp.join("http.sock"),
+            thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
+            http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
             hum_cfg: config::HumConfig::default(),
@@ -276,7 +276,7 @@ impl Sim {
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join("penny.json");
+        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
 
         let initial_capacity = self
             .pending_capacities
@@ -291,8 +291,8 @@ impl Sim {
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
-            thrum_path: tmp.join("thrum.sock"),
-            http_path: tmp.join("http.sock"),
+            thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
+            http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
             hum_cfg: config::HumConfig::default(),

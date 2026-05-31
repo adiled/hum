@@ -91,7 +91,7 @@ impl WorkerBee for ClaudeReplWorker {
         let mut cmd = CommandBuilder::new(&cli);
         cmd.cwd(&spec.cwd);
         if let Ok(path) = std::env::var("PATH") { cmd.env("PATH", path); }
-        if let Ok(home) = std::env::var("HOME") { cmd.env("HOME", home); }
+        cmd.env("HOME", hum_paths::home().to_string_lossy().into_owned());
         cmd.env("TERM", "xterm-256color");
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
