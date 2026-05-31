@@ -1,0 +1,3 @@
+SERVICE claude-cli
+RUN ${HOME}/.local/bin/claude-cli-worker
+RESTART always

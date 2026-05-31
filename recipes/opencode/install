@@ -5,11 +5,11 @@
 # pick provider `hum`, pick a claude model, type, and it works.
 #
 # Pipeline:
-#   1. invoke ./dev/deploy if present (gets humd live for HUM_DEV_USER)
+#   1. invoke ./dev/deploy if present (gets humd + humnest live for HUM_DEV_USER)
 #   2. build the openai-server bee
 #   3. seed ~/.config/hum/hives/openai-server.json (target user)
 #   4. seed/patch ~/.config/opencode/opencode.json with provider.hum
-#   5. install hum-openai-server systemd unit + bounce
+#   5. (re)register claude-cli worker + openai-server bees with humnest
 #
 # Env:
 #   HUM_DEV_USER       target user (default: clwnd; same as deploy)
@@ -26,13 +26,13 @@ TARGET_UID="$(id -u "$TARGET")"
 TARGET_RUNTIME="/run/user/$TARGET_UID"
 PORT="${HUM_OPENAI_PORT:-14620}"
 
-# Step 1 — bring humd up via the env-specific deploy script.
+# Step 1 — bring humd + humnest up via the env-specific deploy script.
 if [ -x "./dev/deploy" ]; then
   echo "[opencode] running dev/deploy …"
   ./dev/deploy
 else
-  echo "[opencode] no dev/deploy found — assuming humd is already live."
-  echo "                  (paradigm 0: cargo run -p humd from another terminal)"
+  echo "[opencode] no dev/deploy found — assuming humd + humnest are already live."
+  echo "                  (paradigm 0: cargo run -p humd + cargo run -p humnest from other terminals)"
 fi
 
 # Step 2 — build the openai-server bee. Each bee is a
@@ -72,10 +72,6 @@ su -l "$TARGET" -c "mkdir -p ~/.config/opencode"
 # OC's openai-compatible provider reads baseURL / apiKey from
 # `options`. Mirror what the AI SDK actually wants; top-level baseURL
 # alone produces "undefined/chat/completions" URL parse failures.
-# Model list is OC-provider-shape metadata, so it lives next to the
-# recipe (./recipes/opencode/models.json). The recipe project the
-# bare id-set into OC's `models` map; the rich metadata (cost, family,
-# limit) is OC-flavored and isn't published anywhere else.
 RECIPE_MODELS="./recipes/opencode/models.json"
 if [ -s "$RECIPE_MODELS" ]; then
   MODELS_JSON="$(jq '[keys[]] | map({(.): {}}) | add' "$RECIPE_MODELS")"
@@ -83,14 +79,6 @@ else
   echo "[opencode] no $RECIPE_MODELS — using narrow fallback (3 models)" >&2
   MODELS_JSON='{"claude-opus-4-7":{},"claude-sonnet-4-6":{},"claude-haiku-4-5":{}}'
 fi
-# Use @ai-sdk/openai (not @ai-sdk/openai-compatible) so OC routes
-# through the OpenAI Responses API (/v1/responses). Required for
-# provider-executed tool semantics: the worker bee's MCP bridge
-# resolves humfs_* tools inline and openai-server emits them as
-# `mcp_call` hosted items, which the SDK marks providerExecuted=
-# true. OC renders the tool call + result as already-done without
-# trying to re-execute (which would land tool: invalid since
-# humfs_* aren't in OC's local tool registry).
 HUM_BLOCK=$(jq -n --argjson models "$MODELS_JSON" '{
   npm: "@ai-sdk/openai",
   options: { baseURL: "http://127.0.0.1:'"$PORT"'/v1", apiKey: "hum-dev" },
@@ -104,12 +92,6 @@ if ! su -l "$TARGET" -c "test -f $OC_CFG"; then
 }
 EOF
 elif command -v jq >/dev/null 2>&1; then
-  # Always overwrite the hum block — old shape (top-level baseURL,
-  # no options) silently breaks OC, so reseeding is safer than
-  # leaving stale config in place. Also strip the 0.2 opencode plugin
-  # entry (`plugin[]` pointing at the hum src tree) — it tries to
-  # connect to the legacy thrum socket and fails after 5s, blocking
-  # every prompt. The 0.3 native openai-compatible provider replaces it.
   echo "[opencode] (re)writing provider.hum + pruning legacy plugin in $OC_CFG …"
   su -l "$TARGET" -c "
     tmp=\$(mktemp) && jq --argjson hum '$HUM_BLOCK' '
@@ -124,35 +106,38 @@ else
   echo "                  Add provider.hum manually — see MIGRATING.md."
 fi
 
-# Step 5 — bring up the claude-cli worker bee. humd is a router; it
+# Step 5 — (re)register the claude-cli worker bee. humd is a router; it
 # can't serve any model without at least one worker registered via thrum.
-echo "[opencode] (re)installing hum-claude-cli-worker service …"
+# Each hive's installer appends itself to hum.json humnest.bees and
+# bounces humnest, so we just invoke them in the target user's shell.
+echo "[opencode] (re)registering claude-cli bee with humnest …"
 su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/claude-cli && ./install" >/dev/null
 
-# Step 6 — install the openai-server service unit (the nestler side).
-echo "[opencode] (re)installing hum-openai-server service …"
+# Step 6 — (re)register the openai-server bee.
+echo "[opencode] (re)registering openai-server bee with humnest …"
 su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/openai-server && ./install" >/dev/null
 
-# Health check via the svc helper — sourced from the rsynced source tree.
-SVC_PATH="$TARGET_HOME/.local/share/hum/src/scripts/svc.sh"
-if su -l "$TARGET" -c "test -f $SVC_PATH"; then
-  for svc in hum-claude-cli-worker hum-openai-server; do
-    if su -l "$TARGET" -c ". $SVC_PATH && XDG_RUNTIME_DIR=$TARGET_RUNTIME svc_is_active $svc"; then
-      echo "[opencode] $svc active ✓"
+# Health check — ask humctl about humnest, and list its bees via the
+# control socket if humctl status doesn't say it all.
+HUMCTL_BIN="$TARGET_HOME/.local/bin/humctl"
+if su -l "$TARGET" -c "test -x $HUMCTL_BIN"; then
+  for unit in humd humnest; do
+    if su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME $HUMCTL_BIN status $unit >/dev/null 2>&1"; then
+      echo "[opencode] $unit active ✓"
     else
-      echo "[opencode] $svc did NOT start cleanly"
-      echo "           Linux:  journalctl --user -u $svc"
-      echo "           macOS:  tail ~/Library/Logs/sh.hum.$svc.err.log"
+      echo "[opencode] $unit did NOT start cleanly"
+      echo "           Linux:  journalctl --user -u $unit"
+      echo "           macOS:  tail ~/Library/Logs/$unit.err.log"
     fi
   done
 else
-  echo "[opencode] WARN: $SVC_PATH missing; can't health-check"
+  echo "[opencode] WARN: $HUMCTL_BIN missing; can't health-check"
 fi
 
 echo
 echo "[opencode] done."
 echo "  humd:               $TARGET_RUNTIME/hum/thrum.sock"
-echo "  claude-cli worker:  registered via thrum bee:['worker']"
+echo "  humnest:            supervising claude-cli + openai-server bees"
 echo "  openai-server:      http://127.0.0.1:$PORT/v1"
 echo "  opencode cfg:       $OC_CFG"
 echo

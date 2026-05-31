@@ -33,7 +33,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
 
     // Forager advertises two fs tools + provides=["fs"]. Build the
     // hello inline (attach_mock_forager doesn't take `provides`).
-    let forager_cid = format!("sim-forager-{}", uuid::Uuid::new_v4());
+    let forager_cid = ids::HumId::mint().to_string();
     let _frx = humd.thrum.register_synthetic(forager_cid.clone());
     let forager_hello = json!({
         "chi":"hello","bee":["forager"],"hive":"humfs","version":"0.0.0",
@@ -50,7 +50,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     humd.thrum.inject_tone(&forager_cid, forager_hello).await;
 
     // Worker captures the chi:"prompt" tone humd sends.
-    let worker_cid = format!("sim-worker-{}", uuid::Uuid::new_v4());
+    let worker_cid = ids::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
     let hello = json!({
         "chi":"hello","bee":["worker"],"hive":"claude-cli","version":"0.0.0",

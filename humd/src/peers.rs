@@ -52,22 +52,8 @@ struct RawPeer {
     alias: Option<String>,
 }
 
-/// Resolve `${XDG_CONFIG_HOME or $HOME/.config}/hum/peers.json`.
 pub fn peers_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("peers.json");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".config")
-                .join("hum")
-                .join("peers.json");
-        }
-    }
-    PathBuf::from(".config/hum/peers.json")
+    hum_paths::peers_json()
 }
 
 /// Best-effort load of the peers file.
@@ -75,7 +61,7 @@ pub fn peers_path() -> PathBuf {
 /// Missing file → empty vec. Parse errors on the outer object → empty vec
 /// (warn). Malformed rows inside `peers[]` → skipped (warn), good rows
 /// kept.
-pub fn load() -> Vec<PeerConfig> {
+pub(crate) fn load() -> Vec<PeerConfig> {
     let path = peers_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -128,8 +114,7 @@ mod tests {
     fn load_parses_fixture_and_skips_bad_rows() {
         let tmp = TempDir::new().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        let dir = tmp.path().join("hum");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(hum_paths::config_dir()).unwrap();
 
         let good_a = "a".repeat(64);
         let good_b = "b".repeat(64);
@@ -143,7 +128,7 @@ mod tests {
               ]
             }}"#
         );
-        std::fs::write(dir.join("peers.json"), body).unwrap();
+        std::fs::write(hum_paths::peers_json(), body).unwrap();
 
         let loaded = load();
         assert_eq!(loaded.len(), 2, "bad row dropped");

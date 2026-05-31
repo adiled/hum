@@ -16,16 +16,16 @@ use std::path::Path;
 
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
-pub mod outline;
-pub mod query;
-pub mod subwalk;
-pub mod symbol;
+pub(crate) mod outline;
+pub(crate) mod query;
+pub(crate) mod subwalk;
+pub(crate) mod symbol;
 
-pub use symbol::{Symbol, SymbolKind};
+pub(crate) use symbol::{Symbol, SymbolKind};
 
 /// Recognize a code language from a file path. Returns None for
 /// unsupported extensions; caller falls back to the text path.
-pub fn detect_language(path: &Path) -> Option<LangSpec> {
+pub(crate) fn detect_language(path: &Path) -> Option<LangSpec> {
     let ext = path.extension().and_then(|s| s.to_str())?.to_ascii_lowercase();
     match ext.as_str() {
         "rs" => Some(LangSpec::Rust),
@@ -39,7 +39,7 @@ pub fn detect_language(path: &Path) -> Option<LangSpec> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LangSpec {
+pub(crate) enum LangSpec {
     Rust,
     Python,
     Go,
@@ -49,7 +49,7 @@ pub enum LangSpec {
 }
 
 impl LangSpec {
-    pub fn tree_sitter_language(self) -> Language {
+    pub(crate) fn tree_sitter_language(self) -> Language {
         match self {
             LangSpec::Rust       => tree_sitter_rust::LANGUAGE.into(),
             LangSpec::Python     => tree_sitter_python::LANGUAGE.into(),
@@ -60,7 +60,7 @@ impl LangSpec {
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             LangSpec::Rust       => "rust",
             LangSpec::Python     => "python",
@@ -74,7 +74,7 @@ impl LangSpec {
 
 /// Parse a source string against the given language. Returns a
 /// parser-owned tree the caller can query.
-pub fn parse(source: &str, lang: LangSpec) -> Option<tree_sitter::Tree> {
+pub(crate) fn parse(source: &str, lang: LangSpec) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser.set_language(&lang.tree_sitter_language()).ok()?;
     parser.parse(source, None)
@@ -83,7 +83,7 @@ pub fn parse(source: &str, lang: LangSpec) -> Option<tree_sitter::Tree> {
 /// Run the given language's symbol query over `source`, returning
 /// every captured symbol sorted by start byte. Children stay in the
 /// returned tree's order; outline formatting handles indentation.
-pub fn file_symbols(source: &str, lang: LangSpec) -> Vec<Symbol> {
+pub(crate) fn file_symbols(source: &str, lang: LangSpec) -> Vec<Symbol> {
     let tree = match parse(source, lang) {
         Some(t) => t,
         None => return vec![],
@@ -139,7 +139,7 @@ pub fn file_symbols(source: &str, lang: LangSpec) -> Vec<Symbol> {
 /// then alias segments (via `subwalk`) under the resulting AST
 /// node. Returns `(start_byte, end_byte, start_row, end_row)` on
 /// match.
-pub fn resolve_path(
+pub(crate) fn resolve_path(
     source: &str,
     lang: LangSpec,
     path: &str,
@@ -192,7 +192,7 @@ fn resolve_named<'a>(symbols: &'a [Symbol], segs: &[&str]) -> Option<&'a Symbol>
 /// Find the smallest symbol enclosing the given byte offset.
 /// Useful for annotating regex hits in `humfs_read` with the
 /// function / class they sit inside.
-pub fn enclosing_symbol(symbols: &[Symbol], byte: usize) -> Option<&Symbol> {
+pub(crate) fn enclosing_symbol(symbols: &[Symbol], byte: usize) -> Option<&Symbol> {
     let mut best: Option<&Symbol> = None;
     for s in symbols {
         if s.start_byte <= byte && byte < s.end_byte {
@@ -208,7 +208,7 @@ pub fn enclosing_symbol(symbols: &[Symbol], byte: usize) -> Option<&Symbol> {
 /// Return Err with a one-line message if the source has any syntax
 /// errors per the given language's parser. Used as a post-write
 /// validation gate by `humfs_do_code` (P5).
-pub fn validate_syntax(source: &str, lang: LangSpec) -> Result<(), String> {
+pub(crate) fn validate_syntax(source: &str, lang: LangSpec) -> Result<(), String> {
     let tree = parse(source, lang).ok_or_else(|| "parser unavailable".to_string())?;
     let root = tree.root_node();
     if root.has_error() {

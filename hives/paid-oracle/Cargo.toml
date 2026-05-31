@@ -7,6 +7,7 @@ description = "x402-style paid oracle bee — sells one price per USDC payment, 
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
+ids = { path = "../../ids" }
 nest-common = { path = "../common" }
 ensemble = { path = "../../ensemble" }
 tokio = { workspace = true }
@@ -19,7 +20,7 @@ parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 uuid = { version = "1", features = ["v4"] }
 hex = { workspace = true }
-libc = "0.2"
+hum-paths = { path = "../../hum-paths" }
 
 [[bin]]
 name = "paid-oracle"

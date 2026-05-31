@@ -1,0 +1,3 @@
+SERVICE grpc
+RUN ${HOME}/.local/bin/grpc-forager
+RESTART always

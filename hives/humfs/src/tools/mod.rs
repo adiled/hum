@@ -1,4 +1,4 @@
-pub mod bash;
-pub mod do_code;
-pub mod do_noncode;
-pub mod read;
+pub(crate) mod bash;
+pub(crate) mod do_code;
+pub(crate) mod do_noncode;
+pub(crate) mod read;

@@ -77,6 +77,8 @@ class Chi:
     KAD_FIND_NODE: str = "kad-find-node"
     # Kademlia DHT FIND_NODE response — `{ query_id, from: <Hid hex>, closest: [<HumdAddr JSON>, ...] }`. Matched to the originating `kad-find-node` by `query_id`. The lookup driver inserts every advertised HumdAddr into its routing table and re-queries the α closest unqueried peers until no closer node is returned.
     KAD_FIND_NODE_RESP: str = "kad-find-node-resp"
+    # thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author.
+    BACKFILL: str = "backfill"
 
 ALL_CHI: frozenset[str] = frozenset({
     "hello",
@@ -112,6 +114,7 @@ ALL_CHI: frozenset[str] = frozenset({
     "gossip-publish",
     "kad-find-node",
     "kad-find-node-resp",
+    "backfill",
 })
 
 def is_valid_chi(value: str) -> bool:

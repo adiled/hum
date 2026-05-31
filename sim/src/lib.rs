@@ -137,7 +137,7 @@ impl Sim {
         // is supplied, but DaemonConfig wants something to hold.
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join("penny.json");
+        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
 
         // Drain any pre-spawn capacity hint and reuse it for both the
         // daemon's overflow policy AND the SimHumd's published atomic so
@@ -155,8 +155,8 @@ impl Sim {
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
-            thrum_path: tmp.join("thrum.sock"),
-            http_path: tmp.join("http.sock"),
+            thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
+            http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
             hum_cfg: config::HumConfig::default(),
@@ -169,6 +169,7 @@ impl Sim {
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
+            thehum_cfg: None,
         };
 
         let shutdown_fut = async move {
@@ -275,7 +276,7 @@ impl Sim {
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join("penny.json");
+        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
 
         let initial_capacity = self
             .pending_capacities
@@ -290,8 +291,8 @@ impl Sim {
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
-            thrum_path: tmp.join("thrum.sock"),
-            http_path: tmp.join("http.sock"),
+            thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
+            http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
             hum_cfg: config::HumConfig::default(),
@@ -304,6 +305,7 @@ impl Sim {
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
+            thehum_cfg: None,
         };
 
         let shutdown_fut = async move { let _ = shutdown_rx.await; };
@@ -486,7 +488,7 @@ impl Sim {
             }
             let tone = serde_json::json!({
                 "chi": "wane-sync",
-                "rid": format!("wane-sync-{}", uuid::Uuid::new_v4()),
+                "rid": ids::HumId::mint().to_string(),
                 "from": from.id.to_hex(),
                 "to": to.id.to_hex(),
                 "snapshot": Value::Object(snapshot_json),
@@ -519,7 +521,7 @@ impl Sim {
             if h.thrum.has_sink() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let client_id = format!("sim-worker-{}", uuid::Uuid::new_v4());
+        let client_id = ids::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         // Hello first so humd records bee:["worker"] + models before the
         // first prompt arrives.
@@ -577,7 +579,7 @@ impl Sim {
             .get(&humd)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
-        let client_id = format!("sim-{}", uuid::Uuid::new_v4());
+        let client_id = ids::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
 
         // Fanout task: drain this synthetic's outbound queue and route
@@ -714,7 +716,7 @@ impl Sim {
             if h.thrum.has_sink() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let client_id = format!("sim-forager-{}", uuid::Uuid::new_v4());
+        let client_id = ids::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         let tools: Vec<Value> = tool_names.iter().map(|name| serde_json::json!({
             "name": name,
@@ -773,7 +775,7 @@ impl Sim {
             observer_humd,
             serde_json::json!({
                 "chi": "attach",
-                "rid": format!("attach-{}", uuid::Uuid::new_v4()),
+                "rid": ids::HumId::mint().to_string(),
                 "sid": sid,
                 "to": host_humd.to_hex(),
                 "from": observer_humd.to_hex(),

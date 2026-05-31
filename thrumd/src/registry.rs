@@ -53,32 +53,32 @@ impl Reach {
     }
 }
 
-pub struct Registry {
+pub(crate) struct Registry {
     by_id: HashMap<ClientId, std::sync::Arc<Reach>>,
 }
 
 impl Registry {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { by_id: HashMap::new() }
     }
 
-    pub fn insert(&mut self, reach: std::sync::Arc<Reach>) {
+    pub(crate) fn insert(&mut self, reach: std::sync::Arc<Reach>) {
         self.by_id.insert(reach.client_id.clone(), reach);
     }
 
-    pub fn remove(&mut self, client_id: &str) {
+    pub(crate) fn remove(&mut self, client_id: &str) {
         self.by_id.remove(client_id);
     }
 
-    pub fn get(&self, client_id: &str) -> Option<&Reach> {
+    pub(crate) fn get(&self, client_id: &str) -> Option<&Reach> {
         self.by_id.get(client_id).map(|r| r.as_ref())
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Reach> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Reach> {
         self.by_id.values().map(|r| r.as_ref())
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.by_id.len()
     }
 }

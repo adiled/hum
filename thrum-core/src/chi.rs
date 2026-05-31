@@ -121,6 +121,10 @@ pub enum Chi {
     /// table and re-queries the α closest unqueried peers until no
     /// closer node is returned.
     KadFindNodeResp,
+    /// thehum chi-log replay request — `{ author: <hid>, from: <seq> }`.
+    /// Host humd answers with one `chi:"backfill-event"` tone per event
+    /// in `[from, ..)` for the named author.
+    Backfill,
 }
 
 /// `pulse.kind` — its own enum within `chi:"pulse"` tones.

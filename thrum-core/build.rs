@@ -1,19 +1,17 @@
-//! Build script — keeps `thrum-clients/ts/chi.ts` in lockstep with `chi.rs`.
+//! Build script — keeps generated SDKs in `thrum-clients/{ts,python,go}/`
+//! in lockstep with `chi.rs`.
 //!
 //! Cargo reruns this whenever the listed files change. We parse the
-//! Rust enums via the `codegen` library and regenerate the TS file.
-//! No drift possible: every build of thrum-core refreshes the TS side.
+//! Rust enums via the `codegen` library and regenerate every target.
+//! No drift possible: every build of thrum-core refreshes every client.
+//! Output paths live in `codegen::paths` — never hand-write them here.
 
-use std::path::PathBuf;
+use codegen::paths;
 
 fn main() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let chi_rs = manifest.join("src/chi.rs");
-    let lib_rs = manifest.join("src/lib.rs");
-    let ts_out = manifest.join("../thrum-clients/ts/chi.ts");
+    let chi_rs = paths::chi_rs();
+    let lib_rs = paths::lib_rs();
 
-    // Cargo: rerun only when these change. Without these directives the
-    // build script reruns every build (cheap, but noisier output).
     println!("cargo:rerun-if-changed={}", chi_rs.display());
     println!("cargo:rerun-if-changed={}", lib_rs.display());
     println!("cargo:rerun-if-changed=build.rs");
@@ -26,32 +24,17 @@ fn main() {
         }
     };
 
-    if let Err(e) = codegen::emit_ts(&spec, &ts_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_ts failed: {e}");
-    }
-
-    let helpers_out = manifest.join("../thrum-clients/ts/helpers.ts");
-    if let Err(e) = codegen::emit_helpers(&helpers_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_helpers failed: {e}");
-    }
-
-    // Python target.
-    let py_out = manifest.join("../thrum-clients/python/thrum/chi.py");
-    if let Err(e) = codegen::emit_py(&spec, &py_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_py failed: {e}");
-    }
-    let py_helpers_out = manifest.join("../thrum-clients/python/thrum/helpers.py");
-    if let Err(e) = codegen::emit_py_helpers(&py_helpers_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_py_helpers failed: {e}");
-    }
-
-    // Go target.
-    let go_out = manifest.join("../thrum-clients/go/thrum/chi.go");
-    if let Err(e) = codegen::emit_go(&spec, &go_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_go failed: {e}");
-    }
-    let go_helpers_out = manifest.join("../thrum-clients/go/thrum/helpers.go");
-    if let Err(e) = codegen::emit_go_helpers(&go_helpers_out) {
-        println!("cargo:warning=thrum-core build.rs: emit_go_helpers failed: {e}");
+    let emits: [(&str, std::path::PathBuf, &dyn Fn(&std::path::Path) -> codegen::Result<()>); 6] = [
+        ("emit_ts",         paths::ts_chi(),     &|p| codegen::emit_ts(&spec, p)),
+        ("emit_helpers",    paths::ts_helpers(), &codegen::emit_helpers),
+        ("emit_py",         paths::py_chi(),     &|p| codegen::emit_py(&spec, p)),
+        ("emit_py_helpers", paths::py_helpers(), &codegen::emit_py_helpers),
+        ("emit_go",         paths::go_chi(),     &|p| codegen::emit_go(&spec, p)),
+        ("emit_go_helpers", paths::go_helpers(), &codegen::emit_go_helpers),
+    ];
+    for (label, out, emit) in &emits {
+        if let Err(e) = emit(out) {
+            println!("cargo:warning=thrum-core build.rs: {label}: {e}");
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! claude-cli — the pipe-mode WorkerBee for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
-//! Takes a [`nest::SpawnSpec`], builds the CLI invocation, runs the
+//! Takes a [`nest::Egg`], builds the CLI invocation, runs the
 //! subprocess, exposes stdin/stdout/exit through [`nest::Cell`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
 
@@ -13,11 +13,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use command_group::AsyncCommandGroup;
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Propensity, Cell, SpawnSpec, WorkerBee};
+use nest::{Propensity, Cell, Egg, WorkerBee};
 
 pub struct ClaudeCliWorker;
 
@@ -25,11 +26,11 @@ impl Default for ClaudeCliWorker {
     fn default() -> Self { Self }
 }
 
-/// Build the claude CLI argv from a [`SpawnSpec`].
+/// Build the claude CLI argv from a [`Egg`].
 ///
 /// Public so it can be unit-tested without spawning a real process. Pure
 /// function — no IO.
-pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
+pub fn build_argv(spec: &Egg) -> Vec<String> {
     let mut argv = vec![
         "-p".to_string(),
         "--verbose".to_string(),
@@ -64,21 +65,25 @@ pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
     }
-    // resume an existing session, or create one under an explicit id.
-    // resume wins; the two are mutually exclusive on claude's CLI.
+    // Foreign explicit resume wins. Otherwise: --resume the sid-derived
+    // UUID (warm continuation), or --session-id it (fresh after resume miss).
+    let derived = spec.sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
     if let Some(resume) = spec.resume_id.as_deref() {
         argv.push("--resume".into());
         argv.push(resume.to_string());
-    } else if let Some(session) = spec.session_id.as_deref() {
+    } else if spec.fresh {
         argv.push("--session-id".into());
-        argv.push(session.to_string());
+        argv.push(derived);
+    } else {
+        argv.push("--resume".into());
+        argv.push(derived);
     }
     argv
 }
 
 /// Build the spawn env. claude is sensitive to a small set of toggles;
 /// callers can override anything via `spec.env`.
-pub fn build_env(spec: &SpawnSpec) -> Vec<(String, String)> {
+pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![
         ("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into()),
         ("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into()),
@@ -94,9 +99,7 @@ pub fn build_env(spec: &SpawnSpec) -> Vec<(String, String)> {
     if let Ok(path) = std::env::var("PATH") {
         env.push(("PATH".into(), path));
     }
-    if let Ok(home) = std::env::var("HOME") {
-        env.push(("HOME".into(), home));
-    }
+    env.push(("HOME".into(), hum_paths::home().to_string_lossy().into_owned()));
     for (k, v) in &spec.env {
         env.push((k.clone(), v.clone()));
     }
@@ -108,7 +111,7 @@ impl WorkerBee for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
+    async fn raise(&self, spec: Egg) -> Result<Cell> {
         let cli = spec.cli_path.clone()
             .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
             .unwrap_or_else(|| "claude".into());
@@ -127,18 +130,19 @@ impl WorkerBee for ClaudeCliWorker {
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().with_context(|| format!("spawn {cli}"))?;
-        let pid = child.id();
-        let mut stdin = child.stdin.take().context("missing stdin")?;
-        let stdout = child.stdout.take().context("missing stdout")?;
-        let stderr = child.stderr.take().context("missing stderr")?;
+        spec.bounds.apply_pre_exec(cmd.as_std_mut())
+            .with_context(|| "apply resource limits")?;
+
+        let mut child = cmd.group_spawn().with_context(|| format!("spawn {cli}"))?;
+        let pid = child.inner().id();
+        let mut stdin = child.inner().stdin.take().context("missing stdin")?;
+        let stdout = child.inner().stdout.take().context("missing stdout")?;
+        let stderr = child.inner().stderr.take().context("missing stderr")?;
 
         let (tx_in, mut rx_in) = mpsc::channel::<String>(64);
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(256);
-        let (tx_exit, rx_exit) = oneshot::channel::<i32>();
 
         // stdin pump — append `\n` for NDJSON framing.
         tokio::spawn(async move {
@@ -196,40 +200,17 @@ impl WorkerBee for ClaudeCliWorker {
             }
         });
 
-        // exit watcher — keep Child alive behind an async-safe mutex so
-        // both the wait task and the kill closure can reach it.
-        let kill_arc: std::sync::Arc<dyn Fn() + Send + Sync> = {
-            let child_holder = std::sync::Arc::new(Mutex::new(Some(child)));
-            let holder_for_wait = child_holder.clone();
-            tokio::spawn(async move {
-                let code = {
-                    let mut guard = holder_for_wait.lock().await;
-                    match guard.as_mut() {
-                        Some(c) => c.wait().await.map(|s| s.code().unwrap_or(1)).unwrap_or(1),
-                        None => 1,
-                    }
-                };
-                let _ = tx_exit.send(code);
-            });
-            let holder_for_kill = child_holder.clone();
-            std::sync::Arc::new(move || {
-                if let Ok(mut guard) = holder_for_kill.try_lock() {
-                    if let Some(c) = guard.as_mut() {
-                        let _ = c.start_kill();
-                    }
-                }
-            })
-        };
+        let (rx_exit, cancel) = nest::lifecycle::tend(child);
 
         trace!(target: "claude-cli", "spawned pid={:?}", pid);
 
         Ok(Cell {
-            pid,
-            stdin: tx_in,
-            events: std::sync::Arc::new(Mutex::new(rx_evt)),
-            exited: rx_exit,
+            mark: pid,
+            feed: tx_in,
+            mmm: std::sync::Arc::new(Mutex::new(rx_evt)),
+            emerged: rx_exit,
             ephemeral: false,
-            kill: kill_arc,
+            silence: cancel,
         })
     }
 }
@@ -240,7 +221,7 @@ mod tests {
 
     #[test]
     fn argv_includes_basics() {
-        let spec = SpawnSpec::new("sid-1", "claude-haiku-4-5", "/tmp");
+        let spec = Egg::new(ids::HumId::mint(), "claude-haiku-4-5", "/tmp");
         let argv = build_argv(&spec);
         assert!(argv.contains(&"-p".to_string()));
         assert!(argv.contains(&"--verbose".to_string()));
@@ -251,7 +232,7 @@ mod tests {
 
     #[test]
     fn argv_omits_mcp_when_no_url() {
-        let spec = SpawnSpec::new("s", "m", "/");
+        let spec = Egg::new(ids::HumId::mint(), "m", "/");
         let argv = build_argv(&spec);
         assert!(!argv.iter().any(|a| a == "--mcp-config"));
         assert!(!argv.iter().any(|a| a == "--strict-mcp-config"));
@@ -259,21 +240,22 @@ mod tests {
 
     #[test]
     fn argv_includes_mcp_when_url_set() {
-        let mut spec = SpawnSpec::new("sid-9", "m", "/");
+        let sid = ids::HumId::mint();
+        let mut spec = Egg::new(sid.clone(), "m", "/");
         spec.mcp_url = Some("http://127.0.0.1:29147".into());
         let argv = build_argv(&spec);
         let idx = argv.iter().position(|a| a == "--mcp-config").expect("mcp-config flag");
         let config: serde_json::Value = serde_json::from_str(&argv[idx + 1]).unwrap();
         assert_eq!(
             config["mcpServers"]["hum"]["url"],
-            "http://127.0.0.1:29147/s/sid-9"
+            format!("http://127.0.0.1:29147/s/{sid}")
         );
         assert!(argv.iter().any(|a| a == "--strict-mcp-config"));
     }
 
     #[test]
     fn argv_includes_system_prompt() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
         spec.system_prompt = Some("Be terse.".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--system-prompt").unwrap();
@@ -282,7 +264,7 @@ mod tests {
 
     #[test]
     fn argv_includes_resume() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
         spec.resume_id = Some("abc-123".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--resume").unwrap();
@@ -291,14 +273,14 @@ mod tests {
 
     #[test]
     fn env_disables_adaptive_thinking_when_not_planning() {
-        let spec = SpawnSpec::new("s", "m", "/");
+        let spec = Egg::new(ids::HumId::mint(), "m", "/");
         let env = build_env(&spec);
         assert!(env.iter().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING" && v == "1"));
     }
 
     #[test]
     fn env_keeps_adaptive_thinking_in_plan_mode() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
         spec.plan_mode = true;
         let env = build_env(&spec);
         assert!(!env.iter().any(|(k, _)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"));
@@ -306,7 +288,7 @@ mod tests {
 
     #[test]
     fn env_user_override_wins() {
-        let mut spec = SpawnSpec::new("s", "m", "/");
+        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
         spec.env.insert("CLAUDE_CODE_DISABLE_FAST_MODE".into(), "0".into());
         let env = build_env(&spec);
         let positions: Vec<(usize, &str)> = env.iter().enumerate()

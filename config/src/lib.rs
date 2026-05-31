@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -19,6 +18,13 @@ pub struct HumdSection {
     pub permission_dusk_ms: u64,
     #[serde(default = "defaults::drift_retention_days", rename = "driftRetentionDays")]
     pub drift_retention_days: u32,
+    #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
+    pub metrics_addr: String,
+    /// host:port the ensemble TCP transport binds on. None / empty
+    /// means dial-only — humd can reach `tcp:` peers but no peer can
+    /// reach it over TCP. iroh is unaffected (independent transport).
+    #[serde(default, rename = "tcpListen")]
+    pub tcp_listen: Option<String>,
 }
 
 impl Default for HumdSection {
@@ -26,6 +32,8 @@ impl Default for HumdSection {
         Self {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             drift_retention_days: defaults::drift_retention_days(),
+            metrics_addr: defaults::metrics_addr(),
+            tcp_listen: None,
         }
     }
 }
@@ -149,31 +157,11 @@ pub struct HumConfig {
 // ── path resolution ───────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("hum.json");
-        }
-    }
-    if let Some(base) = BaseDirs::new() {
-        return base.config_dir().join("hum").join("hum.json");
-    }
-    PathBuf::from(".config/hum/hum.json")
+    hum_paths::hum_json()
 }
 
-/// Expand `~` against `$HOME`. Leaves absolute / non-tilde paths alone.
 fn expand_tilde(p: &Path) -> PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    if s == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
-    }
-    p.to_path_buf()
+    hum_paths::expand_tilde(p)
 }
 
 fn canonical_or_self(p: &Path) -> PathBuf {
@@ -275,31 +263,31 @@ pub fn validate_or_exit() {
 mod defaults {
     use std::path::PathBuf;
 
-    pub fn permission_dusk_ms() -> u64 {
+    pub(crate) fn permission_dusk_ms() -> u64 {
         60_000
     }
-    pub fn drift_retention_days() -> u32 {
+    pub(crate) fn drift_retention_days() -> u32 {
         30
     }
-    pub fn max_active_cells() -> u32 {
+    pub(crate) fn metrics_addr() -> String {
+        "127.0.0.1:9909".into()
+    }
+    pub(crate) fn max_active_cells() -> u32 {
         4
     }
-    pub fn cell_idle_prune_threshold_ms() -> u64 {
+    pub(crate) fn cell_idle_prune_threshold_ms() -> u64 {
         300_000
     }
-    pub fn default_hive() -> String {
+    pub(crate) fn default_hive() -> String {
         "claude-repl".into()
     }
-    pub fn denied() -> Vec<PathBuf> {
-        [
-            "~/.ssh",
-            "~/.aws",
-            "~/.gnupg",
-            "~/.config/hum",
+    pub(crate) fn denied() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from("~/.ssh"),
+            PathBuf::from("~/.aws"),
+            PathBuf::from("~/.gnupg"),
+            hum_paths::config_dir(),
         ]
-        .iter()
-        .map(PathBuf::from)
-        .collect()
     }
 }
 

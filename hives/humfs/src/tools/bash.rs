@@ -47,7 +47,7 @@ struct Args {
     timeout: Option<u64>,
 }
 
-pub fn def() -> ToolDef {
+pub(crate) fn def() -> ToolDef {
     ToolDef {
         name: "humfs_bash".into(),
         description: "Execute a shell command under the session cwd. Use for runtime work: running tests, git operations, build scripts, package managers, language toolchains, CLI utilities. File inspection (ls/find/grep/rg/cat/head/tail/sed/awk/cut/uniq/wc/more/less/tree/du/file/od/xxd/strings/zcat/bzcat/xzcat/zgrep/xargs) routes back to humfs_read; the filter applies post-unwrap so wrapping in bash -c / sh -c / env / shell functions still resolves to humfs_read. File authoring (>, >>, tee, dd, cp, mv, rm, mkdir, touch, chmod, ln, scripting one-liners that write) routes to humfs_do_code / humfs_do_noncode; allowlisted runtime invocations (git, npm/yarn/pnpm/bun, pip/uv/cargo/go, make, docker, tsc, pytest/jest, gcc/clang) pass through. Output capped at 30KB per stream; default timeout 120000ms.".into(),
@@ -63,7 +63,7 @@ pub fn def() -> ToolDef {
     }
 }
 
-pub async fn run(args: Value) -> ToolResult {
+pub(crate) async fn run(args: Value) -> ToolResult {
     let args: Args = match serde_json::from_value(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(format!("invalid args: {e}")),

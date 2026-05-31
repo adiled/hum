@@ -7,6 +7,7 @@ description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
+ids = { path = "../../ids" }
 tokio = { workspace = true }
 axum = "0.7"
 tower = "0.5"
@@ -18,8 +19,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
-uuid = { version = "1", features = ["v4"] }
-libc = "0.2"
+hum-paths = { path = "../../hum-paths" }
 
 [[bin]]
 name = "ollama-server"

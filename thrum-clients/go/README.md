@@ -14,7 +14,7 @@ Python (`clients/python`); same algorithms; one source of truth.
 ## Install
 
 ```bash
-go get github.com/adiled/hum/clients/go/thrum
+go get github.com/adiled/hum/thrum-clients/go/thrum
 ```
 
 (Subdirectory go modules — works today via Go's module resolution.)
@@ -28,7 +28,7 @@ import (
     "context"
     "log"
 
-    thrum "github.com/adiled/hum/clients/go/thrum"
+    thrum "github.com/adiled/hum/thrum-clients/go/thrum"
 )
 
 func main() {

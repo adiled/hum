@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	thrum "github.com/adiled/hum/clients/go/thrum"
+	thrum "github.com/adiled/hum/thrum-clients/go/thrum"
 )
 
 const beeVersion = "0.0.0"

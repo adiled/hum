@@ -1,0 +1,3 @@
+SERVICE openai-server
+RUN ${HOME}/.local/bin/openai-server
+RESTART always

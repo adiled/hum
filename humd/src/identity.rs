@@ -26,24 +26,8 @@ use ensemble::HumdKey;
 use rand::RngCore;
 use tracing::{info, trace};
 
-/// `$XDG_STATE_HOME/hum/humd.key`. Falls back to `$HOME/.local/state/hum/humd.key`,
-/// then `.local/state/hum/humd.key` if neither env var is set.
 pub fn key_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("hum").join("humd.key");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".local")
-                .join("state")
-                .join("hum")
-                .join("humd.key");
-        }
-    }
-    PathBuf::from(".local/state/hum/humd.key")
+    hum_paths::humd_key()
 }
 
 /// Load the persisted key, minting + persisting a fresh one on first boot.
@@ -77,6 +61,28 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
     persist_key(&path, &seed)?;
     info!(path = %path.display(), humd_id = %key.hid().short(), "identity.minted");
     Ok(key)
+}
+
+/// Load the persisted key without minting. Returns `Ok(None)` when no
+/// key file exists yet — for inspect-only callers (`hum` CLI) that
+/// shouldn't mutate state.
+pub fn read_key() -> Result<Option<HumdKey>> {
+    let path = key_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path)
+        .with_context(|| format!("read humd key {}", path.display()))?;
+    if bytes.len() != 32 {
+        return Err(anyhow!(
+            "humd key at {} is {} bytes, expected 32",
+            path.display(),
+            bytes.len()
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(Some(HumdKey(SigningKey::from_bytes(&arr))))
 }
 
 /// Write 32 bytes atomically (tmp + rename) with mode 0o600.

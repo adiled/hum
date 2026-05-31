@@ -2,7 +2,7 @@
 //! captured by a language's symbol query.
 
 #[derive(Debug, Clone)]
-pub struct Symbol {
+pub(crate) struct Symbol {
     pub name: String,
     pub kind: SymbolKind,
     /// Byte range over the source. Half-open `[start_byte, end_byte)`.
@@ -14,7 +14,7 @@ pub struct Symbol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SymbolKind {
+pub(crate) enum SymbolKind {
     Function,
     Method,
     Class,   // class / struct / impl / trait / interface
@@ -28,7 +28,7 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
-    pub fn from_tag(tag: &str) -> Self {
+    pub(crate) fn from_tag(tag: &str) -> Self {
         match tag {
             "fn" | "function" => SymbolKind::Function,
             "method" => SymbolKind::Method,
@@ -43,7 +43,7 @@ impl SymbolKind {
         }
     }
 
-    pub fn tag(self) -> &'static str {
+    pub(crate) fn tag(self) -> &'static str {
         match self {
             SymbolKind::Function => "fn",
             SymbolKind::Method   => "method",

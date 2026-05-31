@@ -14,7 +14,7 @@
 
 use crate::ast::LangSpec;
 
-pub fn symbol_query(lang: LangSpec) -> &'static str {
+pub(crate) fn symbol_query(lang: LangSpec) -> &'static str {
     match lang {
         LangSpec::Rust       => RUST_QUERY,
         LangSpec::Python     => PYTHON_QUERY,

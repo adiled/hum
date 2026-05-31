@@ -1,4 +1,13 @@
-//! hum-native ID — 256-bit identifier, Crockford-base32 encoded.
+//! HumId — the one canonical identifier hum mints.
+//!
+//! 256-bit, Crockford-base32 encoded (52 chars). Foreign formats are
+//! projections via deterministic transform (`to_uuid_v5`).
+//!
+//! Three flavors, indistinguishable at the type level:
+//! - `HumId::mint()` — ts-prefixed random (sessions, requests, calls)
+//! - `HumId::from_hash(b)` — pure hash encoding (identity-derived)
+//! - `HumId::from_foreign(s)` — deterministic hash of a foreign id
+//!   (e.g. OC plugin's uuid → stable HumId without a bridge map)
 //!
 //! Layout: `[ ts (6 bytes, BE) ][ random (26 bytes) ] = 32 bytes`
 //! Text:   52 chars Crockford base32 (260 bits → 4-bit zero pad on LSB end).
@@ -9,7 +18,100 @@
 //! - alphabet omits I, L, O, U (Crockford); uppercase only
 
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fmt;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+/// UUID namespaces for deterministic foreign-format projections.
+/// Constants — don't change them, ever; existing IDs depend on these bytes.
+/// `NS_CLAUDE_SESSION` preserves the historical `HUM_SESSION_NS` value so
+/// existing claude transcripts stay reachable after the canonical rewrite.
+pub const NS_CLAUDE_SESSION: Uuid = Uuid::from_bytes([
+    0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
+]);
+
+/// Canonical hum identifier. Newtype around a validated 52-char string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HumId(String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdError {
+    BadFormat,
+}
+
+impl fmt::Display for IdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self { Self::BadFormat => write!(f, "not a canonical HumId (52-char Crockford-base32)") }
+    }
+}
+
+impl std::error::Error for IdError {}
+
+impl HumId {
+    /// Fresh id, ts-prefixed. Use for sessions, requests, calls.
+    pub fn mint() -> Self { Self(mint_id()) }
+
+    /// Encode a 32-byte hash. Use for identity-derived ids.
+    pub fn from_hash(bytes: [u8; 32]) -> Self { Self(encode(&bytes)) }
+
+    /// Deterministic projection of a foreign string into HumId space.
+    /// Same input → same output, forever. No bridge map needed.
+    pub fn from_foreign(s: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"hum-foreign-id:");
+        hasher.update(s.as_bytes());
+        let digest: [u8; 32] = hasher.finalize().into();
+        Self(encode(&digest))
+    }
+
+    pub fn parse(s: &str) -> Result<Self, IdError> {
+        if is_valid_id(s) { Ok(Self(s.to_string())) } else { Err(IdError::BadFormat) }
+    }
+
+    pub fn timestamp(&self) -> Option<u64> { timestamp_of(&self.0) }
+
+    /// Deterministic UUIDv5 projection — used at boundaries that require
+    /// UUID shape (claude `--session-id`, etc).
+    pub fn to_uuid_v5(&self, namespace: Uuid) -> Uuid {
+        Uuid::new_v5(&namespace, self.0.as_bytes())
+    }
+
+    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn into_string(self) -> String { self.0 }
+}
+
+impl fmt::Display for HumId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+}
+
+impl AsRef<str> for HumId {
+    fn as_ref(&self) -> &str { &self.0 }
+}
+
+impl FromStr for HumId {
+    type Err = IdError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> { Self::parse(s) }
+}
+
+impl From<HumId> for String {
+    fn from(h: HumId) -> String { h.0 }
+}
+
+impl Serialize for HumId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for HumId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
 
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ID_LEN: usize = 52;
@@ -144,8 +246,7 @@ mod tests {
 
     #[test]
     fn ts_parity_vectors() {
-        // Reference vectors produced by lib/id.ts encodeBase32() in Node.
-        // Keeps the Rust encoder bit-identical to the TS implementation.
+        // Fixed reference vectors so encoder output stays bit-stable.
         let zero = [0u8; 32];
         assert_eq!(encode(&zero), "0".repeat(52));
 
@@ -167,6 +268,42 @@ mod tests {
             encode(&ones),
             "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZG"
         );
+    }
+
+    #[test]
+    fn hum_id_roundtrip_mint() {
+        let h = HumId::mint();
+        let s = h.as_str().to_string();
+        assert_eq!(HumId::parse(&s).unwrap(), h);
+        assert!(h.timestamp().is_some());
+    }
+
+    #[test]
+    fn hum_id_from_foreign_is_deterministic() {
+        let a = HumId::from_foreign("oc-session-abc");
+        let b = HumId::from_foreign("oc-session-abc");
+        let c = HumId::from_foreign("oc-session-xyz");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn hum_id_to_uuid_v5_deterministic() {
+        let h = HumId::parse(&mint_id()).unwrap();
+        let u1 = h.to_uuid_v5(NS_CLAUDE_SESSION);
+        let u2 = h.to_uuid_v5(NS_CLAUDE_SESSION);
+        assert_eq!(u1, u2);
+        assert_eq!(u1.get_version_num(), 5);
+    }
+
+    #[test]
+    fn hum_id_serde_roundtrips() {
+        let h = HumId::mint();
+        let j = serde_json::to_string(&h).unwrap();
+        let back: HumId = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, h);
+        let bad: Result<HumId, _> = serde_json::from_str("\"not-a-real-id\"");
+        assert!(bad.is_err());
     }
 
     #[test]

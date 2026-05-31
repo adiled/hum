@@ -3,11 +3,13 @@ resolver = "2"
 members = [
     "thrum-core",
     "thrumd",
+    "hum-paths",
     "ids",
     "config",
     "codegen",
     "drift",
     "humd",
+    "humctl",
     "hum",
     "mcp",
     "nest",
@@ -15,7 +17,6 @@ members = [
     "hives/claude-cli",
     "hives/claude-repl",
     "hives/humfs",
-    "hums",
     "drone",
     "penny",
     "ensemble",
@@ -25,6 +26,7 @@ members = [
     "hives/gsm-modem",
     "hives/ollama-server",
     "hives/bp7",
+    "thehum",
 ]
 
 [workspace.package]

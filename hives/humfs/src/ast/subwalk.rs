@@ -28,13 +28,13 @@ use crate::ast::LangSpec;
 /// vocabulary words; `occurrence` is the 1-based ordinal (1 for
 /// no-`#N` segments).
 #[derive(Debug, Clone)]
-pub struct AliasSegment {
+pub(crate) struct AliasSegment {
     pub alias: String,
     pub occurrence: usize,
 }
 
 /// Parse "when#2" → `AliasSegment { alias: "when", occurrence: 2 }`.
-pub fn parse_segment(raw: &str) -> Option<AliasSegment> {
+pub(crate) fn parse_segment(raw: &str) -> Option<AliasSegment> {
     let (alias, occurrence) = match raw.split_once('#') {
         Some((a, n)) => (a.to_string(), n.parse().ok()?),
         None => (raw.to_string(), 1usize),
@@ -49,7 +49,7 @@ pub fn parse_segment(raw: &str) -> Option<AliasSegment> {
 /// Resolve a path of alias segments under `root`, returning the
 /// final matching node. Each segment's match becomes the scope for
 /// the next segment.
-pub fn resolve_subpath<'tree>(
+pub(crate) fn resolve_subpath<'tree>(
     mut root: Node<'tree>,
     segs: &[AliasSegment],
     lang: LangSpec,

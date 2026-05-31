@@ -1,0 +1,3 @@
+SERVICE bp7
+RUN ${HOME}/.local/bin/bp7-forager
+RESTART always

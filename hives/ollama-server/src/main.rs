@@ -29,7 +29,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tracing::info;
-use uuid::Uuid;
 
 const HIVE_NAME: &str = "ollama-server";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -47,12 +46,7 @@ struct FileConfig {
 }
 
 fn config_file_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home)
-        .join(".config")
-        .join("hum")
-        .join("bees")
-        .join("ollama-server.json")
+    hum_paths::bee_config("ollama-server")
 }
 
 fn read_file_config() -> FileConfig {
@@ -77,9 +71,6 @@ struct Config {
 impl Config {
     fn load() -> Self {
         let file = read_file_config();
-        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-            format!("/run/user/{}", unsafe { libc::geteuid() })
-        });
         let port: u16 = match std::env::var("OLLAMA_SERVER_PORT") {
             Ok(s) => s.parse().unwrap_or(11434),
             Err(_) => file.port.unwrap_or(11434),
@@ -103,8 +94,7 @@ impl Config {
             }),
         };
         Self {
-            sock_path: std::env::var("HUM_THRUM_SOCK")
-                .unwrap_or_else(|_| format!("{runtime}/hum/thrum.sock")),
+            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             listen: format!("{host}:{port}"),
             models,
             bind: None,
@@ -116,9 +106,6 @@ impl Config {
 struct OllamaMessage {
     role: String,
     content: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,7 +206,7 @@ async fn open_prompt(
 
     let mut hello = serde_json::Map::new();
     hello.insert("chi".into(), json!(Chi::Hello));
-    hello.insert("rid".into(), Value::String(format!("hello-{}", Uuid::new_v4())));
+    hello.insert("rid".into(), Value::String(ids::HumId::mint().to_string()));
     hello.insert("from".into(), Value::String(HIVE_NAME.into()));
     hello.insert("bee".into(), Value::String(HIVE_NAME.into()));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
@@ -302,7 +289,7 @@ async fn chat(
     let stream = req.stream.unwrap_or(true);
     let (system, user) = messages_to_prompt(&req.messages);
     let tools = tools_to_thrum(req.tools);
-    let sid = Uuid::new_v4().to_string();
+    let sid = ids::HumId::mint().to_string();
 
     let (rx, _pump) = match open_prompt(
         &cfg, &sid, &user, &req.model, system.as_deref(), tools.as_deref(),
@@ -322,7 +309,7 @@ async fn generate(
     Json(req): Json<GenerateRequest>,
 ) -> Response {
     let stream = req.stream.unwrap_or(true);
-    let sid = Uuid::new_v4().to_string();
+    let sid = ids::HumId::mint().to_string();
     let (rx, _pump) = match open_prompt(
         &cfg, &sid, &req.prompt, &req.model, req.system.as_deref(), None,
     ).await {
@@ -563,6 +550,7 @@ fn error_resp(code: StatusCode, msg: &str) -> Response {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

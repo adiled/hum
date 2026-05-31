@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn save_then_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested/penny.json");
+        let path = dir.path().join(hum_paths::PENNY_BASENAME);
         let p = Penny::new();
         p.incr_by("curateBytesSaved", 99_999);
         p.incr("taskExecutions");
@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn load_skips_non_numeric_fields() {
-        // Mirrors the TS shape that included a `started: <ms>` timestamp alongside counters.
+        // Loader must skip non-numeric fields (e.g. legacy `started`, `label`).
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("penny.json");
+        let path = dir.path().join(hum_paths::PENNY_BASENAME);
         std::fs::write(
             &path,
             br#"{"started":1700000000000,"blooms":7,"label":"ignored","fractional":3.7}"#,

@@ -389,7 +389,7 @@ pub enum HelloParse {
 pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
-        "rid": format!("hello-{}", me.short()),
+        "rid": ids::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "proto_version": caps.proto_version,
@@ -414,7 +414,7 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let sig: Signature = key.0.sign(&msg);
     serde_json::json!({
         "chi": "hello",
-        "rid": format!("hello-{}", me.short()),
+        "rid": ids::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "pubkey": hex::encode(key.pubkey_bytes()),
@@ -736,27 +736,27 @@ impl Ensemble {
                 // subsequent chi:"hello" is application-level (a
                 // tunnelled nestler announcing itself, etc.) and must
                 // pass through to subscribers.
+                //
+                // `id` is the transport-level peer id (real for iroh,
+                // placeholder for TCP-accept etc.). On a verified
+                // hello whose claimed_id differs, we re-key the
+                // registry from `id` to `claimed_id` — the signature
+                // is authoritative over the transport view.
+                let mut id = id;
                 let mut handshake_seen = false;
                 while let Some(tone) = rx.recv().await {
                     let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
                     if is_hello && !handshake_seen {
                         handshake_seen = true;
                         match parse_hello(&tone) {
-                            HelloParse::Verified(claimed_id, caps) if claimed_id == id => {
+                            HelloParse::Verified(claimed_id, caps) => {
+                                if claimed_id != id {
+                                    rekey_peer(&peers, &kad, &conn_for_drain, id, claimed_id);
+                                    id = claimed_id;
+                                }
                                 if let Some(p) = peers.write().get_mut(&id) {
                                     p.learned_caps = Some(caps);
                                 }
-                            }
-                            HelloParse::Verified(claimed_id, _) => {
-                                tracing::warn!(
-                                    target: "ensemble",
-                                    transport_id = %id.short(),
-                                    claimed_id = %claimed_id.short(),
-                                    "hello.rejected: claimed humd_id does not match transport-peer id"
-                                );
-                                peers.write().remove(&id);
-                                conn_for_drain.close();
-                                return;
                             }
                             HelloParse::Unsigned(claimed_id, caps) => {
                                 if strict {
@@ -770,11 +770,11 @@ impl Ensemble {
                                     conn_for_drain.close();
                                     return;
                                 }
-                                // T1 compat: learn caps without proof. We
-                                // still require the claimed id match the
-                                // transport view — anything else is just
-                                // a confused peer, not a hostile one,
-                                // but the registry key has to match.
+                                // T1 compat: learn caps without proof.
+                                // Unsigned hellos can't re-key safely
+                                // (no sig to back the claim), so the
+                                // registry key has to match the
+                                // transport view.
                                 if claimed_id == id {
                                     if let Some(p) = peers.write().get_mut(&id) {
                                         p.learned_caps = Some(caps);
@@ -1445,6 +1445,29 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
 ///     `query_id`. If no waiter is registered (timeout already fired,
 ///     or this is a duplicate resp) we still keep the new routing
 ///     info — a stale resp is still useful peer-discovery signal.
+/// Move an installed peer entry from the transport-level placeholder
+/// id to the cryptographically-verified id from its signed hello.
+/// Called by the install drainer when the first verified hello reveals
+/// the real id is different from what the transport reported (TCP-
+/// accept and other transports that can't authenticate the peer
+/// pre-handshake).
+fn rekey_peer(
+    peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
+    kad: &Arc<KadState>,
+    conn: &Arc<dyn PeerConnection>,
+    old_id: Hid,
+    new_id: Hid,
+) {
+    let mut w = peers.write();
+    if let Some(p) = w.remove(&old_id) {
+        w.insert(new_id, p);
+    }
+    drop(w);
+    let mut addr = conn.peer().clone();
+    addr.id = new_id;
+    kad.note_peer(addr);
+}
+
 async fn handle_kad(
     kad: &Arc<KadState>,
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,

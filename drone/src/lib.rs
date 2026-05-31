@@ -111,8 +111,8 @@ pub struct RawAssessment {
     pub reason: String,
 }
 
-/// Pre-verdict mood — the TS `Assessment` strings, now isolated to the
-/// `raw` channel so they don't compete with [`Verdict`].
+/// Pre-verdict mood — kebab-case strings on the `raw` channel, kept
+/// separate from [`Verdict`] so they can't compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Health {
@@ -622,6 +622,7 @@ fn chi_label(chi: Chi) -> &'static str {
         Chi::KadFindNode => "kad-find-node",
         Chi::KadFindNodeResp => "kad-find-node-resp",
         Chi::ToolInfo => "tool-info",
+        Chi::Backfill => "backfill",
     }
 }
 

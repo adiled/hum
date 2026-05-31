@@ -66,7 +66,7 @@ impl Envelope {
 /// The body lives in a raw `serde_json::Map` because tone shapes vary
 /// per chi. Code that needs strongly typed access decodes the body into
 /// the appropriate per-chi struct. Serializing a `Tone` flattens body
-/// fields up next to the envelope ones — matching the TS wire shape.
+/// fields up next to the envelope ones into one flat wire object.
 #[derive(Debug, Clone)]
 pub struct Tone {
     pub envelope: Envelope,
@@ -93,8 +93,8 @@ impl Tone {
 
 impl Serialize for Tone {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        // Round-trip the envelope through Value so we can merge it with body
-        // into one flat object — the TS wire shape.
+        // Round-trip envelope through Value so we can merge it with body
+        // into one flat wire object.
         let env_value = serde_json::to_value(&self.envelope).map_err(serde::ser::Error::custom)?;
         let Value::Object(mut merged) = env_value else {
             return Err(serde::ser::Error::custom("envelope did not serialize to an object"));

@@ -255,6 +255,23 @@ impl IrohTransport {
         Ok(Self::new(endpoint))
     }
 
+    /// Like [`bind_direct`] but pins iroh's NodeId to the supplied
+    /// [`crate::HumdKey`]. Production wants this — without it iroh
+    /// generates a fresh keypair on every boot and the signed-hello
+    /// pubkey won't hash to the iroh-derived [`Hid`], so peers reject
+    /// each other on `sha256(pubkey) != claimed_id`.
+    pub async fn bind_direct_with_key(humd_key: &crate::HumdKey) -> Result<Self> {
+        let sk = iroh::SecretKey::from_bytes(&humd_key.0.to_bytes());
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![IROH_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .secret_key(sk)
+            .bind()
+            .await
+            .map_err(|e| anyhow!("iroh bind (with key): {e}"))?;
+        Ok(Self::new(endpoint))
+    }
+
     /// Bind an [`Endpoint`] with iroh's default public-relay mesh —
     /// enables NAT hole-punching for WAN T2-T4 peers. Use
     /// `bind_direct()` for loopback/LAN; this one for cross-internet

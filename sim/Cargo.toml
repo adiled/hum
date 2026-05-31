@@ -11,13 +11,14 @@ humd = { path = "../humd" }
 thrum-core = { path = "../thrum-core" }
 thrumd = { path = "../thrumd" }
 nest = { path = "../nest" }
+ids = { path = "../ids" }
 config = { path = "../config" }
+hum-paths = { path = "../hum-paths" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
-uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

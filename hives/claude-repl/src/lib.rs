@@ -1,12 +1,8 @@
-//! claude-repl — interactive `claude` over a PTY. v0 stub.
+//! claude-repl — interactive `claude` over a PTY.
 //!
-//! Real behavior in TS lives in `nests/claude-repl/harness.ts`: a FSM
-//! (NESTING → PERCHED → HUNTING → WILTING → HUSHED/FELLED), an ANSI/DEC
-//! responder, hook FIFO, and JSONL transcript synth into stream-json.
-//!
-//! v0: spawn the PTY, watch stdout, mark PERCHED when the prompt glyph
-//! `❯` shows up. No transcript synth, no hooks, no classifier. The cell
-//! compiles and runs — it just can't carry a turn.
+//! Spawns the PTY, watches stdout, marks PERCHED when the prompt glyph
+//! `❯` shows up. No transcript synth, no hooks, no classifier yet — the
+//! cell compiles and runs but can't carry a turn.
 
 use std::io::Read;
 
@@ -17,18 +13,12 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Cell, SpawnSpec, WorkerBee};
+use nest::{Cell, Egg, WorkerBee};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
     Nesting,
     Perched,
-    #[allow(dead_code)]
-    Hunting,
-    #[allow(dead_code)]
-    Wilting,
-    #[allow(dead_code)]
-    Hushed,
     Felled,
 }
 
@@ -42,7 +32,7 @@ impl Default for ClaudeReplWorker {
 
 /// Build the claude args for REPL/PTY mode. No `-p`, no `--input-format` —
 /// interactive Ink TUI mode. Pure function for unit testing.
-pub fn build_argv(spec: &SpawnSpec) -> Vec<String> {
+pub fn build_argv(spec: &Egg) -> Vec<String> {
     let mut argv = vec![
         "--verbose".to_string(),
         "--model".to_string(), spec.model_id.clone(),
@@ -76,7 +66,7 @@ impl WorkerBee for ClaudeReplWorker {
         true
     }
 
-    async fn spawn(&self, spec: SpawnSpec) -> Result<Cell> {
+    async fn raise(&self, spec: Egg) -> Result<Cell> {
         let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -91,7 +81,7 @@ impl WorkerBee for ClaudeReplWorker {
         let mut cmd = CommandBuilder::new(&cli);
         cmd.cwd(&spec.cwd);
         if let Ok(path) = std::env::var("PATH") { cmd.env("PATH", path); }
-        if let Ok(home) = std::env::var("HOME") { cmd.env("HOME", home); }
+        cmd.env("HOME", hum_paths::home().to_string_lossy().into_owned());
         cmd.env("TERM", "xterm-256color");
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
@@ -192,27 +182,23 @@ impl WorkerBee for ClaudeReplWorker {
             let _ = tx_exit.send(code);
         });
 
-        // master must outlive the writer; stash it behind Arc<Mutex<_>>
-        // through a kill closure. We move the master into the closure.
-        let master = std::sync::Arc::new(std::sync::Mutex::new(Some(pair.master)));
-        let master_for_kill = master.clone();
-        let kill_arc: std::sync::Arc<dyn Fn() + Send + Sync> =
-            std::sync::Arc::new(move || {
-                if let Ok(mut g) = master_for_kill.lock() {
-                    // Dropping the master closes the PTY → child gets SIGHUP.
-                    *g = None;
-                }
-            });
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_watch = cancel.clone();
+        let mut master_holder = Some(pair.master);
+        tokio::spawn(async move {
+            cancel_watch.cancelled().await;
+            master_holder.take();
+        });
 
         trace!(target: "nest", "pty.spawned pid={:?}", pid);
 
         Ok(Cell {
-            pid,
-            stdin: tx_in,
-            events: std::sync::Arc::new(Mutex::new(rx_evt)),
-            exited: rx_exit,
+            mark: pid,
+            feed: tx_in,
+            mmm: std::sync::Arc::new(Mutex::new(rx_evt)),
+            emerged: rx_exit,
             ephemeral: true,
-            kill: kill_arc,
+            silence: cancel,
         })
     }
 }

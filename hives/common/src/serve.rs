@@ -8,22 +8,22 @@
 //!   `propensity`. humd registers `{model_id → client_id}` mappings.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
-//!   `WorkerBee::spawn(spec)`, then murmurs the prompt text on the
-//!   cell's stdin.
-//! - **Chunks out**: each event from `Cell.events` becomes a
+//!   `WorkerBee::raise(egg)`, then feeds the prompt text on `cell.feed`.
+//! - **Chunks out**: each event from `cell.mmm` becomes a
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
-//! - **Cancel**: `chi:"cancel"` triggers `Cell.kill()` for the sid.
-//! - **Tool result**: `chi:"tool-result"` feeds into the cell stdin
-//!   via the worker's tool-result encoder (currently
-//!   `nest::encode_tool_result`).
+//! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
+//! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
+//!   worker's tool-result encoder (`nest::encode_tool_result`).
 //!
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+
+use lru::LruCache;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -34,31 +34,14 @@ use tracing::{debug, info, trace, warn};
 
 use ensemble::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Listener, SpawnSpec, WorkerBee};
+use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
 use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
 
-/// Resolve the canonical thrum socket path. Mirrors `thrumd::default_socket_path`.
 fn default_socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HUM_THRUM_SOCK") {
-        return PathBuf::from(p);
-    }
-    if let Ok(p) = std::env::var("HUM_SOCKET") {
-        return PathBuf::from(p);
-    }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("/tmp/hum-{}", unsafe_uid())));
-    runtime.join("hum").join("thrum.sock")
-}
-
-fn unsafe_uid() -> u32 {
-    std::process::Command::new("id").arg("-u").output().ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+    hum_paths::thrum_sock_resolved()
 }
 
 /// What the host advertises on hello. Drives both routing (humd maps
@@ -111,7 +94,8 @@ pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAd
                 }
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let jitter = rand::random::<f32>() * 0.75;
+        tokio::time::sleep(std::time::Duration::from_secs_f32(2.0 + jitter)).await;
     }
 }
 
@@ -177,7 +161,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
     // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
-    let cells: Arc<Mutex<HashMap<String, CellBundle>>> = Arc::new(Mutex::new(HashMap::new()));
+    let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
@@ -206,7 +191,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .map(|a| a.iter().filter_map(parse_tool_def).collect())
                     .unwrap_or_default();
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
-                    bridge.set_catalogue(&sid, forager_tools, nestler_tools, &provided);
+                    bridge.set_catalogue(forager_tools, nestler_tools, &provided);
                 }
                 let worker = worker.clone();
                 let write_half = write_half.clone();
@@ -221,12 +206,12 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "cancel" => {
                 if !sid.is_empty() {
-                    let r = cells.lock().await;
+                    let mut r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                             let _ = bundle.stdin.send(encode_cancel(rid)).await;
                         }
-                        (bundle.kill)();
+                        bundle.cancel.cancel();
                     }
                 }
             }
@@ -241,7 +226,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
                 if !resolved_by_bridge && !sid.is_empty() {
-                    let r = cells.lock().await;
+                    let mut r = cells.lock().await;
                     if let Some(bundle) = r.get(&sid) {
                         if let (Some(call_id), Some(result)) = (
                             tone.get("callId").and_then(Value::as_str),
@@ -265,10 +250,14 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
 struct CellBundle {
     stdin: mpsc::Sender<String>,
-    kill: Arc<dyn Fn() + Send + Sync>,
+    cancel: tokio_util::sync::CancellationToken,
     finish_sent: Arc<AtomicBool>,
     tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
     last_touched: Arc<AtomicU64>,
+}
+
+impl Drop for CellBundle {
+    fn drop(&mut self) { self.cancel.cancel(); }
 }
 
 /// Build a `ToolDef` from a wire tone entry. MCP standard field is
@@ -296,20 +285,6 @@ const IDLE_TIMEOUT_MS: u64 = 300_000;
 /// when full.
 const MAX_CELLS: usize = 8;
 
-/// Fixed namespace so a hum sid maps to a stable claude session UUID
-/// (uuid5). Deterministic: the same sid always derives the same id, so
-/// it survives worker restarts without persisting anything.
-const HUM_SESSION_NS: uuid::Uuid = uuid::Uuid::from_bytes([
-    0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
-]);
-
-/// Derive the claude session id for a hum sid. claude's `--session-id`
-/// requires a UUID, so we can't pass the sid verbatim; uuid5 maps it
-/// deterministically.
-fn sid_to_session(sid: &str) -> String {
-    uuid::Uuid::new_v5(&HUM_SESSION_NS, sid.as_bytes()).to_string()
-}
-
 /// True if `v` is claude's terminal `result` event flagged `is_error`.
 /// As the *first* event it means a pre-flight failure (bad/absent
 /// session on `--resume`, id clash on `--session-id`) rather than a
@@ -328,32 +303,32 @@ fn is_preflight_error(v: &Value) -> bool {
 /// (first event is an `is_error` result) or produces nothing.
 async fn attempt_spawn<W: WorkerBee + 'static>(
     worker: &Arc<W>,
-    spec: SpawnSpec,
+    spec: Egg,
     content: &str,
 ) -> Option<(Cell, Value)> {
-    let cell = worker.spawn(spec).await.ok()?;
-    if cell.stdin.send(encode_prompt(content)).await.is_err() {
-        (cell.kill)();
+    let cell = worker.raise(spec).await.ok()?;
+    if cell.feed.send(encode_prompt(content)).await.is_err() {
+        cell.silence.cancel();
         return None;
     }
     let first = {
-        let mut ev = cell.events.lock().await;
+        let mut ev = cell.mmm.lock().await;
         match tokio::time::timeout(std::time::Duration::from_secs(180), ev.recv()).await {
             Ok(Some(v)) => Some(v),
-            _ => None, // timeout, or the process died without emitting
+            _ => None,
         }
     };
     match first {
-        Some(v) if is_preflight_error(&v) => { (cell.kill)(); None }
+        Some(v) if is_preflight_error(&v) => { cell.silence.cancel(); None }
         Some(v) => Some((cell, v)),
-        None => { (cell.kill)(); None }
+        None => { cell.silence.cancel(); None }
     }
 }
 
 async fn handle_prompt<W: WorkerBee + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    cells: Arc<Mutex<HashMap<String, CellBundle>>>,
+    cells: Arc<Mutex<LruCache<String, CellBundle>>>,
     hive: String,
     mcp_url: String,
     tone: Value,
@@ -383,7 +358,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     // turn. Reuse the warm cell for the sid; per-turn state lives in
     // finish_sent + tool_use_blocks and must reset before re-entry.
     {
-        let g = cells.lock().await;
+        let mut g = cells.lock().await;
         if let Some(bundle) = g.get(&sid) {
             bundle.finish_sent.store(false, Ordering::SeqCst);
             bundle.tool_use_blocks.lock().await.clear();
@@ -397,23 +372,19 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         }
     }
 
-    // No warm cell — evict LRU if at cap, then spawn fresh.
     {
         let mut g = cells.lock().await;
         if g.len() >= MAX_CELLS {
-            let evict_sid = g.iter()
-                .min_by_key(|(_, b)| b.last_touched.load(Ordering::SeqCst))
-                .map(|(k, _)| k.clone());
-            if let Some(esid) = evict_sid {
-                if let Some(bundle) = g.remove(&esid) {
-                    warn!(evicted_sid = %esid, "worker.cell.evict.lru");
-                    (bundle.kill)();
-                }
+            if let Some((esid, _evicted)) = g.pop_lru() {
+                warn!(evicted_sid = %esid, "worker.cell.evict.lru");
+                metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
             }
         }
+        metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
-    let mut base = SpawnSpec::new(sid.clone(), model.clone(), cwd);
+    let hum_sid = ids::HumId::parse(&sid).unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+    let mut base = Egg::new(hum_sid, model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
@@ -423,31 +394,28 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    // A hum sid is one conversation. `claude -p` exits after each turn,
-    // so the warm cell is gone before the next (tick-spaced) prompt; to
-    // keep continuity we bind the sid to a deterministic claude session
-    // (uuid5 of the sid) and resume it. Resume-first so the common case
-    // (an ongoing sid) is one spawn; on the turn where the session does
-    // not exist yet, claude's `--resume` fails fast (a `result` is_error
-    // with no output), and we fall back to `--session-id` to create it.
-    let cid = sid_to_session(&sid);
+    // Resume-first: claude `-p` exits after each turn, so the warm cell
+    // is gone before the next prompt. The sid-derived session UUID
+    // (computed inside claude-cli from base.sid) keeps continuity. On
+    // first turn `--resume` fails fast (a `result` is_error with no
+    // output) and we retry with `fresh: true` → --session-id.
     let (cell, first_event) = {
         let mut s1 = base.clone();
-        s1.resume_id = Some(explicit_resume.clone().unwrap_or_else(|| cid.clone()));
+        s1.resume_id = explicit_resume.clone();
         match attempt_spawn(&worker, s1, &content).await {
             Some(pair) => pair,
             None => {
                 trace!(sid = %sid, "worker.resume.miss.creating");
                 let mut s2 = base.clone();
-                s2.session_id = Some(cid.clone()); // resume_id None -> --session-id
+                s2.fresh = true;
                 attempt_spawn(&worker, s2, &content).await
                     .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
             }
         }
     };
-    let stdin = cell.stdin.clone();
-    let events = cell.events.clone();
-    let kill = cell.kill.clone();
+    let stdin = cell.feed.clone();
+    let events = cell.mmm.clone();
+    let cancel = cell.silence.clone();
     let finish_sent = Arc::new(AtomicBool::new(false));
     let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
@@ -481,7 +449,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     // Idle reaper — kills the cell if last_touched stays below the
     // IDLE_TIMEOUT_MS threshold.
     let cells_for_idle = cells.clone();
-    let kill_for_idle = kill.clone();
     let sid_for_idle = sid.clone();
     let last_for_idle = last_touched.clone();
     let idle_task = tokio::spawn(async move {
@@ -491,18 +458,17 @@ async fn handle_prompt<W: WorkerBee + 'static>(
             let age = now_ms().saturating_sub(last);
             if age >= IDLE_TIMEOUT_MS {
                 let mut g = cells_for_idle.lock().await;
-                if g.remove(&sid_for_idle).is_some() {
+                if g.pop(&sid_for_idle).is_some() {
                     warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
-                    (kill_for_idle)();
                 }
                 return;
             }
         }
     });
 
-    cells.lock().await.insert(sid.clone(), CellBundle {
+    cells.lock().await.put(sid.clone(), CellBundle {
         stdin: stdin.clone(),
-        kill: kill.clone(),
+        cancel: cancel.clone(),
         finish_sent: finish_sent.clone(),
         tool_use_blocks: tool_use_blocks.clone(),
         last_touched: last_touched.clone(),
@@ -518,7 +484,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let sid_for_cleanup = sid.clone();
     let finish_for_cleanup = finish_sent.clone();
     tokio::spawn(async move {
-        let exit_code = cell.exited.await.unwrap_or(1);
+        let exit_code = cell.emerged.await.unwrap_or(1);
         let _ = dispatch.await;
         idle_task.abort();
         if !finish_for_cleanup.load(Ordering::SeqCst) {
@@ -531,7 +497,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
             let line = format!("{}\n", finish);
             let _ = write_for_cleanup.lock().await.write_all(line.as_bytes()).await;
         }
-        cells_for_cleanup.lock().await.remove(&sid_for_cleanup);
+        cells_for_cleanup.lock().await.pop(&sid_for_cleanup);
         trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
     });
 
@@ -708,11 +674,63 @@ impl WireListener {
     }
 }
 
-#[async_trait::async_trait]
-impl Listener for WireListener {
-    fn session_id(&self) -> &str { &self.sid }
-    async fn on_petal(&self, _kind: &str, _payload: Value) {}
-    async fn on_cell(&self, _nest_id: &str, _model: &str, _tools: Vec<String>) {}
-    async fn on_wilt(&self, _finish_reason: &str, _usage: Option<Value>, _provider_meta: Value) {}
-    async fn on_thorn(&self, _wound: &str) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    fn bundle(cancel: CancellationToken) -> CellBundle {
+        let (tx_in, _rx_in) = mpsc::channel::<String>(1);
+        CellBundle {
+            stdin: tx_in,
+            cancel,
+            finish_sent: Arc::new(AtomicBool::new(false)),
+            tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            last_touched: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_cancels_token() {
+        let cancel = CancellationToken::new();
+        let watch = cancel.clone();
+        let b = bundle(cancel);
+        assert!(!watch.is_cancelled());
+        drop(b);
+        assert!(watch.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn lru_pop_drops_bundle_and_cancels() {
+        let mut cache: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let c1 = CancellationToken::new();
+        let watch1 = c1.clone();
+        let c2 = CancellationToken::new();
+        let watch2 = c2.clone();
+        cache.put("a".into(), bundle(c1));
+        cache.put("b".into(), bundle(c2));
+        assert!(!watch1.is_cancelled());
+        assert!(!watch2.is_cancelled());
+
+        let popped = cache.pop_lru().expect("non-empty");
+        assert_eq!(popped.0, "a");
+        drop(popped);
+        assert!(watch1.is_cancelled(), "evicted bundle should have cancelled on drop");
+        assert!(!watch2.is_cancelled(), "remaining bundle untouched");
+    }
+
+    #[tokio::test]
+    async fn map_clear_cancels_all() {
+        let mut cache: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let watchers: Vec<_> = (0..3).map(|i| {
+            let c = CancellationToken::new();
+            let w = c.clone();
+            cache.put(format!("s{i}"), bundle(c));
+            w
+        }).collect();
+        cache.clear();
+        for w in watchers {
+            assert!(w.is_cancelled());
+        }
+    }
 }

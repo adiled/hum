@@ -14,16 +14,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, PeerCapabilities};
+use ensemble::{Ensemble, Hid, HumdKey, PeerCapabilities};
 use parking_lot::RwLock;
 use serde_json::Value;
-use thrumd::{serve as thrum_serve, Thrum, Tone, ToneSink};
+use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
 
 mod identity;
+mod peer_transport;
 mod peers;
-pub use identity::{key_path, load_or_mint_key};
+pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
 
 /// Per-sid observer roster. Maps a hum's `sid` to a list of peer humds
@@ -76,16 +77,19 @@ pub struct DaemonConfig {
     /// Peers to dial on boot. `from_env` reads
     /// `$XDG_CONFIG_HOME/hum/peers.json`; missing file = empty list.
     pub bootstrap_peers: Vec<PeerConfig>,
+    /// thehum persistence config (retention, snapshot cadence, encryption).
+    /// `from_env` defaults to `thehum::Config::default()` unless hum.json
+    /// carries a `thehum` section.
+    pub thehum_cfg: Option<thehum::Config>,
 }
 
 impl DaemonConfig {
     pub fn from_env() -> Self {
-        let runtime_dir = runtime_dir();
         // Canonical thrum socket path — honors HUM_THRUM_SOCK (and the
         // legacy HUM_SOCKET fallback). thrumd owns the source of truth;
         // humd just reuses it so binary + protocol agree.
         let thrum_path = thrumd::default_socket_path();
-        let http_path = runtime_dir.join("hum.sock.http");
+        let http_path = hum_paths::http_sock();
         let mcp_port: u16 = std::env::var("HUM_MCP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -104,7 +108,7 @@ impl DaemonConfig {
             thrum_path,
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
-            penny_path: runtime_dir.join("penny.json"),
+            penny_path: hum_paths::penny(),
             hum_cfg: config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
@@ -115,16 +119,11 @@ impl DaemonConfig {
             waneman: None,
             humd_key,
             bootstrap_peers,
+            thehum_cfg: None,
         }
     }
 }
 
-fn runtime_dir() -> PathBuf {
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join("hum")
-}
 
 
 // ── Public entry point ─────────────────────────────────────────────────────
@@ -139,6 +138,8 @@ pub async fn run<F>(mut cfg: DaemonConfig, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send,
 {
+    hum_paths::init();
+
     info!(
         thrum = %cfg.thrum_path.display(),
         http = %cfg.http_path.display(),
@@ -146,13 +147,41 @@ where
         "humd.sockets"
     );
 
-    let _hums = hums::Hums::load();
+    if let Ok(addr) = cfg.hum_cfg.humd.metrics_addr.parse::<std::net::SocketAddr>() {
+        match metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(addr)
+            .install()
+        {
+            Ok(()) => info!(%addr, "humd.metrics.listening"),
+            Err(e) => warn!(%addr, err = %e, "humd.metrics.install_failed"),
+        }
+    } else {
+        warn!(addr = %cfg.hum_cfg.humd.metrics_addr, "humd.metrics.addr_parse_failed");
+    }
+
     let penny = penny::Penny::load(&cfg.penny_path);
     penny.clone().spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
 
     let waneman = cfg.waneman.clone().unwrap_or_else(|| Arc::new(WaneTracker::new()));
-    let _drift = drift::Drift::new();
+    let _drift = drift::Drift::with_store_dir(hum_paths::drift_dir());
     let _drone = drone::Drone::new();
+
+    let thehum_handle: Option<Arc<thehum::TheHum>> = cfg.humd_key.as_ref().and_then(|k| {
+        match thehum::TheHum::open(
+            &hum_paths::thehum_dir(),
+            k.0.clone(),
+            cfg.thehum_cfg.clone().unwrap_or_default(),
+        ) {
+            Ok(t) => Some(Arc::new(t)),
+            Err(e) => {
+                warn!(err = %e, "thehum.open.failed");
+                None
+            }
+        }
+    });
+    if let Some(t) = thehum_handle.as_ref() {
+        info!(author = %t.author_hid(), dir = %t.dir().display(), "thehum.opened");
+    }
 
     // Bring up an Ensemble from the persisted identity when the caller
     // didn't supply one. Sim provides its own pre-wired Ensemble (with
@@ -167,36 +196,38 @@ where
         }),
     };
 
-    // Dial-on-boot. Each peer attempt is independently fallible — one
-    // dead host shouldn't sink startup. TcpTransport is the only wired
-    // transport today; other hint prefixes ("iroh:") are skipped with a
-    // log line until their transports land.
-    if let (Some(ens), Some(_key)) = (&ensemble_opt, &cfg.humd_key) {
+    // Bring up the transport surfaces — iroh always, tcp when
+    // configured — dial peers across both, detach accept loops. Each
+    // accepted/dialed connection lands at Ensemble::install (signed)
+    // so the peer registry stays transport-agnostic. Failures are
+    // logged and non-fatal.
+    let mut peer_reach: Vec<String> = Vec::new();
+    if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
         let my_caps = my_capabilities(&cfg);
-        for peer in &cfg.bootstrap_peers {
-            let tcp_hint = peer
-                .hints
-                .iter()
-                .find_map(|h| h.strip_prefix("tcp:"));
-            let Some(addr) = tcp_hint else {
-                trace!(peer = %peer.humd_id.short(), "peers.skip.no-tcp-hint");
-                continue;
-            };
-            let peer_addr = {
-                let mut a = HumdAddr::new(peer.humd_id);
-                for h in &peer.hints { a.hints.push(h.clone()); }
-                a
-            };
-            match ensemble::TcpEndpoint::connect(addr, peer_addr, PeerCapabilities::default()).await {
-                Ok(conn) => {
-                    info!(peer = %peer.humd_id.short(), addr, "peer.dial.ok");
-                    ens.add_peer_with_caps(conn as Arc<dyn ensemble::PeerConnection>, my_caps.clone());
-                }
-                Err(e) => {
-                    warn!(peer = %peer.humd_id.short(), addr, err = %e, "peer.dial.failed");
-                }
+
+        match peer_transport::iroh::bind(key).await {
+            Ok((transport, hints)) => {
+                let transport = Arc::new(transport);
+                peer_transport::iroh::dial_all(&transport, ens, key, &cfg.bootstrap_peers, &my_caps).await;
+                peer_transport::iroh::spawn_listener(
+                    transport,
+                    ens.clone(),
+                    key.clone(),
+                    my_caps.clone(),
+                );
+                peer_reach.extend(hints);
+            }
+            Err(e) => warn!(err = %e, "peer.iroh.bind_failed"),
+        }
+
+        if let Some(addr) = cfg.hum_cfg.humd.tcp_listen.as_deref().filter(|s| !s.is_empty()) {
+            match peer_transport::tcp::spawn_listener(addr, ens.clone(), key.clone(), my_caps.clone()).await {
+                Ok((_bound, hints)) => peer_reach.extend(hints),
+                Err(e) => warn!(addr, err = %e, "peer.tcp.bind_failed"),
             }
         }
+
+        peer_transport::tcp::dial_all(ens, key, &cfg.bootstrap_peers, &my_caps).await;
     } else if !cfg.bootstrap_peers.is_empty() {
         warn!(
             count = cfg.bootstrap_peers.len(),
@@ -223,6 +254,48 @@ where
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let hive_tag = cfg.hum_cfg.nest.default.clone();
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    if let Some(thehum) = thehum_handle.as_ref() {
+        let manifests_for_replay = manifests.clone();
+        if let Err(e) = thehum.replay(|event| {
+            let body = &event.body;
+            let client_id = body.get("client_id").and_then(Value::as_str)
+                .or_else(|| body.get("nestlerId").and_then(Value::as_str))
+                .or_else(|| body.get("from").and_then(Value::as_str))
+                .map(str::to_string);
+            let Some(client_id) = client_id else { return };
+            match event.chi.as_str() {
+                "hello" => {
+                    let name = body.get("hive").and_then(Value::as_str)
+                        .or_else(|| body.get("from").and_then(Value::as_str))
+                        .unwrap_or(&client_id)
+                        .to_string();
+                    let version = body.get("version").and_then(Value::as_str)
+                        .unwrap_or("0.0.0").to_string();
+                    let proto = body.get("protoVersion").and_then(Value::as_str)
+                        .unwrap_or(thrum_core::THRUM_VERSION).to_string();
+                    let mut manifest = ensemble::HiveManifest::new(name, version, proto);
+                    manifest.bee = body.get("bee").and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
+                    manifest.models = body.get("models").and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
+                    manifest.hid = body.get("hid").and_then(Value::as_str)
+                        .and_then(|s| ensemble::Hid::from_hex(s).ok());
+                    manifest.nestler_id = body.get("nestlerId").and_then(Value::as_str).map(str::to_string);
+                    manifests_for_replay.write().insert(client_id, manifest);
+                }
+                "disconnect" | "forget" => {
+                    manifests_for_replay.write().remove(&client_id);
+                }
+                _ => {}
+            }
+            let _ = event.ts_ms;
+        }) {
+            warn!(err = %e, "thehum.replay.failed");
+        }
+        info!(bees = manifests.read().len(), "thehum.replay.bees-derived");
+    }
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
@@ -237,7 +310,6 @@ where
     let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
-        cli_path: cfg.cli_path.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
         capacity_override: cfg.capacity_override,
@@ -250,15 +322,36 @@ where
         alias_resolver: alias_resolver.clone(),
         tool_routes_peer: tool_routes_peer.clone(),
         incoming_tool_calls: incoming_tool_calls.clone(),
+        thehum: thehum_handle.clone(),
     });
     thrum.set_sink(sink);
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
+        let humd_version = env!("CARGO_PKG_VERSION").to_string();
+        let peer_reach = peer_reach.clone();
         tokio::spawn(async move {
-            if let Err(e) = thrum_serve(thrum, &path).await {
+            let res = thrum_serve_with_hook(thrum, &path, move |bound| {
+                let info = hum_paths::RuntimeInfo {
+                    socket: bound.to_path_buf(),
+                    pid: std::process::id(),
+                    version: humd_version,
+                    thrum_version: thrum_core::THRUM_VERSION.to_string(),
+                    bound_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0),
+                    ensemble_addrs: peer_reach.clone(),
+                };
+                if let Err(e) = info.write() {
+                    warn!(err = %e, "humd.runtime_info.write_failed");
+                } else {
+                    info!(path = %hum_paths::runtime_info().display(), "humd.runtime_info.published");
+                }
+            }).await;
+            if let Err(e) = res {
                 warn!(err = %e, "thrum.exit");
             }
+            hum_paths::RuntimeInfo::remove();
         });
     } else {
         trace!("thrum.override.installed");
@@ -284,6 +377,40 @@ where
                 }
             }
             trace!("ensemble.inbox.closed");
+        });
+    }
+
+    if let Some(thehum) = thehum_handle.clone() {
+        let manifests_for_snapshot = manifests.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut last_retention_ms: i64 = 0;
+            loop {
+                tick.tick().await;
+                let now_ms: i64 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                if thehum.should_snapshot(now_ms) {
+                    let leaves: std::collections::BTreeMap<String, Value> = manifests_for_snapshot
+                        .read()
+                        .iter()
+                        .map(|(cid, m)| (cid.clone(), serde_json::to_value(m).unwrap_or_default()))
+                        .collect();
+                    match thehum.snapshot(leaves).await {
+                        Ok(root) => trace!(root = %hex::encode(root), "thehum.snapshot.ok"),
+                        Err(e) => warn!(err = %e, "thehum.snapshot.failed"),
+                    }
+                }
+                if now_ms.saturating_sub(last_retention_ms) >= 3_600_000 {
+                    match thehum.enforce_retention() {
+                        Ok(r) => trace!(removed = r.removed_files, kept = r.kept_files, "thehum.retention.ok"),
+                        Err(e) => warn!(err = %e, "thehum.retention.failed"),
+                    }
+                    last_retention_ms = now_ms;
+                }
+            }
         });
     }
 
@@ -380,7 +507,6 @@ fn parse_tag_name(body: &str) -> Option<String> {
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    cli_path: String,
     /// When present, tones with a `to:` hex addressed to a *different*
     /// humd are routed through here instead of being dispatched locally.
     ensemble: Option<Arc<Ensemble>>,
@@ -440,6 +566,9 @@ struct HumdSink {
     /// the forager's outbound chi:"tool-result" can be stamped
     /// `to:<origin-peer>` and routed back through the ensemble.
     incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+    /// Per-humd authored chi log. Every tone seen by `hear()` lands
+    /// here before dispatch. None in tests/sims without a humd_key.
+    thehum: Option<Arc<thehum::TheHum>>,
 }
 
 /// AliasResolver backed by the bootstrap peers.json `alias` field.
@@ -478,14 +607,8 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 /// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
-/// `$XDG_STATE_HOME/hum/bees.json` (else `~/.local/state/hum/bees.json`).
-/// The `hum` CLI reads this to render `hum bee --list` with full manifest
-/// info. Same resolution as the CLI's state-dir logic.
 fn bees_snapshot_path() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local").join("state")))
-        .unwrap_or_else(|| std::path::PathBuf::from(".local/state"));
-    base.join("hum").join("bees.json")
+    hum_paths::bees_snapshot()
 }
 
 // humd doesn't host an MCP server — tool-call routing is purely
@@ -543,6 +666,24 @@ impl ToneSink for HumdSink {
             .get("chi")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
+
+        // Authored chi log: every locally-originated tone is appended
+        // before dispatch. Ensemble-injected tones are peers' authored
+        // events and are never re-attributed here.
+        if let Some(thehum) = self.thehum.as_ref() {
+            if client_id != "ensemble" {
+                let sid = tone.get("sid").and_then(Value::as_str).and_then(|s| {
+                    ids::HumId::parse(s).ok().or_else(|| Some(ids::HumId::from_foreign(s)))
+                });
+                let rid = tone.get("rid").and_then(Value::as_str)
+                    .map(|s| ids::HumId::parse(s).unwrap_or_else(|_| ids::HumId::from_foreign(s)))
+                    .unwrap_or_else(ids::HumId::mint);
+                let body = serde_json::to_value(&tone).unwrap_or_default();
+                if let Err(e) = thehum.append(chi_str, sid, rid, body).await {
+                    warn!(client_id, %chi_str, err = %e, "thehum.append.failed");
+                }
+            }
+        }
 
         // Worker passthrough: any output tone (chunk / finish / error /
         // tool-call / tool-info / session-ready) coming from a client
@@ -873,13 +1014,7 @@ impl ToneSink for HumdSink {
                         .and_then(|v| serde_json::from_value(v.clone()).ok());
                     let nestler_id = tone.get("nestlerId").and_then(Value::as_str)
                         .map(str::to_string)
-                        .unwrap_or_else(|| {
-                            let ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-                            format!("{}-{}", client_id, ms)
-                        });
+                        .unwrap_or_else(|| client_id.to_string());
                     let mut manifest = ensemble::HiveManifest::new(name, version, proto);
                     manifest.propensity = propensity;
                     manifest.chis = chis;
@@ -1032,7 +1167,7 @@ impl ToneSink for HumdSink {
                 let model = tone.get("modelId").and_then(Value::as_str).unwrap_or("sonnet").to_string();
                 let cwd_raw = tone.get("cwd").and_then(Value::as_str)
                     .map(str::to_string)
-                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+                    .unwrap_or_else(|| "/".into());
                 // cwd may carry a `hum://<host>/<path>` URI pinning a
                 // remote fs hive. Parse, resolve alias to Hid via the
                 // peers.json resolver, stash (sid → fs_hid) so the
@@ -1107,7 +1242,9 @@ impl ToneSink for HumdSink {
                     let pick = {
                         let m = self.manifests.read();
                         let mut found: Option<String> = None;
-                        for (cid, man) in m.iter() {
+                        let mut sorted: Vec<_> = m.iter().collect();
+                        sorted.sort_by(|a, b| a.0.cmp(b.0));
+                        for (cid, man) in sorted {
                             if man.bee.iter().any(|b| b == "worker")
                                 && man.models.iter().any(|m| m == &model)
                             {
@@ -1162,7 +1299,9 @@ impl ToneSink for HumdSink {
                         let mut tools: Vec<Value> = Vec::new();
                         let mut caps: std::collections::BTreeSet<String> =
                             std::collections::BTreeSet::new();
-                        for man in m.values() {
+                        let mut sorted: Vec<_> = m.iter().collect();
+                        sorted.sort_by(|a, b| a.0.cmp(b.0));
+                        for (_, man) in sorted {
                             if !man.bee.iter().any(|b| b == "forager") { continue; }
                             for t in &man.tools {
                                 tools.push(serde_json::json!({
@@ -1451,6 +1590,35 @@ impl ToneSink for HumdSink {
                     trace!(call_id, "tool_result.unrouted");
                 }
             }
+            Some(Chi::Backfill) => {
+                // Requester wants this humd's authored events for `author`
+                // from `from` seq onward. One backfill-event tone per row.
+                let Some(thehum) = self.thehum.as_ref() else {
+                    trace!(client_id, "backfill.no-thehum");
+                    return;
+                };
+                let author = tone.get("author").and_then(Value::as_str).unwrap_or("").to_string();
+                let from = tone.get("from").and_then(Value::as_u64).unwrap_or(0);
+                if author.is_empty() {
+                    warn!(client_id, "backfill.no-author");
+                    return;
+                }
+                match thehum.range(&author, from) {
+                    Ok(events) => {
+                        trace!(client_id, %author, from, count = events.len(), "backfill.serve");
+                        for ev in events {
+                            let body = serde_json::to_value(&ev).unwrap_or_default();
+                            let reply = serde_json::json!({
+                                "chi": "backfill-event",
+                                "rid": ev.rid,
+                                "event": body,
+                            });
+                            self.thrum.thrum_to(client_id, reply);
+                        }
+                    }
+                    Err(e) => warn!(client_id, %author, from, err = %e, "backfill.range.failed"),
+                }
+            }
             Some(Chi::Curate)
             | Some(Chi::ReleasePermit)
             | Some(Chi::TendrilResult)
@@ -1480,8 +1648,6 @@ impl ToneSink for HumdSink {
 fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
     let nest_name = cfg.hum_cfg.nest.default.clone();
     let total_slots = cfg.hum_cfg.nest.max_active_cells;
-    // Initial advertise: full free, Cool. Live updates come from the
-    // beat path once the pool is wired (see TODO in nest::pool::Nest).
     let headroom = ensemble::headroom::CellHeadroom::from_counts(total_slots, total_slots, None);
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.into(),

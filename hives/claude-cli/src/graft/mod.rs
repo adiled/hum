@@ -36,13 +36,8 @@ fn cwd_hash(cwd: &Path) -> String {
     out
 }
 
-fn claude_base() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".claude")
-}
-
 pub fn session_dir(cwd: &Path) -> PathBuf {
-    claude_base().join("projects").join(cwd_hash(cwd))
+    hum_paths::claude_session_dir(&cwd_hash(cwd))
 }
 
 pub fn session_path(cwd: &Path, session_id: &str) -> PathBuf {
@@ -109,7 +104,7 @@ fn read_entries(path: &Path) -> Vec<Value> {
             continue;
         }
         if let Ok(mut v) = serde_json::from_str::<Value>(line) {
-            // Coerce string content into [{type:text,text:...}] like the TS does.
+            // Coerce string content into the canonical [{type:text,text:...}] shape.
             if let Some(msg) = v.get_mut("message") {
                 if let Some(s) = msg.get("content").and_then(Value::as_str).map(str::to_owned) {
                     msg["content"] = json!([{ "type": "text", "text": s }]);
@@ -297,8 +292,7 @@ pub fn graft(
 
 /// Append AI-SDK-prompt-shaped messages to the JSONL as Claude entries.
 /// Returns the number of assistant turns written. Emits the minimum shape
-/// Claude CLI needs (uuid/parentUuid chain, type, role, content); full
-/// fidelity (real version/gitBranch/usage stats) still lives in the TS writer.
+/// Claude CLI needs (uuid/parentUuid chain, type, role, content).
 fn append_from_prompt(
     path: &Path,
     session_id: &str,

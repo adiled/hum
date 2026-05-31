@@ -1,6 +1,6 @@
 //! Per-cell OS-level resource caps — RSS, fds, CPU shares, wall-clock TTL.
 //!
-//! Defines `ResourceLimits` and an `apply_pre_exec()` helper that wires the
+//! Defines `Bounds` and an `apply_pre_exec()` helper that wires the
 //! caps into a `std::process::Command` via `CommandExt::pre_exec`. On Linux
 //! we call `setrlimit(2)` / `setpriority(2)` in the post-fork pre-exec
 //! child. On non-Linux the apply is a no-op so callers compile and degrade
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// Applied via rlimit (setrlimit) before exec on Linux. On non-Linux
 /// platforms `apply_pre_exec` is a no-op — caps degrade gracefully.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ResourceLimits {
+pub struct Bounds {
     /// Hard cap on resident set size in bytes. Maps to RLIMIT_AS on Linux.
     /// Going past this gets the child OOM-killed by the kernel.
     pub rss_bytes: Option<u64>,
@@ -38,7 +38,7 @@ pub struct ResourceLimits {
     pub nice: Option<i32>,
 }
 
-impl ResourceLimits {
+impl Bounds {
     /// Wire the limits into a `std::process::Command` so the child
     /// inherits them at exec time. Linux-only enforcement; on other
     /// platforms returns Ok(()) without doing anything.
@@ -100,7 +100,7 @@ impl ResourceLimits {
 
 /// Post-fork, pre-exec child body. Must only touch async-signal-safe APIs.
 #[cfg(target_os = "linux")]
-fn apply_in_child(limits: &ResourceLimits) -> std::io::Result<()> {
+fn apply_in_child(limits: &Bounds) -> std::io::Result<()> {
     if let Some(rss) = limits.rss_bytes {
         set_rlimit(libc::RLIMIT_AS, rss)?;
     }
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn default_is_empty() {
-        let d = ResourceLimits::default();
+        let d = Bounds::default();
         assert!(d.rss_bytes.is_none());
         assert!(d.fd_count.is_none());
         assert!(d.cpu_secs.is_none());
@@ -163,20 +163,20 @@ mod tests {
 
     #[test]
     fn tight_has_rss_cap() {
-        let t = ResourceLimits::tight();
+        let t = Bounds::tight();
         assert!(t.rss_bytes.is_some());
     }
 
     #[test]
     fn generous_has_no_wall_clock() {
-        assert!(ResourceLimits::generous().wall_clock_ms.is_none());
+        assert!(Bounds::generous().wall_clock_ms.is_none());
     }
 
     #[test]
     fn serialization_roundtrip() {
-        let original = ResourceLimits::tight();
+        let original = Bounds::tight();
         let json = serde_json::to_string(&original).expect("serialize");
-        let back: ResourceLimits = serde_json::from_str(&json).expect("deserialize");
+        let back: Bounds = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(original, back);
     }
 
@@ -186,7 +186,7 @@ mod tests {
         // wiring it up succeeds — the closure body runs in the child at
         // spawn time, which we deliberately skip to avoid polluting the
         // test process tree.
-        let limits = ResourceLimits::default();
+        let limits = Bounds::default();
         let mut cmd = Command::new("/bin/true");
         assert!(limits.apply_pre_exec(&mut cmd).is_ok());
     }

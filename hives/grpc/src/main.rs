@@ -31,12 +31,7 @@ const HIVE_NAME: &str = "grpc";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn humd_sock_path() -> String {
-    if let Ok(s) = std::env::var("HUM_THRUM_SOCK") {
-        return s;
-    }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::geteuid() }));
-    format!("{runtime}/hum/thrum.sock")
+    hum_paths::thrum_sock_resolved().to_string_lossy().into_owned()
 }
 
 /// One bidi stream's bridge: open a thrum connection, pump tones both ways.
@@ -57,10 +52,7 @@ async fn bridge(
     // Send hello on connect so humd advertises us to the mesh.
     let hello = serde_json::json!({
         "chi": Chi::Hello,
-        "rid": format!("hello-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis().to_string())
-            .unwrap_or_default()),
+        "rid": ids::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
@@ -161,6 +153,7 @@ impl Hum for HumBridge {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    hum_paths::init();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -1,0 +1,3 @@
+SERVICE paid-oracle
+RUN ${HOME}/.local/bin/paid-oracle
+RESTART always

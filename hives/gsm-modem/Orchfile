@@ -1,0 +1,3 @@
+SERVICE gsm-modem
+RUN ${HOME}/.local/bin/gsm-modem
+RESTART always
