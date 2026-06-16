@@ -39,25 +39,26 @@ Learn more by simply humming along.. or read the [scenarios](https://adiled.gith
 
 Refer to hum.schema.json
 
----
+### Comparison for the sake of comparison
 
-### Comparison with LLM Routers & Gateways
+> hum is an agentic kernel, not an LLM router, and incomparable in scope. This table simply highlights
+> how hum's out-of-the-box hives overlap with the winning representative from each class.
 
-> hum is an agentic kernel — not an LLM router, and incomparable in scope. This table simply highlights
-> how hum's out-of-the-box hives overlap with and extend common gateway capabilities.
+| Capability | hum | LiteLLM | Ollama | CAMEL | Azure Agent Framework |
+|---|---|---|---|---|---|
+| **Class** | Agentic kernel | Router / proxy | Local model server | Multi-agent framework (17.2k⭐) | Multi-agent orchestrator (11.4k⭐) |
+| **Language** | Rust | Python | Go | Python | Python / .NET |
+| **Model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ Local models | ❌ | ❌ |
+| **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ❌ | ❌ |
+| **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ✅ | ❌ | ❌ |
+| **Built-in TUI** | ✅ (decoupled, wryme in progress) | ❌ | ❌ | ❌ | ❌ |
+| **Self-hosted, local-first** | ✅ (kernel runs anywhere) | ✅ | ✅ | ❌ (cloud) | ✅ |
+| **Multi-agent orchestration** | ✅ (bee/nest primitives) | ❌ | ❌ | ✅ agents + roles | ✅ workflows + agents |
+| **Agent memory / long-term context** | ✅ (`bloom` + `thrum` protocol) | ❌ | ❌ | ✅ (societal memory) | ✅ (cognitive memory) |
+| **Streaming / SSE** | ✅ (thrum tones, `petal` primitives) | ✅ | ✅ | ✅ | ✅ |
+| **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` transport) | ✅ (cost, usage, logs) | ❌ | ✅ (swarm traces) | ✅ (run traces, deploy) |
+| **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ |
+| **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ❌ | ✅ (Azure AI) |
+| **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ✅ |
 
-| Capability | hum | LiteLLM | LocalAI | Ollama | CoAI | Plano |
-|---|---|---|---|---|---|---|
-| **Model type** | Agentic kernel | Proxy/router | Model server | Model server | Proxy/billing | Proxy/data plane |
-| **Language** | Rust | Python | Go | Go | TypeScript/React | Rust |
-| **Multi-model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ LLM/vision/voice | ✅ Local models | ✅ 200+ models, 35+ providers | ✅ smart routing |
-| **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Built-in TUI** | ✅ (decoupled — wryme in progress) | ❌ | ❌ | ❌ | ✅ (web UI) | ❌ |
-| **Self-hosted, local-first** | ✅ (kernel runs anywhere) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Multi-agent orchestration** | ✅ (bee/nest primitives) | ❌ | ❌ | ❌ | ❌ | ✅ |
-| **Agent memory / long-term context** | ✅ (`bloom` + `thrum`) | ❌ | ❌ | ❌ | ❌ | ✅ |
-| **RAG / retrieval pipeline** | ❌ (honeybee or external hive) | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` protocol) | ✅ | ❌ | ❌ | ✅ (dashboard) | ✅ |
-
-**Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability — inference, tool use, payment, UX — that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
+**Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
