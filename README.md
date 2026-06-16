@@ -39,7 +39,7 @@ Learn more by simply humming along.. or read the [scenarios](https://adiled.gith
 
 Refer to hum.schema.json
 
-### Comparison for the sake of comparison
+**Comparison for the sake of comparison**
 
 > hum is an agentic kernel, not an LLM router, and incomparable in scope. This table simply highlights
 > how hum's out-of-the-box hives overlap with the winning representative from each class.
