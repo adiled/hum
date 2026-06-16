@@ -51,7 +51,7 @@ Refer to hum.schema.json
 | **Model type** | Agentic kernel | Proxy/router | Model server | Model server | Proxy/billing | Proxy/data plane |
 | **Language** | Rust | Python | Go | Go | TypeScript/React | Rust |
 | **Multi-model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ LLM/vision/voice | ✅ Local models | ✅ 200+ models, 35+ providers | ✅ smart routing |
-| **OpenAI-compatible API** | ✅ (`ollama-server` hive) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ❌ | ✅ | ❌ | ❌ |
 | **Agentic execution** | ✅ (bee/nest/bloom primitives) | ❌ | ❌ | ❌ | ❌ | ✅ |
 | **Decoupled ensemble** | ✅ (sovereign bees, swarm gossip) | ❌ (monolith) | ⚠️ (libp2p only) | ❌ | ❌ | ❌ |
