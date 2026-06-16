@@ -61,12 +61,12 @@ Refer to hum.schema.json
 | **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) | ✅ vector DBs | ❌ | ✅ |
 | **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Trust / Risk modeling** | ✅ (T1 own devices → T4 open p2p) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Roaming inference** | ✅ (one hum follows the operator) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Roaming filesystems** | ✅ (survives wire breaks and outages) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Multi-party gamification** | ✅ (multiple nestlers on one hum) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Distributed orchestration** | ✅ (scattered humds, one hum; overflow to peers with free slots) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Zero-trust access control** | ✅ (T1 own devices → T4 open p2p; cross-org scoped grants + revocation) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Agent-human consensus** | ✅ (integrations with decentralized protocols and networks) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Trust / Risk modeling** | ✅ (`strict_auth` + T1→T4 trust via `Transport` + `Ensemble` hello handshake) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Roaming inference** | ✅ (`Chi::Attach` + `wane` cursor replay) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Roaming filesystems** | ✅ (`humfs` forager hive + `hum://` URI routing) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Multi-party gamification** | ✅ (multiple nestlers per bloom via `observers[sid]` roster) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + capacity-aware overflow routing) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Zero-trust access control** | ✅ (scoped capability grants + revocation via `federation.*` error chi) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Agent-human consensus** | ✅ (`thehum` hash chain + on-chain anchoring via `HumdRegistry` contract) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
