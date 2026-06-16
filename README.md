@@ -53,15 +53,11 @@ Refer to hum.schema.json
 | **Multi-model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ LLM/vision/voice | ✅ Local models | ✅ 200+ models, 35+ providers | ✅ smart routing |
 | **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Agentic execution** | ✅ (bee/nest/bloom primitives) | ❌ | ❌ | ❌ | ❌ | ✅ |
-| **Decoupled ensemble** | ✅ (sovereign bees, swarm gossip) | ❌ (monolith) | ⚠️ (libp2p only) | ❌ | ❌ | ❌ |
 | **Built-in TUI** | ✅ (decoupled — wryme in progress) | ❌ | ❌ | ❌ | ✅ (web UI) | ❌ |
-| **Embeddings** | ⚠️ (can be added via hive) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Cost/billing tracking** | ❌ (not a business layer) | ✅ | ❌ | ❌ | ✅ | ❌ |
-| **Multi-tenant** | ⚠️ (ensemble, not tenant-based) | ✅ | ❌ | ❌ | ✅ | ❌ |
-| **Load balancing & failover** | ❌ (bee-selection is by design) | ✅ | ❌ | ❌ | ✅ | ✅ |
-| **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ |
-| **MCP gateway** | ⚠️ (bee can implement) | ✅ | ✅ (tags) | ✅ (MCP tags) | ❌ | ❌ |
 | **Self-hosted, local-first** | ✅ (kernel runs anywhere) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Multi-agent orchestration** | ✅ (bee/nest primitives) | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Agent memory / long-term context** | ✅ (`bloom` + `thrum`) | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **RAG / retrieval pipeline** | ❌ (honeybee or external hive) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` protocol) | ✅ | ❌ | ❌ | ✅ (dashboard) | ✅ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability — inference, tool use, payment, UX — that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
