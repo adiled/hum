@@ -61,5 +61,13 @@ Refer to hum.schema.json
 | **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) | ✅ vector DBs | ❌ | ✅ |
 | **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Ensemble mesh** | ✅ (scattered humds, one hum) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Trust tiers** | ✅ (T1 own devs → T4 open p2p) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Hum roaming** | ✅ (one hum follows the body) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Parallel collaboration** | ✅ (multiple nestlers, same hum) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Federation handoff** | ✅ (cross-org, scoped capability grants) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Capacity-aware overflow** | ✅ (route to peer with free slots) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Partition tolerance** | ✅ (wire breaks, both keep humming, wane reconciles on heal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Autonomous persistence** | ✅ (bloom continues while operator walks away) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
