@@ -44,22 +44,22 @@ Refer to hum.schema.json
 > hum is an agentic kernel, not an LLM router, and incomparable in scope. This table simply highlights
 > how hum's out-of-the-box hives overlap with the winning representative from each class.
 
-| Capability | hum | LiteLLM | Ollama | LocalAI | CAMEL | Azure Agent Framework |
-|---|---|---|---|---|---|---|
-| **Class** | Agentic kernel | Router / proxy | Local model server | Multi-modal AI server | Multi-agent framework | Multi-agent orchestrator |
-| **Language** | Rust | Python | Go | Go | Python | Python / .NET |
-| **Model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ Local models | ❌ | ❌ | ❌ |
-| **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ✅ | ❌ | ❌ | ❌ |
-| **Multimodal: vision, TTS, STT, image gen** | ❌ (honeybee or external hive) | ❌ | ❌ | ✅ LLM, vision, voice, image, video | ❌ | ❌ |
-| **Built-in TUI** | ✅ (decoupled, wryme in progress) | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Self-hosted, local-first** | ✅ (kernel runs anywhere) | ✅ | ✅ | ✅ | ❌ (cloud) | ✅ |
-| **Multi-agent orchestration** | ✅ (bee/nest primitives) | ❌ | ❌ | ❌ | ✅ agents + roles | ✅ workflows + agents |
-| **Agent memory / long-term context** | ✅ (`bloom` + `thrum` protocol) | ❌ | ❌ | ❌ | ✅ (societal memory) | ✅ (cognitive memory) |
-| **Streaming / SSE** | ✅ (thrum tones, `petal` primitives) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` transport) | ✅ (cost, usage, logs) | ❌ | ❌ | ✅ (swarm traces) | ✅ (run traces, deploy) |
-| **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) |
-| **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Capability | hum | LiteLLM | Ollama | LocalAI | CAMEL | Azure Agent Framework | Phoenix | vLLM | Open WebUI |
+|---|---|---|---|---|---|---|---|---|---|
+| **Class** | Agentic kernel | Router / proxy | Local model server | Multi-modal AI server | Multi-agent framework | Multi-agent orchestrator | AI observability & evals | Production inference serving | LLM web UI |
+| **Language** | Rust | Python | Go | Go | Python | Python / .NET | Python | Python | Python |
+| **Model gateway** | ✅ (hives gossip) | ✅ 100+ APIs | ✅ Local models | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **OpenAI-compatible API** | ✅ (`openai-server` hive) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| **Ollama-compatible API** | ⚠️ (in progress, see [issue #44](https://github.com/adiled/hum/issues/44)) | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Multimodal: vision, TTS, STT, image gen** | ❌ (honeybee or external hive) | ❌ | ❌ | ✅ LLM, vision, voice, image, video | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Built-in TUI** | ✅ (decoupled, wryme in progress) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Self-hosted, local-first** | ✅ (kernel runs anywhere) | ✅ | ✅ | ✅ | ❌ (cloud) | ✅ | ✅ | ✅ | ✅ |
+| **Multi-agent orchestration** | ✅ (bee/nest primitives) | ❌ | ❌ | ❌ | ✅ agents + roles | ✅ workflows + agents | ❌ | ❌ | ❌ |
+| **Agent memory / long-term context** | ✅ (`bloom` + `thrum` protocol) | ❌ | ❌ | ❌ | ✅ (societal memory) | ✅ (cognitive memory) | ❌ | ❌ | ❌ |
+| **Streaming / SSE** | ✅ (thrum tones, `petal` primitives) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
+| **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` transport) | ✅ (cost, usage, logs) | ❌ | ❌ | ✅ (swarm traces) | ✅ (run traces, deploy) | ✅ traces, evals, prompt mgmt | ❌ | ❌ |
+| **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) | ✅ vector DBs | ❌ | ✅ |
+| **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
