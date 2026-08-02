@@ -26,8 +26,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/adiled/hum.git",
-    "directory": "thrum"
+    "url": "git+https://github.com/adiled/hum.git"
   },
   "homepage": "https://adiled.github.io/hum/",
   "engines": {
