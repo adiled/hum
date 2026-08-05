@@ -31,7 +31,6 @@ ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
-MIN_CLAUDE="2.1.86"
 
 CMD="${1:-install}"
 OS="$(uname -s)"
@@ -53,7 +52,6 @@ ensure_min_version() {
 }
 
 ensure_prereqs() {
-  ensure_min_version "claude CLI" "claude" "$MIN_CLAUDE"
   if ! command -v cargo >/dev/null 2>&1; then
     if [ -x "$HUMD_BIN" ] && [ -x "$HUMCTL_BIN" ] && [ -x "$HUM_CLI_BIN" ] && [ -x "$ORCHD_BIN" ]; then
       warn "cargo not found; using pre-built binaries in $HUM_BIN_ROOT/bin"
@@ -102,7 +100,7 @@ ensure_hum_config() {
     ],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
   },
-  "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
+  "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "openai-server" }
 }
 JSON
   log "wrote default hum.json at $CFG"
@@ -199,7 +197,7 @@ start_daemons() {
 print_next_steps() {
   log ""
   log "humd is up. Add a bee:"
-  log "  hum hive install claude-cli       # claude worker (cargo build + register)"
+  log "  hum hive install openai-server    # OpenAI inference cell (pnpm build)"
   log "  hum hive install humfs            # filesystem forager"
   log "  hum hive install paid-oracle      # x402 paid price oracle"
   log ""
