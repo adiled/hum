@@ -67,13 +67,9 @@ ensure_identity() {
   local KEY="$HUM_STATE/humd.key"
   if [ -s "$KEY" ]; then log "humd identity: $KEY ✓"; return 0; fi
   log "minting humd identity at $KEY"
-  if command -v openssl >/dev/null 2>&1; then
-    openssl genpkey -algorithm Ed25519 -outform DER -out "$KEY.tmp" 2>/dev/null
-    tail -c 32 "$KEY.tmp" > "$KEY"
-    rm -f "$KEY.tmp"
-  else
-    dd if=/dev/urandom of="$KEY" bs=32 count=1 2>/dev/null
-  fi
+  # Use dd directly — works everywhere. openssl on macOS (LibreSSL)
+  # doesn't support Ed25519, and this avoids the dependency entirely.
+  dd if=/dev/urandom of="$KEY" bs=32 count=1 2>/dev/null
   chmod 600 "$KEY"
 }
 
