@@ -1,0 +1,22 @@
+# Gradle build artifacts
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Android local
+local.properties
+*.apk
+*.aab
+*.apk.unsigned
+*.aab.unsigned
+
+# Kotlin metadata
+*.kotlin_module
+*.kjsm
