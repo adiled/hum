@@ -25,6 +25,7 @@ members = [
     "hives/paid-oracle",
     "hives/gsm-modem",
     "hives/ollama-server",
+    "hives/ollama-worker",
     "hives/bp7",
     "thehum",
 ]

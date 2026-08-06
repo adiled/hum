@@ -1,0 +1,25 @@
+[package]
+name = "ollama-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WorkerBee that calls Ollama's API directly — run local LLMs without claude."
+
+[[bin]]
+name = "ollama-worker"
+path = "src/main.rs"
+
+[dependencies]
+hum-paths = { path = "../../hum-paths" }
+nest = { path = "../../nest" }
+nest-common = { path = "../common" }
+ids = { path = "../../ids" }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7"
+serde_json = { workspace = true }
+serde = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

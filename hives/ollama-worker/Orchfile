@@ -1,0 +1,5 @@
+SERVICE ollama-worker
+RUN ${HOME}/.local/bin/ollama-worker
+ENV OLLAMA_WORKER_MODEL=smollm:1.7b
+ENV OLLAMA_WORKER_MODELS=smollm:1.7b
+RESTART always
