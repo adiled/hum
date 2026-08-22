@@ -8,5 +8,6 @@ docs/
 dev/deploy
 dev/deploy.*
 target/
+.cargo/
 AGENTS.md
 CLAUDE.md
