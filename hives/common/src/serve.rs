@@ -538,6 +538,19 @@ impl WireListener {
 
     async fn forward_raw(&self, value: Value) {
         self.last_touched.store(now_ms(), Ordering::SeqCst);
+
+        // If the event is already a thrum chi event (has a "chi" field),
+        // pass it through directly. This lets workers like ollama-worker
+        // emit thrum events without going through claude's stream-json.
+        if value.get("chi").and_then(Value::as_str).is_some() {
+            let mut v = value.clone();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("sid".into(), Value::String(self.sid.clone()));
+            }
+            self.send(v).await;
+            return;
+        }
+
         // claude emits stream-json events. The relevant chunk events
         // arrive wrapped as `{"type":"stream_event","event":{...inner...}}`;
         // unwrap to inspect the inner type. Mirrors the dispatch
