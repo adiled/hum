@@ -26,9 +26,10 @@ function defaultThrumPath(): string {
   // in-flight upgrade doesn't strand bees.
   const explicit = process.env.HUM_THRUM_SOCK ?? process.env.HUM_SOCKET;
   if (explicit) return explicit;
-  const runtime = process.env.XDG_RUNTIME_DIR
-    ?? `/tmp/hum-${process.getuid?.() ?? 0}`;
-  return `${runtime}/hum/thrum.sock`;
+  // Rust: state_dir() = $XDG_STATE_HOME/hum or ~/.local/state/hum
+  const stateHome = process.env.XDG_STATE_HOME
+    ?? `${process.env.HOME ?? "/tmp"}/.local/state`;
+  return `${stateHome}/hum/thrum.sock`;
 }
 
 export class ThrumClient {
