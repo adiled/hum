@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hum P2P Bee</string>
+    <string name="service_notification_channel">Hum P2P Bee Channel</string>
+    <string name="service_notification_title">Hum P2P Bee</string>
+    <string name="service_notification_text">WiFi Direct bee is running</string>
+</resources>

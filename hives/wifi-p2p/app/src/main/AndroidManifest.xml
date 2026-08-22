@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- WiFi Direct discovery + group formation -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_PEERS" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Foreground service (required for ongoing P2P scanning + socket) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Internet for TCP sockets on P2P interface -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Hum P2P Bee"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoTitleBar">
+
+        <service
+            android:name=".WifiP2pBeeService"
+            android:foregroundServiceType="dataSync"
+            android:exported="true"
+            android:label="WiFi Direct Bee" />
+
+        <receiver
+            android:name=".P2pManagerBroadcastReceiver"
+            android:exported="true"
+            android:label="P2P Broadcast Receiver">
+            <intent-filter>
+                <action android:name="android.net.wifi.p2p.STATE_CHANGED" />
+                <action android:name="android.net.wifi.p2p.CONNECT_STATE_CHANGE" />
+                <action android:name="android.net.wifi.p2p.PEERS_CHANGED" />
+                <action android:name="android.net.wifi.p2p.CONNECTION_INFO_CHANGED" />
+                <action android:name="android.net.wifi.p2p.GROUP_INFO_CHANGED" />
+                <action android:name="android.net.wifi.p2p.DISCOVERY_CHANGE" />
+                <action android:name="android.net.wifi.p2p.GROUP_REMOVED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

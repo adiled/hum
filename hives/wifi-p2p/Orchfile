@@ -1,0 +1,3 @@
+SERVICE wifi-p2p
+RUN com.hum.hive.wifip2p/.WifiP2pBeeService
+RESTART always
