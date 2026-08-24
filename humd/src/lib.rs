@@ -1619,8 +1619,23 @@ impl ToneSink for HumdSink {
                     Err(e) => warn!(client_id, %author, from, err = %e, "backfill.range.failed"),
                 }
             }
-            Some(Chi::Curate)
-            | Some(Chi::ReleasePermit)
+            Some(Chi::Curate) => {
+                if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
+                    // Forward the curate to all registered workers — same
+                    // shape as cancel/cleanup above. Workers no-op on an
+                    // unknown sid, so spraying is safe until sid→worker
+                    // routing exists.
+                    let workers: Vec<String> = self.manifests.read()
+                        .iter()
+                        .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
+                        .map(|(cid, _)| cid.clone())
+                        .collect();
+                    for wc in workers {
+                        self.thrum.thrum_to(&wc, tone.clone());
+                    }
+                }
+            }
+            Some(Chi::ReleasePermit)
             | Some(Chi::TendrilResult)
             | Some(Chi::PetalCell)
             | Some(Chi::Echo)
