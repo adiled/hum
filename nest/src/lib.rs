@@ -119,6 +119,20 @@ pub enum Propensity {
     EphemeralPerCall,
 }
 
+/// What a curation trimmed. Byte counts are of the bee's own stored
+/// transcript, whatever form that takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CurateReport {
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+}
+
+impl CurateReport {
+    pub fn trimmed(&self) -> u64 {
+        self.bytes_before.saturating_sub(self.bytes_after)
+    }
+}
+
 /// A WorkerBee raises cells from eggs — the compute-side trait every
 /// commissioned hive implements.
 #[async_trait]
@@ -128,6 +142,17 @@ pub trait WorkerBee: Send + Sync {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
     }
     async fn raise(&self, egg: Egg) -> Result<Cell>;
+
+    /// Curate the stored transcript for a sid — trim what can go without
+    /// losing the thread. Answers `chi:"curate"`.
+    ///
+    /// Operates on what the bee has persisted, not on a live cell: a
+    /// harness that exits between turns (claude `-p`) still has a
+    /// transcript to curate, and a curate may well arrive with nothing
+    /// running. Default is a no-op for bees holding nothing to trim.
+    async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {
+        Ok(CurateReport::default())
+    }
 }
 
 /// Pollen — what a forager bee carries back alongside the text:

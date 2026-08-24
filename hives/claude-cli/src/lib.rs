@@ -111,6 +111,36 @@ impl WorkerBee for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
+    /// Prune the sid's transcript in place — drop thinking blocks and
+    /// clip oversized tool results, protecting the most recent turns.
+    ///
+    /// The transcript is the session state here, so this works whether or
+    /// not a cell is live: `claude -p` exits after every turn, and the
+    /// next `--resume` reads whatever is on disk.
+    async fn curate(&self, sid: &ids::HumId, cwd: &str) -> Result<nest::CurateReport> {
+        let derived = sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
+        let path = graft::session_path(std::path::Path::new(cwd), &derived);
+        if !path.exists() {
+            trace!(sid = %sid, path = %path.display(), "worker.curate.no-transcript");
+            return Ok(nest::CurateReport::default());
+        }
+
+        let pruned = graft::prune_jsonl(&path)?;
+        trace!(
+            sid = %sid,
+            trimmed = pruned.trimmed,
+            stripped = pruned.stripped,
+            bytes_before = pruned.bytes_before,
+            bytes_after = pruned.bytes_after,
+            "worker.curate.pruned"
+        );
+
+        Ok(nest::CurateReport {
+            bytes_before: pruned.bytes_before as u64,
+            bytes_after: pruned.bytes_after as u64,
+        })
+    }
+
     async fn raise(&self, spec: Egg) -> Result<Cell> {
         let cli = spec.cli_path.clone()
             .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
