@@ -6,6 +6,7 @@ members = [
     "hum-paths",
     "hum-identity",
     "hum-thrum",
+    "hum-mcp",
     "ids",
     "config",
     "codegen",

@@ -1,0 +1,20 @@
+[package]
+name = "hum-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Worker-side MCP HTTP bridge. Spawns an axum JSON-RPC server mapping tools/list + tools/call to thrum tones. Leaf crate for remote worker hives — no daemon or nest deps."
+
+[dependencies]
+mcp = { path = "../mcp" }
+thrum-core = { path = "../thrum-core" }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+axum = "0.7"
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "sync", "macros", "rt", "time"] }
+
+[dev-dependencies]
+serde = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

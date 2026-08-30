@@ -1929,6 +1929,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hum-mcp"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "mcp",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hum-paths"
 version = "0.32.0"
 dependencies = [
@@ -3016,6 +3031,7 @@ dependencies = [
  "ensemble",
  "futures",
  "hum-identity",
+ "hum-mcp",
  "hum-paths",
  "hum-thrum",
  "ids",
