@@ -18,19 +18,19 @@
 //! - **Cancel**: `chi:"cancel"` (with a `callId`) signals the forager
 //!   to abort the in-flight tool, if it can.
 //!
-//! Reconnect is built in — humd restarts don't strand foragers.
+//! The wire mechanics (dial, hello, read NDJSON, reconnect) are the
+//! shared `hum-thrum` client; this module is the forager-specific
+//! chi semantics + tool dispatcher seam. Reconnect is built in —
+//! humd restarts don't strand foragers.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use ensemble::HidPrefix;
+use hum_identity::HidPrefix;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::sync::Mutex;
-use tracing::{info, trace, warn};
+use tracing::{info, trace};
 
 use crate::identity::load_or_mint_bee_key;
 
@@ -124,25 +124,16 @@ pub async fn serve_forager<D: ToolDispatcher + 'static>(
     advert: ForagerAdvert,
 ) -> Result<()> {
     let path = default_socket_path();
-    loop {
-        match dial_and_serve(&path, dispatcher.clone(), &advert).await {
-            Ok(()) => trace!("serve_forager: clean exit, reconnecting"),
-            Err(e) => warn!(err = %e, "serve_forager: connection failed, retrying"),
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
+    hum_thrum::serve_forever(|| dial_and_serve(&path, dispatcher.clone(), &advert)).await
 }
 
 async fn dial_and_serve<D: ToolDispatcher + 'static>(
-    path: &Path,
+    path: &PathBuf,
     dispatcher: Arc<D>,
     advert: &ForagerAdvert,
 ) -> Result<()> {
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
-    let stream = UnixStream::connect(path).await
-        .with_context(|| format!("connect to thrum at {}", path.display()))?;
-    let (read_half, write_half) = stream.into_split();
-    let write_half = Arc::new(Mutex::new(write_half));
+    let (reader, write_half) = hum_thrum::connect(path).await?;
 
     // Load (or mint) the persistent forager-bee identity. fbee_ hid
     // survives reconnect / restart; humd indexes by it.
@@ -171,7 +162,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
     });
-    write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
+    hum_thrum::send_json(&write_half, &hello).await?;
     info!(
         hive = %advert.hive,
         hid = %bee_key.hid.short(),
@@ -180,13 +171,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "forager.hello.sent"
     );
 
-    let mut reader = BufReader::new(read_half).lines();
-    while let Some(line) = reader.next_line().await? {
-        if line.is_empty() { continue; }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => { trace!(err = %e, "forager.parse.skip"); continue; }
-        };
+    hum_thrum::read_tones(reader, |tone| {
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         match chi {
             "tool-call" => {
@@ -207,13 +192,11 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
                         "title": result.title,
                         "metadata": result.metadata,
                     });
-                    let line = format!("{}\n", body);
-                    let _ = write_half.lock().await.write_all(line.as_bytes()).await;
+                    let _ = hum_thrum::send_json(&write_half, &body).await;
                 });
             }
             "breath" | "echo" | "" => {}
             other => trace!(chi = other, "forager.unknown.chi"),
         }
-    }
-    Ok(())
+    }).await
 }

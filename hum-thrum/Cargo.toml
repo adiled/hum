@@ -1,0 +1,17 @@
+[package]
+name = "hum-thrum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The thrum wire client for bees: dial the Unix socket, hello, read NDJSON tones, reconnect. Transport-agnostic leaf for remote hives — no daemon, nest, or mesh deps."
+
+[dependencies]
+ids = { path = "../ids" }
+hum-paths = { path = "../hum-paths" }
+hum-identity = { path = "../hum-identity" }
+thrum-core = { path = "../thrum-core" }
+tokio = { workspace = true, features = ["net", "io-util", "sync", "macros", "rt", "time"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }

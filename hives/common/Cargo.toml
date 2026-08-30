@@ -8,6 +8,7 @@ description = "Shared building blocks for nests — regex Classifier for the dro
 [dependencies]
 hum-paths = { path = "../../hum-paths" }
 hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
 drone = { path = "../../drone" }
 ensemble = { path = "../../ensemble" }
 mcp = { path = "../../mcp" }

@@ -1937,6 +1937,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hum-thrum"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "hum-identity",
+ "hum-paths",
+ "ids",
+ "rand 0.8.6",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3002,6 +3017,7 @@ dependencies = [
  "futures",
  "hum-identity",
  "hum-paths",
+ "hum-thrum",
  "ids",
  "lru 0.12.5",
  "mcp",

@@ -5,6 +5,7 @@ members = [
     "thrumd",
     "hum-paths",
     "hum-identity",
+    "hum-thrum",
     "ids",
     "config",
     "codegen",

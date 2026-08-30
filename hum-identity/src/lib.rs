@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use ed25519_dalek::SigningKey;
-use ids::{Hid, HidPrefix};
+pub use ids::{Hid, HidPrefix};
 use rand::RngCore;
 use tracing::{info, trace};
 
