@@ -2231,6 +2231,7 @@ dependencies = [
 name = "ids"
 version = "0.32.0"
 dependencies = [
+ "hex",
  "rand 0.8.6",
  "serde",
  "serde_json",
