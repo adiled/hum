@@ -4,6 +4,7 @@ members = [
     "thrum-core",
     "thrumd",
     "hum-paths",
+    "hum-identity",
     "ids",
     "config",
     "codegen",

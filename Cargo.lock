@@ -1916,6 +1916,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hum-identity"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "ed25519-dalek 2.2.0",
+ "hum-paths",
+ "ids",
+ "rand 0.8.6",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "hum-paths"
 version = "0.32.0"
 dependencies = [
@@ -2987,6 +3000,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "ensemble",
  "futures",
+ "hum-identity",
  "hum-paths",
  "ids",
  "lru 0.12.5",
