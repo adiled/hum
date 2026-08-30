@@ -27,12 +27,10 @@ use lru::LruCache;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
-use ensemble::HidPrefix;
+use hum_identity::HidPrefix;
 use mcp::protocol::ToolDef;
 use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
@@ -105,10 +103,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     advert: &HiveAdvert,
 ) -> Result<()> {
     info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
-    let stream = UnixStream::connect(path).await
-        .with_context(|| format!("connect to thrum at {}", path.display()))?;
-    let (read_half, write_half) = stream.into_split();
-    let write_half = Arc::new(Mutex::new(write_half));
+    let (reader, write_half) = hum_thrum::connect(path).await?;
 
     // Load (or mint) the persistent worker-bee identity. The wbee_
     // hid survives reconnect + restart; humd indexes manifests by it
@@ -137,7 +132,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         "chis": ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "error", "tool-call"],
         "source": advert.source.clone().unwrap_or_default(),
     });
-    write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
+    hum_thrum::send_json(&write_half, &hello).await?;
     info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 
     // Worker-local MCP bridge. The compute (e.g. claude) dials it
@@ -148,8 +143,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let bridge = McpBridge::new(Arc::new(move |tone: Value| {
         let write_half = write_for_bridge.clone();
         tokio::spawn(async move {
-            let line = format!("{}\n", tone);
-            if let Err(e) = write_half.lock().await.write_all(line.as_bytes()).await {
+            if let Err(e) = hum_thrum::send_json(&write_half, &tone).await {
                 warn!(err = %e, "mcp.bridge.tool-call.write.failed");
             }
         });
@@ -164,13 +158,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
-    let mut reader = BufReader::new(read_half).lines();
-    while let Some(line) = reader.next_line().await? {
-        if line.is_empty() { continue; }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => { trace!(err = %e, "worker.parse.skip"); continue; }
-        };
+    hum_thrum::read_tones(reader, |tone| {
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
 
@@ -206,13 +194,17 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "cancel" => {
                 if !sid.is_empty() {
-                    let mut r = cells.lock().await;
-                    if let Some(bundle) = r.get(&sid) {
-                        if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
-                            let _ = bundle.stdin.send(encode_cancel(rid)).await;
+                    let cells = cells.clone();
+                    let tone = tone.clone();
+                    tokio::spawn(async move {
+                        let mut r = cells.lock().await;
+                        if let Some(bundle) = r.get(&sid) {
+                            if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
+                                let _ = bundle.stdin.send(encode_cancel(rid)).await;
+                            }
+                            bundle.cancel.cancel();
                         }
-                        bundle.cancel.cancel();
-                    }
+                    });
                 }
             }
             "tool-result" => {
@@ -226,15 +218,19 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
                 if !resolved_by_bridge && !sid.is_empty() {
-                    let mut r = cells.lock().await;
-                    if let Some(bundle) = r.get(&sid) {
-                        if let (Some(call_id), Some(result)) = (
-                            tone.get("callId").and_then(Value::as_str),
-                            tone.get("result").and_then(Value::as_str),
-                        ) {
-                            let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
+                    let cells = cells.clone();
+                    let tone = tone.clone();
+                    tokio::spawn(async move {
+                        let mut r = cells.lock().await;
+                        if let Some(bundle) = r.get(&sid) {
+                            if let (Some(call_id), Some(result)) = (
+                                tone.get("callId").and_then(Value::as_str),
+                                tone.get("result").and_then(Value::as_str),
+                            ) {
+                                let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
+                            }
                         }
-                    }
+                    });
                 }
             }
             "breath" | "echo" | "" => {
@@ -244,8 +240,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 trace!(chi = other, "worker.unknown.chi");
             }
         }
-    }
-    Ok(())
+    }).await
 }
 
 struct CellBundle {
@@ -494,8 +489,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
                 "finishReason": if exit_code == 0 { "stop" } else { "error" },
                 "exitCode": exit_code,
             });
-            let line = format!("{}\n", finish);
-            let _ = write_for_cleanup.lock().await.write_all(line.as_bytes()).await;
+            let _ = hum_thrum::send_json(&write_for_cleanup, &finish).await;
         }
         cells_for_cleanup.lock().await.pop(&sid_for_cleanup);
         trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
@@ -532,8 +526,7 @@ struct WireListener {
 
 impl WireListener {
     async fn send(&self, tone: Value) {
-        let line = format!("{}\n", tone);
-        let _ = self.write_half.lock().await.write_all(line.as_bytes()).await;
+        let _ = hum_thrum::send_json(&self.write_half, &tone).await;
     }
 
     async fn forward_raw(&self, value: Value) {
