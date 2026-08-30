@@ -1,0 +1,224 @@
+.TH HUM 1 "August 2025" "hum 0.32.0" "User Commands"
+.SH NAME
+hum \- the AI stack on a biodiverse agentic kernel
+.SH SYNOPSIS
+.B hum
+[\fICOMMAND\fR] [\fIOPTIONS\fR]
+.PP
+.B hum help
+[\fICOMMAND\fR]
+.SH DESCRIPTION
+.B hum
+is the user-facing command-line interface to the hum agentic stack: a daemon
+(\fBhumd\fR) that hosts a mesh of cooperating agents (bees) over a native
+vibration protocol called \fBthrum\fR (v0.7.0). It manages hives, bees, a
+persistent event log, a peer mesh, and the daemon lifecycle.
+.PP
+The core model:
+.TS
+l l.
+hive	the kind; a typology a bee conforms to (doesn't run itself)
+bee	the instance; a running participant commissioned by a hive
+nestler	a bee mid-handshake, awaiting acceptance of its hello
+nestled	a bee registered into the nest
+nest	where nestled bees gather, inside humd
+thrum	the hum-native vibration protocol; carries tones across a range of chi
+petal	one unit of content (text, image, tool call, or result)
+bloom	one turn of conversation, opened by a prompt, closed when it wilts
+ensemble	the mesh of cooperating humds
+.TE
+.PP
+With no command, \fBhum\fR prints a health summary (version plus daemon state).
+.SH COMMANDS
+.TP
+.B status
+Daemon + config + service-manager state: humd binary path and version,
+identity key, peers and config files, and per-service status.
+.TP
+.B logs [\-n \fIN\fR]
+Tail recent daemon logs (cross-platform). Default 200 lines. On macOS these
+come from launchd; on Linux, journalctl.
+.TP
+.B doctor
+One-shot full diagnostic dump. Run this first when something is wrong:
+versions, config, environment sanity, the claude binary, every bee and
+service state, and recent daemon + worker logs with warnings highlighted.
+Paste the output into a bug report.
+.TP
+.B hive
+Manage hive kinds \(em the source a bee is commissioned from.
+.RS
+.B hum hive \-\-list
+\(em catalogue + configured + running hives.
+.br
+.B hum hive \fIref\fR install
+\(em build the hive and register its bee. \fIref\fR is a bundled name (e.g.
+\fBclaude-cli\fR, \fBhumfs\fR, \fBpaid-oracle\fR), a local path, or the source
+URL a bee advertises (a github tree URL of a \fBhives/<kind>\fR directory).
+.RE
+.TP
+.B bee
+Manage running bee instances.
+.RS
+.B hum bee \-\-list
+\(em list bees and their state.
+.br
+.B hum bee \fIname|id\fR enter
+\(em start a stopped bee.
+.br
+.B hum bee \fIname|id\fR exit
+\(em stop a bee (state preserved).
+.br
+.B hum bee \fIname|id\fR reenter
+\(em restart a bee gracefully, keeping the same id.
+.br
+The hive name (e.g. \fBclaude-cli\fR) is accepted in place of a bee id.
+.RE
+.TP
+.B nest
+List orchd-managed bees (delegates to \fBorchd status\fR).
+.TP
+.B penny
+Show lifetime counters from penny.json (token swaps, tool executions, etc).
+.TP
+.B recipes [\fIname\fR]
+List available recipes (\fBrecipes/*\fR) or run one by name (e.g. \fBopencode\fR).
+.TP
+.B thehum \fIVERB\fR
+Inspect the persistent chi log \(em a hash-chained, signed event log.
+.RS
+.B thehum status
+\(em print dir, file count, total seq, latest snapshot height + timestamp.
+.br
+.B thehum tail [\-n \fIN\fR]
+\(em tail the most recent daily file as compact JSON, one event per line
+(default 20).
+.br
+.B thehum range \-\-author \fIhid\fR \-\-from \fIseq\fR [\-\-to \fIseq\fR]
+\(em filter events by author hid and seq range (inclusive bounds).
+.br
+.B thehum verify
+\(em check the hash chain and signatures across the whole log.
+.br
+.B thehum replay
+\(em replay the log, counting events by chi kind.
+.RE
+.TP
+.B ensemble
+Inspect or edit the peer-mesh state.
+.RS
+.B hum ensemble
+\(em show our identity, reach, and configured peers.
+.br
+.B hum ensemble peer add \fIhumd_id\fR [\-\-hint \fIHINT\fR]... [\-\-alias \fIname\fR]
+\(em append a peer to peers.json. \fIhumd_id\fR is hex (with or without the
+\fBhumd_\fR prefix). Repeated \fB\-\-hint\fR flags accumulate; hints are
+\fBtcp:host:port\fR or \fBiroh:<64-hex>\fR. An existing entry with the same
+humd_id is replaced (idempotent). Alias enables \fBhum://<alias>/path\fR
+URI resolution.
+.br
+.B hum ensemble peer rm \fItarget\fR
+\(em drop all entries matching \fItarget\fR (a humd_id hex or alias).
+.RE
+.TP
+.B uninstall
+Stop the service and remove the humd binary. State is preserved.
+.TP
+.B update [\-\-force]
+Check for a newer release and self-update. Compares the local version
+against GitHub's latest release; if newer, re-runs the canonical install
+(which bounces the service atomically). \fB\-\-force\fR reinstalls even when
+versions match.
+.TP
+.B help
+Print this message or the help of the given subcommand(s).
+.SH OPTIONS
+.TP
+.B \-h, \-\-help
+Print help.
+.TP
+.B \-V, \-\-version
+Print the version.
+.SH FILES
+.TP
+.B ~/.config/hum/hum.json
+Main configuration (see \fBhum.schema.json\fR in the repo).
+.TP
+.B ~/.config/hum/peers.json
+Bootstrap peers humd dials on boot; edited via \fBhum ensemble peer\fR.
+.TP
+.B ~/.config/hum/orch.d/
+Overlay directory for the orchd bee supervisor.
+.TP
+.B ~/.local/state/hum/humd.key
+The humd identity: a 32-byte Ed25519 seed minted on install (chmod 600).
+HumdId is the sha256 of the humd's Ed25519 public key.
+.TP
+.B ~/.local/state/hum/penny.json
+Lifetime counters.
+.TP
+.B ~/.local/share/hum/
+Data: source checkout, logs, and the chi log.
+.TP
+.B ~/.local/bin/
+Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorch\fR, \fBorchd\fR.
+.SH ENVIRONMENT
+.TP
+.B HUM_BIN
+Path to the humd binary; overrides the default resolved location.
+.SH INSTALLATION
+.PP
+Install with the canonical installer:
+.PP
+.nf
+curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
+.fi
+.PP
+The installer builds and registers \fBhumd\fR as a user service (launchd on
+macOS, systemd-style on Linux), mints the identity key, and pulls in the
+\fBorch\fR/\fBorchd\fR bee-supervisor binaries. Re-running it upgrades in
+place. From a cloned repo, \fB./install\fR accepts a subcommand:
+.RS
+.B status
+\(em humd state + paths.
+.br
+.B logs
+\(em tail humd logs.
+.br
+.B uninstall
+\(em stop + remove the humd unit (state preserved).
+.br
+.B purge
+\(em remove everything including state.
+.RE
+.PP
+After install, bring up bees:
+.nf
+hum hive install openai-server    # OpenAI inference cell (pnpm build)
+hum hive install humfs            # filesystem forager
+hum hive install paid-oracle      # x402 paid price oracle
+hum bee --list   /   hum nest
+.fi
+.SH VOCABULARY
+.PP
+The stack reasons in a "biodiverse" register; names carry meaning beyond
+function:
+.TS
+l l.
+thrum	bidirectional NDJSON socket between humd and any nestler
+tone	one message frame on the thrum (envelope chi/rid/sid plus body)
+chi	the tone's discriminator (prompt, chunk, finish, gossip-publish, ...)
+sigil	content-addressable session pairing hash, stable across reconnects
+wane	Lamport clock per sigil, incremented on every state mutation
+dusk	absolute ms expiry on a tone; past dusk, drop
+cell	one live LLM subprocess in the nest; fungible
+brood	the state machine that walks a cell from cold to ready (PTY-only)
+drone	the sentinel watching every tone (self-governance + drift detection)
+drift	timing rings per bloom (p50/p95 across humds)
+worker	a bee that produces compute (accepts prompt, emits chunk/finish/tool-call)
+forager	a bee that translates outside wire <-> thrum (HTTP/gRPC/stdio)
+.TE
+.SH SEE ALSO
+.B hum.schema.json
+(1), the \fBscenarios/\fR directory for ensemble narratives, and the
+project website: https://adiled.github.io/hum/.
