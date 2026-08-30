@@ -29,49 +29,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hum_identity::HidPrefix;
+use mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 
 use crate::identity::load_or_mint_bee_key;
-
-/// One advertised tool. Description + schema land in humd's tool
-/// registry and get fanned out to MCP clients verbatim.
-#[derive(Debug, Clone, Default)]
-pub struct ToolDef {
-    /// Tool name — `humfs_read`, `humfs_do_code`, etc. Routing key.
-    pub name: String,
-    /// Free-form description; rendered by MCP clients in their tool
-    /// pickers.
-    pub description: String,
-    /// JSON schema for the tool's `args` object. Foragers MUST
-    /// validate `args` against this themselves before dispatching —
-    /// humd does not enforce schemas.
-    pub input_schema: Value,
-}
-
-/// Outcome of one tool dispatch.
-#[derive(Debug, Clone)]
-pub struct ToolResult {
-    /// Free-form text rendered to the asker. Tool authors decide
-    /// shape (e.g. line-numbered file slice, hit list, status line).
-    pub output: String,
-    /// Optional short title shown in the asker's tool-call header.
-    pub title: Option<String>,
-    /// Optional structured side-channel data (e.g. image base64,
-    /// usage stats).
-    pub metadata: Option<Value>,
-    /// True if dispatch failed; output carries the error message.
-    pub is_error: bool,
-}
-
-impl ToolResult {
-    pub fn text(s: impl Into<String>) -> Self {
-        Self { output: s.into(), title: None, metadata: None, is_error: false }
-    }
-    pub fn error(s: impl Into<String>) -> Self {
-        Self { output: s.into(), title: None, metadata: None, is_error: true }
-    }
-}
 
 /// Forager-side tool dispatcher. The forager binary owns its own
 /// state (cwd, fs.roots snapshot, permission cache); this trait is
