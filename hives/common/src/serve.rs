@@ -134,7 +134,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "error", "tool-call"],
+        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call"],
         "source": advert.source.clone().unwrap_or_default(),
     });
     write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
@@ -162,6 +162,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
     // reach the right child.
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
+
+    // sid → cwd, learned from prompts. A curate names a sid but no cwd,
+    // and the transcript it trims lives under one.
+    let sid_cwd: Arc<Mutex<LruCache<String, String>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
     let mut reader = BufReader::new(read_half).lines();
@@ -193,6 +198,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
                     bridge.set_catalogue(forager_tools, nestler_tools, &provided);
                 }
+                if !sid.is_empty() {
+                    if let Some(cwd) = tone.get("cwd").and_then(Value::as_str) {
+                        sid_cwd.lock().await.put(sid.clone(), cwd.to_string());
+                    }
+                }
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
@@ -212,6 +222,28 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                             let _ = bundle.stdin.send(encode_cancel(rid)).await;
                         }
                         bundle.cancel.cancel();
+                    }
+                }
+            }
+            "curate" => {
+                if !sid.is_empty() {
+                    let cwd = sid_cwd.lock().await.get(&sid).cloned();
+                    match cwd {
+                        Some(cwd) => {
+                            let hum_sid = ids::HumId::parse(&sid)
+                                .unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+                            match worker.curate(&hum_sid, &cwd).await {
+                                Ok(report) => trace!(
+                                    sid = %sid,
+                                    trimmed = report.trimmed(),
+                                    "worker.curate.done"
+                                ),
+                                Err(e) => warn!(sid = %sid, err = %e, "worker.curate.failed"),
+                            }
+                        }
+                        // No prompt has named a cwd for this sid yet, so
+                        // there is no transcript of ours to curate.
+                        None => trace!(sid = %sid, "worker.curate.unknown-sid"),
                     }
                 }
             }
