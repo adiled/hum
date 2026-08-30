@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- humd for Android: the native Rust daemon, hosted by a foreground
+         service. WiFi Direct (WifiP2pManager) is the radio underlay for
+         ad-hoc peer discovery; the daemon's ensemble (iroh QUIC + relay)
+         is the mesh overlay that reaches other humds. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_PEERS" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+
+    <application
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Material.Light"
+        android:allowBackup="false">
+
+        <service
+            android:name=".HumdService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+    </application>
+</manifest>

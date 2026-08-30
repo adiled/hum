@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">humd · android</string>
+    <string name="notif_title">humd running</string>
+    <string name="notif_text">native hum daemon · ensemble mesh active</string>
+</resources>
