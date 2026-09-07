@@ -1916,11 +1916,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "hum-identity"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "ed25519-dalek 2.2.0",
+ "hum-paths",
+ "ids",
+ "rand 0.8.6",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "hum-mcp"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "mcp",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hum-paths"
 version = "0.32.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hum-thrum"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "hum-identity",
+ "hum-paths",
+ "ids",
+ "rand 0.8.6",
+ "serde_json",
+ "thrum-core",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2231,6 +2274,7 @@ dependencies = [
 name = "ids"
 version = "0.32.0"
 dependencies = [
+ "hex",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -2986,7 +3030,10 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "ensemble",
  "futures",
+ "hum-identity",
+ "hum-mcp",
  "hum-paths",
+ "hum-thrum",
  "ids",
  "lru 0.12.5",
  "mcp",

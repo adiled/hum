@@ -18,60 +18,22 @@
 //! - **Cancel**: `chi:"cancel"` (with a `callId`) signals the forager
 //!   to abort the in-flight tool, if it can.
 //!
-//! Reconnect is built in — humd restarts don't strand foragers.
+//! The wire mechanics (dial, hello, read NDJSON, reconnect) are the
+//! shared `hum-thrum` client; this module is the forager-specific
+//! chi semantics + tool dispatcher seam. Reconnect is built in —
+//! humd restarts don't strand foragers.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use ensemble::HidPrefix;
+use hum_identity::HidPrefix;
+use mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::sync::Mutex;
-use tracing::{info, trace, warn};
+use tracing::{info, trace};
 
 use crate::identity::load_or_mint_bee_key;
-
-/// One advertised tool. Description + schema land in humd's tool
-/// registry and get fanned out to MCP clients verbatim.
-#[derive(Debug, Clone, Default)]
-pub struct ToolDef {
-    /// Tool name — `humfs_read`, `humfs_do_code`, etc. Routing key.
-    pub name: String,
-    /// Free-form description; rendered by MCP clients in their tool
-    /// pickers.
-    pub description: String,
-    /// JSON schema for the tool's `args` object. Foragers MUST
-    /// validate `args` against this themselves before dispatching —
-    /// humd does not enforce schemas.
-    pub input_schema: Value,
-}
-
-/// Outcome of one tool dispatch.
-#[derive(Debug, Clone)]
-pub struct ToolResult {
-    /// Free-form text rendered to the asker. Tool authors decide
-    /// shape (e.g. line-numbered file slice, hit list, status line).
-    pub output: String,
-    /// Optional short title shown in the asker's tool-call header.
-    pub title: Option<String>,
-    /// Optional structured side-channel data (e.g. image base64,
-    /// usage stats).
-    pub metadata: Option<Value>,
-    /// True if dispatch failed; output carries the error message.
-    pub is_error: bool,
-}
-
-impl ToolResult {
-    pub fn text(s: impl Into<String>) -> Self {
-        Self { output: s.into(), title: None, metadata: None, is_error: false }
-    }
-    pub fn error(s: impl Into<String>) -> Self {
-        Self { output: s.into(), title: None, metadata: None, is_error: true }
-    }
-}
 
 /// Forager-side tool dispatcher. The forager binary owns its own
 /// state (cwd, fs.roots snapshot, permission cache); this trait is
@@ -124,25 +86,16 @@ pub async fn serve_forager<D: ToolDispatcher + 'static>(
     advert: ForagerAdvert,
 ) -> Result<()> {
     let path = default_socket_path();
-    loop {
-        match dial_and_serve(&path, dispatcher.clone(), &advert).await {
-            Ok(()) => trace!("serve_forager: clean exit, reconnecting"),
-            Err(e) => warn!(err = %e, "serve_forager: connection failed, retrying"),
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
+    hum_thrum::serve_forever(|| dial_and_serve(&path, dispatcher.clone(), &advert)).await
 }
 
 async fn dial_and_serve<D: ToolDispatcher + 'static>(
-    path: &Path,
+    path: &PathBuf,
     dispatcher: Arc<D>,
     advert: &ForagerAdvert,
 ) -> Result<()> {
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
-    let stream = UnixStream::connect(path).await
-        .with_context(|| format!("connect to thrum at {}", path.display()))?;
-    let (read_half, write_half) = stream.into_split();
-    let write_half = Arc::new(Mutex::new(write_half));
+    let (reader, write_half) = hum_thrum::connect(path).await?;
 
     // Load (or mint) the persistent forager-bee identity. fbee_ hid
     // survives reconnect / restart; humd indexes by it.
@@ -171,7 +124,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
     });
-    write_half.lock().await.write_all(format!("{}\n", hello).as_bytes()).await?;
+    hum_thrum::send_json(&write_half, &hello).await?;
     info!(
         hive = %advert.hive,
         hid = %bee_key.hid.short(),
@@ -180,13 +133,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "forager.hello.sent"
     );
 
-    let mut reader = BufReader::new(read_half).lines();
-    while let Some(line) = reader.next_line().await? {
-        if line.is_empty() { continue; }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => { trace!(err = %e, "forager.parse.skip"); continue; }
-        };
+    hum_thrum::read_tones(reader, |tone| {
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         match chi {
             "tool-call" => {
@@ -207,13 +154,11 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
                         "title": result.title,
                         "metadata": result.metadata,
                     });
-                    let line = format!("{}\n", body);
-                    let _ = write_half.lock().await.write_all(line.as_bytes()).await;
+                    let _ = hum_thrum::send_json(&write_half, &body).await;
                 });
             }
             "breath" | "echo" | "" => {}
             other => trace!(chi = other, "forager.unknown.chi"),
         }
-    }
-    Ok(())
+    }).await
 }
