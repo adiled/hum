@@ -1,5 +1,16 @@
 [workspace]
 resolver = "2"
+exclude = [
+    "hives/claude-cli",
+    "hives/claude-repl",
+    "hives/humfs",
+    "hives/grpc",
+    "hives/paid-oracle",
+    "hives/gsm-modem",
+    "hives/ollama-server",
+    "hives/ollama-worker",
+    "hives/bp7",
+]
 members = [
     "thrum-core",
     "thrumd",
@@ -12,17 +23,8 @@ members = [
     "humctl",
     "hum",
     "hum-nest",
-    "hives/claude-cli",
-    "hives/claude-repl",
-    "hives/humfs",
     "ensemble",
     "sim",
-    "hives/grpc",
-    "hives/paid-oracle",
-    "hives/gsm-modem",
-    "hives/ollama-server",
-    "hives/ollama-worker",
-    "hives/bp7",
     "thehum",
 ]
 
