@@ -1,24 +1,24 @@
 [package]
 name = "grpc-forager"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.32.0"
+edition = "2024"
+license = "MIT"
 description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only bee."
 
 [dependencies]
-thrum-core = { path = "../../thrum-core" }
-hum-identity = { path = "../../hum-identity" }
-hum-thrum = { path = "../../hum-thrum" }
-tokio = { workspace = true }
+thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-thrum = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tonic = "0.12"
 prost = "0.13"
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
-hum-paths = { path = "../../hum-paths" }
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -26,3 +26,4 @@ tonic-build = "0.12"
 [[bin]]
 name = "grpc-forager"
 path = "src/main.rs"
+[workspace]

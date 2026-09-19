@@ -1,26 +1,27 @@
 [package]
 name = "ollama-server"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.32.0"
+edition = "2024"
+license = "MIT"
 description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client."
 
 [dependencies]
-thrum-core = { path = "../../thrum-core" }
-hum-identity = { path = "../../hum-identity" }
-tokio = { workspace = true }
+thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower = "0.5"
 tokio-stream = "0.1"
 bytes = "1"
-serde = { workspace = true }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-chrono = { workspace = true }
-hum-paths = { path = "../../hum-paths" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 
 [[bin]]
 name = "ollama-server"
 path = "src/main.rs"
+[workspace]

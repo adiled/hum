@@ -1,23 +1,23 @@
 [package]
 name = "humfs"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.32.0"
+edition = "2024"
+license = "MIT"
 description = "humfs — hum's native filesystem forager hive. Symbol-aware code surface (read/do_code/do_noncode/bash/task), AST-grounded via tree-sitter. Translates chi:tool-call ↔ filesystem ops; humd routes other foragers' tool-calls here."
 
 [dependencies]
-hum-paths = { path = "../../hum-paths" }
-hum-nest = { path = "../../hum-nest" }
-thrum-core = { path = "../../thrum-core" }
+hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-nest = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
 
-tokio = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-async-trait = { workspace = true }
-parking_lot = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+parking_lot = "0.12"
 regex = "1"
 base64 = "0.22"
 mime_guess = "2"
@@ -35,3 +35,4 @@ tree-sitter-go = "0.25"
 [[bin]]
 name = "humfs-forager"
 path = "src/main.rs"
+[workspace]

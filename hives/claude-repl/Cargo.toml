@@ -1,8 +1,8 @@
 [package]
 name = "claude-repl"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.32.0"
+edition = "2024"
+license = "MIT"
 description = "Concrete WorkerBee impl: interactive `claude` over a PTY. v0 stub — no classifier."
 
 [[bin]]
@@ -10,13 +10,14 @@ name = "claude-repl-worker"
 path = "src/main.rs"
 
 [dependencies]
-hum-paths = { path = "../../hum-paths" }
-hum-nest = { path = "../../hum-nest" }
-tokio = { workspace = true, features = ["full"] }
+hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-nest = { git = "https://github.com/adiled/hum.git", branch = "main" }
+tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-tracing = { workspace = true }
+serde_json = "1"
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 portable-pty = "0.9"
+[workspace]
