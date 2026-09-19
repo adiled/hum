@@ -27,6 +27,7 @@ mod identity;
 mod peer_transport;
 mod peers;
 mod penny;
+pub mod thrumd;
 pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
 

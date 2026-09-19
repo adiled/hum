@@ -80,7 +80,7 @@ const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
 /// Tolerance window for `signed_at` skew, both directions.
 const HANDSHAKE_SKEW_MS: i64 = 60_000;
 
-/// Tones flow through the ensemble as loose JSON — same shape thrumd
+/// Tones flow through the ensemble as loose JSON — same shape humd's thrum module
 /// uses on the wire. Strict typing lives in `thrum_core::Tone` for
 /// callers that need it; here we stay loose so any new chi flows
 /// through without a type bump.

@@ -22,7 +22,6 @@ anyhow = { workspace = true }
 
 # Path deps on every workspace crate.
 thrum-core = { path = "../thrum-core" }
-thrumd = { path = "../thrumd" }
 hum-mcp = { path = "../hum-mcp" }
 hum-identity = { path = "../hum-identity" }
 thehum = { path = "../thehum" }
@@ -37,6 +36,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 chrono = { workspace = true }
+governor = "0.6"
 
 [dev-dependencies]
 tokio = { workspace = true }

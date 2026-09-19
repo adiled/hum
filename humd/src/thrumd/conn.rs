@@ -10,8 +10,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
-use crate::registry::Reach;
-use crate::{
+use super::registry::Reach;
+use super::{
     breath_tone, chi_of, echo_tone, rid_of, short, tone_is_dusk, validate_envelope, Thrum,
 };
 
@@ -193,11 +193,11 @@ async fn write_loop(
 impl Thrum {
     pub(crate) fn inner_clients_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, crate::registry::Registry> {
+    ) -> parking_lot::RwLockWriteGuard<'_, super::registry::Registry> {
         self.inner.clients.write()
     }
 
-    pub(crate) fn inner_sink(&self) -> Option<Arc<dyn crate::ToneSink>> {
+    pub(crate) fn inner_sink(&self) -> Option<Arc<dyn super::ToneSink>> {
         self.inner.sink.read().clone()
     }
 }

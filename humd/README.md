@@ -130,7 +130,7 @@ binary runs.
 
 - [`hum-paths`](../hum-paths): the XDG layout humd's filesystem state hangs from.
 - [`ensemble`](../ensemble): the mesh humd plugs into. Transports, signed hello, peer registry, gossip, kad.
-- [`thrumd`](../thrumd): the unix socket server humd hosts for local bees.
+- `thrumd` (in `src/thrumd.rs`): the unix socket server humd hosts for local bees.
 - [`thehum`](../thehum): the signed append-only chi log humd writes every tone into.
 - [`sim`](../sim): the in-process multi-humd simulator, calls `humd::run` with overrides.
 - [`hum`](../hum): the user-facing CLI that inspects and configures humd.

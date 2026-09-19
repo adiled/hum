@@ -22,7 +22,7 @@ use ensemble::{hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, PeerCapabil
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
-use thrumd::Thrum;
+use humd::thrumd::Thrum;
 use tokio::sync::{mpsc, oneshot};
 
 /// Sentinel meaning "unlimited capacity" — round-trips through
