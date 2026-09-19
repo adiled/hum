@@ -12,7 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use claude_cli::graft::session_path;
 use claude_cli::ClaudeCliWorker;
-use nest::WorkerBee;
+use hum_nest::WorkerBee;
 use tempfile::TempDir;
 
 // HOME is process-global and cargo runs these tests on parallel threads.
@@ -28,7 +28,7 @@ fn home_lock() -> MutexGuard<'static, ()> {
 fn sandbox() -> (TempDir, MutexGuard<'static, ()>) {
     let guard = home_lock();
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("HOME", dir.path());
+    unsafe { std::env::set_var("HOME", dir.path()) };
     (dir, guard)
 }
 
@@ -40,8 +40,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 /// Place a fixture transcript where `curate` will look for this sid's.
-fn stage_transcript(home: &TempDir, cwd: &str, sid: &ids::HumId, name: &str) -> std::path::PathBuf {
-    let derived = sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
+fn stage_transcript(home: &TempDir, cwd: &str, sid: &hum_identity::HumId, name: &str) -> std::path::PathBuf {
+    let derived = sid.to_uuid_v5(hum_identity::NS_CLAUDE_SESSION).to_string();
     let path = session_path(std::path::Path::new(cwd), &derived);
     fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     fs::copy(fixture(name), &path).expect("copy fixture");
@@ -54,7 +54,7 @@ async fn curate_prunes_the_sid_transcript_in_place() {
     let (home, _guard) = sandbox();
 
     let cwd = "/tmp/proj";
-    let sid = ids::HumId::from_foreign("ses_curate_one");
+    let sid = hum_identity::HumId::from_foreign("ses_curate_one");
     let path = stage_transcript(&home, cwd, &sid, "with_thinking.jsonl");
     let before = fs::metadata(&path).expect("stat").len();
 
@@ -83,7 +83,7 @@ async fn curate_prunes_the_sid_transcript_in_place() {
 async fn curate_is_a_no_op_when_no_transcript_exists() {
     let (_home, _guard) = sandbox();
 
-    let sid = ids::HumId::from_foreign("ses_never_prompted");
+    let sid = hum_identity::HumId::from_foreign("ses_never_prompted");
     let report = ClaudeCliWorker
         .curate(&sid, "/tmp/nonexistent")
         .await

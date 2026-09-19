@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
         let first = load_or_mint_key().expect("mint");
         let id1 = first.hid();
@@ -158,6 +158,6 @@ mod tests {
         let second = load_or_mint_key().expect("reload");
         assert_eq!(id1, second.hid(), "humd_id stable across reloads");
 
-        std::env::remove_var("XDG_STATE_HOME");
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 }

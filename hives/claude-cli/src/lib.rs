@@ -67,7 +67,7 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     }
     // Foreign explicit resume wins. Otherwise: --resume the sid-derived
     // UUID (warm continuation), or --session-id it (fresh after resume miss).
-    let derived = spec.sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
+    let derived = spec.sid.to_uuid_v5(hum_identity::NS_CLAUDE_SESSION).to_string();
     if let Some(resume) = spec.resume_id.as_deref() {
         argv.push("--resume".into());
         argv.push(resume.to_string());
@@ -117,8 +117,8 @@ impl WorkerBee for ClaudeCliWorker {
     /// The transcript is the session state here, so this works whether or
     /// not a cell is live: `claude -p` exits after every turn, and the
     /// next `--resume` reads whatever is on disk.
-    async fn curate(&self, sid: &ids::HumId, cwd: &str) -> Result<hum_nest::CurateReport> {
-        let derived = sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
+    async fn curate(&self, sid: &hum_identity::HumId, cwd: &str) -> Result<hum_nest::CurateReport> {
+        let derived = sid.to_uuid_v5(hum_identity::NS_CLAUDE_SESSION).to_string();
         let path = graft::session_path(std::path::Path::new(cwd), &derived);
         if !path.exists() {
             trace!(sid = %sid, path = %path.display(), "worker.curate.no-transcript");
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn argv_includes_basics() {
-        let spec = Egg::new(ids::HumId::mint(), "claude-haiku-4-5", "/tmp");
+        let spec = Egg::new(hum_identity::HumId::mint(), "claude-haiku-4-5", "/tmp");
         let argv = build_argv(&spec);
         assert!(argv.contains(&"-p".to_string()));
         assert!(argv.contains(&"--verbose".to_string()));
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn argv_omits_mcp_when_no_url() {
-        let spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         let argv = build_argv(&spec);
         assert!(!argv.iter().any(|a| a == "--mcp-config"));
         assert!(!argv.iter().any(|a| a == "--strict-mcp-config"));
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn argv_includes_mcp_when_url_set() {
-        let sid = ids::HumId::mint();
+        let sid = hum_identity::HumId::mint();
         let mut spec = Egg::new(sid.clone(), "m", "/");
         spec.mcp_url = Some("http://127.0.0.1:29147".into());
         let argv = build_argv(&spec);
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn argv_includes_system_prompt() {
-        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let mut spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         spec.system_prompt = Some("Be terse.".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--system-prompt").unwrap();
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn argv_includes_resume() {
-        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let mut spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         spec.resume_id = Some("abc-123".into());
         let argv = build_argv(&spec);
         let i = argv.iter().position(|a| a == "--resume").unwrap();
@@ -303,14 +303,14 @@ mod tests {
 
     #[test]
     fn env_disables_adaptive_thinking_when_not_planning() {
-        let spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         let env = build_env(&spec);
         assert!(env.iter().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING" && v == "1"));
     }
 
     #[test]
     fn env_keeps_adaptive_thinking_in_plan_mode() {
-        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let mut spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         spec.plan_mode = true;
         let env = build_env(&spec);
         assert!(!env.iter().any(|(k, _)| k == "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"));
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn env_user_override_wins() {
-        let mut spec = Egg::new(ids::HumId::mint(), "m", "/");
+        let mut spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
         spec.env.insert("CLAUDE_CODE_DISABLE_FAST_MODE".into(), "0".into());
         let env = build_env(&spec);
         let positions: Vec<(usize, &str)> = env.iter().enumerate()

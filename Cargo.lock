@@ -433,7 +433,6 @@ dependencies = [
  "bp7 0.10.7",
  "hum-identity",
  "hum-paths",
- "ids",
  "serde",
  "serde_json",
  "thrum-core",
@@ -570,9 +569,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "command-group",
+ "hum-identity",
  "hum-nest",
  "hum-paths",
- "ids",
  "serde_json",
  "tempfile",
  "tokio",
@@ -654,17 +653,6 @@ dependencies = [
  "nix 0.27.1",
  "tokio",
  "winapi",
-]
-
-[[package]]
-name = "config"
-version = "0.32.0"
-dependencies = [
- "hum-paths",
- "jsonschema",
- "serde",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -1127,29 +1115,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "drift"
-version = "0.32.0"
-dependencies = [
- "anyhow",
- "chrono",
- "parking_lot",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "drone"
-version = "0.32.0"
-dependencies = [
- "parking_lot",
- "serde",
- "serde_json",
- "thrum-core",
- "tracing",
-]
-
-[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1242,7 +1207,7 @@ dependencies = [
  "async-trait",
  "ed25519-dalek 2.2.0",
  "hex",
- "ids",
+ "hum-identity",
  "iroh",
  "lru 0.12.5",
  "parking_lot",
@@ -1632,7 +1597,6 @@ dependencies = [
  "hum-identity",
  "hum-paths",
  "hum-thrum",
- "ids",
  "prost",
  "serde_json",
  "thrum-core",
@@ -1654,7 +1618,6 @@ dependencies = [
  "hex",
  "hum-identity",
  "hum-paths",
- "ids",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1899,7 +1862,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "config",
  "ed25519-dalek 2.2.0",
  "hum-paths",
  "humd",
@@ -1917,11 +1879,15 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek 2.2.0",
+ "hex",
  "hum-paths",
- "ids",
  "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1930,10 +1896,10 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "axum",
- "mcp",
  "parking_lot",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "thrum-core",
  "tokio",
  "tracing",
@@ -1946,15 +1912,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "command-group",
- "drone",
  "hum-identity",
  "hum-mcp",
  "hum-paths",
  "hum-thrum",
- "ids",
  "libc",
  "lru 0.12.5",
- "mcp",
  "metrics",
  "rand 0.8.6",
  "regex",
@@ -1972,8 +1935,10 @@ dependencies = [
 name = "hum-paths"
 version = "0.32.0"
 dependencies = [
+ "jsonschema",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1983,7 +1948,6 @@ dependencies = [
  "anyhow",
  "hum-identity",
  "hum-paths",
- "ids",
  "rand 0.8.6",
  "serde_json",
  "thrum-core",
@@ -2013,19 +1977,17 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "config",
- "drift",
- "drone",
+ "chrono",
  "ed25519-dalek 2.2.0",
  "ensemble",
  "hex",
+ "hum-identity",
+ "hum-mcp",
+ "hum-nest",
  "hum-paths",
- "ids",
- "mcp",
  "metrics",
  "metrics-exporter-prometheus",
  "parking_lot",
- "penny",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -2045,7 +2007,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
- "config",
  "hum-nest",
  "hum-paths",
  "mime_guess",
@@ -2291,18 +2252,6 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
-]
-
-[[package]]
-name = "ids"
-version = "0.32.0"
-dependencies = [
- "hex",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "uuid",
 ]
 
 [[package]]
@@ -2817,19 +2766,6 @@ name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
-
-[[package]]
-name = "mcp"
-version = "0.32.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "thrum-core",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "memchr"
@@ -3502,8 +3438,8 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "hum-identity",
  "hum-paths",
- "ids",
  "serde",
  "serde_json",
  "thrum-core",
@@ -3520,9 +3456,9 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "hum-identity",
  "hum-nest",
  "hum-paths",
- "ids",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3574,7 +3510,6 @@ dependencies = [
  "hex",
  "hum-identity",
  "hum-paths",
- "ids",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
@@ -3648,19 +3583,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6305423e0e7738146434843d1694d621cce767262b2a86910beab705e4493d9"
 dependencies = [
  "base64ct",
-]
-
-[[package]]
-name = "penny"
-version = "0.32.0"
-dependencies = [
- "hum-paths",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -4819,12 +4741,11 @@ name = "sim"
 version = "0.32.0"
 dependencies = [
  "anyhow",
- "config",
  "ensemble",
+ "hum-identity",
+ "hum-mcp",
  "hum-paths",
  "humd",
- "ids",
- "mcp",
  "parking_lot",
  "serde_json",
  "thrum-core",
@@ -5172,8 +5093,8 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "ensemble",
  "hex",
+ "hum-identity",
  "hum-paths",
- "ids",
  "parking_lot",
  "rand 0.8.6",
  "serde",
@@ -5241,7 +5162,7 @@ version = "0.32.0"
 dependencies = [
  "codegen",
  "hex",
- "ids",
+ "hum-identity",
  "parking_lot",
  "serde",
  "serde_json",
@@ -5257,8 +5178,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "governor",
+ "hum-identity",
  "hum-paths",
- "ids",
  "parking_lot",
  "serde",
  "serde_json",

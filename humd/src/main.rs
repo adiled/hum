@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     // A daemon must not boot on an invalid config. Validate hum.json
     // against the schema and exit non-zero (violations verbatim) before
     // any state is built.
-    config::validate_or_exit();
+    hum_paths::config::validate_or_exit();
 
     let cfg = DaemonConfig::from_env();
     info!(

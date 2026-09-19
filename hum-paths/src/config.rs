@@ -157,11 +157,11 @@ pub struct HumConfig {
 // ── path resolution ───────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
-    hum_paths::hum_json()
+    crate::hum_json()
 }
 
 fn expand_tilde(p: &Path) -> PathBuf {
-    hum_paths::expand_tilde(p)
+    crate::expand_tilde(p)
 }
 
 fn canonical_or_self(p: &Path) -> PathBuf {
@@ -286,7 +286,7 @@ mod defaults {
             PathBuf::from("~/.ssh"),
             PathBuf::from("~/.aws"),
             PathBuf::from("~/.gnupg"),
-            hum_paths::config_dir(),
+            crate::config_dir(),
         ]
     }
 }

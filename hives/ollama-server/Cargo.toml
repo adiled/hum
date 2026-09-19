@@ -7,7 +7,7 @@ description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
-ids = { path = "../../ids" }
+hum-identity = { path = "../../hum-identity" }
 tokio = { workspace = true }
 axum = "0.7"
 tower = "0.5"

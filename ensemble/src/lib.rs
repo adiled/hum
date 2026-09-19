@@ -90,7 +90,7 @@ pub type Tone = serde_json::Value;
 /// Content-addressable identity, moved to `ids`. Re-exported here for
 /// back-compat so existing `ensemble::Hid` / `ensemble::HidPrefix` call
 /// sites keep compiling.
-pub use ids::{Hid, HidPrefix, HidParseError};
+pub use hum_identity::{Hid, HidPrefix, HidParseError};
 /// Ed25519 signing key for a humd. The pubkey's SHA-256 is the
 /// [`Hid`] — identity is content-addressable, no separate registry.
 ///
@@ -224,7 +224,7 @@ pub enum HelloParse {
 pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
-        "rid": ids::HumId::mint().to_string(),
+        "rid": hum_identity::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "proto_version": caps.proto_version,
@@ -249,7 +249,7 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let sig: Signature = key.0.sign(&msg);
     serde_json::json!({
         "chi": "hello",
-        "rid": ids::HumId::mint().to_string(),
+        "rid": hum_identity::HumId::mint().to_string(),
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "pubkey": hex::encode(key.pubkey_bytes()),

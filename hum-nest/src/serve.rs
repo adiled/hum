@@ -31,7 +31,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
 use hum_identity::HidPrefix;
-use mcp::protocol::ToolDef;
+use hum_mcp::protocol::ToolDef;
 use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
@@ -231,8 +231,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                         let cwd = sid_cwd.lock().await.get(&sid).cloned();
                         match cwd {
                             Some(cwd) => {
-                                let hum_sid = ids::HumId::parse(&sid)
-                                    .unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+                                let hum_sid = hum_identity::HumId::parse(&sid)
+                                    .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
                                 match worker.curate(&hum_sid, &cwd).await {
                                     Ok(report) => trace!(
                                         sid = %sid,
@@ -420,7 +420,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
-    let hum_sid = ids::HumId::parse(&sid).unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+    let hum_sid = hum_identity::HumId::parse(&sid).unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
     let mut base = Egg::new(hum_sid, model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);

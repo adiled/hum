@@ -271,3 +271,5 @@ pub fn expand_tilde(p: &std::path::Path) -> PathBuf {
     if s == "~" { return home(); }
     p.to_path_buf()
 }
+
+pub mod config;

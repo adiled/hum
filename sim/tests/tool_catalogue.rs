@@ -33,7 +33,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
 
     // Forager advertises two fs tools + provides=["fs"]. Build the
     // hello inline (attach_mock_forager doesn't take `provides`).
-    let forager_cid = ids::HumId::mint().to_string();
+    let forager_cid = hum_identity::HumId::mint().to_string();
     let _frx = humd.thrum.register_synthetic(forager_cid.clone());
     let forager_hello = json!({
         "chi":"hello","bee":["forager"],"hive":"humfs","version":"0.0.0",
@@ -50,7 +50,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     humd.thrum.inject_tone(&forager_cid, forager_hello).await;
 
     // Worker captures the chi:"prompt" tone humd sends.
-    let worker_cid = ids::HumId::mint().to_string();
+    let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
     let hello = json!({
         "chi":"hello","bee":["worker"],"hive":"claude-cli","version":"0.0.0",
@@ -115,9 +115,9 @@ fn parse_tool_def_normalizes_schema_field() {
     use serde_json::json;
     // Spot-check the parse via the bridge's set_catalogue: anything
     // that survives the merge must serialize back with a non-null
-    // inputSchema. We round-trip via mcp::catalogue::merge so any
+    // inputSchema. We round-trip via hum_mcp::catalogue::merge so any
     // ToolDef path is exercised.
-    let with_schema = serde_json::from_value::<mcp::protocol::ToolDef>(json!({
+    let with_schema = serde_json::from_value::<hum_mcp::protocol::ToolDef>(json!({
         "name":"read","description":"r",
         "inputSchema":{"type":"object","properties":{}},
     })).expect("ToolDef parses inputSchema");
@@ -126,7 +126,7 @@ fn parse_tool_def_normalizes_schema_field() {
     // Missing inputSchema entirely deserializes to Value::Null —
     // confirming why a shim emitting `parameters` would break the
     // wire if we didn't normalize.
-    let bare = serde_json::from_value::<mcp::protocol::ToolDef>(json!({
+    let bare = serde_json::from_value::<hum_mcp::protocol::ToolDef>(json!({
         "name":"read",
     })).expect("ToolDef parses without inputSchema");
     assert!(bare.input_schema.is_null(),

@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
-    let client_id = ids::HumId::mint().to_string();
+    let client_id = hum_identity::HumId::mint().to_string();
     let (reach, rx) = Reach::new(client_id.clone());
     let reach = Arc::new(reach);
 

@@ -44,7 +44,9 @@ pub enum IdError {
 
 impl fmt::Display for IdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self { Self::BadFormat => write!(f, "not a canonical HumId (52-char Crockford-base32)") }
+        match self {
+            Self::BadFormat => write!(f, "not a canonical HumId (52-char Crockford-base32)"),
+        }
     }
 }
 
@@ -52,10 +54,14 @@ impl std::error::Error for IdError {}
 
 impl HumId {
     /// Fresh id, ts-prefixed. Use for sessions, requests, calls.
-    pub fn mint() -> Self { Self(mint_id()) }
+    pub fn mint() -> Self {
+        Self(mint_id())
+    }
 
     /// Encode a 32-byte hash. Use for identity-derived ids.
-    pub fn from_hash(bytes: [u8; 32]) -> Self { Self(encode(&bytes)) }
+    pub fn from_hash(bytes: [u8; 32]) -> Self {
+        Self(encode(&bytes))
+    }
 
     /// Deterministic projection of a foreign string into HumId space.
     /// Same input → same output, forever. No bridge map needed.
@@ -68,10 +74,16 @@ impl HumId {
     }
 
     pub fn parse(s: &str) -> Result<Self, IdError> {
-        if is_valid_id(s) { Ok(Self(s.to_string())) } else { Err(IdError::BadFormat) }
+        if is_valid_id(s) {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(IdError::BadFormat)
+        }
     }
 
-    pub fn timestamp(&self) -> Option<u64> { timestamp_of(&self.0) }
+    pub fn timestamp(&self) -> Option<u64> {
+        timestamp_of(&self.0)
+    }
 
     /// Deterministic UUIDv5 projection — used at boundaries that require
     /// UUID shape (claude `--session-id`, etc).
@@ -79,25 +91,37 @@ impl HumId {
         Uuid::new_v5(&namespace, self.0.as_bytes())
     }
 
-    pub fn as_str(&self) -> &str { &self.0 }
-    pub fn into_string(self) -> String { self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn into_string(self) -> String {
+        self.0
+    }
 }
 
 impl fmt::Display for HumId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl AsRef<str> for HumId {
-    fn as_ref(&self) -> &str { &self.0 }
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
 impl FromStr for HumId {
     type Err = IdError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> { Self::parse(s) }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
 }
 
 impl From<HumId> for String {
-    fn from(h: HumId) -> String { h.0 }
+    fn from(h: HumId) -> String {
+        h.0
+    }
 }
 
 impl Serialize for HumId {
@@ -241,7 +265,10 @@ mod tests {
             .as_millis() as u64;
         assert!(is_valid_id(&id));
         let ts = timestamp_of(&id).expect("timestamp decodes");
-        assert!(ts >= before && ts <= after, "ts={ts} before={before} after={after}");
+        assert!(
+            ts >= before && ts <= after,
+            "ts={ts} before={before} after={after}"
+        );
     }
 
     #[test]
@@ -394,9 +421,13 @@ impl Hid {
     /// Convenience: random hid tagged as a humd. Matches the legacy
     /// `Hid::random_humd()` shape; preferred call sites use
     /// [`Hid::random`] directly.
-    pub fn random_humd() -> Self { Self::random(HidPrefix::Humd) }
+    pub fn random_humd() -> Self {
+        Self::random(HidPrefix::Humd)
+    }
 
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.bytes }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.bytes
+    }
 
     /// Full wire form: `<prefix>_<64 hex>`.
     pub fn to_hex(&self) -> String {
@@ -438,7 +469,10 @@ impl Hid {
         }
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&bytes_vec);
-        Ok(Hid { prefix: HidPrefix::Humd, bytes })
+        Ok(Hid {
+            prefix: HidPrefix::Humd,
+            bytes,
+        })
     }
 }
 
@@ -469,14 +503,18 @@ impl fmt::Display for Hid {
 
 impl Serialize for Hid {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         ser.serialize_str(&self.to_hex())
     }
 }
 
 impl<'de> Deserialize<'de> for Hid {
     fn deserialize<D>(de: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let s = String::deserialize(de)?;
         Hid::from_hex(&s).map_err(serde::de::Error::custom)
     }
@@ -487,6 +525,9 @@ impl From<[u8; 32]> for Hid {
     /// Migrate to `Hid { prefix, bytes }` directly when the role is
     /// known.
     fn from(bytes: [u8; 32]) -> Self {
-        Self { prefix: HidPrefix::Humd, bytes }
+        Self {
+            prefix: HidPrefix::Humd,
+            bytes,
+        }
     }
 }

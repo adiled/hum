@@ -9,7 +9,7 @@
 //! lives here; a remote hive that only needs the wire takes the leaf
 //! crates ([`hum-thrum`], [`hum-identity`], [`hum-mcp`]) directly.
 //!
-//! The [`drone`]-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
+//! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
 //! also lives here (patterns for chat-LLM context-loss detection).
 
 use std::collections::HashMap;
@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use ids::HumId;
+use hum_identity::HumId;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -30,7 +31,7 @@ pub mod serve;
 pub mod suspicion_regex;
 
 pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
-pub use mcp::protocol::{ToolDef, ToolResult};
+pub use hum_mcp::protocol::{ToolDef, ToolResult};
 pub use serve::{serve_worker, HiveAdvert};
 pub use suspicion_regex::RegexClassifier;
 
@@ -150,6 +151,55 @@ pub struct CurateReport {
 impl CurateReport {
     pub fn trimmed(&self) -> u64 {
         self.bytes_before.saturating_sub(self.bytes_after)
+    }
+}
+
+/// How loud a classifier is shouting about a piece of LLM output.
+///
+/// - `None`     — text looks fine
+/// - `Soft`     — flagged for evaluator-driven adjudication
+/// - `Heavy`    — strongly flagged; evaluator may still confirm
+/// - `Critical` — bypass the evaluator and swallow immediately
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Suspicion {
+    None,
+    Soft,
+    Heavy,
+    Critical,
+}
+
+impl Suspicion {
+    /// True when any tier matched.
+    pub fn flagged(self) -> bool {
+        !matches!(self, Suspicion::None)
+    }
+}
+
+/// Context-loss heuristic seam.
+///
+/// The drone calls this on `TurnEnd` (and during `assess`) to score
+/// the accumulated response text. Implementations decide which
+/// patterns are which severity; the drone only branches on the
+/// returned [`Suspicion`].
+///
+/// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
+/// Concrete pattern-bank impls live in this crate — see
+/// [`suspicion_regex`] for the regex-driven one tuned for chat-LLM
+/// context loss.
+pub trait Classifier: Send + Sync {
+    fn classify(&self, text: &str) -> Suspicion;
+}
+
+/// No-op default — every input is `Suspicion::None`. Drone running with
+/// this classifier behaves as a pure channel-health sentinel; it
+/// never reaches the swallow path on its own.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopClassifier;
+
+impl Classifier for NoopClassifier {
+    fn classify(&self, _text: &str) -> Suspicion {
+        Suspicion::None
     }
 }
 

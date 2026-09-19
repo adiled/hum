@@ -31,7 +31,7 @@ pub mod sign;
 pub mod snapshot;
 
 pub use ed25519_dalek::{SigningKey as Key, VerifyingKey as PubKey};
-pub use ids::HumId;
+pub use hum_identity::HumId;
 
 pub type Seq = u64;
 pub type Hash32 = [u8; 32];

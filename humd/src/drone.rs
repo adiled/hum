@@ -16,58 +16,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hum_nest::{Classifier, NoopClassifier, Suspicion};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thrum_core::{Chi, Tone};
-
-/// How loud a classifier is shouting about a piece of LLM output.
-///
-/// - `None`     — text looks fine
-/// - `Soft`     — flagged for evaluator-driven adjudication
-/// - `Heavy`    — strongly flagged; evaluator may still confirm
-/// - `Critical` — bypass the evaluator and swallow immediately
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Suspicion {
-    None,
-    Soft,
-    Heavy,
-    Critical,
-}
-
-impl Suspicion {
-    /// True when any tier matched.
-    pub fn flagged(self) -> bool {
-        !matches!(self, Suspicion::None)
-    }
-}
-
-/// Context-loss heuristic seam.
-///
-/// The drone calls this on `TurnEnd` (and during `assess`) to score
-/// the accumulated response text. Implementations decide which
-/// patterns are which severity; the drone only branches on the
-/// returned [`Suspicion`].
-///
-/// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
-/// Concrete pattern-bank impls live outside this crate — see
-/// `hum-nest` for the regex-driven one tuned for chat-LLM context loss.
-pub trait Classifier: Send + Sync {
-    fn classify(&self, text: &str) -> Suspicion;
-}
-
-/// No-op default — every input is `Suspicion::None`. Drone running with
-/// this classifier behaves as a pure channel-health sentinel; it
-/// never reaches the swallow path on its own.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoopClassifier;
-
-impl Classifier for NoopClassifier {
-    fn classify(&self, _text: &str) -> Suspicion {
-        Suspicion::None
-    }
-}
 
 /// What the drone thinks the host should do.
 ///
@@ -186,12 +139,20 @@ pub fn create_drone_state(sigil: impl Into<String>) -> DroneState {
 /// What the nestler tells us about the LLM stream.
 #[derive(Debug, Clone)]
 pub enum Observed {
-    ToolStart { name: Option<String> },
-    ToolEnd { name: Option<String> },
-    Tokens { delta: u64 },
+    ToolStart {
+        name: Option<String>,
+    },
+    ToolEnd {
+        name: Option<String>,
+    },
+    Tokens {
+        delta: u64,
+    },
     PermissionAsk,
     PermissionResolved,
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// Turn boundary — triggers suspicion classification on response_text.
     TurnEnd,
 }
@@ -319,9 +280,13 @@ impl Drone {
         if matches!(tone.chi(), Chi::Drone | Chi::Echo) {
             return;
         }
-        let Some(sigil) = tone.envelope.sigil.clone() else { return };
+        let Some(sigil) = tone.envelope.sigil.clone() else {
+            return;
+        };
         let mut states = self.inner.states.write();
-        let state = states.entry(sigil.clone()).or_insert_with(|| create_drone_state(sigil));
+        let state = states
+            .entry(sigil.clone())
+            .or_insert_with(|| create_drone_state(sigil));
         if tracked(tone.chi()) {
             state.pending_echoes.insert(
                 tone.rid().to_string(),
@@ -348,10 +313,13 @@ impl Drone {
                 }
             }
             Chi::Drone => {
-                let Some(sigil) = tone.envelope.sigil.clone() else { return };
+                let Some(sigil) = tone.envelope.sigil.clone() else {
+                    return;
+                };
                 let mut states = self.inner.states.write();
-                let state =
-                    states.entry(sigil.clone()).or_insert_with(|| create_drone_state(sigil));
+                let state = states
+                    .entry(sigil.clone())
+                    .or_insert_with(|| create_drone_state(sigil));
                 state.last_beat_received = now_ms();
                 state.missed_beats = 0;
                 if let Some(w) = tone.envelope.wane {
@@ -359,10 +327,13 @@ impl Drone {
                 }
             }
             _ => {
-                let Some(sigil) = tone.envelope.sigil.clone() else { return };
+                let Some(sigil) = tone.envelope.sigil.clone() else {
+                    return;
+                };
                 let mut states = self.inner.states.write();
-                let state =
-                    states.entry(sigil.clone()).or_insert_with(|| create_drone_state(sigil));
+                let state = states
+                    .entry(sigil.clone())
+                    .or_insert_with(|| create_drone_state(sigil));
                 // Process-death pulses reset per-process counters but leave the
                 // cross-process channel state (wane, echoes, missed beats) alone.
                 if tone.chi() == Chi::Pulse {
@@ -429,7 +400,10 @@ impl Drone {
             reason = format!("missed {} beats", state.missed_beats);
         } else if state.local_wane != state.remote_wane && state.last_beat_received > 0 {
             verdict = Verdict::Drift;
-            reason = format!("wane local={} remote={}", state.local_wane, state.remote_wane);
+            reason = format!(
+                "wane local={} remote={}",
+                state.local_wane, state.remote_wane
+            );
         } else {
             let now = now_ms();
             let deadline = state.rhythm_ms.saturating_mul(2) as i64;
@@ -456,8 +430,7 @@ impl Drone {
                 Suspicion::Critical => true,
                 Suspicion::Heavy | Suspicion::Soft => {
                     if let Some(eval) = self.inner.evaluator.as_ref() {
-                        eval.evaluate(&state.response_text, state)
-                            >= self.inner.swallow_threshold
+                        eval.evaluate(&state.response_text, state) >= self.inner.swallow_threshold
                     } else {
                         false
                     }
@@ -483,7 +456,10 @@ impl Drone {
             reason,
         };
 
-        Assessment { unified: verdict, raw }
+        Assessment {
+            unified: verdict,
+            raw,
+        }
     }
 
     /// Bump the local wane after a tone is committed. Hosts call this
@@ -569,13 +545,15 @@ fn derive_health(state: &DroneState) -> Health {
     }
     let now = now_ms();
     let deadline = state.rhythm_ms.saturating_mul(2) as i64;
-    if state.pending_echoes.values().any(|p| now - p.time_ms > deadline) {
+    if state
+        .pending_echoes
+        .values()
+        .any(|p| now - p.time_ms > deadline)
+    {
         return Health::Critical;
     }
 
-    if state.pending_permissions > 0
-        || state.inflight_tools > 3
-        || !state.pending_echoes.is_empty()
+    if state.pending_permissions > 0 || state.inflight_tools > 3 || !state.pending_echoes.is_empty()
     {
         return Health::Tense;
     }
@@ -681,17 +659,26 @@ mod tests {
     // nest-side crates (see `hum-nest`).
     struct AlwaysCritical;
     impl Classifier for AlwaysCritical {
-        fn classify(&self, _: &str) -> Suspicion { Suspicion::Critical }
+        fn classify(&self, _: &str) -> Suspicion {
+            Suspicion::Critical
+        }
     }
     struct AlwaysSoft;
     impl Classifier for AlwaysSoft {
-        fn classify(&self, _: &str) -> Suspicion { Suspicion::Soft }
+        fn classify(&self, _: &str) -> Suspicion {
+            Suspicion::Soft
+        }
     }
 
     #[test]
     fn critical_suspicion_swallows_without_evaluator() {
         let d = Drone::with_classifier(Arc::new(AlwaysCritical));
-        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
+        d.observed(
+            "s1",
+            Observed::TextDelta {
+                text: "anything past twenty characters".into(),
+            },
+        );
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
@@ -701,7 +688,12 @@ mod tests {
     #[test]
     fn soft_suspicion_alone_does_not_swallow() {
         let d = Drone::with_classifier(Arc::new(AlwaysSoft));
-        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
+        d.observed(
+            "s1",
+            Observed::TextDelta {
+                text: "anything past twenty characters".into(),
+            },
+        );
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
@@ -710,17 +702,21 @@ mod tests {
 
     struct YesEvaluator;
     impl Evaluator for YesEvaluator {
-        fn evaluate(&self, _text: &str, _state: &DroneState) -> f32 { 0.95 }
+        fn evaluate(&self, _text: &str, _state: &DroneState) -> f32 {
+            0.95
+        }
     }
 
     #[test]
     fn evaluator_promotes_soft_to_swallow() {
-        let d = Drone::with_classifier_and_evaluator(
-            Arc::new(AlwaysSoft),
-            Arc::new(YesEvaluator),
-            0.7,
+        let d =
+            Drone::with_classifier_and_evaluator(Arc::new(AlwaysSoft), Arc::new(YesEvaluator), 0.7);
+        d.observed(
+            "s1",
+            Observed::TextDelta {
+                text: "anything past twenty characters".into(),
+            },
         );
-        d.observed("s1", Observed::TextDelta { text: "anything past twenty characters".into() });
         d.observed("s1", Observed::TurnEnd);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
@@ -761,7 +757,8 @@ mod tests {
         let mut env = Envelope::new(Chi::Pulse, "rid-p");
         env.sigil = Some("s1".into());
         let mut t = Tone::new(env);
-        t.body.insert("kind".into(), Value::String("cell-died".into()));
+        t.body
+            .insert("kind".into(), Value::String("cell-died".into()));
         d.heard(&t);
         let st = d.inspect("s1").unwrap();
         assert_eq!(st.inflight_tools, 0);

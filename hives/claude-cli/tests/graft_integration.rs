@@ -34,7 +34,7 @@ fn home_lock() -> MutexGuard<'static, ()> {
 fn sandbox() -> (TempDir, MutexGuard<'static, ()>) {
     let guard = home_lock();
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("HOME", dir.path());
+    unsafe { std::env::set_var("HOME", dir.path()) };
     (dir, guard)
 }
 

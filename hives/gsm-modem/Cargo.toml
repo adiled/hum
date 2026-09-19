@@ -7,7 +7,6 @@ description = "Hum-on-a-burner-phone — USB GSM modem bee driven by AT commands
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
-ids = { path = "../../ids" }
 hum-identity = { path = "../../hum-identity" }
 tokio = { workspace = true }
 tokio-serial = "5"

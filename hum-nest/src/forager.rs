@@ -29,7 +29,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hum_identity::HidPrefix;
-use mcp::protocol::{ToolDef, ToolResult};
+use hum_mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 

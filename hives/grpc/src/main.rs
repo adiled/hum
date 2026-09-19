@@ -44,14 +44,14 @@ async fn bridge(
 
     // Persisted forager identity — humd dedupes us by this fbee_ hid
     // across reconnects; without it every reconnect leaks a manifest.
-    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, ids::HidPrefix::Fbee)
+    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
     // Send hello on connect so humd advertises us to the mesh.
     let hello = serde_json::json!({
         "chi": Chi::Hello,
-        "rid": ids::HumId::mint().to_string(),
+        "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
