@@ -1769,6 +1769,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek 2.2.0",
  "ensemble",
+ "governor",
  "hex",
  "hum-identity",
  "hum-mcp",
@@ -1783,7 +1784,6 @@ dependencies = [
  "tempfile",
  "thehum",
  "thrum-core",
- "thrumd",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4145,7 +4145,6 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "thrum-core",
- "thrumd",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4487,23 +4486,6 @@ dependencies = [
  "sha2 0.10.9",
  "strum 0.26.3",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "thrumd"
-version = "0.32.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "governor",
- "hum-identity",
- "hum-paths",
- "parking_lot",
- "serde",
- "serde_json",
- "thrum-core",
- "tokio",
- "tracing",
 ]
 
 [[package]]

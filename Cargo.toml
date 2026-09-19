@@ -13,7 +13,6 @@ exclude = [
 ]
 members = [
     "thrum-core",
-    "thrumd",
     "hum-paths",
     "hum-identity",
     "hum-thrum",

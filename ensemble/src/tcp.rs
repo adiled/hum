@@ -2,7 +2,7 @@
 //!
 //! NDJSON over `tokio::net::TcpStream`. One framing rule: each tone is
 //! a single JSON value followed by `\n`. Mirrors the unix-socket shape
-//! thrumd uses (`thrumd/src/conn.rs`) — same parser, different socket.
+//! humd's thrum module uses (`humd/src/thrumd/conn.rs`) — same parser, different socket.
 //!
 //! Auth lives one layer up: the ensemble's signed `chi:"hello"` exchange
 //! authenticates the peer once a connection is installed. This module
