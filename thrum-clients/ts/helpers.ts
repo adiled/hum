@@ -4,7 +4,7 @@
 // so the TS side cannot drift from the Rust side. If you need a new
 // helper, add it in Rust first and extend codegen's render_helpers.
 
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 
 /**
  * Deterministic identity for a (nest, session) pair.
@@ -22,10 +22,45 @@ export function sigil(sid: string, nest: string): string {
     .slice(0, 12);
 }
 
-/** Monotonic request id — base36 timestamp + counter. */
-let __ridCounter = 0;
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * Encode 32 bytes (48-bit ms prefix + 208 random bits, big-endian) as a
+ * 52-char Crockford base32 id. Mirrors hum_identity's encode bit-for-bit.
+ */
+export function humIdEncode(buf: Uint8Array): string {
+  let v = 0n;
+  for (const b of buf) v = (v << 8n) | BigInt(b);
+  v <<= 4n;
+  let out = "";
+  for (let i = 0; i < 52; i++) {
+    out += CROCKFORD[Number((v >> BigInt(255 - 5 * i)) & 0x1fn)];
+  }
+  return out;
+}
+
+/**
+ * Correlation id in canonical HumId form — 52-char Crockford base32,
+ * ts-prefixed, matching hum_identity::HumId::mint().
+ */
 export function rid(): string {
-  return `${Date.now().toString(36)}-${(__ridCounter++).toString(36)}`;
+  const buf = new Uint8Array(32);
+  let ms = BigInt(Date.now());
+  for (let i = 0; i < 6; i++) {
+    buf[5 - i] = Number(ms & 0xffn);
+    ms >>= 8n;
+  }
+  buf.set(randomBytes(26), 6);
+  return humIdEncode(buf);
+}
+
+/** True iff `value` is a 52-char Crockford base32 id. */
+export function isValidRid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length === 52 &&
+    [...value].every((c) => CROCKFORD.includes(c))
+  );
 }
 
 /** Absolute ms timestamp ms in the future. */

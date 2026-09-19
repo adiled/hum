@@ -38,39 +38,57 @@ fn run() -> Result<()> {
         positional
     };
 
-    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs())
-        .context("parse chi spec")?;
+    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs()).context("parse chi spec")?;
+    let proto = codegen::protocol::protocol_spec(
+        &paths::views_rs(),
+        &paths::envelope_rs(),
+        &paths::lib_rs(),
+    )
+    .context("parse protocol spec")?;
 
     for t in &targets {
-        run_target(t, &spec, check)?;
+        run_target(t, &spec, &proto, check)?;
     }
     Ok(())
 }
 
-fn run_target(target: &str, spec: &ChiSpec, check: bool) -> Result<()> {
-    let (chi_out, helpers_out, emit_chi, emit_helpers): (
+fn run_target(
+    target: &str,
+    spec: &ChiSpec,
+    proto: &codegen::protocol::ProtocolSpec,
+    check: bool,
+) -> Result<()> {
+    let (chi_out, helpers_out, protocol_out, emit_chi, emit_helpers, emit_protocol): (
         std::path::PathBuf,
         std::path::PathBuf,
+        std::path::PathBuf,
+        Box<dyn Fn(&std::path::Path) -> Result<()>>,
         Box<dyn Fn(&std::path::Path) -> Result<()>>,
         Box<dyn Fn(&std::path::Path) -> Result<()>>,
     ) = match target {
         "ts" => (
             paths::ts_chi(),
             paths::ts_helpers(),
+            paths::ts_protocol(),
             Box::new(|p| codegen::emit_ts(spec, p)),
             Box::new(codegen::emit_helpers),
+            Box::new(|p| codegen::protocol::emit_protocol_ts(proto, p)),
         ),
         "python" | "py" => (
             paths::py_chi(),
             paths::py_helpers(),
+            paths::py_protocol(),
             Box::new(|p| codegen::emit_py(spec, p)),
             Box::new(codegen::emit_py_helpers),
+            Box::new(|p| codegen::protocol::emit_protocol_py(proto, p)),
         ),
         "go" => (
             paths::go_chi(),
             paths::go_helpers(),
+            paths::go_protocol(),
             Box::new(|p| codegen::emit_go(spec, p)),
             Box::new(codegen::emit_go_helpers),
+            Box::new(|p| codegen::protocol::emit_protocol_go(proto, p)),
         ),
         other => anyhow::bail!("unknown target {other}; valid: ts, python, go"),
     };
@@ -78,20 +96,34 @@ fn run_target(target: &str, spec: &ChiSpec, check: bool) -> Result<()> {
     if check {
         check_against(&chi_out, &emit_chi)?;
         check_against(&helpers_out, &emit_helpers)?;
-        eprintln!("codegen: {} + {} up to date", chi_out.display(), helpers_out.display());
+        check_against(&protocol_out, &emit_protocol)?;
+        eprintln!(
+            "codegen: {} + {} + {} up to date",
+            chi_out.display(),
+            helpers_out.display(),
+            protocol_out.display()
+        );
     } else {
         emit_chi(&chi_out)?;
         emit_helpers(&helpers_out)?;
+        emit_protocol(&protocol_out)?;
         eprintln!(
-            "codegen {target}: {} ({} chi, {} pulse) -> {} + {}",
-            spec.version, spec.chi.len(), spec.pulse.len(),
-            chi_out.display(), helpers_out.display(),
+            "codegen {target}: {} ({} chi, {} pulse) -> {} + {} + {}",
+            spec.version,
+            spec.chi.len(),
+            spec.pulse.len(),
+            chi_out.display(),
+            helpers_out.display(),
+            protocol_out.display(),
         );
     }
     Ok(())
 }
 
-fn check_against(output: &std::path::Path, emit: &dyn Fn(&std::path::Path) -> Result<()>) -> Result<()> {
+fn check_against(
+    output: &std::path::Path,
+    emit: &dyn Fn(&std::path::Path) -> Result<()>,
+) -> Result<()> {
     let tmp = tempfile_path(output);
     emit(&tmp)?;
     let generated = std::fs::read(&tmp).context("read tmp")?;

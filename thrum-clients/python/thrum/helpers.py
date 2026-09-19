@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import threading
 import time
 from typing import Any, Mapping
@@ -29,28 +30,30 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-_RID_LOCK = threading.Lock()
-_RID_COUNTER = 0
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
-def _base36(n: int) -> str:
-    if n == 0:
-        return "0"
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    out = []
-    while n > 0:
-        out.append(alphabet[n % 36])
-        n //= 36
-    return "".join(reversed(out))
+def _hum_id_from_bytes(buf: bytes) -> str:
+    """Encode 32 bytes (48-bit ms prefix + 208 random bits) as a 52-char
+    Crockford base32 id. Mirrors hum_identity's encode bit-for-bit."""
+    v = int.from_bytes(buf, "big") << 4
+    return "".join(_CROCKFORD[(v >> (255 - 5 * i)) & 0x1F] for i in range(52))
 
 
 def rid() -> str:
-    """Monotonic correlation id: '{base36-ms}-{base36-counter}'."""
-    global _RID_COUNTER
-    with _RID_LOCK:
-        n = _RID_COUNTER
-        _RID_COUNTER += 1
-    return f"{_base36(now_ms())}-{_base36(n)}"
+    """Correlation id in canonical HumId form: 52-char Crockford base32,
+    ts-prefixed, matching hum_identity::HumId::mint()."""
+    ts = int(time.time() * 1000)
+    buf = ts.to_bytes(6, "big") + secrets.token_bytes(26)
+    return _hum_id_from_bytes(buf)
+
+
+def is_valid_rid(value: str) -> bool:
+    """True iff `value` is a 52-char Crockford base32 id."""
+    return (
+        len(value) == 52
+        and all(c in _CROCKFORD for c in value)
+    )
 
 
 def dusk_in(ms: int) -> int:
