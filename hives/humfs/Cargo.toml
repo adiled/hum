@@ -9,7 +9,6 @@ description = "humfs — hum's native filesystem forager hive. Symbol-aware code
 hum-paths = { path = "../../hum-paths" }
 nest-common = { path = "../common" }
 thrum-core = { path = "../../thrum-core" }
-nest = { path = "../../nest" }
 config = { path = "../../config" }
 
 tokio = { workspace = true }

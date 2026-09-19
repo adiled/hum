@@ -13,7 +13,7 @@
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
 //! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
 //! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
-//!   worker's tool-result encoder (`nest::encode_tool_result`).
+//!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
 //!
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
@@ -32,7 +32,7 @@ use tracing::{debug, info, trace, warn};
 
 use hum_identity::HidPrefix;
 use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
+use hum_nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
 use crate::identity::load_or_mint_bee_key;
@@ -115,9 +115,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     //   hid, bee, hive (kind), models, propensity, version,
     //   protoVersion, source, chis.
     let propensity_str = match worker.propensity() {
-        nest::Propensity::StatefulSession => "stateful_session",
-        nest::Propensity::StatelessPerCall => "stateless_per_call",
-        nest::Propensity::EphemeralPerCall => "ephemeral_per_call",
+        hum_nest::Propensity::StatefulSession => "stateful_session",
+        hum_nest::Propensity::StatelessPerCall => "stateless_per_call",
+        hum_nest::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
         "chi": "hello",

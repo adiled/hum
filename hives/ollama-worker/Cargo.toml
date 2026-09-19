@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 hum-paths = { path = "../../hum-paths" }
-nest = { path = "../../nest" }
+hum-nest = { path = "../../hum-nest" }
 nest-common = { path = "../common" }
 ids = { path = "../../ids" }
 tokio = { workspace = true, features = ["full"] }

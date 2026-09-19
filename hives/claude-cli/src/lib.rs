@@ -1,8 +1,8 @@
 //! claude-cli — the pipe-mode WorkerBee for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
-//! Takes a [`nest::Egg`], builds the CLI invocation, runs the
-//! subprocess, exposes stdin/stdout/exit through [`nest::Cell`]. The
+//! Takes a [`hum_nest::Egg`], builds the CLI invocation, runs the
+//! subprocess, exposes stdin/stdout/exit through [`hum_nest::Cell`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
 
 pub mod graft;
@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Propensity, Cell, Egg, WorkerBee};
+use hum_nest::{Propensity, Cell, Egg, WorkerBee};
 
 pub struct ClaudeCliWorker;
 

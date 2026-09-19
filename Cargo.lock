@@ -571,6 +571,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "command-group",
+ "hum-nest",
  "hum-paths",
  "ids",
  "nest",
@@ -588,8 +589,8 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "hum-nest",
  "hum-paths",
- "nest",
  "nest-common",
  "portable-pty",
  "serde_json",
@@ -1944,6 +1945,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hum-nest"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ids",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hum-paths"
 version = "0.32.0"
 dependencies = [
@@ -1999,7 +2014,6 @@ dependencies = [
  "mcp",
  "metrics",
  "metrics-exporter-prometheus",
- "nest",
  "parking_lot",
  "penny",
  "rand 0.8.6",
@@ -2024,7 +2038,6 @@ dependencies = [
  "config",
  "hum-paths",
  "mime_guess",
- "nest",
  "nest-common",
  "parking_lot",
  "regex",
@@ -3001,19 +3014,12 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 name = "nest"
 version = "0.32.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "command-group",
- "ids",
+ "hum-nest",
  "libc",
- "lru 0.12.5",
  "metrics",
- "parking_lot",
- "portable-pty",
  "serde",
- "serde_json",
  "sysinfo",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3028,17 +3034,16 @@ dependencies = [
  "axum",
  "drone",
  "ed25519-dalek 2.2.0",
- "ensemble",
  "futures",
  "hum-identity",
  "hum-mcp",
+ "hum-nest",
  "hum-paths",
  "hum-thrum",
  "ids",
  "lru 0.12.5",
  "mcp",
  "metrics",
- "nest",
  "parking_lot",
  "rand 0.8.6",
  "regex",
@@ -3552,9 +3557,9 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "hum-nest",
  "hum-paths",
  "ids",
- "nest",
  "nest-common",
  "reqwest 0.12.28",
  "serde",
@@ -4859,7 +4864,6 @@ dependencies = [
  "humd",
  "ids",
  "mcp",
- "nest",
  "parking_lot",
  "serde_json",
  "thrum-core",

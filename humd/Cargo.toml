@@ -26,7 +26,6 @@ mcp = { path = "../mcp" }
 config = { path = "../config" }
 ids = { path = "../ids" }
 drift = { path = "../drift" }
-nest = { path = "../nest" }
 penny = { path = "../penny" }
 thehum = { path = "../thehum" }
 drone = { path = "../drone" }

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 hum-paths = { path = "../../hum-paths" }
+hum-nest = { path = "../../hum-nest" }
 nest = { path = "../../nest" }
 nest-common = { path = "../common" }
 ids = { path = "../../ids" }

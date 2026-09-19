@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use nest::{Cell, Egg, WorkerBee};
+use hum_nest::{Cell, Egg, WorkerBee};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {

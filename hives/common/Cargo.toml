@@ -10,10 +10,9 @@ hum-paths = { path = "../../hum-paths" }
 hum-identity = { path = "../../hum-identity" }
 hum-thrum = { path = "../../hum-thrum" }
 hum-mcp = { path = "../../hum-mcp" }
+hum-nest = { path = "../../hum-nest" }
 drone = { path = "../../drone" }
-ensemble = { path = "../../ensemble" }
 mcp = { path = "../../mcp" }
-nest = { path = "../../nest" }
 ids = { path = "../../ids" }
 thrum-core = { path = "../../thrum-core" }
 async-trait = "0.1"

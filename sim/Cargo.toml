@@ -10,7 +10,6 @@ ensemble = { path = "../ensemble" }
 humd = { path = "../humd" }
 thrum-core = { path = "../thrum-core" }
 thrumd = { path = "../thrumd" }
-nest = { path = "../nest" }
 ids = { path = "../ids" }
 config = { path = "../config" }
 hum-paths = { path = "../hum-paths" }

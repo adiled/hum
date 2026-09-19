@@ -14,3 +14,6 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 metrics = "0.23"
 serde = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+libc = "0.2"
