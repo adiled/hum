@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
     // bees/paid-oracle.key, reused every boot. humd dedupes us across
     // reconnects by this fbee_ hid; without it, each reconnect would
     // leak a stale manifest.
-    let bee_key = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
+    let bee_key = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
         .context("load/mint paid-oracle identity")?;
     let hid = bee_key.hid.to_hex();
 

@@ -8,13 +8,13 @@
 //! Each bidi stream opens its own thrum connection so concurrent gRPC
 //! clients can use overlapping sids without colliding handler state.
 
+use std::path::Path;
 use std::pin::Pin;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use hum_thrum as thrum;
 use serde_json::Value;
 use thrum_core::{Chi, THRUM_VERSION};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{Stream, StreamExt};
@@ -39,13 +39,12 @@ async fn bridge(
     mut incoming: Streaming<Tone>,
     out: mpsc::Sender<Result<Tone, Status>>,
 ) -> Result<()> {
-    let sock = UnixStream::connect(humd_sock_path()).await?;
-    let (rd, mut wr) = sock.into_split();
-    let mut lines = BufReader::new(rd).lines();
+    let (reader, write_half) = thrum::connect(Path::new(&humd_sock_path())).await
+        .with_context(|| format!("connect {}", humd_sock_path()))?;
 
     // Persisted forager identity — humd dedupes us by this fbee_ hid
     // across reconnects; without it every reconnect leaks a manifest.
-    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
+    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, ids::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
@@ -65,9 +64,7 @@ async fn bridge(
         },
         "source": "https://github.com/adiled/hum/tree/main/hives/grpc"
     });
-    let mut buf = serde_json::to_string(&hello)?;
-    buf.push('\n');
-    wr.write_all(buf.as_bytes()).await?;
+    thrum::send_json(&write_half, &hello).await?;
 
     // gRPC → thrum
     let to_thrum = tokio::spawn(async move {
@@ -94,36 +91,30 @@ async fn bridge(
                 }))
                 .unwrap_or_default()
             };
-            let mut framed = line;
-            framed.push('\n');
-            if wr.write_all(framed.as_bytes()).await.is_err() {
+            let tone: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if thrum::send_json(&write_half, &tone).await.is_err() {
                 break;
             }
         }
     });
 
     // thrum → gRPC
-    while let Some(line) = lines.next_line().await? {
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "thrum.parse");
-                continue;
-            }
-        };
-        let wire = Tone {
-            chi: tone.get("chi").and_then(Value::as_str).unwrap_or("").into(),
-            sid: tone.get("sid").and_then(Value::as_str).unwrap_or("").into(),
-            rid: tone.get("rid").and_then(Value::as_str).unwrap_or("").into(),
-            body: line.into_bytes(),
-        };
-        if out.send(Ok(wire)).await.is_err() {
-            break;
-        }
-    }
+    thrum::read_tones(reader, |tone| {
+        let out = out.clone();
+        tokio::spawn(async move {
+            let wire = Tone {
+                chi: tone.get("chi").and_then(Value::as_str).unwrap_or("").into(),
+                sid: tone.get("sid").and_then(Value::as_str).unwrap_or("").into(),
+                rid: tone.get("rid").and_then(Value::as_str).unwrap_or("").into(),
+                body: tone.to_string().into_bytes(),
+            };
+            if out.send(Ok(wire)).await.is_err() {}
+        });
+    })
+    .await?;
     let _ = to_thrum.await;
     Ok(())
 }

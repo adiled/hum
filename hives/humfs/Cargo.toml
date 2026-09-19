@@ -7,7 +7,7 @@ description = "humfs — hum's native filesystem forager hive. Symbol-aware code
 
 [dependencies]
 hum-paths = { path = "../../hum-paths" }
-nest-common = { path = "../common" }
+hum-nest = { path = "../../hum-nest" }
 thrum-core = { path = "../../thrum-core" }
 config = { path = "../../config" }
 

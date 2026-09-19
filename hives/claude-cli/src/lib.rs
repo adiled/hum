@@ -230,7 +230,7 @@ impl WorkerBee for ClaudeCliWorker {
             }
         });
 
-        let (rx_exit, cancel) = nest::lifecycle::tend(child);
+        let (rx_exit, cancel) = hum_nest::lifecycle::tend(child);
 
         trace!(target: "claude-cli", "spawned pid={:?}", pid);
 

@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_common::{serve_worker, HiveAdvert};
+use hum_nest::{serve_worker, HiveAdvert};
 
 use lib::OllamaWorker;
 mod lib;

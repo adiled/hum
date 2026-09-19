@@ -167,7 +167,7 @@ async fn run_prompt(
     let mut lines = BufReader::new(rd).lines();
 
     // Persisted forager identity — humd dedupes by this fbee_ hid.
-    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
+    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 

@@ -32,11 +32,11 @@ use tracing::{debug, info, trace, warn};
 
 use hum_identity::HidPrefix;
 use mcp::protocol::ToolDef;
-use hum_nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
+use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
-use crate::identity::load_or_mint_bee_key;
-use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
+use hum_identity::load_or_mint_bee_key;
+use hum_mcp::{spawn_local_mcp, McpBridge};
 
 fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock_resolved()
@@ -115,9 +115,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     //   hid, bee, hive (kind), models, propensity, version,
     //   protoVersion, source, chis.
     let propensity_str = match worker.propensity() {
-        hum_nest::Propensity::StatefulSession => "stateful_session",
-        hum_nest::Propensity::StatelessPerCall => "stateless_per_call",
-        hum_nest::Propensity::EphemeralPerCall => "ephemeral_per_call",
+        crate::Propensity::StatefulSession => "stateful_session",
+        crate::Propensity::StatelessPerCall => "stateless_per_call",
+        crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
         "chi": "hello",

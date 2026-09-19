@@ -431,10 +431,9 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "bp7 0.10.7",
- "ensemble",
+ "hum-identity",
  "hum-paths",
  "ids",
- "nest-common",
  "serde",
  "serde_json",
  "thrum-core",
@@ -574,8 +573,6 @@ dependencies = [
  "hum-nest",
  "hum-paths",
  "ids",
- "nest",
- "nest-common",
  "serde_json",
  "tempfile",
  "tokio",
@@ -591,7 +588,6 @@ dependencies = [
  "async-trait",
  "hum-nest",
  "hum-paths",
- "nest-common",
  "portable-pty",
  "serde_json",
  "tokio",
@@ -1633,10 +1629,10 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-stream",
- "ensemble",
+ "hum-identity",
  "hum-paths",
+ "hum-thrum",
  "ids",
- "nest-common",
  "prost",
  "serde_json",
  "thrum-core",
@@ -1654,12 +1650,11 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "bytes",
- "ensemble",
  "futures-util",
  "hex",
+ "hum-identity",
  "hum-paths",
  "ids",
- "nest-common",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1950,12 +1945,27 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "command-group",
+ "drone",
+ "hum-identity",
+ "hum-mcp",
+ "hum-paths",
+ "hum-thrum",
  "ids",
  "libc",
+ "lru 0.12.5",
+ "mcp",
+ "metrics",
+ "rand 0.8.6",
+ "regex",
  "serde",
  "serde_json",
+ "sysinfo",
+ "tempfile",
+ "thrum-core",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -2036,9 +2046,9 @@ dependencies = [
  "async-trait",
  "base64",
  "config",
+ "hum-nest",
  "hum-paths",
  "mime_guess",
- "nest-common",
  "parking_lot",
  "regex",
  "serde",
@@ -3011,53 +3021,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
-name = "nest"
-version = "0.32.0"
-dependencies = [
- "command-group",
- "hum-nest",
- "libc",
- "metrics",
- "serde",
- "sysinfo",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "nest-common"
-version = "0.32.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "drone",
- "ed25519-dalek 2.2.0",
- "futures",
- "hum-identity",
- "hum-mcp",
- "hum-nest",
- "hum-paths",
- "hum-thrum",
- "ids",
- "lru 0.12.5",
- "mcp",
- "metrics",
- "parking_lot",
- "rand 0.8.6",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thrum-core",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "netdev"
 version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3560,7 +3523,6 @@ dependencies = [
  "hum-nest",
  "hum-paths",
  "ids",
- "nest-common",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3609,11 +3571,10 @@ name = "paid-oracle"
 version = "0.32.0"
 dependencies = [
  "anyhow",
- "ensemble",
  "hex",
+ "hum-identity",
  "hum-paths",
  "ids",
- "nest-common",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",

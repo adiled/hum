@@ -87,9 +87,9 @@ fn bank() -> &'static Bank {
         let soft_src: Vec<&str> =
             COMPENSATION.iter().chain(FORMALITY_SHIFT.iter()).copied().collect();
         Bank {
-            critical: RegexSet::new(&crit_src).expect("nest-common: critical patterns compile"),
-            heavy: RegexSet::new(&heavy_src).expect("nest-common: heavy patterns compile"),
-            soft: RegexSet::new(&soft_src).expect("nest-common: soft patterns compile"),
+            critical: RegexSet::new(&crit_src).expect("hum-nest: critical patterns compile"),
+            heavy: RegexSet::new(&heavy_src).expect("hum-nest: heavy patterns compile"),
+            soft: RegexSet::new(&soft_src).expect("hum-nest: soft patterns compile"),
         }
     })
 }

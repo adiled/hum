@@ -16,8 +16,6 @@ members = [
     "hum",
     "hum-nest",
     "mcp",
-    "nest",
-    "hives/common",
     "hives/claude-cli",
     "hives/claude-repl",
     "hives/humfs",

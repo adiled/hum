@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_common::{serve_forager, ForagerAdvert};
+use hum_nest::{serve_forager, ForagerAdvert};
 use tracing_subscriber::EnvFilter;
 
 mod ast;

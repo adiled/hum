@@ -10,7 +10,7 @@
 //! any specific model — context-loss pattern detection plugs in via
 //! the [`Classifier`] trait. The default [`NoopClassifier`] never
 //! flags anything; concrete classifiers live in nest-side crates
-//! (e.g. `nest-common::RegexClassifier`).
+//! (e.g. `hum-nest::RegexClassifier`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ impl Suspicion {
 ///
 /// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
 /// Concrete pattern-bank impls live outside this crate — see
-/// `nest-common` for the regex-driven one tuned for chat-LLM context loss.
+/// `hum-nest` for the regex-driven one tuned for chat-LLM context loss.
 pub trait Classifier: Send + Sync {
     fn classify(&self, text: &str) -> Suspicion;
 }
@@ -678,7 +678,7 @@ mod tests {
 
     // Canned classifiers exercise the drone's branching logic without
     // depending on a particular pattern bank — pattern banks live in
-    // nest-side crates (see `nest-common`).
+    // nest-side crates (see `hum-nest`).
     struct AlwaysCritical;
     impl Classifier for AlwaysCritical {
         fn classify(&self, _: &str) -> Suspicion { Suspicion::Critical }

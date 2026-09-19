@@ -1,13 +1,16 @@
-//! The worker contract — `WorkerBee` trait + `Egg`/`Cell` shape +
-//! `Propensity`/`Pollen` + tone encoders. A leaf crate: a remote hive
-//! that *is* a worker depends on this for the compute-side contract
-//! without pulling the process-supervision machinery (command-group,
-//! portable-pty, sysinfo, metrics) that only process-spawning harnesses
-//! need.
+//! hum's hive-side kernel. The worker contract ([`WorkerBee`], [`Egg`],
+//! [`Cell`], [`Propensity`], [`Pollen`], tone encoders), the process
+//! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
+//! sampling / [`limits`] rlimits), and the wire-semantics loops that
+//! wrap [`hum-thrum`] for the two bee shapes — [`serve`] (`serve_worker`)
+//! and [`forager`] (`serve_forager`).
 //!
-//! The process runtime that realizes this contract — child-process-group
-//! ownership, per-cell metrics sampling, rlimit wiring — lives in the
-//! [`nest`] crate, which re-exports these types for back-compat.
+//! One crate, no `nest`-common indirection: a hive that needs the nest
+//! lives here; a remote hive that only needs the wire takes the leaf
+//! crates ([`hum-thrum`], [`hum-identity`], [`hum-mcp`]) directly.
+//!
+//! The [`drone`]-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
+//! also lives here (patterns for chat-LLM context-loss detection).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +22,17 @@ use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
+pub mod forager;
+pub mod lifecycle;
 pub mod limits;
+pub mod metrics;
+pub mod serve;
+pub mod suspicion_regex;
+
+pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
+pub use mcp::protocol::{ToolDef, ToolResult};
+pub use serve::{serve_worker, HiveAdvert};
+pub use suspicion_regex::RegexClassifier;
 
 /// An egg — what a worker bee needs to raise a cell.
 #[derive(Debug, Clone)]

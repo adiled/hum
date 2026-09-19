@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use base64::Engine;
-use nest_common::{ToolDef, ToolResult};
+use hum_nest::{ToolDef, ToolResult};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};

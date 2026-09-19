@@ -33,7 +33,7 @@ use mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 
-use crate::identity::load_or_mint_bee_key;
+use hum_identity::load_or_mint_bee_key;
 
 /// Forager-side tool dispatcher. The forager binary owns its own
 /// state (cwd, fs.roots snapshot, permission cache); this trait is
