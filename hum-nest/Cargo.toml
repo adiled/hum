@@ -1,0 +1,18 @@
+[package]
+name = "hum-nest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Worker contract for hum — WorkerBee/Egg/Cell/Propensity/Pollen + tone encoders. Daemon-independent leaf: no process supervision, no pty, no metrics."
+
+[dependencies]
+ids = { path = "../ids" }
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = "0.7"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
