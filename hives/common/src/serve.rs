@@ -129,7 +129,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "error", "tool-call"],
+        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call"],
         "source": advert.source.clone().unwrap_or_default(),
     });
     hum_thrum::send_json(&write_half, &hello).await?;
@@ -158,6 +158,11 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
+    // sid → cwd, learned from prompts. A curate names a sid but no cwd,
+    // and the transcript it trims lives under one.
+    let sid_cwd: Arc<Mutex<LruCache<String, String>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
+
     hum_thrum::read_tones(reader, |tone| {
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
@@ -181,12 +186,22 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
                     bridge.set_catalogue(forager_tools, nestler_tools, &provided);
                 }
+                // Learn sid → cwd so a later chi:"curate" (which names a
+                // sid but no cwd) can find the transcript under it.
+                let cwd = if !sid.is_empty() {
+                    tone.get("cwd").and_then(Value::as_str).map(str::to_string)
+                } else { None };
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
                 let hive = advert.hive.clone();
                 let mcp_url = mcp_url.clone();
+                let sid_cwd = sid_cwd.clone();
+                let sid2 = sid.clone();
                 tokio::spawn(async move {
+                    if let Some(cwd) = cwd {
+                        sid_cwd.lock().await.put(sid2, cwd);
+                    }
                     if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
@@ -203,6 +218,33 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                                 let _ = bundle.stdin.send(encode_cancel(rid)).await;
                             }
                             bundle.cancel.cancel();
+                        }
+                    });
+                }
+            }
+            "curate" => {
+                if !sid.is_empty() {
+                    let sid_cwd = sid_cwd.clone();
+                    let worker = worker.clone();
+                    let sid = sid.clone();
+                    tokio::spawn(async move {
+                        let cwd = sid_cwd.lock().await.get(&sid).cloned();
+                        match cwd {
+                            Some(cwd) => {
+                                let hum_sid = ids::HumId::parse(&sid)
+                                    .unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+                                match worker.curate(&hum_sid, &cwd).await {
+                                    Ok(report) => trace!(
+                                        sid = %sid,
+                                        trimmed = report.trimmed(),
+                                        "worker.curate.done"
+                                    ),
+                                    Err(e) => warn!(sid = %sid, err = %e, "worker.curate.failed"),
+                                }
+                            }
+                            // No prompt has named a cwd for this sid yet, so
+                            // there is no transcript of ours to curate.
+                            None => trace!(sid = %sid, "worker.curate.unknown-sid"),
                         }
                     });
                 }
