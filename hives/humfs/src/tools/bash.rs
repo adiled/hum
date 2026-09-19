@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::process::Stdio;
 use std::time::Duration;
 
-use nest_common::{ToolDef, ToolResult};
+use hum_nest::{ToolDef, ToolResult};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};

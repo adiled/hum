@@ -115,14 +115,14 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let mut lines = BufReader::new(rd).lines();
 
     // Persisted forager identity — humd dedupes by this fbee_ hid.
-    let hid = nest_common::load_or_mint_bee_key(HIVE_NAME, ensemble::HidPrefix::Fbee)
+    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
         .map(|k| k.hid.to_hex())
         .unwrap_or_default();
 
     // Hello (per WIRE.md §Handshake).
     let hello = json!({
         "chi": Chi::Hello,
-        "rid": ids::HumId::mint().to_string(),
+        "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
         "hid": hid,
         "bee": ["forager"],
@@ -137,7 +137,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     // Prompt.
     let prompt = json!({
         "chi": Chi::Prompt,
-        "rid": ids::HumId::mint().to_string(),
+        "rid": hum_identity::HumId::mint().to_string(),
         "sid": sid,
         "text": sms.body,
         "modelId": cfg.model,

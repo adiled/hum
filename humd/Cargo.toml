@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 hum-paths = { path = "../hum-paths" }
+hum-nest = { path = "../hum-nest" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -22,14 +23,9 @@ anyhow = { workspace = true }
 # Path deps on every workspace crate.
 thrum-core = { path = "../thrum-core" }
 thrumd = { path = "../thrumd" }
-mcp = { path = "../mcp" }
-config = { path = "../config" }
-ids = { path = "../ids" }
-drift = { path = "../drift" }
-nest = { path = "../nest" }
-penny = { path = "../penny" }
+hum-mcp = { path = "../hum-mcp" }
+hum-identity = { path = "../hum-identity" }
 thehum = { path = "../thehum" }
-drone = { path = "../drone" }
 ensemble = { path = "../ensemble" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -40,6 +36,7 @@ rand = { workspace = true }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -47,6 +44,7 @@ serde_json = { workspace = true }
 tempfile = "3"
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+chrono = { workspace = true }
 
 [[example]]
 name = "smoke"

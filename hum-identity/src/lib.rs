@@ -12,9 +12,9 @@
 //! write-and-rename. Same convention as humd's daemon key — the only
 //! difference is the dir + role tagging.
 //!
-//! This is a *leaf* crate for remote hives: it depends only on `ids`
-//! (for [`Hid`]) and `hum-paths` (for the seed path). No daemon, mesh,
-//! or nest machinery.
+//! This is a *leaf* crate for remote hives: it depends only on
+//! `hum-paths` (for the seed path) and its own bundled `ids` module
+//! for [`Hid`]. No daemon, mesh, or nest machinery.
 
 use std::fs;
 use std::io::Write;
@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use ed25519_dalek::SigningKey;
-pub use ids::{Hid, HidPrefix};
+mod ids;
+pub use ids::*;
 use rand::RngCore;
 use tracing::{info, trace};
 
@@ -52,8 +53,7 @@ pub fn bee_key_path(kind: &str) -> PathBuf {
 pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
     let path = bee_key_path(kind);
     if path.exists() {
-        let bytes = fs::read(&path)
-            .with_context(|| format!("read bee key {}", path.display()))?;
+        let bytes = fs::read(&path).with_context(|| format!("read bee key {}", path.display()))?;
         if bytes.len() != 32 {
             return Err(anyhow!(
                 "bee key at {} is {} bytes, expected 32",
@@ -80,8 +80,7 @@ pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
 
 fn persist(path: &Path, seed: &[u8; 32]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
     let tmp = match path.file_name() {
         Some(name) => {
@@ -134,7 +133,7 @@ mod tests {
     fn round_trip_worker_key_then_different_kind() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
         let first = load_or_mint_bee_key("claude-cli", HidPrefix::Wbee).expect("mint");
         assert_eq!(first.hid.prefix, HidPrefix::Wbee);
@@ -147,17 +146,17 @@ mod tests {
         assert_ne!(id1, other.hid);
         assert_eq!(other.hid.prefix, HidPrefix::Fbee);
 
-        std::env::remove_var("XDG_STATE_HOME");
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 
     #[test]
     fn key_path_uses_xdg_state_home() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
         let path = bee_key_path("foo");
         assert!(path.starts_with(tmp.path()), "path {:?}", path);
         assert!(path.ends_with("hum/bees/foo.key"));
-        std::env::remove_var("XDG_STATE_HOME");
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 }

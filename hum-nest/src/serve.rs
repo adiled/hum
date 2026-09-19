@@ -13,7 +13,7 @@
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
 //! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
 //! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
-//!   worker's tool-result encoder (`nest::encode_tool_result`).
+//!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
 //!
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
@@ -31,12 +31,12 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
 use hum_identity::HidPrefix;
-use mcp::protocol::ToolDef;
-use nest::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
+use hum_mcp::protocol::ToolDef;
+use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
-use crate::identity::load_or_mint_bee_key;
-use crate::mcp_bridge::{spawn_local_mcp, McpBridge};
+use hum_identity::load_or_mint_bee_key;
+use hum_mcp::{spawn_local_mcp, McpBridge};
 
 fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock_resolved()
@@ -115,9 +115,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     //   hid, bee, hive (kind), models, propensity, version,
     //   protoVersion, source, chis.
     let propensity_str = match worker.propensity() {
-        nest::Propensity::StatefulSession => "stateful_session",
-        nest::Propensity::StatelessPerCall => "stateless_per_call",
-        nest::Propensity::EphemeralPerCall => "ephemeral_per_call",
+        crate::Propensity::StatefulSession => "stateful_session",
+        crate::Propensity::StatelessPerCall => "stateless_per_call",
+        crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
         "chi": "hello",
@@ -231,8 +231,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                         let cwd = sid_cwd.lock().await.get(&sid).cloned();
                         match cwd {
                             Some(cwd) => {
-                                let hum_sid = ids::HumId::parse(&sid)
-                                    .unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+                                let hum_sid = hum_identity::HumId::parse(&sid)
+                                    .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
                                 match worker.curate(&hum_sid, &cwd).await {
                                     Ok(report) => trace!(
                                         sid = %sid,
@@ -420,7 +420,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
 
-    let hum_sid = ids::HumId::parse(&sid).unwrap_or_else(|_| ids::HumId::from_foreign(&sid));
+    let hum_sid = hum_identity::HumId::parse(&sid).unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
     let mut base = Egg::new(hum_sid, model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);

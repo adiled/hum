@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use nest::{Cell, Egg, Propensity, WorkerBee};
+use hum_nest::{Cell, Egg, Propensity, WorkerBee};
 
 /// Ollama chat request body — the exact shape Ollama's API expects.
 #[derive(Debug, Clone, Serialize)]

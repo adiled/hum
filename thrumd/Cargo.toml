@@ -8,7 +8,7 @@ description = "NDJSON unix-socket thrum server — listens, dispatches, broadcas
 [dependencies]
 hum-paths = { path = "../hum-paths" }
 thrum-core = { path = "../thrum-core" }
-ids = { path = "../ids" }
+hum-identity = { path = "../hum-identity" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

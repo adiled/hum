@@ -5,7 +5,7 @@
 //! straight into `serve_forager`.
 
 use async_trait::async_trait;
-use nest_common::{ToolDef, ToolDispatcher, ToolResult};
+use hum_nest::{ToolDef, ToolDispatcher, ToolResult};
 use serde_json::Value;
 
 use crate::tools::{bash, do_code, do_noncode, read};

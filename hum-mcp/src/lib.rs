@@ -7,18 +7,20 @@
 //! through humd. Tool results return as `chi:"tool-result"` tones
 //! the worker pumps into the bridge by callId.
 //!
-//! The `mcp` crate is a pure library — this is the axum server that
-//! puts it to use. Standalone crate so a remote worker hive can
-//! spawn an MCP bridge without pulling the daemon tree.
-//!
-//! Each worker bee that needs to expose tools to its compute via
-//! MCP spawns one of these. The bridge serves JSON-RPC at
-//! `/s/<session_id>`, mapping `tools/list` to the worker's current
-//! catalogue and `tools/call` to a thrum `chi:"tool-call"` tone
-//! through humd. Tool results return as `chi:"tool-result"` tones
-//! the worker pumps into the bridge by callId.
-//!
-//! The mcp/ crate is a pure library — this is where it gets used.
+//! The modules under `src/` (`protocol`, `capability`, `translate`,
+//! `catalogue`) are the pure data-mapping layer; this file is the
+//! axum server that puts it to use. Standalone crate so a remote
+//! worker hive can spawn an MCP bridge without pulling the daemon
+//! tree.
+
+pub mod capability;
+pub mod catalogue;
+pub mod protocol;
+pub mod translate;
+
+pub use protocol::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDef, ToolResult,
+};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -34,10 +36,6 @@ use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{trace, warn};
-
-use mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ToolDef};
-use mcp::catalogue;
-use mcp::translate;
 
 /// Shared state between the MCP HTTP handlers and the worker's
 /// thrum loop. The worker updates the catalogue on each

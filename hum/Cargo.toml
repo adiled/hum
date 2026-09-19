@@ -10,7 +10,6 @@ path = "src/main.rs"
 [dependencies]
 hum-paths = { path = "../hum-paths" }
 humd = { path = "../humd" }
-config = { path = "../config" }
 thehum = { path = "../thehum" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

@@ -33,7 +33,7 @@ pub fn now_ms() -> i64 {
 
 /// Correlation id — canonical HumId. Ts-prefixed inside, so freshly
 /// minted rids are lex-sortable by mint time.
-pub fn rid() -> String { ids::HumId::mint().to_string() }
+pub fn rid() -> String { hum_identity::HumId::mint().to_string() }
 
 /// Absolute ms timestamp at which a tone with `dusk = dusk_in(ms)` expires.
 pub fn dusk_in(ms: i64) -> i64 {
@@ -76,8 +76,8 @@ mod tests {
         let a = rid();
         let b = rid();
         assert_ne!(a, b);
-        assert!(ids::HumId::parse(&a).is_ok());
-        assert!(ids::HumId::parse(&b).is_ok());
+        assert!(hum_identity::HumId::parse(&a).is_ok());
+        assert!(hum_identity::HumId::parse(&b).is_ok());
     }
 
     #[test]

@@ -7,7 +7,7 @@ description = "Per-humd authored chi log. The sustained signal that captures eve
 
 [dependencies]
 hum-paths = { path = "../hum-paths" }
-ids = { path = "../ids" }
+hum-identity = { path = "../hum-identity" }
 thrum-core = { path = "../thrum-core" }
 ensemble = { path = "../ensemble" }
 serde = { workspace = true }

@@ -6,12 +6,17 @@ license.workspace = true
 description = "Persistent bee identity: load-or-mint an Ed25519 seed and derive the role-tagged Hid. Leaf crate for remote hives — no daemon, mesh, or nest deps."
 
 [dependencies]
-ids = { path = "../ids" }
+
 hum-paths = { path = "../hum-paths" }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = "3"

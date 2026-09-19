@@ -11,8 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 hum-paths = { path = "../../hum-paths" }
-nest = { path = "../../nest" }
-nest-common = { path = "../common" }
+hum-nest = { path = "../../hum-nest" }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = "0.7"
 serde_json = { workspace = true }

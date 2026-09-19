@@ -159,7 +159,7 @@ impl Sim {
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
-            hum_cfg: config::HumConfig::default(),
+            hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
             penny_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
@@ -218,7 +218,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (config::HumConfig::default
+                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.
@@ -295,7 +295,7 @@ impl Sim {
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
-            hum_cfg: config::HumConfig::default(),
+            hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
             penny_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
@@ -355,7 +355,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (config::HumConfig::default
+                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.
@@ -397,7 +397,7 @@ impl Sim {
             let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
             PeerCapabilities {
                 proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (config::HumConfig::default
+                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
                 // → nest.default = "claude-repl"). Overflow lookup keys on
                 // this nest name; mismatch with the daemon's tag breaks
                 // the test deterministically.
@@ -488,7 +488,7 @@ impl Sim {
             }
             let tone = serde_json::json!({
                 "chi": "wane-sync",
-                "rid": ids::HumId::mint().to_string(),
+                "rid": hum_identity::HumId::mint().to_string(),
                 "from": from.id.to_hex(),
                 "to": to.id.to_hex(),
                 "snapshot": Value::Object(snapshot_json),
@@ -521,7 +521,7 @@ impl Sim {
             if h.thrum.has_sink() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let client_id = ids::HumId::mint().to_string();
+        let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         // Hello first so humd records bee:["worker"] + models before the
         // first prompt arrives.
@@ -579,7 +579,7 @@ impl Sim {
             .get(&humd)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
-        let client_id = ids::HumId::mint().to_string();
+        let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
 
         // Fanout task: drain this synthetic's outbound queue and route
@@ -716,7 +716,7 @@ impl Sim {
             if h.thrum.has_sink() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let client_id = ids::HumId::mint().to_string();
+        let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         let tools: Vec<Value> = tool_names.iter().map(|name| serde_json::json!({
             "name": name,
@@ -775,7 +775,7 @@ impl Sim {
             observer_humd,
             serde_json::json!({
                 "chi": "attach",
-                "rid": ids::HumId::mint().to_string(),
+                "rid": hum_identity::HumId::mint().to_string(),
                 "sid": sid,
                 "to": host_humd.to_hex(),
                 "from": observer_humd.to_hex(),

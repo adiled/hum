@@ -543,7 +543,7 @@ fn doctor() -> Result<()> {
     println!("\n[hum.json schema validation]");
     match std::fs::read_to_string(&hum_json) {
         Err(_) => println!("  (no hum.json — humd runs on defaults)"),
-        Ok(raw) => match config::validate(&raw) {
+        Ok(raw) => match hum_paths::config::validate(&raw) {
             Ok(()) => println!("  ✓ valid against hum.schema.json"),
             Err(violations) => {
                 println!("  ✗ INVALID — humd will refuse to start:");

@@ -1,18 +1,39 @@
-//! WorkerBee trait + Cell shape + lifecycle/limits/metrics submodules.
+//! hum's hive-side kernel. The worker contract ([`WorkerBee`], [`Egg`],
+//! [`Cell`], [`Propensity`], [`Pollen`], tone encoders), the process
+//! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
+//! sampling / [`limits`] rlimits), and the wire-semantics loops that
+//! wrap [`hum-thrum`] for the two bee shapes — [`serve`] (`serve_worker`)
+//! and [`forager`] (`serve_forager`).
+//!
+//! One crate, no `nest`-common indirection: a hive that needs the nest
+//! lives here; a remote hive that only needs the wire takes the leaf
+//! crates ([`hum-thrum`], [`hum-identity`], [`hum-mcp`]) directly.
+//!
+//! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
+//! also lives here (patterns for chat-LLM context-loss detection).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use ids::HumId;
+use hum_identity::HumId;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
+pub mod forager;
 pub mod lifecycle;
-pub mod metrics;
 pub mod limits;
+pub mod metrics;
+pub mod serve;
+pub mod suspicion_regex;
+
+pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
+pub use hum_mcp::protocol::{ToolDef, ToolResult};
+pub use serve::{serve_worker, HiveAdvert};
+pub use suspicion_regex::RegexClassifier;
 
 /// An egg — what a worker bee needs to raise a cell.
 #[derive(Debug, Clone)]
@@ -133,6 +154,55 @@ impl CurateReport {
     }
 }
 
+/// How loud a classifier is shouting about a piece of LLM output.
+///
+/// - `None`     — text looks fine
+/// - `Soft`     — flagged for evaluator-driven adjudication
+/// - `Heavy`    — strongly flagged; evaluator may still confirm
+/// - `Critical` — bypass the evaluator and swallow immediately
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Suspicion {
+    None,
+    Soft,
+    Heavy,
+    Critical,
+}
+
+impl Suspicion {
+    /// True when any tier matched.
+    pub fn flagged(self) -> bool {
+        !matches!(self, Suspicion::None)
+    }
+}
+
+/// Context-loss heuristic seam.
+///
+/// The drone calls this on `TurnEnd` (and during `assess`) to score
+/// the accumulated response text. Implementations decide which
+/// patterns are which severity; the drone only branches on the
+/// returned [`Suspicion`].
+///
+/// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
+/// Concrete pattern-bank impls live in this crate — see
+/// [`suspicion_regex`] for the regex-driven one tuned for chat-LLM
+/// context loss.
+pub trait Classifier: Send + Sync {
+    fn classify(&self, text: &str) -> Suspicion;
+}
+
+/// No-op default — every input is `Suspicion::None`. Drone running with
+/// this classifier behaves as a pure channel-health sentinel; it
+/// never reaches the swallow path on its own.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopClassifier;
+
+impl Classifier for NoopClassifier {
+    fn classify(&self, _text: &str) -> Suspicion {
+        Suspicion::None
+    }
+}
+
 /// A WorkerBee raises cells from eggs — the compute-side trait every
 /// commissioned hive implements.
 #[async_trait]
@@ -222,7 +292,6 @@ pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
     })
     .to_string()
 }
-
 
 /// Encode a tool_result reply for stream-json stdin (TS `encodeToolResult`).
 pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {

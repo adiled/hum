@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use nest_common::{ToolDef, ToolResult};
+use hum_nest::{ToolDef, ToolResult};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};

@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn load_parses_fixture_and_skips_bad_rows() {
         let tmp = TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
         std::fs::create_dir_all(hum_paths::config_dir()).unwrap();
 
         let good_a = "a".repeat(64);
@@ -135,16 +135,16 @@ mod tests {
         assert_eq!(loaded[0].hints, vec!["tcp:host-a:9000".to_string()]);
         assert_eq!(loaded[1].hints.len(), 2);
 
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     /// Missing file returns empty without error.
     #[test]
     fn load_missing_file_is_empty() {
         let tmp = TempDir::new().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
         let loaded = load();
         assert!(loaded.is_empty());
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 }

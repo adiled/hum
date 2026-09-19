@@ -1,6 +1,6 @@
 //! Regex-driven context-loss classifier.
 //!
-//! Implements [`drone::Classifier`]. Patterns are tuned for chat LLMs
+//! Implements [`crate::Classifier`]. Patterns are tuned for chat LLMs
 //! that occasionally drop their context window mid-conversation —
 //! Claude, GPT, Gemini all share the symptoms (apology + greeting
 //! reset + "let me search the codebase" hedging). The bank below
@@ -19,7 +19,7 @@
 
 use std::sync::OnceLock;
 
-use drone::{Classifier, Suspicion};
+use crate::{Classifier, Suspicion};
 use regex::RegexSet;
 
 // Critical: explicit context loss admission — the honest failure mode.
@@ -82,14 +82,20 @@ fn bank() -> &'static Bank {
     static B: OnceLock<Bank> = OnceLock::new();
     B.get_or_init(|| {
         let crit_src: Vec<&str> = CONTEXT_LOSS_EXPLICIT.iter().copied().collect();
-        let heavy_src: Vec<&str> =
-            IDENTITY_RESET.iter().chain(GREETING_RESET.iter()).copied().collect();
-        let soft_src: Vec<&str> =
-            COMPENSATION.iter().chain(FORMALITY_SHIFT.iter()).copied().collect();
+        let heavy_src: Vec<&str> = IDENTITY_RESET
+            .iter()
+            .chain(GREETING_RESET.iter())
+            .copied()
+            .collect();
+        let soft_src: Vec<&str> = COMPENSATION
+            .iter()
+            .chain(FORMALITY_SHIFT.iter())
+            .copied()
+            .collect();
         Bank {
-            critical: RegexSet::new(&crit_src).expect("nest-common: critical patterns compile"),
-            heavy: RegexSet::new(&heavy_src).expect("nest-common: heavy patterns compile"),
-            soft: RegexSet::new(&soft_src).expect("nest-common: soft patterns compile"),
+            critical: RegexSet::new(&crit_src).expect("hum-nest: critical patterns compile"),
+            heavy: RegexSet::new(&heavy_src).expect("hum-nest: heavy patterns compile"),
+            soft: RegexSet::new(&soft_src).expect("hum-nest: soft patterns compile"),
         }
     })
 }
@@ -124,7 +130,10 @@ mod tests {
 
     #[test]
     fn explicit_admission_is_critical() {
-        assert_eq!(cls().classify("I don't have any previous context for this."), Suspicion::Critical);
+        assert_eq!(
+            cls().classify("I don't have any previous context for this."),
+            Suspicion::Critical
+        );
         assert_eq!(
             cls().classify("This appears to be the start of our conversation."),
             Suspicion::Critical,
@@ -133,12 +142,18 @@ mod tests {
 
     #[test]
     fn identity_reset_is_heavy() {
-        assert_eq!(cls().classify("I'm Claude, an AI assistant."), Suspicion::Heavy);
+        assert_eq!(
+            cls().classify("I'm Claude, an AI assistant."),
+            Suspicion::Heavy
+        );
     }
 
     #[test]
     fn compensation_is_soft() {
-        assert_eq!(cls().classify("Let me search the codebase for that."), Suspicion::Soft);
+        assert_eq!(
+            cls().classify("Let me search the codebase for that."),
+            Suspicion::Soft
+        );
     }
 
     #[test]

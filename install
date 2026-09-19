@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # hum installer.
 #
-# Builds + registers humd as a user service. Pulls orch + orchd binaries
-# (bee supervisor). After this, `hum hive install <kind>` brings up bees
-# via orchd; no per-bee bash scripts.
+# Builds + registers humd as a user service. Pulls the orchd supervisor
+# (bee lifecycle) from crates.io, pinned to an exact version. `hum hive
+# install <kind>` brings up bees via orchd; no per-bee bash scripts. The
+# `orch` Orchfile CLI is not installed — it's dead weight; hum parses
+# Orchfiles in-process, and Orchfile parsing is available as the
+# `the-orch` library should we ever need it.
 #
 # Idempotent — re-running upgrades in place.
 #
@@ -26,7 +29,6 @@ HUM_BIN_ROOT="$HOME/.local"
 HUMD_BIN="$HUM_BIN_ROOT/bin/humd"
 HUMCTL_BIN="$HUM_BIN_ROOT/bin/humctl"
 HUM_CLI_BIN="$HUM_BIN_ROOT/bin/hum"
-ORCH_BIN="$HUM_BIN_ROOT/bin/orch"
 ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
@@ -127,15 +129,13 @@ build_binaries() {
   cargo install --quiet --locked --path "$SRC/humd"   --root "$HUM_BIN_ROOT" --force
   cargo install --quiet --locked --path "$SRC/humctl" --root "$HUM_BIN_ROOT" --force
   cargo install --quiet --locked --path "$SRC/hum"    --root "$HUM_BIN_ROOT" --force
-  log "installing orch + orchd (bee supervisor) from git"
-  cargo install --quiet --git https://github.com/adiled/orch.git  --root "$HUM_BIN_ROOT" --force
-  cargo install --quiet --git https://github.com/adiled/orchd.git --root "$HUM_BIN_ROOT" --force
+  log "installing orchd (bee supervisor) from crates.io, pinned"
+  cargo install --quiet orchd --version "=0.3.4" --root "$HUM_BIN_ROOT" --force
   [ -x "$HUMD_BIN" ]    || fail "humd not at $HUMD_BIN after build"
   [ -x "$HUMCTL_BIN" ]  || fail "humctl not at $HUMCTL_BIN after build"
   [ -x "$HUM_CLI_BIN" ] || fail "hum not at $HUM_CLI_BIN after build"
-  [ -x "$ORCH_BIN" ]    || fail "orch not at $ORCH_BIN after build"
   [ -x "$ORCHD_BIN" ]   || fail "orchd not at $ORCHD_BIN after build"
-  log "humd $HUMD_BIN ; humctl $HUMCTL_BIN ; hum $HUM_CLI_BIN ; orch $ORCH_BIN ; orchd $ORCHD_BIN"
+  log "humd $HUMD_BIN ; humctl $HUMCTL_BIN ; hum $HUM_CLI_BIN ; orchd $ORCHD_BIN"
 }
 
 linux_unit_dir="${XDG_CONFIG_HOME}/systemd/user"
@@ -203,7 +203,7 @@ print_next_steps() {
 }
 
 # Warn loudly when ~/.local/bin isn't on $PATH. Without it,
-# `hum`/`humd`/`humctl`/`orch`/`orchd` aren't reachable by bare name
+# `hum`/`humd`/`humctl`/`orchd` aren't reachable by bare name
 # from a fresh shell, and `hum hive install` fails late with confusing
 # errors. hum's own orchd lookup now prefers the absolute path, but
 # the user still needs `hum` itself on PATH.
@@ -260,7 +260,7 @@ uninstall() {
       ;;
   esac
   rm -f "$HUMD_BIN" "$HUMCTL_BIN" "$HUM_CLI_BIN"
-  log "uninstalled humd. orch/orchd left in place. State preserved in $HUM_STATE + $HUM_CONFIG."
+  log "uninstalled humd. orchd left in place. State preserved in $HUM_STATE + $HUM_CONFIG."
   log "  run \`./install purge\` to remove state too."
 }
 

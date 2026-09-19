@@ -10,9 +10,7 @@ ensemble = { path = "../ensemble" }
 humd = { path = "../humd" }
 thrum-core = { path = "../thrum-core" }
 thrumd = { path = "../thrumd" }
-nest = { path = "../nest" }
-ids = { path = "../ids" }
-config = { path = "../config" }
+hum-identity = { path = "../hum-identity" }
 hum-paths = { path = "../hum-paths" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
@@ -23,4 +21,4 @@ parking_lot = "0.12"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
-mcp = { path = "../mcp" }
+hum-mcp = { path = "../hum-mcp" }

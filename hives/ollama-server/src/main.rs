@@ -206,7 +206,7 @@ async fn open_prompt(
 
     let mut hello = serde_json::Map::new();
     hello.insert("chi".into(), json!(Chi::Hello));
-    hello.insert("rid".into(), Value::String(ids::HumId::mint().to_string()));
+    hello.insert("rid".into(), Value::String(hum_identity::HumId::mint().to_string()));
     hello.insert("from".into(), Value::String(HIVE_NAME.into()));
     hello.insert("bee".into(), Value::String(HIVE_NAME.into()));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
@@ -289,7 +289,7 @@ async fn chat(
     let stream = req.stream.unwrap_or(true);
     let (system, user) = messages_to_prompt(&req.messages);
     let tools = tools_to_thrum(req.tools);
-    let sid = ids::HumId::mint().to_string();
+    let sid = hum_identity::HumId::mint().to_string();
 
     let (rx, _pump) = match open_prompt(
         &cfg, &sid, &user, &req.model, system.as_deref(), tools.as_deref(),
@@ -309,7 +309,7 @@ async fn generate(
     Json(req): Json<GenerateRequest>,
 ) -> Response {
     let stream = req.stream.unwrap_or(true);
-    let sid = ids::HumId::mint().to_string();
+    let sid = hum_identity::HumId::mint().to_string();
     let (rx, _pump) = match open_prompt(
         &cfg, &sid, &req.prompt, &req.model, req.system.as_deref(), None,
     ).await {

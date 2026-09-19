@@ -7,21 +7,14 @@ members = [
     "hum-identity",
     "hum-thrum",
     "hum-mcp",
-    "ids",
-    "config",
     "codegen",
-    "drift",
     "humd",
     "humctl",
     "hum",
-    "mcp",
-    "nest",
-    "hives/common",
+    "hum-nest",
     "hives/claude-cli",
     "hives/claude-repl",
     "hives/humfs",
-    "drone",
-    "penny",
     "ensemble",
     "sim",
     "hives/grpc",
@@ -35,7 +28,7 @@ members = [
 
 [workspace.package]
 version = "0.32.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/adiled/hum"
 homepage = "https://adiled.github.io/hum/"

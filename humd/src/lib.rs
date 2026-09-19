@@ -21,9 +21,12 @@ use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
 use tracing::{info, trace, warn};
 
+mod drone;
+mod drift;
 mod identity;
 mod peer_transport;
 mod peers;
+mod penny;
 pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
 
@@ -50,7 +53,7 @@ pub struct DaemonConfig {
     pub http_path: PathBuf,
     pub mcp_addr: std::net::SocketAddr,
     pub penny_path: PathBuf,
-    pub hum_cfg: config::HumConfig,
+    pub hum_cfg: hum_paths::config::HumConfig,
     pub cli_path: String,
     pub penny_persist_interval: Duration,
     /// When set, sim provides the Thrum and the daemon does NOT bind a
@@ -109,7 +112,7 @@ impl DaemonConfig {
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
             penny_path: hum_paths::penny(),
-            hum_cfg: config::load(),
+            hum_cfg: hum_paths::config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
             thrum_override: None,
@@ -673,11 +676,11 @@ impl ToneSink for HumdSink {
         if let Some(thehum) = self.thehum.as_ref() {
             if client_id != "ensemble" {
                 let sid = tone.get("sid").and_then(Value::as_str).and_then(|s| {
-                    ids::HumId::parse(s).ok().or_else(|| Some(ids::HumId::from_foreign(s)))
+                    hum_identity::HumId::parse(s).ok().or_else(|| Some(hum_identity::HumId::from_foreign(s)))
                 });
                 let rid = tone.get("rid").and_then(Value::as_str)
-                    .map(|s| ids::HumId::parse(s).unwrap_or_else(|_| ids::HumId::from_foreign(s)))
-                    .unwrap_or_else(ids::HumId::mint);
+                    .map(|s| hum_identity::HumId::parse(s).unwrap_or_else(|_| hum_identity::HumId::from_foreign(s)))
+                    .unwrap_or_else(hum_identity::HumId::mint);
                 let body = serde_json::to_value(&tone).unwrap_or_default();
                 if let Err(e) = thehum.append(chi_str, sid, rid, body).await {
                     warn!(client_id, %chi_str, err = %e, "thehum.append.failed");
@@ -1326,7 +1329,7 @@ impl ToneSink for HumdSink {
                     // names + the names in any capability the
                     // mesh declares ownership of. Generic; no
                     // hardcoded list — the capability table in
-                    // mcp::capability holds the per-category
+                    // hum_mcp::capability holds the per-category
                     // canonical name set.
                     let mut disallowed: std::collections::BTreeSet<String> =
                         obj.get("disallowedTools")
@@ -1334,7 +1337,7 @@ impl ToneSink for HumdSink {
                             .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                             .unwrap_or_default();
                     for cap in &provided_caps {
-                        if let Some(names) = mcp::capability::capability_tools(cap) {
+                        if let Some(names) = hum_mcp::capability::capability_tools(cap) {
                             for n in names { disallowed.insert((*n).into()); }
                         }
                     }
