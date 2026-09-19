@@ -117,12 +117,12 @@ impl WorkerBee for ClaudeCliWorker {
     /// The transcript is the session state here, so this works whether or
     /// not a cell is live: `claude -p` exits after every turn, and the
     /// next `--resume` reads whatever is on disk.
-    async fn curate(&self, sid: &ids::HumId, cwd: &str) -> Result<nest::CurateReport> {
+    async fn curate(&self, sid: &ids::HumId, cwd: &str) -> Result<hum_nest::CurateReport> {
         let derived = sid.to_uuid_v5(ids::NS_CLAUDE_SESSION).to_string();
         let path = graft::session_path(std::path::Path::new(cwd), &derived);
         if !path.exists() {
             trace!(sid = %sid, path = %path.display(), "worker.curate.no-transcript");
-            return Ok(nest::CurateReport::default());
+            return Ok(hum_nest::CurateReport::default());
         }
 
         let pruned = graft::prune_jsonl(&path)?;
@@ -135,7 +135,7 @@ impl WorkerBee for ClaudeCliWorker {
             "worker.curate.pruned"
         );
 
-        Ok(nest::CurateReport {
+        Ok(hum_nest::CurateReport {
             bytes_before: pruned.bytes_before as u64,
             bytes_after: pruned.bytes_after as u64,
         })
