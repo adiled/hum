@@ -1,0 +1,51 @@
+name: Wire protocol
+
+# views.rs is the single source of truth for every chi body and the
+# envelope. These checks keep the generated client mirrors (TS/Python/Go)
+# and the golden fixture byte-locked to it.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Every chi has a body view (fails the build otherwise)
+        run: cargo build -p thrum-core
+      - name: Generated mirrors are byte-identical to views.rs
+        run: cargo run -p codegen -- --check
+      - name: Codegen unit tests
+        run: cargo test -p codegen --lib
+      - name: Golden fixture round-trips through views
+        run: cargo test -p thrum-core
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Golden-wire parse + rid parity
+        working-directory: thrum-clients/go
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Golden-wire parse + rid parity (stdlib only)
+        run: python -m unittest discover -s thrum-clients/python/tests

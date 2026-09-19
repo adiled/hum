@@ -6,15 +6,15 @@
 package thrum
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -29,19 +29,53 @@ func Sigil(sid, nest string) string {
 // NowMs returns wall-clock milliseconds since the Unix epoch.
 func NowMs() int64 { return time.Now().UnixMilli() }
 
-var ridCounter uint64
+const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-func base36(n uint64) string {
-	if n == 0 {
-		return "0"
+// HumIdEncode encodes 32 bytes (48-bit ms prefix + 208 random bits,
+// big-endian) as a 52-char Crockford base32 id. Mirrors hum_identity's
+// encode bit-for-bit.
+func HumIdEncode(buf [32]byte) string {
+	var v big.Int
+	v.SetBytes(buf[:])
+	v.Lsh(&v, 4)
+	var out strings.Builder
+	out.Grow(52)
+	for i := 0; i < 52; i++ {
+		var idx big.Int
+		idx.Rsh(&v, uint(255-5*i))
+		idx.And(&idx, big.NewInt(0x1f))
+		out.WriteByte(crockford[idx.Int64()])
 	}
-	return strconv.FormatUint(n, 36)
+	return out.String()
 }
 
-// Rid mints a monotonic correlation id: "{base36-ms}-{base36-counter}".
+// Rid mints a correlation id in canonical HumId form — 52-char
+// Crockford base32, ts-prefixed, matching hum_identity::HumId::mint().
 func Rid() string {
-	n := atomic.AddUint64(&ridCounter, 1) - 1
-	return fmt.Sprintf("%s-%s", base36(uint64(NowMs())), base36(n))
+	var buf [32]byte
+	ms := uint64(NowMs())
+	for i := 0; i < 6; i++ {
+		buf[5-i] = byte(ms >> (8 * uint(i)))
+	}
+	if _, err := rand.Read(buf[6:]); err != nil {
+		// 26 bytes from the CSPRNG is practically infallible; fall
+		// back to a time-seeded value rather than mint nothing.
+		buf[6] = byte(ms >> 40)
+	}
+	return HumIdEncode(buf)
+}
+
+// IsValidRid reports whether value is a 52-char Crockford base32 id.
+func IsValidRid(value string) bool {
+	if len(value) != 52 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if !strings.ContainsRune(crockford, rune(value[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // DuskIn returns the absolute ms timestamp at which a tone with this

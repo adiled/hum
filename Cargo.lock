@@ -517,6 +517,7 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "regex",
+ "syn",
 ]
 
 [[package]]

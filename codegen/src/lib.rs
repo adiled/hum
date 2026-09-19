@@ -13,6 +13,7 @@ use anyhow::{anyhow, bail, Context};
 use regex::Regex;
 
 pub mod paths;
+pub mod protocol;
 
 pub use anyhow::Result;
 
@@ -31,7 +32,6 @@ fn chi_at_generated_header(comment: &str) -> String {
         chi = paths::CHI_RS_REL,
     )
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Variant {
@@ -53,10 +53,10 @@ pub struct ChiSpec {
 
 /// Parse a chi.rs + lib.rs pair into a [`ChiSpec`].
 pub fn parse(chi_rs: &Path, lib_rs: &Path) -> Result<ChiSpec> {
-    let chi_src = fs::read_to_string(chi_rs)
-        .with_context(|| format!("read {}", chi_rs.display()))?;
-    let lib_src = fs::read_to_string(lib_rs)
-        .with_context(|| format!("read {}", lib_rs.display()))?;
+    let chi_src =
+        fs::read_to_string(chi_rs).with_context(|| format!("read {}", chi_rs.display()))?;
+    let lib_src =
+        fs::read_to_string(lib_rs).with_context(|| format!("read {}", lib_rs.display()))?;
     Ok(ChiSpec {
         version: extract_version(&lib_src)?,
         chi: extract_enum(&chi_src, "Chi")?,
@@ -133,7 +133,9 @@ pub fn emit_go_helpers(output: &Path) -> Result<()> {
 
 fn extract_version(lib: &str) -> Result<String> {
     let re = Regex::new(r#"pub\s+const\s+THRUM_VERSION\s*:\s*&\s*str\s*=\s*"([^"]+)""#)?;
-    let caps = re.captures(lib).ok_or_else(|| anyhow!("THRUM_VERSION not found in lib.rs"))?;
+    let caps = re
+        .captures(lib)
+        .ok_or_else(|| anyhow!("THRUM_VERSION not found in lib.rs"))?;
     Ok(caps[1].to_string())
 }
 
@@ -142,7 +144,9 @@ fn extract_version(lib: &str) -> Result<String> {
 /// doc comments that immediately precede it.
 fn extract_enum(src: &str, name: &str) -> Result<Vec<Variant>> {
     let opener = Regex::new(&format!(r"pub\s+enum\s+{}\s*\{{", regex::escape(name)))?;
-    let m = opener.find(src).ok_or_else(|| anyhow!("`pub enum {}` not found", name))?;
+    let m = opener
+        .find(src)
+        .ok_or_else(|| anyhow!("`pub enum {}` not found", name))?;
     let body_start = m.end();
     let bytes = src.as_bytes();
     let mut depth = 1usize;
@@ -152,13 +156,17 @@ fn extract_enum(src: &str, name: &str) -> Result<Vec<Variant>> {
             b'{' => depth += 1,
             b'}' => {
                 depth -= 1;
-                if depth == 0 { break; }
+                if depth == 0 {
+                    break;
+                }
             }
             _ => {}
         }
         i += 1;
     }
-    if depth != 0 { bail!("unterminated `{}` block", name); }
+    if depth != 0 {
+        bail!("unterminated `{}` block", name);
+    }
     let body = &src[body_start..i];
 
     let mut out = Vec::new();
@@ -191,7 +199,9 @@ fn extract_enum(src: &str, name: &str) -> Result<Vec<Variant>> {
         pending_doc.clear();
         out.push(Variant { pascal, wire, doc });
     }
-    if out.is_empty() { bail!("`{}` block parsed but yielded no variants", name); }
+    if out.is_empty() {
+        bail!("`{}` block parsed but yielded no variants", name);
+    }
     Ok(out)
 }
 
@@ -199,7 +209,9 @@ fn pascal_to_kebab(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for (i, c) in s.chars().enumerate() {
         if c.is_ascii_uppercase() {
-            if i > 0 { out.push('-'); }
+            if i > 0 {
+                out.push('-');
+            }
             out.push(c.to_ascii_lowercase());
         } else {
             out.push(c);
@@ -245,7 +257,7 @@ fn render_helpers() -> String {
          // helper, add it in Rust first and extend codegen's render_helpers.\n\n",
         paths::HELPERS_SOURCE_REF,
     );
-    const BODY: &str = r#"import { createHash } from "crypto";
+    const BODY: &str = r#"import { createHash, randomBytes } from "crypto";
 
 /**
  * Deterministic identity for a (nest, session) pair.
@@ -263,10 +275,45 @@ export function sigil(sid: string, nest: string): string {
     .slice(0, 12);
 }
 
-/** Monotonic request id — base36 timestamp + counter. */
-let __ridCounter = 0;
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * Encode 32 bytes (48-bit ms prefix + 208 random bits, big-endian) as a
+ * 52-char Crockford base32 id. Mirrors hum_identity's encode bit-for-bit.
+ */
+export function humIdEncode(buf: Uint8Array): string {
+  let v = 0n;
+  for (const b of buf) v = (v << 8n) | BigInt(b);
+  v <<= 4n;
+  let out = "";
+  for (let i = 0; i < 52; i++) {
+    out += CROCKFORD[Number((v >> BigInt(255 - 5 * i)) & 0x1fn)];
+  }
+  return out;
+}
+
+/**
+ * Correlation id in canonical HumId form — 52-char Crockford base32,
+ * ts-prefixed, matching hum_identity::HumId::mint().
+ */
 export function rid(): string {
-  return `${Date.now().toString(36)}-${(__ridCounter++).toString(36)}`;
+  const buf = new Uint8Array(32);
+  let ms = BigInt(Date.now());
+  for (let i = 0; i < 6; i++) {
+    buf[5 - i] = Number(ms & 0xffn);
+    ms >>= 8n;
+  }
+  buf.set(randomBytes(26), 6);
+  return humIdEncode(buf);
+}
+
+/** True iff `value` is a 52-char Crockford base32 id. */
+export function isValidRid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length === 52 &&
+    [...value].every((c) => CROCKFORD.includes(c))
+  );
 }
 
 /** Absolute ms timestamp ms in the future. */
@@ -305,7 +352,10 @@ fn render_ts(spec: &ChiSpec) -> String {
     let mut s = String::new();
     s.push_str(&chi_at_generated_header("//"));
 
-    s.push_str(&format!("export const THRUM_VERSION = \"{}\" as const;\n\n", spec.version));
+    s.push_str(&format!(
+        "export const THRUM_VERSION = \"{}\" as const;\n\n",
+        spec.version
+    ));
 
     s.push_str("// Every wire-known chi value. Adding a new variant bumps the\n");
     s.push_str("// protocol minor; renaming/removing bumps major.\n");
@@ -314,7 +364,11 @@ fn render_ts(spec: &ChiSpec) -> String {
         if !v.doc.is_empty() {
             s.push_str(&format!("  /** {} */\n", v.doc));
         }
-        s.push_str(&format!("  {}: \"{}\",\n", pascal_to_camel(&v.pascal), v.wire));
+        s.push_str(&format!(
+            "  {}: \"{}\",\n",
+            pascal_to_camel(&v.pascal),
+            v.wire
+        ));
     }
     s.push_str("} as const;\n");
     s.push_str("export type ChiKind = typeof Chi[keyof typeof Chi];\n\n");
@@ -327,7 +381,11 @@ fn render_ts(spec: &ChiSpec) -> String {
         if !v.doc.is_empty() {
             s.push_str(&format!("  /** {} */\n", v.doc));
         }
-        s.push_str(&format!("  {}: \"{}\",\n", pascal_to_camel(&v.pascal), v.wire));
+        s.push_str(&format!(
+            "  {}: \"{}\",\n",
+            pascal_to_camel(&v.pascal),
+            v.wire
+        ));
     }
     s.push_str("} as const;\n");
     s.push_str("export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];\n\n");
@@ -427,6 +485,7 @@ fn render_py_helpers() -> String {
 import hashlib
 import json
 import os
+import secrets
 import threading
 import time
 from typing import Any, Mapping
@@ -448,28 +507,30 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-_RID_LOCK = threading.Lock()
-_RID_COUNTER = 0
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
-def _base36(n: int) -> str:
-    if n == 0:
-        return "0"
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    out = []
-    while n > 0:
-        out.append(alphabet[n % 36])
-        n //= 36
-    return "".join(reversed(out))
+def _hum_id_from_bytes(buf: bytes) -> str:
+    """Encode 32 bytes (48-bit ms prefix + 208 random bits) as a 52-char
+    Crockford base32 id. Mirrors hum_identity's encode bit-for-bit."""
+    v = int.from_bytes(buf, "big") << 4
+    return "".join(_CROCKFORD[(v >> (255 - 5 * i)) & 0x1F] for i in range(52))
 
 
 def rid() -> str:
-    """Monotonic correlation id: '{base36-ms}-{base36-counter}'."""
-    global _RID_COUNTER
-    with _RID_LOCK:
-        n = _RID_COUNTER
-        _RID_COUNTER += 1
-    return f"{_base36(now_ms())}-{_base36(n)}"
+    """Correlation id in canonical HumId form: 52-char Crockford base32,
+    ts-prefixed, matching hum_identity::HumId::mint()."""
+    ts = int(time.time() * 1000)
+    buf = ts.to_bytes(6, "big") + secrets.token_bytes(26)
+    return _hum_id_from_bytes(buf)
+
+
+def is_valid_rid(value: str) -> bool:
+    """True iff `value` is a 52-char Crockford base32 id."""
+    return (
+        len(value) == 52
+        and all(c in _CROCKFORD for c in value)
+    )
 
 
 def dusk_in(ms: int) -> int:
@@ -572,7 +633,10 @@ fn render_go(spec: &ChiSpec) -> String {
         if !v.doc.is_empty() {
             s.push_str(&format!("    // {}\n", v.doc));
         }
-        s.push_str(&format!("    PulseKind{} PulseKind = \"{}\"\n", v.pascal, v.wire));
+        s.push_str(&format!(
+            "    PulseKind{} PulseKind = \"{}\"\n",
+            v.pascal, v.wire
+        ));
     }
     s.push_str(")\n");
 
@@ -590,15 +654,15 @@ fn render_go_helpers() -> String {
     const BODY: &str = r#"package thrum
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -613,19 +677,53 @@ func Sigil(sid, nest string) string {
 // NowMs returns wall-clock milliseconds since the Unix epoch.
 func NowMs() int64 { return time.Now().UnixMilli() }
 
-var ridCounter uint64
+const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-func base36(n uint64) string {
-	if n == 0 {
-		return "0"
+// HumIdEncode encodes 32 bytes (48-bit ms prefix + 208 random bits,
+// big-endian) as a 52-char Crockford base32 id. Mirrors hum_identity's
+// encode bit-for-bit.
+func HumIdEncode(buf [32]byte) string {
+	var v big.Int
+	v.SetBytes(buf[:])
+	v.Lsh(&v, 4)
+	var out strings.Builder
+	out.Grow(52)
+	for i := 0; i < 52; i++ {
+		var idx big.Int
+		idx.Rsh(&v, uint(255-5*i))
+		idx.And(&idx, big.NewInt(0x1f))
+		out.WriteByte(crockford[idx.Int64()])
 	}
-	return strconv.FormatUint(n, 36)
+	return out.String()
 }
 
-// Rid mints a monotonic correlation id: "{base36-ms}-{base36-counter}".
+// Rid mints a correlation id in canonical HumId form — 52-char
+// Crockford base32, ts-prefixed, matching hum_identity::HumId::mint().
 func Rid() string {
-	n := atomic.AddUint64(&ridCounter, 1) - 1
-	return fmt.Sprintf("%s-%s", base36(uint64(NowMs())), base36(n))
+	var buf [32]byte
+	ms := uint64(NowMs())
+	for i := 0; i < 6; i++ {
+		buf[5-i] = byte(ms >> (8 * uint(i)))
+	}
+	if _, err := rand.Read(buf[6:]); err != nil {
+		// 26 bytes from the CSPRNG is practically infallible; fall
+		// back to a time-seeded value rather than mint nothing.
+		buf[6] = byte(ms >> 40)
+	}
+	return HumIdEncode(buf)
+}
+
+// IsValidRid reports whether value is a 52-char Crockford base32 id.
+func IsValidRid(value string) bool {
+	if len(value) != 52 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if !strings.ContainsRune(crockford, rune(value[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // DuskIn returns the absolute ms timestamp at which a tone with this
