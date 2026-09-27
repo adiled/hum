@@ -220,6 +220,17 @@ Only emitted across the ensemble layer (not by local nestlers):
 `gossip-publish`, `kad-find-node`, `kad-find-node-resp`.
 See [`ensemble/README.md`](../ensemble/README.md).
 
+**Send deadline.** Every inter-humd send is bounded at 5s
+(`ensemble::SEND_TIMEOUT`). A peer that stops reading fills its socket
+buffer rather than closing, so the write stalls indefinitely while the
+connection still looks healthy to a liveness lease. On timeout humd
+closes that connection, counts the event in `send_timeouts`, and lets
+the lease mark the peer dead — a bounded send is what keeps one stalled
+peer from wedging a fan-out to every other peer. Implementations that
+speak this wire should impose an equivalent deadline; a peer that wants
+larger tones or a slower link should say so rather than write without
+one.
+
 ## Helpers
 
 The reference clients ship three deterministic helpers. Algorithms

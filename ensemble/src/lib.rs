@@ -52,9 +52,11 @@ pub use tls::{
 };
 
 pub mod iroh;
-pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
+pub use iroh::{dialable_addr, IrohEndpoint, IrohTransport, IROH_ALPN, IROH_IP_HINT};
 
 pub mod delivery;
+pub mod send;
+pub use send::{send_bounded, SendError, SendStats, SEND_TIMEOUT};
 pub use delivery::{DeliveryState, DELIVERY_SEEN_CAP};
 
 pub mod gossip;
@@ -438,6 +440,8 @@ pub struct LinkCounters {
     pub buffered: u64,
     pub lost_on_heal: u64,
     pub evicted: u64,
+    /// Sends handed to a stalled link, which never completed.
+    pub stalled_sends: u64,
 }
 
 impl LinkCounters {
@@ -452,6 +456,7 @@ impl LinkCounters {
             buffered: self.buffered - base.buffered,
             lost_on_heal: self.lost_on_heal - base.lost_on_heal,
             evicted: self.evicted - base.evicted,
+            stalled_sends: self.stalled_sends - base.stalled_sends,
         }
     }
 }
@@ -506,6 +511,13 @@ pub struct InMemoryEndpoint {
     /// which is what marks the lease `TransportClosed`. Distinct from
     /// `partitioned`, which keeps the link nominally up.
     killed: AtomicBool,
+    /// Set by [`InMemoryEndpoint::stall`]. A stalled link accepts the
+    /// connection and stops draining: the write never completes, which
+    /// is what a full socket buffer with a non-reading peer looks like
+    /// from the writer's side. Distinct from `killed` (gone) and from
+    /// `partitioned` (nominally up and buffering) — a stalled peer
+    /// looks perfectly healthy to a lease.
+    stalled: AtomicBool,
 }
 
 struct PartitionState {
@@ -557,6 +569,7 @@ impl InMemoryEndpoint {
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
             killed: AtomicBool::new(false),
+            stalled: AtomicBool::new(false),
         });
         let b = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(a_id),
@@ -572,6 +585,7 @@ impl InMemoryEndpoint {
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
             killed: AtomicBool::new(false),
+            stalled: AtomicBool::new(false),
         });
         (a, b)
     }
@@ -617,6 +631,14 @@ impl InMemoryEndpoint {
     /// the sender out and putting it back is what keeps `kill` from
     /// deadlocking against a send that has already committed to it.
     async fn emit(&self, tone: Tone) -> Result<()> {
+        if self.stalled.load(Ordering::SeqCst) {
+            // Never completes. Modelled as a hang rather than an error
+            // because that is what the real transport does, and an
+            // error would let a fix that merely checks the return value
+            // pass without ever testing the deadline.
+            self.counters.lock().stalled_sends += 1;
+            std::future::pending::<()>().await;
+        }
         let tx = {
             let mut guard = self.tx.lock();
             match guard.take() {
@@ -683,6 +705,25 @@ impl InMemoryEndpoint {
             Some(tone) => self.try_emit(tone).is_ok(),
             None => false,
         }
+    }
+
+    /// Make this link stop draining. Sends to it hang rather than fail,
+    /// and the peer stays registered — a stall is invisible to a liveness
+    /// lease, which is the whole problem. Not the same as [`Self::kill`]
+    /// (the link is gone, so the far side's receiver closes) or as a
+    /// partition (the link stays nominally up and keeps buffering).
+    pub fn stall(&self) {
+        self.stalled.store(true, Ordering::SeqCst);
+    }
+
+    /// Let a stalled link drain again. A stall is a fault, not a
+    /// teardown, so it has to be reversible.
+    pub fn unstall(&self) {
+        self.stalled.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_stalled(&self) -> bool {
+        self.stalled.load(Ordering::SeqCst)
     }
 
     /// Drop the link as if the peer's process had vanished. Sends start
@@ -823,6 +864,9 @@ pub struct Ensemble {
     expired_dusk: Arc<AtomicU64>,
     /// Mids already dispatched here, so a retransmit is delivered once.
     delivery: Arc<DeliveryState>,
+    /// Sends that did not complete. A stalled peer has to be a number
+    /// someone can alert on, not a `Lagged(n)` on a broadcast receiver.
+    send_stats: Arc<SendStats>,
 }
 
 /// The local fan-out point for tones arriving from peers. Cloned into
@@ -906,6 +950,11 @@ pub enum RouteError {
     Untargeted,
     #[error("send failed: {0}")]
     SendFailed(anyhow::Error),
+    /// The peer stopped reading and the write did not complete in time.
+    /// Distinct from a plain failure because the connection was closed
+    /// on purpose — the peer should be gone from the registry shortly.
+    #[error("peer stalled: no write completed within the send deadline")]
+    PeerStalled,
 }
 
 impl Ensemble {
@@ -919,6 +968,7 @@ impl Ensemble {
             strict_auth: false,
             expired_dusk: Arc::new(AtomicU64::new(0)),
             delivery: DeliveryState::new(),
+            send_stats: SendStats::new(),
         }
     }
 
@@ -978,6 +1028,7 @@ impl Ensemble {
             let gossip = self.gossip.clone();
             let expired_dusk = self.expired_dusk.clone();
             let delivery = self.delivery.clone();
+            let send_stats = self.send_stats.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1062,7 +1113,7 @@ impl Ensemble {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
-                        if handle_gossip(&gossip, &peers, &id, &tone).await {
+                        if handle_gossip(&send_stats, &gossip, &peers, &id, &tone).await {
                             continue;
                         }
                     }
@@ -1075,7 +1126,7 @@ impl Ensemble {
                     if chi_val == Some(KAD_FIND_NODE_CHI)
                         || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
                     {
-                        if handle_kad(&kad, &peers, &id, &my_id, &tone).await {
+                        if handle_kad(&send_stats, &kad, &peers, &id, &my_id, &tone).await {
                             continue;
                         }
                     }
@@ -1142,6 +1193,7 @@ impl Ensemble {
             let gossip = self.gossip.clone();
             let expired_dusk = self.expired_dusk.clone();
             let delivery = self.delivery.clone();
+            let send_stats = self.send_stats.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1201,7 +1253,7 @@ impl Ensemble {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
-                        if handle_gossip(&gossip, &peers, &id, &tone).await {
+                        if handle_gossip(&send_stats, &gossip, &peers, &id, &tone).await {
                             continue;
                         }
                     }
@@ -1209,7 +1261,7 @@ impl Ensemble {
                     if chi_val == Some(KAD_FIND_NODE_CHI)
                         || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
                     {
-                        if handle_kad(&kad, &peers, &id, &my_id, &tone).await {
+                        if handle_kad(&send_stats, &kad, &peers, &id, &my_id, &tone).await {
                             continue;
                         }
                     }
@@ -1237,7 +1289,7 @@ impl Ensemble {
             .map(|(id, p)| (*id, p.conn.clone()))
             .collect();
         for (id, conn) in peers {
-            let _ = conn.send(ping_tone(&self.me, &id, seq)).await;
+            let _ = send_bounded(&conn, ping_tone(&self.me, &id, seq), &self.send_stats).await;
         }
     }
 
@@ -1250,7 +1302,7 @@ impl Ensemble {
         // as long as the link takes.
         let conn = self.peers.read().get(id).map(|p| p.conn.clone());
         if let Some(conn) = conn {
-            let _ = conn.send(ping_tone(&self.me, id, seq)).await;
+            let _ = send_bounded(&conn, ping_tone(&self.me, id, seq), &self.send_stats).await;
         }
     }
 
@@ -1338,6 +1390,18 @@ impl Ensemble {
         self.delivery.len()
     }
 
+    /// Peer sends that did not complete. `timed_out` is the interesting
+    /// one: it means a peer stopped reading, and each one should have
+    /// cost that peer its place in the registry.
+    pub fn send_timeouts(&self) -> u64 {
+        self.send_stats.timed_out()
+    }
+
+    /// Peer sends that failed outright, as opposed to stalling.
+    pub fn send_failures(&self) -> u64 {
+        self.send_stats.failed()
+    }
+
     /// Publish a gossip message to every installed peer. Mints a fresh
     /// `msg_id`, marks it seen locally
     /// (so we don't re-fan it on the inevitable echo), and sends a
@@ -1377,7 +1441,7 @@ impl Ensemble {
             peers.values().map(|p| p.conn.clone()).collect()
         };
         for conn in conns {
-            if let Err(e) = conn.send(tone.clone()).await {
+            if let Err(e) = send_bounded(&conn, tone.clone(), &self.send_stats).await {
                 tracing::debug!(
                     target: "ensemble.gossip",
                     peer = %conn.peer().id.short(),
@@ -1649,7 +1713,11 @@ impl Ensemble {
             peers.get(&target).map(|p| p.conn.clone())
         };
         let conn = conn.ok_or(RouteError::UnknownPeer(target))?;
-        conn.send(tone).await.map_err(RouteError::SendFailed)
+        match send_bounded(&conn, tone, &self.send_stats).await {
+            Ok(()) => Ok(()),
+            Err(SendError::TimedOut) => Err(RouteError::PeerStalled),
+            Err(SendError::Failed(why)) => Err(RouteError::SendFailed(anyhow::anyhow!(why))),
+        }
     }
 }
 
@@ -1861,6 +1929,7 @@ fn rekey_peer(
 }
 
 async fn handle_kad(
+    send_stats: &SendStats,
     kad: &Arc<KadState>,
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
     arrived_from: &Hid,
@@ -1884,7 +1953,7 @@ async fn handle_kad(
             peers.get(arrived_from).map(|p| p.conn.clone())
         };
         if let Some(conn) = conn {
-            if let Err(e) = conn.send(resp).await {
+            if let Err(e) = send_bounded(&conn, resp, send_stats).await {
                 tracing::debug!(
                     target: "ensemble.kad",
                     peer = %arrived_from.short(),
@@ -1944,6 +2013,7 @@ async fn handle_liveness(
 }
 
 async fn handle_gossip(
+    send_stats: &SendStats,
     gossip: &Arc<gossip::GossipState>,
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
     arrived_from: &Hid,
@@ -1975,7 +2045,7 @@ async fn handle_gossip(
             .collect()
     };
     for conn in others {
-        if let Err(e) = conn.send(tone.clone()).await {
+        if let Err(e) = send_bounded(&conn, tone.clone(), send_stats).await {
             tracing::debug!(
                 target: "ensemble.gossip",
                 peer = %conn.peer().id.short(),

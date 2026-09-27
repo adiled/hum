@@ -485,6 +485,24 @@ impl Sim {
         Ok(())
     }
 
+    /// Make `a→b` stop draining. Sends into it hang instead of failing,
+    /// and `b` stays registered — the shape of a peer whose socket
+    /// buffer filled because nobody is reading.
+    pub fn stall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.stall();
+        Ok(())
+    }
+
+    pub fn unstall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.unstall();
+        Ok(())
+    }
+
+    /// Whether `a→b` is currently stalled.
+    pub fn is_stalled(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_stalled())
+    }
+
     /// Fault both directions, resetting each endpoint's tone counter.
     pub fn impair(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
         self.impair_dir(a, b, faults.clone())?;
@@ -640,23 +658,38 @@ impl Sim {
         let ha = ha.ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
         let hb = hb.ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
 
+        // A failed heal flush is worth a warning but not a hard error:
+        // the link is back either way, and the tips will reconcile on the
+        // next heal. Losing the log line would hide it entirely.
         for (from, to) in [(&ha, &hb), (&hb, &ha)] {
-            let snapshot = from.waneman.snapshot();
-            let mut snapshot_json = serde_json::Map::new();
-            for (sigil, n) in snapshot {
-                snapshot_json.insert(sigil, Value::from(n));
-            }
-            let tone = serde_json::json!({
-                "chi": "wane-sync",
-                "rid": hum_identity::HumId::mint().to_string(),
-                "from": from.id.to_hex(),
-                "to": to.id.to_hex(),
-                "snapshot": Value::Object(snapshot_json),
-            });
-            if let Err(e) = from.ensemble.route(tone).await {
+            if let Err(e) = self.wane_sync(from, to).await {
                 tracing::warn!(err = %e, "wane-sync.route.failed");
             }
         }
+        Ok(())
+    }
+
+    /// Emit one `chi:"wane-sync"` from `from` to `to`, carrying `from`'s
+    /// current `WaneTracker` snapshot.
+    ///
+    /// Separate from [`Self::heal`] so a test can send one *while a
+    /// partition is up* and assert it does not arrive. A partition test
+    /// that only sends during the heal cannot tell a real outage from a
+    /// silent one: no traffic means no leak, so the tips stay divergent
+    /// either way and the test passes for the wrong reason.
+    pub async fn wane_sync(&self, from: &SimHumd, to: &SimHumd) -> Result<()> {
+        let mut snapshot_json = serde_json::Map::new();
+        for (sigil, n) in from.waneman.snapshot() {
+            snapshot_json.insert(sigil, Value::from(n));
+        }
+        let tone = serde_json::json!({
+            "chi": "wane-sync",
+            "rid": hum_identity::HumId::mint().to_string(),
+            "from": from.id.to_hex(),
+            "to": to.id.to_hex(),
+            "snapshot": Value::Object(snapshot_json),
+        });
+        from.ensemble.route(tone).await?;
         Ok(())
     }
 
