@@ -548,14 +548,16 @@ impl Sim {
     /// Liveness of `a` as `b` sees it. The sim needs its own probe and
     /// sweep because it drives the ensembles directly rather than
     /// through the daemon's supervisor.
+    /// Send a liveness probe from `a` to `b`. Direction is the point:
+    /// this says whether a can still reach b, not the reverse.
     pub async fn probe(&self, a: Hid, b: Hid) -> Result<()> {
         let ens = self
             .humds
             .read()
-            .get(&b)
+            .get(&a)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", b.short()))?;
-        ens.ensemble.probe_all(0).await;
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
+        ens.ensemble.probe_one(&b, 0).await;
         Ok(())
     }
 
@@ -631,16 +633,12 @@ impl Sim {
             link.b_end.set_partitioned(false);
         }
 
-        let humds = self.humds.read();
-        let ha = humds
-            .get(&link_a)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
-        let hb = humds
-            .get(&link_b)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
-        drop(humds);
+        let (ha, hb) = {
+            let humds = self.humds.read();
+            (humds.get(&link_a).cloned(), humds.get(&link_b).cloned())
+        };
+        let ha = ha.ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
+        let hb = hb.ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
 
         for (from, to) in [(&ha, &hb), (&hb, &ha)] {
             let snapshot = from.waneman.snapshot();
@@ -812,6 +810,7 @@ impl Sim {
         // each receiver out, drain non-blockingly, then put it back.
         // This keeps the per-humd state simple — no long-lived fanout
         // task per synthetic client.
+        {
         let mut queues = h.out_queues.lock();
         for (_cid, rx) in queues.iter_mut() {
             while let Ok(tone) = rx.try_recv() {
@@ -837,7 +836,7 @@ impl Sim {
                 }
             }
         }
-        drop(queues);
+        }
 
         // Now await the named sid's mailbox.
         let mut rx_opt = h.sid_mailboxes.lock().remove(sid)?;
@@ -964,12 +963,19 @@ impl Sim {
     pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
         for _ in 0..200 {
             let done = {
-                let humds = self.humds.read();
-                let (Some(ha), Some(hb)) = (humds.get(&a), humds.get(&b)) else {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                    continue;
+                let (ha, hb) = {
+                    let humds = self.humds.read();
+                    (humds.get(&a).cloned(), humds.get(&b).cloned())
                 };
-                ha.ensemble.handshake_done(&b) && hb.ensemble.handshake_done(&a)
+                match (ha, hb) {
+                    (Some(ha), Some(hb)) => {
+                        ha.ensemble.handshake_done(&b) && hb.ensemble.handshake_done(&a)
+                    }
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                }
             };
             if done {
                 let hb = self.humds.read().get(&b).cloned().expect("checked above");

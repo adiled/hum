@@ -57,8 +57,11 @@ impl LivenessSignal {
 /// One peer's lease.
 #[derive(Debug, Clone)]
 pub struct Lease {
-    /// Traffic last seen from this peer, or `None` before the first
-    /// inbound tone. A peer is `Stale` until it proves itself.
+    /// When this peer was installed. Silence counts from here, so a
+    /// peer that never proves itself still expires: a black-hole link
+    /// that swallows every probe would otherwise read as `Live` forever.
+    pub since: std::time::Instant,
+    /// Traffic last seen from this peer, `None` until it first answers.
     pub last_seen: Option<std::time::Instant>,
     /// Set when the transport reported the link closed.
     pub closed: bool,
@@ -66,7 +69,11 @@ pub struct Lease {
 
 impl Default for Lease {
     fn default() -> Self {
-        Self { last_seen: None, closed: false }
+        Self {
+            since: std::time::Instant::now(),
+            last_seen: None,
+            closed: false,
+        }
     }
 }
 
@@ -90,12 +97,13 @@ impl Lease {
         if self.closed {
             return Liveness::Dead;
         }
-        match self.last_seen {
-            // Never heard from: a link that hasn't finished its
-            // handshake yet is not stale, it's unproven.
-            None => Liveness::Live,
-            Some(t) if t.elapsed() > ttl => Liveness::Stale,
-            Some(_) => Liveness::Live,
+        // An unproven peer is still on probation, not immortal: quiet
+        // since install ages it out just like a peer that went quiet.
+        let quiet = self.last_seen.unwrap_or(self.since);
+        if quiet.elapsed() > ttl {
+            Liveness::Stale
+        } else {
+            Liveness::Live
         }
     }
 

@@ -54,7 +54,9 @@ async fn traffic_renews_the_lease_without_probing() {
     // Drain off a peer stamps the lease in the drainer, so a real tone
     // is enough.
     for i in 0..3 {
-        sim.send_marks(b, a, &format!("keep{i}"), 1).await.expect("send");
+        sim.send_marks(b, a, &format!("keep{i}"), 1)
+            .await
+            .expect("send");
     }
     // Give the drainer a moment to publish.
     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -119,13 +121,23 @@ async fn a_partitioned_peer_is_not_dead() {
     let (sim, a, b) = pair().await;
     sim.partition(a, b).expect("partition");
     tokio::time::sleep(TTL + Duration::from_millis(60)).await;
-    assert_eq!(
+
+    // Silence is silence: from here a partition and a death look the
+    // same, and the sweep reaps both. What a partition is *not* is
+    // `Dead`, which is reserved for a transport that told us it closed
+    // — a fact rather than an inference, and the only case that earns
+    // an immediate redial.
+    assert_ne!(
         liveness(&sim, a, b),
-        Some(Liveness::Live),
-        "a partition is not a death: the link is still up"
+        Some(Liveness::Dead),
+        "no transport reported closure, so this is not a proven death"
     );
-    assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![]);
-    assert_eq!(sim.peer_count(a), 1);
+    assert_eq!(liveness(&sim, a, b), Some(Liveness::Stale));
+    assert_eq!(
+        sim.peer_count(a),
+        1,
+        "a partition does not evict on its own"
+    );
 }
 
 /// After reaping, a rewired peer is reachable again — the recovery the
@@ -170,4 +182,18 @@ async fn eviction_only_touches_the_dead_peer() {
     assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![b]);
     assert_eq!(liveness(&sim, a, c), Some(Liveness::Live), "c is untouched");
     assert_eq!(sim.peer_count(a), 1, "only b was reaped");
+}
+/// A link that swallows every probe must still be reaped. Without an
+/// install timestamp such a peer is unproven forever, and "unproven"
+/// quietly becomes "immortal".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_that_never_answers_goes_stale() {
+    let (sim, a, b) = pair().await;
+    // Black-hole both directions: a's probe arrives, b's reply does not.
+    sim.impair(a, b, ensemble::LinkFaults::default().drop_pct(100, 7))
+        .expect("black hole");
+    sim.probe(a, b).await.expect("probe");
+    tokio::time::sleep(TTL + Duration::from_millis(60)).await;
+    assert_eq!(liveness(&sim, a, b), Some(Liveness::Stale));
+    assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![b]);
 }

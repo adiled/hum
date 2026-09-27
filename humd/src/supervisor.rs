@@ -84,7 +84,16 @@ impl Supervisor {
         iroh: Option<Arc<ensemble::IrohTransport>>,
         cfg: LivenessConfig,
     ) -> Self {
-        Self { ens, key, peers, my_caps, iroh, cfg, backoff: HashMap::new(), seq: 0 }
+        Self {
+            ens,
+            key,
+            peers,
+            my_caps,
+            iroh,
+            cfg,
+            backoff: HashMap::new(),
+            seq: 0,
+        }
     }
 
     fn backoff_for(&mut self, id: &Hid) -> &mut Backoff {
@@ -100,20 +109,36 @@ impl Supervisor {
         self.ens.probe_all(self.seq).await;
         let evicted = self.ens.evict_expired(self.cfg.ttl);
 
-        let mut report = SweepReport { evicted: evicted.clone(), ..Default::default() };
+        let mut report = SweepReport {
+            evicted: evicted.clone(),
+            ..Default::default()
+        };
         for id in evicted {
             if !self.peers.iter().any(|p| p.humd_id == id) {
                 // Evicted a peer we didn't dial (inbound-only). Nothing
                 // to redial, but it's no longer in the registry.
                 debug!(peer = %id.short(), "liveness.evicted.inbound_only");
-                continue;
             }
+        }
+
+        // The redial set is "configured but absent", not "just evicted".
+        // A peer whose *first* dial failed was never installed, so no
+        // sweep will ever name it — and a peer that is down at boot is
+        // exactly the one that must come back.
+        let wanted: Vec<PeerConfig> = self
+            .peers
+            .iter()
+            .filter(|p| !self.ens.peers().contains(&p.humd_id))
+            .cloned()
+            .collect();
+
+        for peer in wanted {
+            let id = peer.humd_id;
             if !self.backoff_for(&id).ready() {
                 report.backed_off.push(id);
                 continue;
             }
-            let peer = self.peers.iter().find(|p| p.humd_id == id).expect("checked above");
-            if self.dial(peer).await {
+            if self.dial(&peer).await {
                 self.backoff_for(&id).succeed();
                 report.redialed.push(id);
                 info!(peer = %id.short(), "liveness.redial.ok");
@@ -127,26 +152,37 @@ impl Supervisor {
     }
 
     /// Try each transport this peer advertises, in preference order.
-    /// A transport that isn't configured is skipped, not failed — an
-    /// iroh-only daemon shouldn't count TCP's absence against the
-    /// peer.
+    /// A transport this daemon isn't running is skipped rather than
+    /// failed — an iroh-only daemon shouldn't count TCP's absence
+    /// against the peer.
+    ///
+    /// A peer that advertises nothing we can dial fails: reporting
+    /// success would clear its backoff, and the peer would be
+    /// re-evicted and re-"dialled" on every tick forever.
     async fn dial(&self, peer: &PeerConfig) -> bool {
-        let mut tried = false;
+        let mut dialable = false;
         if let Some(transport) = &self.iroh {
-            if peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
-                tried = true;
+            if peer
+                .hints
+                .iter()
+                .any(|h| h.starts_with(ensemble::iroh::IROH_HINT))
+            {
+                dialable = true;
                 if iroh::dial_one(transport, &self.ens, &self.key, peer, &self.my_caps).await {
                     return true;
                 }
             }
         }
         if peer.hints.iter().any(|h| h.starts_with("tcp:")) {
-            tried = true;
+            dialable = true;
             if tcp::dial_one(&self.ens, &self.key, peer, &self.my_caps).await {
                 return true;
             }
         }
-        !tried
+        if !dialable {
+            warn!(peer = %peer.humd_id.short(), "liveness.redial.undialable");
+        }
+        false
     }
 
     /// Liveness of a single peer, for reporting.
@@ -188,11 +224,14 @@ mod tests {
 
     #[test]
     fn report_defaults_to_empty() {
-        assert_eq!(SweepReport::default(), SweepReport {
-            evicted: vec![],
-            redialed: vec![],
-            backed_off: vec![],
-            dial_failed: vec![],
-        });
+        assert_eq!(
+            SweepReport::default(),
+            SweepReport {
+                evicted: vec![],
+                redialed: vec![],
+                backed_off: vec![],
+                dial_failed: vec![],
+            }
+        );
     }
 }

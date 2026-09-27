@@ -1203,6 +1203,19 @@ impl Ensemble {
         }
     }
 
+    /// Ping one peer. Direction matters: a probe answers a question
+    /// about the link in the direction it travels, so probing a->b
+    /// says nothing about whether b->a still works.
+    pub async fn probe_one(&self, id: &Hid, seq: u64) {
+        // Clone out from under the lock: holding the registry read
+        // lock across the send would block add_peer/remove_peer for
+        // as long as the link takes.
+        let conn = self.peers.read().get(id).map(|p| p.conn.clone());
+        if let Some(conn) = conn {
+            let _ = conn.send(ping_tone(&self.me, id, seq)).await;
+        }
+    }
+
     /// Liveness of one peer. `None` if it isn't installed.
     pub fn peer_liveness(&self, id: &Hid, ttl: std::time::Duration) -> Option<Liveness> {
         self.peers.read().get(id).map(|p| p.lease.state(ttl))
@@ -1216,6 +1229,15 @@ impl Ensemble {
             .filter(|(_, p)| p.lease.expired(ttl))
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// Mark a peer dead as if its transport had closed. Lets a scenario
+    /// produce a death without waiting out a TTL, which is the only way
+    /// to test eviction deterministically.
+    pub fn expire_peer(&self, id: &Hid) {
+        if let Some(p) = self.peers.write().get_mut(id) {
+            p.lease.observe(LivenessSignal::TransportClosed);
+        }
     }
 
     /// Evict every peer whose lease has run out, closing each link.
