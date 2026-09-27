@@ -235,6 +235,30 @@ async fn a_response_echoing_the_request_rid_still_arrives() {
     assert_eq!(mids, vec!["m-req", "m-resp"], "both messages delivered");
 }
 
+/// A gossip tone published with a lifetime is dropped once that
+/// lifetime passes, by the same rule as any other tone. Gossip is
+/// re-fanned at every hop, so without this a congested mesh delivers
+/// alerts long after they stopped being true.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_expired_gossip_publish_is_dropped() {
+    let (sim, a, b, c) = trio().await;
+    let mut sub = sim.subscribe_topic(c, "alerts").expect("subscribe");
+
+    sim.publish_with_dusk(a, "alerts", json!({"event": "overloaded"}), -1_000)
+        .await
+        .expect("publish with a lifetime already in the past");
+
+    let got = timeout(Duration::from_millis(200), sub.recv()).await;
+    assert!(got.is_err(), "an expired gossip tone was delivered: {got:?}");
+
+    // Counted at the FIRST hop, not the last. Expiry is enforced
+    // wherever a tone lands, so a dead tone is dropped on entry to the
+    // mesh instead of being carried to every subscriber and dropped
+    // N times.
+    assert_eq!(sim.expired_dusk(b), 1, "b is the first hop and should have caught it");
+    assert_eq!(sim.expired_dusk(c), 0, "c never saw it — it died at b");
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

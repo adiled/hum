@@ -58,7 +58,10 @@ pub mod delivery;
 pub use delivery::{DeliveryState, DELIVERY_SEEN_CAP};
 
 pub mod gossip;
-pub use gossip::{gossip_tone, mint_msg_id, GossipState, GOSSIP_CHI, GOSSIP_SEEN_CAP};
+pub use gossip::{
+    gossip_tone, gossip_tone_with_dusk, mint_msg_id, GossipState, GOSSIP_CHI,
+    GOSSIP_SEEN_CAP,
+};
 
 pub mod liveness;
 pub use liveness::{
@@ -1349,12 +1352,26 @@ impl Ensemble {
     /// `route()` semantically; both share the `PeerConnection.send`
     /// wire but `publish` is mesh-wide and `route` is unicast.
     pub async fn publish(&self, topic: &str, payload: serde_json::Value) {
+        self.publish_with_dusk(topic, payload, None).await
+    }
+
+    /// As [`Self::publish`], with a lifetime in ms. Every hop re-fans,
+    /// so a slow mesh can deliver a gossip tone long after it was sent;
+    /// `dusk_ms` is how long it stays worth acting on. `None` (the
+    /// default) never expires — see [`gossip_tone_with_dusk`] for why
+    /// there is no default TTL.
+    pub async fn publish_with_dusk(
+        &self,
+        topic: &str,
+        payload: serde_json::Value,
+        dusk_ms: Option<i64>,
+    ) {
         let msg_id = mint_msg_id(&self.me);
         let rid = format!("gossip-{msg_id}");
         // Mark seen locally so the next-hop echo (peer re-fans back to
         // us) is dropped at the drainer's seen check.
         self.gossip.note_seen(&msg_id);
-        let tone = gossip_tone(topic, &rid, &self.me, payload, &msg_id);
+        let tone = gossip_tone_with_dusk(topic, &rid, &self.me, payload, &msg_id, dusk_ms);
         let conns: Vec<Arc<dyn PeerConnection>> = {
             let peers = self.peers.read();
             peers.values().map(|p| p.conn.clone()).collect()

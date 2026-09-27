@@ -171,6 +171,10 @@ registry by one bump.
 
 ### Nestler → daemon
 
+`body fields` below are the chi-specific fields only. `sid` is not
+among them — it is an [envelope](#envelope) field, and a tone carries it
+alongside any of these.
+
 | chi | body fields | meaning |
 |---|---|---|
 | `hello` | `bee`, `protoVersion`, optional `version`/`propensity`/`chi`/`source` | first frame after connect |
@@ -178,9 +182,9 @@ registry by one bump.
 | `cancel` | `sid` | interrupt the current turn for this sid |
 | `cleanup` | `sid` | drop daemon state for this session |
 | `curate` | `sid` | manual compaction request |
-| `release-permit` | `sid`, `permitId`, `decision` | answer a `permission-ask` |
+| `release-permit` | `callId`, `ok`, optional `error` | answer a `permission-ask` |
 | `tendril-result` | `sid`, `callId`, `result` | task subagent answered |
-| `tool-result` | `sid`, `callId`, `result` | nestler-declared tool answered |
+| `tool-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | nestler-declared tool answered |
 | `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) |
 
 ### Daemon → nestler
@@ -188,15 +192,15 @@ registry by one bump.
 | chi | body fields | meaning |
 |---|---|---|
 | `breath` | (state snapshot, usually `{}`) | reply to hello |
-| `chunk` | `sid`, `part` (text/reasoning/tool fragment), `index` | streamed model output |
-| `finish` | `sid`, `finishReason`, `usage` | turn complete |
-| `error` | `sid`, `code`, `message`, optional protocol payload | turn aborted / hard error |
-| `session-ready` | `sid`, `claudeSessionId` | nest spawned, ready for prompts |
-| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `cellId` | process lifecycle event |
-| `permission-ask` | `sid`, `permitId`, `question`, `context` | mid-stream permission needed |
-| `tendril-reach` | `sid`, `callId`, `name`, `args` | task subagent dispatch |
+| `chunk` | `chunkType`, `blockIdx`, `delta`, `partialJson` | streamed model output |
+| `finish` | `finishReason`, `usage`, optional `exitCode`, `subtype` | turn complete |
+| `error` | `message`, `code`, optional `subtype`, `usage` | turn aborted / hard error |
+| `session-ready` | `nestId`, `model`, `tools` | nest spawned, ready for prompts |
+| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `pid` | process lifecycle event |
+| `permission-ask` | `callId`, `toolName`, `message`, `arg` | mid-stream permission needed |
+| `tendril-reach` | `task`, `tools` | task subagent dispatch |
 | `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch |
-| `tool-meta` | `sid`, `callId`, `meta` | out-of-band metadata for a tool result |
+| `tool-meta` | `callId`, `toolName`, `metadata` | out-of-band metadata for a tool result |
 
 ### Either direction
 

@@ -72,10 +72,12 @@ pub struct GossipState {
 
 impl GossipState {
     pub fn new() -> Arc<Self> {
+        Self::with_cap(GOSSIP_SEEN_CAP)
+    }
+
+    pub fn with_cap(cap: usize) -> Arc<Self> {
         Arc::new(Self {
-            seen: Mutex::new(LruCache::new(
-                NonZeroUsize::new(GOSSIP_SEEN_CAP).expect("seen cap > 0"),
-            )),
+            seen: Mutex::new(LruCache::new(NonZeroUsize::new(cap).expect("seen cap > 0"))),
             topics: Mutex::new(HashMap::new()),
         })
     }
@@ -132,22 +134,52 @@ impl GossipState {
 pub fn mint_msg_id(from: &Hid) -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let origin = &from.to_hex()[..12];
+    // Slice on a char boundary rather than byte 12, and fall back to
+    // the whole hex if a Hid ever renders shorter. A panic here would
+    // take down a publisher, and the prefix is cosmetic anyway.
+    let hex = from.to_hex();
+    let origin: String = hex.chars().take(12).collect(); // 6 bytes of origin
+    let origin = origin.as_str();
     format!("{origin}-{:x}-{seq:x}", crate::now_ms())
 }
 
 /// Build a `chi:"gossip-publish"` tone with the given fields. Kept here
 /// so `Ensemble::publish` and the install drainer's re-fan path agree
 /// on the wire shape.
-pub fn gossip_tone(topic: &str, rid: &str, from: &Hid, payload: Value, msg_id: &str) -> Tone {
-    serde_json::json!({
+///
+/// `dusk_ms` is a lifetime, and it is `None` by default on purpose. A
+/// gossip message is re-fanned by every hop, so a slow mesh can deliver
+/// one arbitrarily late; whether a stale announcement is worse than no
+/// announcement is the publisher's call, not the library's. A heartbeat
+/// wants a tight lifetime, a "worker moved" notice wants a long one, and
+/// a default TTL would silently drop the second kind on a congested
+/// mesh. `None` means no expiry.
+pub fn gossip_tone_with_dusk(
+    topic: &str,
+    rid: &str,
+    from: &Hid,
+    payload: Value,
+    msg_id: &str,
+    dusk_ms: Option<i64>,
+) -> Tone {
+    let mut tone = serde_json::json!({
         "chi": GOSSIP_CHI,
         "rid": rid,
         "topic": topic,
         "payload": payload,
         "from": from.to_hex(),
         "msg_id": msg_id,
-    })
+    });
+    if let Some(dusk) = dusk_ms {
+        tone.as_object_mut()
+            .expect("gossip tone is an object")
+            .insert("dusk".into(), serde_json::json!(crate::now_ms() + dusk));
+    }
+    tone
+}
+
+pub fn gossip_tone(topic: &str, rid: &str, from: &Hid, payload: Value, msg_id: &str) -> Tone {
+    gossip_tone_with_dusk(topic, rid, from, payload, msg_id, None)
 }
 
 /// Parsed view of an incoming gossip tone. Drainer pulls these fields
@@ -191,12 +223,24 @@ mod tests {
     }
 
     #[test]
-    fn seen_set_dedups_within_capacity() {
+    fn seen_set_dedups_repeats() {
         let state = GossipState::new();
         assert!(state.note_seen("a"));
         assert!(!state.note_seen("a"));
         assert!(state.note_seen("b"));
         assert!(!state.note_seen("a"));
+    }
+
+    /// The cap is the only thing bounding this set, so eviction has to
+    /// be exercised at a cap small enough to reach.
+    #[test]
+    fn seen_set_evicts_at_its_cap() {
+        let state = GossipState::with_cap(2);
+        assert!(state.note_seen("a"));
+        assert!(state.note_seen("b"));
+        assert!(state.note_seen("c"), "c is new");
+        assert!(state.note_seen("a"), "a was least recent, so evicted");
+        assert!(!state.note_seen("c"), "c survived");
     }
 
     #[test]

@@ -22,27 +22,30 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use lru::LruCache;
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 
 use crate::Tone;
 
-/// Bound on the per-ensemble `mid` seen-set. Sizing is a memory/idle-
-/// time trade: the set only has to remember an id for as long as a
-/// duplicate of it could still be in flight, which `dusk` bounds from
-/// above. A tone with no `dusk` can be redelivered arbitrarily late by
-/// a re-fan, so it is bounded only by this cap.
+/// Bound on the per-ensemble `mid` seen-set, in entries. Sizing is a
+/// memory/idle-time trade: the set only has to remember an id for as
+/// long as a duplicate of it could still be in flight, which `dusk`
+/// bounds from above. A tone with no `dusk` can be redelivered
+/// arbitrarily late by a re-fan, so it is bounded by this cap instead.
 pub const DELIVERY_SEEN_CAP: usize = 4096;
 
-/// Ids of tones this ensemble has already dispatched.
+/// Ids of tones this ensemble has already dispatched, held as digests.
 pub struct DeliveryState {
-    seen: Mutex<LruCache<String, ()>>,
+    seen: Mutex<LruCache<[u8; 32], ()>>,
 }
 
 impl DeliveryState {
     pub fn new() -> std::sync::Arc<Self> {
+        Self::with_cap(DELIVERY_SEEN_CAP)
+    }
+
+    pub fn with_cap(cap: usize) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
-            seen: Mutex::new(LruCache::new(
-                NonZeroUsize::new(DELIVERY_SEEN_CAP).expect("seen cap > 0"),
-            )),
+            seen: Mutex::new(LruCache::new(NonZeroUsize::new(cap).expect("seen cap > 0"))),
         })
     }
 
@@ -55,12 +58,13 @@ impl DeliveryState {
     /// couple two unrelated decisions and let one evict the other's
     /// entries early.
     pub fn note_mid(&self, mid: &str) -> bool {
+        let key = mid_key(mid);
         let mut seen = self.seen.lock();
-        if seen.contains(mid) {
-            seen.get(mid);
+        if seen.contains(&key) {
+            seen.get(&key);
             false
         } else {
-            seen.put(mid.to_string(), ());
+            seen.put(key, ());
             true
         }
     }
@@ -96,6 +100,26 @@ fn drop_if_dusk(tone: &Tone, expired: &AtomicU64) -> bool {
     past
 }
 
+/// Reduce a `mid` to a fixed 32-byte key before it goes in the set.
+///
+/// A `mid` is attacker-controlled and unbounded: the TCP transport reads
+/// NDJSON with `BufReader::lines()`, which has no length cap, so a peer
+/// can put a megabyte in one field. Capping the *entry count* therefore
+/// does not bound the memory — 4096 entries of unbounded string is not
+/// a bound. Digesting keeps dedup exact while making the footprint
+/// `cap * 32` bytes no matter what arrives.
+fn mid_key(mid: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(mid.as_bytes());
+    h.finalize().into()
+}
+
+/// Enough of a `mid` to correlate a log line with a sender, without
+/// copying an attacker-sized string into the log.
+fn mid_prefix(mid: &str) -> String {
+    mid.chars().take(12).collect()
+}
+
 /// The `mid` on a tone, if it carries one. Absent or non-string means
 /// "no at-most-once claim", not "malformed" — the tone is delivered.
 pub fn mid_of(tone: &Tone) -> Option<&str> {
@@ -116,7 +140,7 @@ pub fn admit(tone: &Tone, delivery: &DeliveryState, expired_dusk: &AtomicU64) ->
         Some(mid) if !delivery.note_mid(mid) => {
             tracing::debug!(
                 target: "ensemble",
-                mid,
+                mid = %mid_prefix(mid),
                 chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or(""),
                 "tone.mid: duplicate suppressed"
             );
@@ -198,6 +222,56 @@ mod tests {
     /// Dusk is checked first, so a mid already known to be dead cannot
     /// displace a live one from the bounded set.
     #[test]
+    /// The set is bounded in entries AND in bytes. A `mid` is
+    /// attacker-controlled and the transport has no frame cap, so the
+    /// entry cap alone bounds nothing.
+    #[test]
+    fn an_enormous_mid_costs_a_fixed_32_bytes() {
+        let d = state();
+        let huge = "x".repeat(4 * 1024 * 1024);
+        assert!(d.note_mid(&huge));
+        assert!(!d.note_mid(&huge), "still dedups exactly");
+        assert_eq!(d.len(), 1);
+        // The key is the digest, not the string.
+        assert_eq!(mid_key(&huge).len(), 32);
+        assert_ne!(mid_key(&huge), mid_key(&"y".repeat(4 * 1024 * 1024)));
+    }
+
+    /// A multibyte `mid` must not panic the prefix used in logs.
+    #[test]
+    fn mid_prefix_is_char_safe() {
+        assert_eq!(mid_prefix(&"short"), "short");
+        assert_eq!(mid_prefix("é".repeat(50).as_str()), "é".repeat(12));
+    }
+
+    /// Eviction must actually happen at the cap — the whole reason the
+    /// cap exists. Filling past it should evict the least recently seen
+    /// and admit the newcomer.
+    #[test]
+    fn the_seen_set_evicts_at_its_cap() {
+        let d = DeliveryState::with_cap(2);
+        assert!(d.note_mid("a"));
+        assert!(d.note_mid("b"));
+        // Observing "a" is also its LRU touch, so "b" is now the victim.
+        assert!(!d.note_mid("a"), "still remembered at cap");
+        assert!(d.note_mid("c"), "c is new");
+        assert_eq!(d.len(), 2, "cap holds");
+        assert!(!d.note_mid("a"), "a survived");
+        assert!(d.note_mid("b"), "b was the least recent, so it went");
+    }
+
+    /// A duplicate is only suppressed while the set can still remember
+    /// it. Past the cap a very late retransmit is admitted again — the
+    /// documented consequence of bounding memory, not a silent
+    /// guarantee. `dusk` is what closes this window in practice.
+    #[test]
+    fn a_duplicate_past_the_cap_is_admitted_again() {
+        let d = DeliveryState::with_cap(1);
+        assert!(d.note_mid("old"));
+        assert!(d.note_mid("new"));
+        assert!(d.note_mid("old"), "forgotten — cap is 1");
+    }
+
     fn a_dead_mid_does_not_evict_a_live_one() {
         let d = state();
         let expired = AtomicU64::new(0);

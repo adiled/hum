@@ -1051,6 +1051,26 @@ impl Sim {
         Ok(())
     }
 
+    /// As [`Self::publish`], with a lifetime in ms so a scenario can
+    /// assert that an expired gossip tone is dropped rather than
+    /// delivered. `None` never expires.
+    pub async fn publish_with_dusk(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+        dusk_ms: i64,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish_with_dusk(topic, payload, Some(dusk_ms)).await;
+        Ok(())
+    }
+
     /// Subscribe to a gossip topic on one of the sim's humds. Broadcast
     /// receivers only see what is published after they subscribe.
     pub fn subscribe_topic(
