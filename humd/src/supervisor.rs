@@ -162,11 +162,11 @@ impl Supervisor {
     async fn dial(&self, peer: &PeerConfig) -> bool {
         let mut dialable = false;
         if let Some(transport) = &self.iroh {
-            if peer
+            let iroh_hints = peer
                 .hints
                 .iter()
-                .any(|h| h.starts_with(ensemble::iroh::IROH_HINT))
-            {
+                .any(|h| h.starts_with(ensemble::iroh::IROH_HINT));
+            if iroh_hints {
                 dialable = true;
                 if iroh::dial_one(transport, &self.ens, &self.key, peer, &self.my_caps).await {
                     return true;

@@ -219,9 +219,6 @@ mod tests {
         assert_eq!(expired.load(Ordering::SeqCst), 0);
     }
 
-    /// Dusk is checked first, so a mid already known to be dead cannot
-    /// displace a live one from the bounded set.
-    #[test]
     /// The set is bounded in entries AND in bytes. A `mid` is
     /// attacker-controlled and the transport has no frame cap, so the
     /// entry cap alone bounds nothing.
@@ -240,7 +237,7 @@ mod tests {
     /// A multibyte `mid` must not panic the prefix used in logs.
     #[test]
     fn mid_prefix_is_char_safe() {
-        assert_eq!(mid_prefix(&"short"), "short");
+        assert_eq!(mid_prefix("short"), "short");
         assert_eq!(mid_prefix("é".repeat(50).as_str()), "é".repeat(12));
     }
 
@@ -272,6 +269,9 @@ mod tests {
         assert!(d.note_mid("old"), "forgotten — cap is 1");
     }
 
+    /// Dusk is checked first, so a mid already known to be dead cannot
+    /// displace a live one from the bounded set.
+    #[test]
     fn a_dead_mid_does_not_evict_a_live_one() {
         let d = state();
         let expired = AtomicU64::new(0);
