@@ -28,7 +28,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -470,7 +470,11 @@ pub const PARTITION_BUFFER_CAP: usize = 64;
 pub struct InMemoryEndpoint {
     peer: HumdAddr,
     caps: PeerCapabilities,
-    tx: mpsc::Sender<Tone>,
+    /// Outbound sender. An Option so `kill` can drop it: dropping the
+    /// last sender is what closes the *peer's* receiver and ends its
+    /// drainer. `close` only drops our own receiver, which stops us
+    /// reading without telling the peer anything.
+    tx: Mutex<Option<mpsc::Sender<Tone>>>,
     rx: Mutex<Option<mpsc::Receiver<Tone>>>,
     /// Sim-controlled link state. When `partitioned == true`, `send()`
     /// accepts the tone and buffers it (bounded VecDeque) instead of
@@ -491,6 +495,11 @@ pub struct InMemoryEndpoint {
     /// Held tone during a reorder pair, awaiting its partner so the pair
     /// can be delivered in reverse.
     reorder_hold: Mutex<Option<Tone>>,
+    /// Set by [`InMemoryEndpoint::kill`]. A killed link is gone, not
+    /// slow: sends fail and the peer drainer sees its receiver close,
+    /// which is what marks the lease `TransportClosed`. Distinct from
+    /// `partitioned`, which keeps the link nominally up.
+    killed: AtomicBool,
 }
 
 struct PartitionState {
@@ -531,7 +540,7 @@ impl InMemoryEndpoint {
         let a = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(b_id),
             caps: b_caps.clone(),
-            tx: tx_ab,
+            tx: Mutex::new(Some(tx_ab)),
             rx: Mutex::new(Some(rx_ba)),
             partition: Mutex::new(PartitionState {
                 partitioned: false,
@@ -541,11 +550,12 @@ impl InMemoryEndpoint {
             rng: Mutex::new(StdRng::seed_from_u64(seed_a)),
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
+            killed: AtomicBool::new(false),
         });
         let b = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(a_id),
             caps: a_caps,
-            tx: tx_ba,
+            tx: Mutex::new(Some(tx_ba)),
             rx: Mutex::new(Some(rx_ab)),
             partition: Mutex::new(PartitionState {
                 partitioned: false,
@@ -555,6 +565,7 @@ impl InMemoryEndpoint {
             rng: Mutex::new(StdRng::seed_from_u64(seed_b)),
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
+            killed: AtomicBool::new(false),
         });
         (a, b)
     }
@@ -586,13 +597,43 @@ impl InMemoryEndpoint {
         }
     }
 
+    /// `try_send` variant for the synchronous heal-flush path, where
+    /// holding a lock across an await isn't an option.
+    fn try_emit(&self, tone: Tone) -> Result<()> {
+        let guard = self.tx.lock();
+        let Some(tx) = guard.as_ref() else {
+            return Err(anyhow::anyhow!("link to {} is dead", self.peer.id.short()));
+        };
+        tx.try_send(tone).map_err(|e| anyhow::anyhow!("push: {e}"))
+    }
+
+    /// Send without holding the sender lock across the await. Taking
+    /// the sender out and putting it back is what keeps `kill` from
+    /// deadlocking against a send that has already committed to it.
+    async fn emit(&self, tone: Tone) -> Result<()> {
+        let tx = {
+            let mut guard = self.tx.lock();
+            match guard.take() {
+                Some(tx) => tx,
+                None => return Err(anyhow::anyhow!("link to {} is dead", self.peer.id.short())),
+            }
+        };
+        let sent = tx.send(tone).await;
+        // Reclaim the sender unless `kill` won the race and dropped it.
+        let mut guard = self.tx.lock();
+        if guard.is_none() {
+            *guard = Some(tx);
+        }
+        sent.map_err(|e| anyhow::anyhow!("send: {e}"))
+    }
+
     /// One tone onto the wire, optionally twice. `try_send` — a full or
     /// dead receiver during a heal flush is a lost tone, not an error the
     /// caller can act on.
     fn push(&self, tone: Tone, duplicate: bool) -> Result<()> {
-        self.tx.try_send(tone.clone()).map_err(|e| anyhow::anyhow!("push: {e}"))?;
+        self.try_emit(tone.clone())?;
         self.counters.lock().delivered += 1;
-        if duplicate && self.tx.try_send(tone).is_ok() {
+        if duplicate && self.try_emit(tone).is_ok() {
             let mut c = self.counters.lock();
             c.delivered += 1;
             c.duplicated += 1;
@@ -633,9 +674,31 @@ impl InMemoryEndpoint {
     /// Frees a tone held for reorder when no partner arrives.
     pub fn flush_reorder(&self) -> bool {
         match self.reorder_hold.lock().take() {
-            Some(tone) => self.tx.try_send(tone).is_ok(),
+            Some(tone) => self.try_emit(tone).is_ok(),
             None => false,
         }
+    }
+
+    /// Drop the link as if the peer's process had vanished. Sends start
+    /// failing and the drainer at the far end sees its receiver close,
+    /// which marks that peer's lease `TransportClosed`.
+    ///
+    /// A partition is not this: a partitioned link stays nominally up
+    /// and its peer may still be alive, so its lease keeps renewing and
+    /// it is never reaped. That difference is the point — a partition
+    /// heals itself, a dead peer needs a redial.
+    pub fn kill(&self) {
+        self.killed.store(true, Ordering::SeqCst);
+        // Dropping our sender is what closes the peer's receiver, which
+        // ends its drainer and marks its lease TransportClosed. Dropping
+        // our own receiver would only stop *us* reading, leaving the
+        // peer with a link that looks fine.
+        self.tx.lock().take();
+    }
+
+    /// Whether this link has been killed.
+    pub fn is_killed(&self) -> bool {
+        self.killed.load(Ordering::SeqCst)
     }
 }
 
@@ -645,6 +708,9 @@ impl PeerConnection for InMemoryEndpoint {
     fn capabilities(&self) -> &PeerCapabilities { &self.caps }
 
     async fn send(&self, tone: Tone) -> Result<()> {
+        if self.killed.load(Ordering::SeqCst) {
+            return Err(anyhow::anyhow!("link to {} is dead", self.peer.id.short()));
+        }
         self.counters.lock().offered += 1;
 
         {
@@ -670,9 +736,9 @@ impl PeerConnection for InMemoryEndpoint {
             let held = self.reorder_hold.lock().take();
             if let Some(held) = held {
                 self.counters.lock().reordered += 1;
-                self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+                self.emit(tone).await?;
                 self.counters.lock().delivered += 1;
-                self.tx.send(held).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+                self.emit(held).await?;
                 self.counters.lock().delivered += 1;
                 return Ok(());
             }
@@ -680,10 +746,10 @@ impl PeerConnection for InMemoryEndpoint {
             return Ok(());
         }
 
-        self.tx.send(tone.clone()).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+        self.emit(tone.clone()).await?;
         self.counters.lock().delivered += 1;
         if verdict.duplicate {
-            self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+            self.emit(tone).await?;
             let mut c = self.counters.lock();
             c.delivered += 1;
             c.duplicated += 1;
@@ -696,9 +762,9 @@ impl PeerConnection for InMemoryEndpoint {
     }
 
     fn close(&self) {
-        // Dropping the only sender drops the channel — receiver gets None.
-        // We can't drop tx through &self without interior mutability; mark
-        // closed by replacing rx with None so subsequent takes report empty.
+        // Drop both halves: the sender so the peer stops reading, the
+        // receiver so we stop expecting. Idempotent.
+        self.tx.lock().take();
         let _ = self.rx.lock().take();
     }
 }

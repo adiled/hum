@@ -226,6 +226,13 @@ impl Sim {
     /// support so overflow routing has somewhere to land, and the
     /// advertised `free_slots` reflects the atomic set via
     /// [`Sim::set_capacity`] (default = unlimited).
+    /// Rebuild the link between `a` and `b`, replacing whatever was
+    /// there. This is what a redial does: a fresh endpoint pair, so the
+    /// previous liveness state goes with it.
+    pub fn rewire(&self, a: Hid, b: Hid) -> Result<()> {
+        self.wire(a, b)
+    }
+
     pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
@@ -517,6 +524,75 @@ impl Sim {
         self.end_for(a, b)?.set_faults(LinkFaults::default());
         self.end_for(b, a)?.set_faults(LinkFaults::default());
         Ok(())
+    }
+
+    /// Drop the `a→b` direction as if `a`'s process had died: sends
+    /// fail and `b`'s drainer sees its receiver close, marking `a`
+    /// `TransportClosed` on `b`'s side.
+    pub fn kill_peer(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.kill();
+        Ok(())
+    }
+
+    /// Both directions. For "this peer is gone", which is the case a
+    /// liveness test actually wants.
+    pub fn kill_link(&self, a: Hid, b: Hid) -> Result<()> {
+        self.kill_peer(a, b)?;
+        self.kill_peer(b, a)
+    }
+
+    pub fn link_killed(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_killed())
+    }
+
+    /// Liveness of `a` as `b` sees it. The sim needs its own probe and
+    /// sweep because it drives the ensembles directly rather than
+    /// through the daemon's supervisor.
+    pub async fn probe(&self, a: Hid, b: Hid) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&b)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", b.short()))?;
+        ens.ensemble.probe_all(0).await;
+        Ok(())
+    }
+
+    /// Classify every installed peer of `observer` against `ttl`.
+    pub fn peer_liveness(
+        &self,
+        observer: Hid,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<(ensemble::Hid, ensemble::Liveness)>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens
+            .ensemble
+            .peers()
+            .into_iter()
+            .filter_map(|p| ens.ensemble.peer_liveness(&p, ttl).map(|l| (p, l)))
+            .collect())
+    }
+
+    /// Evict `observer`'s expired peers, returning who was reaped.
+    pub fn evict_expired(&self, observer: Hid, ttl: std::time::Duration) -> Result<Vec<ensemble::Hid>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens.ensemble.evict_expired(ttl))
+    }
+
+    /// Peers `observer` still has installed.
+    pub fn peer_count(&self, observer: Hid) -> usize {
+        self.humds.read().get(&observer).map(|h| h.ensemble.peers().len()).unwrap_or(0)
     }
 
     /// Drop the wired link between `a` and `b`. Both endpoints stop
