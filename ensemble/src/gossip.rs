@@ -36,7 +36,6 @@ use std::sync::Arc;
 use lru::LruCache;
 use parking_lot::Mutex;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use crate::{Hid, Tone};
@@ -117,25 +116,24 @@ impl GossipState {
     }
 }
 
-/// Mint the canonical `msg_id` for a gossip publish:
-/// `sha256("{topic}:{rid}:{from}:{payload}")[..16]` as 32 hex chars.
-/// `payload` is serialized via `serde_json` — not strictly canonical
-/// across implementations, but stable within one Rust ensemble (the
-/// same input produces the same output). Re-running publish() with the
-/// same (topic, rid, from, payload) yields the same id, which is what
-/// the dedup test relies on.
-pub fn mint_msg_id(topic: &str, rid: &str, from: &Hid, payload: &Value) -> String {
-    let payload_canonical = serde_json::to_string(payload).unwrap_or_default();
-    let mut h = Sha256::new();
-    h.update(topic.as_bytes());
-    h.update(b":");
-    h.update(rid.as_bytes());
-    h.update(b":");
-    h.update(from.to_hex().as_bytes());
-    h.update(b":");
-    h.update(payload_canonical.as_bytes());
-    let digest = h.finalize();
-    hex::encode(&digest[..16])
+/// Mint the wire `msg_id` for one publish: `{origin6}-{ms:x}-{seq:x}`.
+///
+/// The originator assigns this, and it is deliberately not derived from
+/// the payload. Content addressing cannot tell "the network delivered
+/// this twice" from "we published this twice on purpose", and a repeat
+/// is ordinary for the tones gossip exists to carry — a heartbeat, a
+/// standing overload alert, a retry after a resync. Hashing the payload
+/// swallows those as duplicates; only the sender can know which it meant.
+///
+/// A per-process counter makes every publish distinct whatever the clock
+/// or the content does, and the origin prefix keeps two humds from
+/// minting the same id. Receivers dedup on this and never mint it
+/// themselves.
+pub fn mint_msg_id(from: &Hid) -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let origin = &from.to_hex()[..12];
+    format!("{origin}-{:x}-{seq:x}", crate::now_ms())
 }
 
 /// Build a `chi:"gossip-publish"` tone with the given fields. Kept here
@@ -176,14 +174,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn msg_id_is_stable_and_distinct() {
+    fn msg_id_is_unique_per_publish() {
         let from = Hid::random_humd();
-        let a = mint_msg_id("t", "r1", &from, &json!({"x": 1}));
-        let b = mint_msg_id("t", "r1", &from, &json!({"x": 1}));
-        assert_eq!(a, b);
-        let c = mint_msg_id("t", "r1", &from, &json!({"x": 2}));
-        assert_ne!(a, c);
-        assert_eq!(a.len(), 32); // 16 bytes hex
+        let a = mint_msg_id(&from);
+        let b = mint_msg_id(&from);
+        assert_ne!(a, b, "two publishes must not share an id");
+    }
+
+    #[test]
+    fn msg_id_carries_its_origin() {
+        let a = mint_msg_id(&Hid::random_humd());
+        let b = mint_msg_id(&Hid::random_humd());
+        let origin = |id: &str| id.split('-').next().unwrap().to_string();
+        assert_ne!(origin(&a), origin(&b), "two humds must not mint alike");
+        assert_eq!(origin(&a).len(), 12);
     }
 
     #[test]
@@ -198,7 +202,7 @@ mod tests {
     #[test]
     fn parse_gossip_pulls_fields() {
         let from = Hid::random_humd();
-        let id = mint_msg_id("topic", "r", &from, &json!(1));
+        let id = mint_msg_id(&from);
         let t = gossip_tone("topic", "r", &from, json!(1), &id);
         let p = parse_gossip(&t).unwrap();
         assert_eq!(p.topic, "topic");

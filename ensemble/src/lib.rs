@@ -811,6 +811,35 @@ pub struct Ensemble {
     /// regardless of mode: a present pubkey that fails to verify is
     /// hostile, not legacy.
     strict_auth: bool,
+    /// Tones dropped for arriving past their own `dusk`. Counts what the
+    /// expiry rule actually caught, so a scenario can assert on it
+    /// instead of inferring from what did arrive.
+    expired_dusk: Arc<AtomicU64>,
+}
+
+/// True if `tone` is dead on arrival: it carries a `dusk` that has
+/// already passed, so it must not be dispatched or re-fanned. Counts
+/// the drop. A tone with no `dusk` never expires — the field is
+/// optional in the envelope.
+///
+/// Each node applies the deadline it was handed, at its own edge, once.
+/// That bounds how long a seen-set has to remember an id: a message
+/// past its `dusk` is gone rather than delivered, so an id only has to
+/// outlive the window in which a duplicate could still be in flight.
+fn drop_if_dusk(tone: &Tone, expired: &AtomicU64) -> bool {
+    let past = tone
+        .get("dusk")
+        .and_then(|v| v.as_i64())
+        .is_some_and(|dusk| now_ms() > dusk);
+    if past {
+        expired.fetch_add(1, Ordering::SeqCst);
+        tracing::debug!(
+            target: "ensemble",
+            chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or(""),
+            "tone.dusk: dropped on arrival"
+        );
+    }
+    past
 }
 
 /// The local fan-out point for tones arriving from peers. Cloned into
@@ -905,6 +934,7 @@ impl Ensemble {
             gossip: GossipState::new(),
             kad: KadState::new(me),
             strict_auth: false,
+            expired_dusk: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -962,6 +992,7 @@ impl Ensemble {
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
+            let expired_dusk = self.expired_dusk.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1033,6 +1064,12 @@ impl Ensemble {
                     // Falls through to the inbox fan-out if the tone is
                     // malformed (treats it as opaque application data).
                     if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
+                        continue;
+                    }
+                    // After the liveness stamp: an expired tone still
+                    // proves the link is alive, it just has nothing
+                    // left worth delivering or re-fanning.
+                    if drop_if_dusk(&tone, &expired_dusk) {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
@@ -1114,6 +1151,7 @@ impl Ensemble {
             let conn_for_drain = conn.clone();
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
+            let expired_dusk = self.expired_dusk.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1160,6 +1198,12 @@ impl Ensemble {
                         continue;
                     }
                     if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
+                        continue;
+                    }
+                    // After the liveness stamp: an expired tone still
+                    // proves the link is alive, it just has nothing
+                    // left worth delivering or re-fanning.
+                    if drop_if_dusk(&tone, &expired_dusk) {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
@@ -1290,8 +1334,13 @@ impl Ensemble {
     /// value is a boot-order race that silently ate network traffic.
     pub fn inbox_dropped(&self) -> u64 { self.inbox.dropped() }
 
-    /// Publish a gossip message to every installed peer. Mints an
-    /// `msg_id` from `(topic, rid, me, payload)`, marks it seen locally
+    /// Tones dropped for arriving past their `dusk`.
+    pub fn expired_dusk(&self) -> u64 {
+        self.expired_dusk.load(Ordering::SeqCst)
+    }
+
+    /// Publish a gossip message to every installed peer. Mints a fresh
+    /// `msg_id`, marks it seen locally
     /// (so we don't re-fan it on the inevitable echo), and sends a
     /// `chi:"gossip-publish"` tone over every `PeerConnection`. Local
     /// `subscribe_topic` subscribers do NOT see their own publish — that
@@ -1304,8 +1353,8 @@ impl Ensemble {
     /// `route()` semantically; both share the `PeerConnection.send`
     /// wire but `publish` is mesh-wide and `route` is unicast.
     pub async fn publish(&self, topic: &str, payload: serde_json::Value) {
-        let rid = format!("gossip-{}-{}", topic, now_ms());
-        let msg_id = mint_msg_id(topic, &rid, &self.me, &payload);
+        let msg_id = mint_msg_id(&self.me);
+        let rid = format!("gossip-{msg_id}");
         // Mark seen locally so the next-hop echo (peer re-fans back to
         // us) is dropped at the drainer's seen check.
         self.gossip.note_seen(&msg_id);

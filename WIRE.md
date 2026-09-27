@@ -42,14 +42,14 @@ Every tone is a JSON object with these top-level fields:
 | key | type | required | meaning |
 |---|---|---|---|
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
-| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. |
+| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. **Not a dedup key** — see [Identity](#identity). |
 | `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
 | `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
 | `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same (nest, sid). |
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
-| `dusk` | integer | optional | Absolute ms expiry. If `now > dusk`, the receiver MAY drop. |
+| `dusk` | integer | optional | Absolute ms expiry. humd drops a tone arriving with `now > dusk`, and counts it — see [Identity](#identity). |
 | `ext` | object | optional | Per-bee extension bag. Key it by your bee name; ignore other keys. |
 
 Beyond the envelope, **each chi defines its own body fields**. A
@@ -241,6 +241,43 @@ rid = base36(now_ms) + "-" + base36(counter++)
 Monotonic correlation id. Counter is per-process and starts at 0.
 Format-agnostic on receive — only the originator's correlation logic
 cares about the exact format.
+
+### Identity
+
+`rid` is correlation, not identity. Three things follow, and all three
+are load-bearing:
+
+- A request and its correlated response share one `rid`. `chi:"echo"`
+  is the ack *for* an `rid`, so a receiver that deduped on `rid` would
+  drop every response as a duplicate of its request.
+- `rid` is explicitly format-agnostic and per-originator, so two humds
+  can mint the same value. Reference clients mint per-session values
+  (`p-<sid>`, `prompt-<sid>`) that recur across restarts.
+- A sender that means to publish the same content twice is not
+  transmitting a duplicate. Repeats are ordinary for the tones gossip
+  carries — a heartbeat, a standing overload alert, a retry.
+
+So a message that needs at-most-once delivery carries its own
+originator-assigned id, minted once per publish and never reused:
+
+| chi | id field | who mints it |
+|---|---|---|
+| `gossip-publish` | `msg_id` | originator, once per publish |
+
+Receivers dedup on that field and never mint one themselves. The
+reference `Ensemble::publish` mints `"{origin6}-{ms:x}-{seq:x}"`: a
+per-process counter makes each publish distinct regardless of clock or
+content, and the origin prefix keeps two humds from colliding.
+
+Content-addressing an id (`sha256(topic:rid:from:payload)`) cannot
+work here. It conflates "delivered twice" with "sent twice", and since
+a sender typically marks its own publish seen before sending, a repeat
+that hashed alike was dropped before it ever left the origin.
+
+`dusk` bounds the window a duplicate can be recognised in at all: a
+tone past its `dusk` is dropped on arrival rather than delivered, so
+the seen-set only has to remember ids for as long as they can still be
+legitimately in flight.
 
 ### `WaneTracker`
 

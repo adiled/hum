@@ -97,7 +97,7 @@ async fn gossip_percolates_one_hop_and_dedupes_duplicates() {
     while let Ok(Ok(_)) = timeout(Duration::from_millis(1), sub_c.recv()).await {}
 
     let canary_payload = json!({"event": "dedup-canary"});
-    let canary_msg_id = mint_msg_id("test-topic", "rid-canary", &x_id, &canary_payload);
+    let canary_msg_id = mint_msg_id(&x_id);
     let canary_tone = gossip_tone(
         "test-topic",
         "rid-canary",

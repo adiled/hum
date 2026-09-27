@@ -1033,6 +1033,45 @@ impl Sim {
         Ok(cid)
     }
 
+    /// Publish a gossip payload to a mesh topic from one of the sim's
+    /// humds.
+    pub async fn publish(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish(topic, payload).await;
+        Ok(())
+    }
+
+    /// Subscribe to a gossip topic on one of the sim's humds. Broadcast
+    /// receivers only see what is published after they subscribe.
+    pub fn subscribe_topic(
+        &self,
+        humd: Hid,
+        topic: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        Ok(ens.ensemble.subscribe_topic(topic))
+    }
+
+    /// Tones this ensemble dropped for arriving past their `dusk`.
+    pub fn expired_dusk(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map_or(0, |h| h.ensemble.expired_dusk())
+    }
+
     /// Route `n` tones `from` → `to`, rid-tagged `tag-<i>`, in order.
     pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
         for i in 0..n {
