@@ -142,13 +142,23 @@ async fn link_recovers_after_lossy_heal() {
     sim.partition(a, b).unwrap();
     sim.send_marks(a, b, "cut", 4).await.unwrap();
     sim.impair_dir(a, b, LinkFaults::default().drop_next(2)).unwrap();
+
+    // Subscribe before healing. A subscription only sees tones
+    // delivered after it exists, and the healed tones reach the inbox
+    // asynchronously — subscribing afterwards races them, and a
+    // partition that drops fewer than 3 makes the window short enough
+    // for a late arrival to displace an "ok". This ordering also lets
+    // the assertion cover the lossy heal, not just the recovery.
+    let mut rx = sim.humd_peer_sub(b).unwrap();
     sim.heal(a, b).await.unwrap();
     sim.heal_link_faults(a, b).unwrap();
 
-    let mut rx = sim.humd_peer_sub(b).unwrap();
     sim.send_marks(a, b, "ok", 3).await.unwrap();
-    let rid = Sim::collect_rids(&mut rx, 3, WINDOW).await;
-    assert_eq!(rid, ["ok-0","ok-1","ok-2"]);
+    // Six tones: the two buffered ones the lossy heal spared, the
+    // wane-sync heal emits on its way out, then the three new marks.
+    let got = Sim::collect_rids(&mut rx, 6, WINDOW).await;
+    assert_eq!(&got[..2], ["cut-2", "cut-3"], "heal dropped the first two");
+    assert_eq!(&got[3..], ["ok-0", "ok-1", "ok-2"], "and the link carries traffic again");
 }
 
 // ── directional ────────────────────────────────────────────────────
