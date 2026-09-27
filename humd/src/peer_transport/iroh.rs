@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use ensemble::{Ensemble, HumdAddr, HumdKey, IrohTransport, PeerCapabilities, PeerConnection};
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 use crate::peers::PeerConfig;
 

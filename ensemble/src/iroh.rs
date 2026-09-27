@@ -56,6 +56,25 @@ pub const IROH_HINT: &str = "iroh:";
 /// hints accumulate as multiple direct addresses on the dial target.
 pub const IROH_IP_HINT: &str = "iroh-ip:";
 
+/// Turn a bound socket address into one a dialer can actually use.
+///
+/// An unspecified IP (`0.0.0.0` / `::`) means "all interfaces" and is
+/// not routable as a destination, so it becomes loopback. Anything
+/// already concrete is left alone — a peer bound to a real LAN address
+/// should be dialled at that address, not at 127.0.0.1.
+pub fn dialable_addr(bound: std::net::SocketAddr) -> std::net::SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    let ip = match bound.ip() {
+        // Unspecified v4 -> v4 loopback.
+        IpAddr::V4(v4) if v4.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        // Unspecified v6 -> v6 loopback, keeping the address family so
+        // the port stays bound on the socket the peer actually opened.
+        IpAddr::V6(v6) if v6.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        other => other,
+    };
+    SocketAddr::new(ip, bound.port())
+}
+
 /// Convert an iroh [`EndpointId`] (Ed25519 verifying key) into our
 /// content-addressable [`Hid`]. `Hid = sha256(pubkey)`.
 pub fn humd_id_from_node_id(node_id: &EndpointId) -> Hid {
@@ -309,10 +328,31 @@ impl IrohTransport {
     }
 
     /// This endpoint's NodeId (its Ed25519 public key). Pair with
-    /// `bound_sockets()` to build the [`HumdAddr`] the peer needs to
-    /// dial us back.
+    /// [`IrohTransport::dial_hints`] to build the [`HumdAddr`] the peer
+    /// needs to dial us back.
     pub fn node_id(&self) -> EndpointId {
         self.endpoint.id()
+    }
+
+    /// The address a peer should dial to reach this endpoint.
+    ///
+    /// `bound_sockets()` reports the addresses we *bound* — which for a
+    /// normal bind are the wildcard `0.0.0.0` and `[::]`. Those are
+    /// not destinations: a dialer that tries them hangs until its own
+    /// deadline, with no error to explain the wait. So the unspecified
+    /// address is swapped for loopback, which is what a same-host dial
+    /// actually wants, and a concrete address is passed through
+    /// unchanged.
+    ///
+    /// Worth being explicit about because the symptom is atrocious: the
+    /// dialer hangs, the far side's `accept()` hangs, and nothing in
+    /// either log mentions that the address was never valid.
+    pub fn dial_hints(&self) -> Vec<String> {
+        self.endpoint
+            .bound_sockets()
+            .into_iter()
+            .map(|s| format!("{IROH_IP_HINT}{}", dialable_addr(s)))
+            .collect()
     }
 
     /// Accept the next inbound connection. Performs the QUIC handshake
@@ -388,5 +428,56 @@ impl Transport for IrohTransport {
         )
         .await?;
         Ok(endpoint as Arc<dyn PeerConnection>)
+    }
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use super::dialable_addr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    /// The bug this exists for: a normal bind reports `0.0.0.0`, and a
+    /// dialer handed that address waits out its full deadline with no
+    /// error. Both families.
+    #[test]
+    fn a_wildcard_bind_becomes_loopback() {
+        let v4: SocketAddr = "0.0.0.0:41678".parse().expect("parse");
+        assert_eq!(dialable_addr(v4), "127.0.0.1:41678".parse().expect("parse"));
+        let v6: SocketAddr = "[::]:41678".parse().expect("parse");
+        assert_eq!(dialable_addr(v6), "[::1]:41678".parse().expect("parse"));
+    }
+
+    /// The port has to survive, or the hint points at a different socket
+    /// and the dial times out for a second, subtler reason.
+    #[test]
+    fn the_port_is_preserved() {
+        let a: SocketAddr = "0.0.0.0:1".parse().expect("parse");
+        let b: SocketAddr = "0.0.0.0:65535".parse().expect("parse");
+        assert_eq!(dialable_addr(a).port(), 1);
+        assert_eq!(dialable_addr(b).port(), 65535);
+    }
+
+    /// A peer already bound to a routable address must be dialled there.
+    /// Rewriting a real LAN address to loopback would break T1, which is
+    /// the one case where these hints are load-bearing in production.
+    #[test]
+    fn a_concrete_address_is_left_alone() {
+        for s in ["192.168.1.5:9000", "10.0.0.7:443", "[fe80::1]:9000", "127.0.0.1:5000"] {
+            let before: SocketAddr = s.parse().expect("parse");
+            assert_eq!(dialable_addr(before), before, "{s} must be untouched");
+        }
+    }
+
+    /// Idempotent: running it twice is the same as running it once, so a
+    /// caller can re-normalise an address it was handed without harm.
+    #[test]
+    fn normalising_twice_is_stable() {
+        let v4: SocketAddr = "0.0.0.0:7000".parse().expect("parse");
+        let once = dialable_addr(v4);
+        assert_eq!(dialable_addr(once), once);
+        // And the result is a real destination, not another wildcard.
+        assert!(!once.ip().is_unspecified());
+        assert_ne!(once.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_ne!(dialable_addr(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)).ip(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
     }
 }
