@@ -1,0 +1,9 @@
+# cross-compiled humd binary — built by android/scripts/build-humd.sh
+app/src/main/assets/humd
+
+# gradle / android build outputs
+app/build/
+build/
+.cargo/
+*.apk
+*.log
