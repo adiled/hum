@@ -54,6 +54,9 @@ pub use tls::{
 pub mod iroh;
 pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
 
+pub mod delivery;
+pub use delivery::{DeliveryState, DELIVERY_SEEN_CAP};
+
 pub mod gossip;
 pub use gossip::{gossip_tone, mint_msg_id, GossipState, GOSSIP_CHI, GOSSIP_SEEN_CAP};
 
@@ -815,31 +818,8 @@ pub struct Ensemble {
     /// expiry rule actually caught, so a scenario can assert on it
     /// instead of inferring from what did arrive.
     expired_dusk: Arc<AtomicU64>,
-}
-
-/// True if `tone` is dead on arrival: it carries a `dusk` that has
-/// already passed, so it must not be dispatched or re-fanned. Counts
-/// the drop. A tone with no `dusk` never expires — the field is
-/// optional in the envelope.
-///
-/// Each node applies the deadline it was handed, at its own edge, once.
-/// That bounds how long a seen-set has to remember an id: a message
-/// past its `dusk` is gone rather than delivered, so an id only has to
-/// outlive the window in which a duplicate could still be in flight.
-fn drop_if_dusk(tone: &Tone, expired: &AtomicU64) -> bool {
-    let past = tone
-        .get("dusk")
-        .and_then(|v| v.as_i64())
-        .is_some_and(|dusk| now_ms() > dusk);
-    if past {
-        expired.fetch_add(1, Ordering::SeqCst);
-        tracing::debug!(
-            target: "ensemble",
-            chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or(""),
-            "tone.dusk: dropped on arrival"
-        );
-    }
-    past
+    /// Mids already dispatched here, so a retransmit is delivered once.
+    delivery: Arc<DeliveryState>,
 }
 
 /// The local fan-out point for tones arriving from peers. Cloned into
@@ -935,6 +915,7 @@ impl Ensemble {
             kad: KadState::new(me),
             strict_auth: false,
             expired_dusk: Arc::new(AtomicU64::new(0)),
+            delivery: DeliveryState::new(),
         }
     }
 
@@ -993,6 +974,7 @@ impl Ensemble {
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
             let expired_dusk = self.expired_dusk.clone();
+            let delivery = self.delivery.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1068,8 +1050,12 @@ impl Ensemble {
                     }
                     // After the liveness stamp: an expired tone still
                     // proves the link is alive, it just has nothing
-                    // left worth delivering or re-fanning.
-                    if drop_if_dusk(&tone, &expired_dusk) {
+                    // left worth delivering or re-fanning. `admit`
+                    // also drops a `mid` this ensemble already
+                    // dispatched, so a retransmit is delivered once.
+                    // Checked before gossip so a duplicate is not
+                    // re-fanned either.
+                    if !delivery::admit(&tone, &delivery, &expired_dusk) {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
@@ -1152,6 +1138,7 @@ impl Ensemble {
             let strict = self.strict_auth;
             let gossip = self.gossip.clone();
             let expired_dusk = self.expired_dusk.clone();
+            let delivery = self.delivery.clone();
             let kad = self.kad.clone();
             let my_id = self.me;
             tokio::spawn(async move {
@@ -1202,8 +1189,12 @@ impl Ensemble {
                     }
                     // After the liveness stamp: an expired tone still
                     // proves the link is alive, it just has nothing
-                    // left worth delivering or re-fanning.
-                    if drop_if_dusk(&tone, &expired_dusk) {
+                    // left worth delivering or re-fanning. `admit`
+                    // also drops a `mid` this ensemble already
+                    // dispatched, so a retransmit is delivered once.
+                    // Checked before gossip so a duplicate is not
+                    // re-fanned either.
+                    if !delivery::admit(&tone, &delivery, &expired_dusk) {
                         continue;
                     }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
@@ -1337,6 +1328,11 @@ impl Ensemble {
     /// Tones dropped for arriving past their `dusk`.
     pub fn expired_dusk(&self) -> u64 {
         self.expired_dusk.load(Ordering::SeqCst)
+    }
+
+    /// Number of mids currently remembered for at-most-once delivery.
+    pub fn delivery_seen(&self) -> usize {
+        self.delivery.len()
     }
 
     /// Publish a gossip message to every installed peer. Mints a fresh

@@ -38,6 +38,18 @@ pub struct Envelope {
     /// absolute ms expiry — past this, drop tone
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dusk: Option<i64>,
+    /// originator-assigned message id — at-most-once delivery.
+    ///
+    /// Minted once per logical message by whoever originates it, and
+    /// never equal to `rid`. A response echoes the request's `rid` for
+    /// correlation but carries its own `mid`, because a request and its
+    /// response are two messages. A receiver that deduped on `rid`
+    /// would drop every response as a duplicate of its request.
+    ///
+    /// Optional: a tone without one makes no at-most-once claim and is
+    /// delivered as it arrives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mid: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ext: Option<BTreeMap<String, BTreeMap<String, Value>>>,
@@ -56,6 +68,7 @@ impl Envelope {
             wane: None,
             sent_at: None,
             dusk: None,
+            mid: None,
             ext: None,
         }
     }
@@ -112,7 +125,7 @@ impl<'de> Deserialize<'de> for Tone {
         let mut all: Map<String, Value> = Map::deserialize(de)?;
         // Pull envelope keys out, leave the rest as body.
         const ENV_KEYS: &[&str] =
-            &["chi", "rid", "from", "to", "sigil", "sid", "wane", "sentAt", "dusk", "ext"];
+            &["chi", "rid", "from", "to", "sigil", "sid", "wane", "sentAt", "dusk", "mid", "ext"];
         let mut env_map = Map::with_capacity(ENV_KEYS.len());
         for k in ENV_KEYS {
             if let Some(v) = all.remove(*k) {

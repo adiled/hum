@@ -50,6 +50,7 @@ Every tone is a JSON object with these top-level fields:
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
 | `dusk` | integer | optional | Absolute ms expiry. humd drops a tone arriving with `now > dusk`, and counts it — see [Identity](#identity). |
+| `mid` | string | optional | Originator-assigned message id. Presence is an at-most-once claim: a receiver that has already dispatched this `mid` drops the repeat. Distinct from `rid` — see [Identity](#identity). |
 | `ext` | object | optional | Per-bee extension bag. Key it by your bee name; ignore other keys. |
 
 Beyond the envelope, **each chi defines its own body fields**. A
@@ -263,11 +264,36 @@ originator-assigned id, minted once per publish and never reused:
 | chi | id field | who mints it |
 |---|---|---|
 | `gossip-publish` | `msg_id` | originator, once per publish |
+| any, when at-most-once is wanted | `mid` | originator, once per logical message |
 
 Receivers dedup on that field and never mint one themselves. The
 reference `Ensemble::publish` mints `"{origin6}-{ms:x}-{seq:x}"`: a
 per-process counter makes each publish distinct regardless of clock or
 content, and the origin prefix keeps two humds from colliding.
+
+`mid` extends the same rule to unicast, and the distinction is the
+whole design. `mid` answers *which message is this*; `rid` answers
+*which conversation is it in*. A response therefore carries the
+request's `rid` and its own `mid` — same rid, different mid, both
+delivered. That is what a retry looks like too: same rid, same mid,
+delivered once.
+
+`mid` is optional, and its absence is meaningful rather than a
+shortcoming. A tone with no `mid` makes no at-most-once claim and is
+delivered every time it is sent, so a sender may repeat a body as often
+as it likes. Suppressing those would be the original mistake in another
+guise — dropping a message the sender meant to send. A receiver must
+not substitute `rid` for a missing `mid`.
+
+Each receiver enforces `mid` and `dusk` at its own edge, once per hop,
+and keeps the two independent:
+
+- `dusk` is checked first, so a dead tone never occupies seen-set
+  capacity and cannot displace a live id.
+- The `mid` seen-set is separate from the gossip `msg_id` seen-set. A
+  `mid` records that this node already *delivered* a tone; a `msg_id`
+  also governs whether it is *re-fanned*. Sharing one set would couple
+  two unrelated decisions and let one evict the other's entries early.
 
 Content-addressing an id (`sha256(topic:rid:from:payload)`) cannot
 work here. It conflates "delivered twice" with "sent twice", and since
@@ -277,7 +303,9 @@ that hashed alike was dropped before it ever left the origin.
 `dusk` bounds the window a duplicate can be recognised in at all: a
 tone past its `dusk` is dropped on arrival rather than delivered, so
 the seen-set only has to remember ids for as long as they can still be
-legitimately in flight.
+legitimately in flight. A tone with no `dusk` can be re-fanned
+arbitrarily late, so such ids are bounded by the seen-set cap instead
+of by any deadline.
 
 ### `WaneTracker`
 

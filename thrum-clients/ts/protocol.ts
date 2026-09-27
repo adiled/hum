@@ -219,6 +219,7 @@ export interface Envelope {
   wane?: number;
   sentAt?: number;
   dusk?: number;
+  mid?: string;
   ext?: Record<string, Record<string, unknown>>;
 }
 
