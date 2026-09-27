@@ -62,8 +62,15 @@ pub fn peers_path() -> PathBuf {
 /// (warn). Malformed rows inside `peers[]` → skipped (warn), good rows
 /// kept.
 pub(crate) fn load() -> Vec<PeerConfig> {
-    let path = peers_path();
-    let raw = match std::fs::read_to_string(&path) {
+    load_from(&peers_path())
+}
+
+/// As [`load`], against an explicit path. Split out so a test can name
+/// its own file: `XDG_CONFIG_HOME` is process-global, and a test that
+/// sets it races every other test in the same binary that reads a
+/// config path.
+pub(crate) fn load_from(path: &std::path::Path) -> Vec<PeerConfig> {
+    let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             trace!(path = %path.display(), "peers.missing");
@@ -107,15 +114,25 @@ fn parse_humd_id(s: &str) -> Option<Hid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// These tests name their own file instead of setting
+    /// `XDG_CONFIG_HOME`. That variable is process-global, and the test
+    /// binary runs these in parallel threads: setting it here pointed
+    /// every other test in the process at this fixture, and the
+    /// `remove_var` on the way out left the rest reading whatever
+    /// happened to be next.
+    fn fixture() -> (TempDir, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("peers.json");
+        (tmp, path)
+    }
 
     /// Fixture file with two good entries + one malformed → 2 loaded.
     #[test]
     fn load_parses_fixture_and_skips_bad_rows() {
-        let tmp = TempDir::new().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-        std::fs::create_dir_all(hum_paths::config_dir()).unwrap();
-
+        let (_tmp, path) = fixture();
         let good_a = "a".repeat(64);
         let good_b = "b".repeat(64);
         let bad = "nope";
@@ -128,23 +145,18 @@ mod tests {
               ]
             }}"#
         );
-        std::fs::write(hum_paths::peers_json(), body).unwrap();
+        std::fs::write(&path, body).unwrap();
 
-        let loaded = load();
+        let loaded = load_from(&path);
         assert_eq!(loaded.len(), 2, "bad row dropped");
         assert_eq!(loaded[0].hints, vec!["tcp:host-a:9000".to_string()]);
         assert_eq!(loaded[1].hints.len(), 2);
-
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     /// Missing file returns empty without error.
     #[test]
     fn load_missing_file_is_empty() {
-        let tmp = TempDir::new().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-        let loaded = load();
-        assert!(loaded.is_empty());
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        let (_tmp, path) = fixture();
+        assert!(load_from(&path).is_empty());
     }
 }

@@ -34,9 +34,16 @@ pub fn key_path() -> PathBuf {
 ///
 /// Bytes on disk are the raw 32-byte Ed25519 secret seed.
 pub fn load_or_mint_key() -> Result<HumdKey> {
-    let path = key_path();
+    load_or_mint_key_at(&key_path())
+}
+
+/// As [`load_or_mint_key`], against an explicit path. Split out so a
+/// test can name its own file instead of setting `XDG_STATE_HOME`,
+/// which is process-global and would point every other test in the
+/// binary at this test's key.
+pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
     if path.exists() {
-        let bytes = fs::read(&path)
+        let bytes = fs::read(path)
             .with_context(|| format!("read humd key {}", path.display()))?;
         if bytes.len() != 32 {
             return Err(anyhow!(
@@ -58,7 +65,7 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
     rand::thread_rng().fill_bytes(&mut seed);
     let signing = SigningKey::from_bytes(&seed);
     let key = HumdKey(signing);
-    persist_key(&path, &seed)?;
+    persist_key(path, &seed)?;
     info!(path = %path.display(), humd_id = %key.hid().short(), "identity.minted");
     Ok(key)
 }
@@ -132,32 +139,34 @@ fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
 
     /// Mint a key, drop it, reload from the same path — same Hid.
     /// Also checks file perms are 0o600.
+    ///
+    /// Names its own file rather than setting `XDG_STATE_HOME`: that
+    /// variable is process-global, and these tests share a binary with
+    /// others that read config and state paths.
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();
-        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+        let path: &Path = &tmp.path().join("humd.key");
 
-        let first = load_or_mint_key().expect("mint");
+        let first = load_or_mint_key_at(path).expect("mint");
         let id1 = first.hid();
-        let path = key_path();
         assert!(path.exists(), "key file persisted");
 
         // Permissions check.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "key file must be 0o600");
         }
 
         // Reload — same identity.
-        let second = load_or_mint_key().expect("reload");
+        let second = load_or_mint_key_at(path).expect("reload");
         assert_eq!(id1, second.hid(), "humd_id stable across reloads");
-
-        unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 }
