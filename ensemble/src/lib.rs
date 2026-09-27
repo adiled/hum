@@ -429,6 +429,22 @@ pub struct LinkCounters {
     pub evicted: u64,
 }
 
+impl LinkCounters {
+    /// Counters accrued after `base` was taken.
+    pub fn since(&self, base: &Self) -> Self {
+        Self {
+            offered: self.offered - base.offered,
+            delivered: self.delivered - base.delivered,
+            dropped: self.dropped - base.dropped,
+            duplicated: self.duplicated - base.duplicated,
+            reordered: self.reordered - base.reordered,
+            buffered: self.buffered - base.buffered,
+            lost_on_heal: self.lost_on_heal - base.lost_on_heal,
+            evicted: self.evicted - base.evicted,
+        }
+    }
+}
+
 // ── In-memory transport (sim) ──────────────────────────────────────────────
 
 /// Two `InMemoryEndpoint`s wired together with `mpsc` channels. Lets

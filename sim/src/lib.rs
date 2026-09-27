@@ -18,7 +18,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use ensemble::{hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
+use ensemble::{
+    hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults,
+    PeerCapabilities,
+};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
@@ -82,6 +85,7 @@ pub struct Sim {
 /// by humd `a` (it sends through this to reach `b`); `b_end` is the
 /// mirror. To fully partition the link we flip both — each blocks its
 /// own outbound side.
+#[derive(Clone)]
 struct Link {
     a: Hid,
     b: Hid,
@@ -195,24 +199,26 @@ impl Sim {
         sim_humd
       }
 
-      /// Block until both gates are closed: the daemon posted a ToneSink
-      /// to its ensemble, and the ensemble inbox pump subscribed for
-      /// peer drains. Before this, any injected tone is dropped.
-    pub async fn await_ready(&self, humd: Hid) {
-           for _ in 0..200 {
-                let h = self.humds.read().get(&humd).cloned();
-                if let Some(h) = h {
-                    let has_sink = h.thrum.has_sink();
-                    let has_sub = h.ensemble.has_subscribers();
-                    if has_sink && has_sub {
-                        return;
-                    }
-                  }
-             tokio::time::sleep(Duration::from_millis(5)).await;
-           }
-         let id = humd.short();
-         panic!("humd {} never became ready", id);
-       }
+    /// Block until both gates are closed: the daemon posted a ToneSink
+    /// to its ensemble, and the ensemble inbox pump subscribed for peer
+    /// drains. Before this, any injected tone is dropped. Errors if the
+    /// humd never reaches readiness.
+    pub async fn await_ready(&self, humd: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let ready = {
+                let Some(h) = self.humds.read().get(&humd).cloned() else {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    continue;
+                };
+                h.thrum.has_sink() && h.ensemble.has_subscribers()
+            };
+            if ready {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("humd {} never became ready", humd.short())
+    }
 
       /// Wire two humds with an in-memory channel pair. Both ensembles
     /// pick up a `PeerConnection` to the other; capabilities mirror each
@@ -449,6 +455,67 @@ impl Sim {
         // C also installs its side (so its drainer exists), but the
         // test only asserts A's view of the registry.
         hc.ensemble.install_unsigned(c_view, c_caps);
+        Ok(())
+    }
+
+    fn link(&self, a: Hid, b: Hid) -> Result<Link> {
+        self.links
+            .read()
+            .get(&link_key(a, b))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no link {}-{}", a.short(), b.short()))
+    }
+
+    /// The concrete endpoint `from` holds for its link to `to`.
+    fn end_for(&self, a: Hid, b: Hid) -> Result<Arc<InMemoryEndpoint>> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a { link.a_end } else { link.b_end })
+    }
+
+    /// Apply `faults` to one direction only. `a` is the sender.
+    pub fn impair_dir(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.end_for(a, b)?.set_faults(faults);
+        Ok(())
+    }
+
+    /// Fault both directions, resetting each endpoint's tone counter.
+    pub fn impair(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.impair_dir(a, b, faults.clone())?;
+        self.impair_dir(b, a, faults)
+    }
+
+    /// `(a→b, b→a)` ground truth for what the link actually did.
+    pub fn link_counters(&self, a: Hid, b: Hid) -> Result<(LinkCounters, LinkCounters)> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a {
+            (link.a_end.counters(), link.b_end.counters())
+        } else {
+            (link.b_end.counters(), link.a_end.counters())
+        })
+    }
+
+    /// Counters accrued since `base`. Link setup (the `wire` hello) is
+    /// traffic the link really carried, so a scenario measures a delta
+    /// rather than a total.
+    pub fn link_counters_since(
+        &self,
+        a: Hid,
+        b: Hid,
+        base: &LinkCounters,
+    ) -> Result<LinkCounters> {
+        let (ab, _) = self.link_counters(a, b)?;
+        Ok(ab.since(base))
+    }
+
+    /// Tones the `a→b` link is holding while partitioned.
+    pub fn buffered(&self, a: Hid, b: Hid) -> Result<usize> {
+        Ok(self.end_for(a, b)?.buffered())
+    }
+
+    /// Clear injected faults, restoring a clean link.
+    pub fn heal_link_faults(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.set_faults(LinkFaults::default());
+        self.end_for(b, a)?.set_faults(LinkFaults::default());
         Ok(())
     }
 
@@ -815,86 +882,101 @@ impl Sim {
         }
     }
 
-      /// Block until both ends have exchanged their hello tones, then
-      /// drain them from the inbox so scenarios start clean.
-     pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
-          for _ in 0..100 {
-              let ah = self.humds.read().get(&a).map(|h| h.ensemble.handshake_done(&b));
-              let bh = self.humds.read().get(&b).map(|h| h.ensemble.handshake_done(&a));
-              if ah == Some(true) && bh == Some(true) {
-                  // Drain any hello tones published to the inbox.
-                  {
-                      let h = self.humds.read().get(&b).cloned().ok_or_else(|| anyhow::anyhow!("no humd"))?;
-                      let mut rx = h.ensemble.subscribe();
-                      for _ in 0..10 { match rx.try_recv() { Ok(_t) => {}, Err(_) => break } }
-                  }
-                  return Ok(());
-              }
-              tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-           }
-          bail!("handshake timed out");
-     }
+    /// Block until both ends have exchanged hellos, then drain them from
+    /// `b`'s inbox so a scenario's receiver starts clean. The hello is
+    /// itself faultable, so a scenario must not race it.
+    pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let done = {
+                let humds = self.humds.read();
+                let (Some(ha), Some(hb)) = (humds.get(&a), humds.get(&b)) else {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    continue;
+                };
+                ha.ensemble.handshake_done(&b) && hb.ensemble.handshake_done(&a)
+            };
+            if done {
+                let hb = self.humds.read().get(&b).cloned().expect("checked above");
+                let mut rx = hb.ensemble.subscribe();
+                while rx.try_recv().is_ok() {}
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("{}-{} handshake timed out", a.short(), b.short())
+    }
 
-      /// Subscribe to humd inbox now, before any send races it.
-     pub fn humd_peer_sub(&self, humd: Hid) -> Option<ensemble::InboxSub> {
-          Some(self.humds.read().get(&humd)?.ensemble.subscribe())
-     }
+    /// Subscribe to `humd`'s inbox now. A `broadcast::Receiver` only
+    /// sees tones published after it exists, so a test that subscribes
+    /// inside a spawned task races its own first send.
+    pub fn humd_peer_sub(&self, humd: Hid) -> Option<ensemble::InboxSub> {
+        Some(self.humds.read().get(&humd)?.ensemble.subscribe())
+    }
 
-      /// Collect up to want tones, stopping early or on window.
-     pub async fn collect_rids(
-          rx: &mut ensemble::InboxSub,
-          want: usize,
-          window: Duration,
-      ) -> Vec<String> {
-          let mut out = Vec::with_capacity(want);
-          let deadline = tokio::time::Instant::now() + window;
-          while out.len() < want {
-              match tokio::time::timeout_at(deadline, rx.recv()).await {
-                  Ok(Ok(ton)) => {
-                      if let Some(rid) = ton["rid"].as_str() { out.push(rid.to_string()); }
-                  }
-                  _ => break,
-              }
-           }
-          out
-     }
+    /// Drain up to `want` rids from an inbox handle, stopping early once
+    /// `want` land or `window` elapses. A short return is the signal.
+    pub async fn collect_rids(
+        rx: &mut ensemble::InboxSub,
+        want: usize,
+        window: Duration,
+    ) -> Vec<String> {
+        let mut out = Vec::with_capacity(want);
+        let deadline = tokio::time::Instant::now() + window;
+        while out.len() < want {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(tone)) => {
+                    if let Some(rid) = tone["rid"].as_str() {
+                        out.push(rid.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+        out
+    }
 
-      /// Like nestler_send but injects in caller task so ordering is preserved.
-     pub async fn nestler_send_ordered(&self, humd: Hid, tone: Value) -> Result<String> {
-          let h = self.humds.read().get(&humd).cloned()
-              .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
-          let cid = hum_identity::HumId::mint().to_string();
-          let _ = h.thrum.register_synthetic(cid.clone());
-          h.thrum.inject_tone(&cid, tone).await;
-          Ok(cid)
-     }
+    /// `nestler_send` injects on a detached task, so consecutive sends
+    /// have no order. A scripted fault names a tone by position, so it
+    /// needs the injection to happen in the caller's task.
+    pub async fn nestler_send_ordered(&self, humd: Hid, tone: Value) -> Result<String> {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        let cid = hum_identity::HumId::mint().to_string();
+        let _ = h.thrum.register_synthetic(cid.clone());
+        h.thrum.inject_tone(&cid, tone).await;
+        Ok(cid)
+    }
 
-      /// Route n perf-mark tones from from to to, tagged tag-i.
-     pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
-          for i in 0..n {
-              let tone = serde_json::json!({
-                  "chi": "perf-mark",
-                  "rid": format!("{}-{}", tag, i),
-                  "to": to.to_hex(),
-                  "from": from.to_hex(),
-                  "mark": tag,
-               });
-              self.nestler_send_ordered(from, tone).await?;
-           }
-         Ok(())
-      }
+    /// Route `n` tones `from` → `to`, rid-tagged `tag-<i>`, in order.
+    pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
+        for i in 0..n {
+            let tone = serde_json::json!({
+                "chi": "perf-mark",
+                "rid": format!("{tag}-{i}"),
+                "to": to.to_hex(),
+                "from": from.to_hex(),
+                "mark": tag,
+            });
+            self.nestler_send_ordered(from, tone).await?;
+        }
+        Ok(())
+    }
 
-      /// The rid values of a collected batch, in arrival order.
-   pub fn rids(tones: &[Value]) -> Vec<String> {
-          tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
-       }
+    /// `rid`s of a collected batch, in arrival order.
+    pub fn rids(tones: &[Value]) -> Vec<String> {
+        tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+    }
 
-       /// Tones the ensemble's inbox accepted from a peer then destroyed
-       /// because no local subscriber was attached. Must stay zero when
-       /// a scenario subscribes before sending.
-    pub async fn ensemble_dropped(&self, humd: Hid) -> u64 {
-          self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
-       }
+    /// Tones the inbox accepted from a peer then destroyed because no
+    /// local subscriber was attached. Must stay zero when a scenario
+    /// subscribes before sending — loss belongs to the link, not here.
+    pub fn ensemble_dropped(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
+    }
 
     /// Shutdown all humds and drain their join handles.
     pub async fn shutdown(self) {
