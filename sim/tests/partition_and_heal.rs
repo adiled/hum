@@ -34,6 +34,8 @@ async fn partition_then_heal_converges_wane() {
     let a = sim.spawn_humd(a_id).await;
     let b = sim.spawn_humd(b_id).await;
 
+    sim.await_ready(a_id).await.expect("a ready");
+    sim.await_ready(b_id).await.expect("b ready");
     sim.wire(a_id, b_id).expect("wire a-b");
 
     // Both healthy: tick wane on each side a few times in lockstep
@@ -81,6 +83,8 @@ async fn partition_then_heal_converges_wane() {
         b.waneman.get(SIGIL),
     );
     assert_eq!(a.waneman.get(SIGIL), b.waneman.get(SIGIL));
+    assert_eq!(a.ensemble.inbox_dropped(), 0, "a dropped a drained tone");
+    assert_eq!(b.ensemble.inbox_dropped(), 0, "b dropped a drained tone");
 
     sim.shutdown().await;
 }

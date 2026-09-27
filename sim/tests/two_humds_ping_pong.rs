@@ -23,30 +23,27 @@ async fn two_humds_ping_pong() {
     let a = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     let b = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
+    sim.await_ready(a.id).await.expect("a ready");
+    sim.await_ready(b.id).await.expect("b ready");
     sim.wire(a.id, b.id).expect("wire humd-A and humd-B");
 
     // Tap humd-A's inbound peer stream BEFORE sending so we don't race
     // the broadcast (broadcast::Receiver only sees tones sent after it
-    // was created — earlier ones are gone). Spawn the tap in a task
-    // and join later.
+    // was created — earlier ones are gone).
     let a_id = a.id;
     let sim_arc = std::sync::Arc::new(sim);
     let sim_for_tap = sim_arc.clone();
     let tap = tokio::spawn(async move {
         sim_for_tap
-            .humd_peer_tap(a_id, Duration::from_secs(1))
+            .humd_peer_tap(a_id, Duration::from_secs(5))
             .await
     });
-
-    // Tiny pause so the tap subscriber exists before B sends. Without
-    // this the test races; with it the broadcast::Receiver is in place
-    // before any tone is published.
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // From humd-B's mock nestler, send a tone addressed to humd-A.
     // Note: `chi: "hello"` is the ensemble's peer-handshake tone and
     // gets absorbed by the drainer. Use `perf-mark` for the routing
-    // test — it's a non-handshake chi that flows through.
+    // test — it's a non-handshake chi, and the sink's `to:` rule routes
+    // it to the ensemble before chi-specific dispatch.
     let tone = serde_json::json!({
         "chi": "perf-mark",
         "rid": "ping-1",

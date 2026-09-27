@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use ensemble::{hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
@@ -193,9 +193,28 @@ impl Sim {
 
         self.humds.write().insert(id, sim_humd.clone());
         sim_humd
-    }
+      }
 
-    /// Wire two humds with an in-memory channel pair. Both ensembles
+      /// Block until both gates are closed: the daemon posted a ToneSink
+      /// to its ensemble, and the ensemble inbox pump subscribed for
+      /// peer drains. Before this, any injected tone is dropped.
+    pub async fn await_ready(&self, humd: Hid) {
+           for _ in 0..200 {
+                let h = self.humds.read().get(&humd).cloned();
+                if let Some(h) = h {
+                    let has_sink = h.thrum.has_sink();
+                    let has_sub = h.ensemble.has_subscribers();
+                    if has_sink && has_sub {
+                        return;
+                    }
+                  }
+             tokio::time::sleep(Duration::from_millis(5)).await;
+           }
+         let id = humd.short();
+         panic!("humd {} never became ready", id);
+       }
+
+      /// Wire two humds with an in-memory channel pair. Both ensembles
     /// pick up a `PeerConnection` to the other; capabilities mirror each
     /// side's current capacity — sim humds always claim `claude-cli`
     /// support so overflow routing has somewhere to land, and the
@@ -795,6 +814,87 @@ impl Sim {
             _ => None,
         }
     }
+
+      /// Block until both ends have exchanged their hello tones, then
+      /// drain them from the inbox so scenarios start clean.
+     pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
+          for _ in 0..100 {
+              let ah = self.humds.read().get(&a).map(|h| h.ensemble.handshake_done(&b));
+              let bh = self.humds.read().get(&b).map(|h| h.ensemble.handshake_done(&a));
+              if ah == Some(true) && bh == Some(true) {
+                  // Drain any hello tones published to the inbox.
+                  {
+                      let h = self.humds.read().get(&b).cloned().ok_or_else(|| anyhow::anyhow!("no humd"))?;
+                      let mut rx = h.ensemble.subscribe();
+                      for _ in 0..10 { match rx.try_recv() { Ok(_t) => {}, Err(_) => break } }
+                  }
+                  return Ok(());
+              }
+              tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+           }
+          bail!("handshake timed out");
+     }
+
+      /// Subscribe to humd inbox now, before any send races it.
+     pub fn humd_peer_sub(&self, humd: Hid) -> Option<ensemble::InboxSub> {
+          Some(self.humds.read().get(&humd)?.ensemble.subscribe())
+     }
+
+      /// Collect up to want tones, stopping early or on window.
+     pub async fn collect_rids(
+          rx: &mut ensemble::InboxSub,
+          want: usize,
+          window: Duration,
+      ) -> Vec<String> {
+          let mut out = Vec::with_capacity(want);
+          let deadline = tokio::time::Instant::now() + window;
+          while out.len() < want {
+              match tokio::time::timeout_at(deadline, rx.recv()).await {
+                  Ok(Ok(ton)) => {
+                      if let Some(rid) = ton["rid"].as_str() { out.push(rid.to_string()); }
+                  }
+                  _ => break,
+              }
+           }
+          out
+     }
+
+      /// Like nestler_send but injects in caller task so ordering is preserved.
+     pub async fn nestler_send_ordered(&self, humd: Hid, tone: Value) -> Result<String> {
+          let h = self.humds.read().get(&humd).cloned()
+              .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+          let cid = hum_identity::HumId::mint().to_string();
+          let _ = h.thrum.register_synthetic(cid.clone());
+          h.thrum.inject_tone(&cid, tone).await;
+          Ok(cid)
+     }
+
+      /// Route n perf-mark tones from from to to, tagged tag-i.
+     pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
+          for i in 0..n {
+              let tone = serde_json::json!({
+                  "chi": "perf-mark",
+                  "rid": format!("{}-{}", tag, i),
+                  "to": to.to_hex(),
+                  "from": from.to_hex(),
+                  "mark": tag,
+               });
+              self.nestler_send_ordered(from, tone).await?;
+           }
+         Ok(())
+      }
+
+      /// The rid values of a collected batch, in arrival order.
+   pub fn rids(tones: &[Value]) -> Vec<String> {
+          tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+       }
+
+       /// Tones the ensemble's inbox accepted from a peer then destroyed
+       /// because no local subscriber was attached. Must stay zero when
+       /// a scenario subscribes before sending.
+    pub async fn ensemble_dropped(&self, humd: Hid) -> u64 {
+          self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
+       }
 
     /// Shutdown all humds and drain their join handles.
     pub async fn shutdown(self) {

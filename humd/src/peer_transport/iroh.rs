@@ -37,12 +37,26 @@ use crate::peers::PeerConfig;
 pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, Vec<String>)> {
     let transport = IrohTransport::bind_direct_with_key(humd_key).await?;
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
-    let sockets = transport.endpoint().bound_sockets();
-    info!(node_id = %&node_id_hex[..16], socket_count = sockets.len(), "peer.iroh.bound");
+    // `addr().ip_addrs()` is the routable set iroh discovered. NOT
+    // `bound_sockets()`, which reports the wildcard binds
+    // (0.0.0.0:<port>) — advertising those as dial targets is how a
+    // peering hint turns into "unreachable" and the dial silently falls
+    // back to address lookup, which is not configured in production.
+    let addrs: Vec<String> = transport
+        .endpoint()
+        .addr()
+        .ip_addrs()
+        .map(|s| s.to_string())
+        .collect();
+    info!(
+        node_id = %&node_id_hex[..16],
+        socket_count = addrs.len(),
+        "peer.iroh.bound"
+    );
 
-    let mut hints = Vec::with_capacity(1 + sockets.len());
+    let mut hints = Vec::with_capacity(1 + addrs.len());
     hints.push(format!("iroh:{node_id_hex}"));
-    for s in &sockets {
+    for s in &addrs {
         hints.push(format!("iroh-ip:{s}"));
     }
     Ok((transport, hints))
@@ -118,6 +132,14 @@ mod tests {
     /// each other in their peer registry after the handshake.
     #[tokio::test]
     async fn dial_then_accept_meet_via_signed_hello() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init();
+
         let a_key = Arc::new(HumdKey::generate());
         let b_key = Arc::new(HumdKey::generate());
         let a_id = a_key.hid();

@@ -27,13 +27,17 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::ops::Deref;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
@@ -295,15 +299,146 @@ pub trait Transport: Send + Sync {
     async fn connect(&self, addr: &HumdAddr) -> Result<Arc<dyn PeerConnection>>;
 }
 
+// ── Link fault model (sim) ─────────────────────────────────────────────────
+
+/// Deterministic faults, counted in offered tones. Takes precedence over
+/// [`Noise`] so a scripted scenario lands exactly where it says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Script {
+    /// Decremented per offered tone.
+    pub drop_next: usize,
+    pub dup_next: usize,
+    /// Decremented per offered pair; reverses its delivery.
+    pub reorder_next: usize,
+    pub drop_every: usize,
+    pub dup_every: usize,
+}
+
+impl Script {
+    /// `counted` wins over `every`: a scripted `drop_next` of 3 drops
+    /// exactly the next 3, whatever the periodic rule would have said.
+    fn take(counted: &mut usize, every: usize, offered: u64) -> bool {
+        match *counted {
+            0 => every > 0 && offered % every as u64 == 0,
+            n => {
+                *counted = n - 1;
+                true
+            }
+        }
+    }
+
+    fn verdict(&mut self, offered: u64) -> Option<Verdict> {
+        let drop = Self::take(&mut self.drop_next, self.drop_every, offered);
+        let duplicate = Self::take(&mut self.dup_next, self.dup_every, offered);
+        (drop || duplicate).then_some(Verdict { drop, duplicate })
+    }
+}
+
+/// Probabilistic faults, drawn from the link's seeded PRNG.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Noise {
+    pub drop_pct: u8,
+    pub dup_pct: u8,
+}
+
+impl Noise {
+    fn verdict(&self, rng: &mut impl Rng) -> Verdict {
+        Verdict {
+            drop: self.drop_pct > 0 && rng.gen_range(0..100u8) < self.drop_pct,
+            duplicate: self.dup_pct > 0 && rng.gen_range(0..100u8) < self.dup_pct,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verdict {
+    pub drop: bool,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinkFaults {
+    pub script: Script,
+    pub noise: Noise,
+    seed: u64,
+    offered: u64,
+}
+
+impl Default for LinkFaults {
+    fn default() -> Self {
+        Self { script: Script::default(), noise: Noise::default(), seed: 0x5EED_C0DE, offered: 0 }
+    }
+}
+
+impl LinkFaults {
+    pub fn script(mut self, script: Script) -> Self {
+        self.script = script;
+        self
+    }
+
+    pub fn noise(mut self, noise: Noise) -> Self {
+        self.noise = noise;
+        self
+    }
+
+    pub fn drop_next(mut self, n: usize) -> Self {
+        self.script.drop_next = n;
+        self
+    }
+
+    pub fn dup_next(mut self, n: usize) -> Self {
+        self.script.dup_next = n;
+        self
+    }
+
+    pub fn reorder_next(mut self, n: usize) -> Self {
+        self.script.reorder_next = n;
+        self
+    }
+
+    pub fn drop_pct(mut self, pct: u8, seed: u64) -> Self {
+        self.noise.drop_pct = pct.min(100);
+        self.seed = seed;
+        self
+    }
+
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// `offered` advances for every tone the link accepts, partitioned
+    /// tones included, so a scenario can be written against a global
+    /// position rather than a per-state one.
+    fn verdict(&mut self, rng: &mut impl Rng) -> Verdict {
+        self.offered += 1;
+        self.script.verdict(self.offered).unwrap_or_else(|| self.noise.verdict(rng))
+    }
+}
+
+/// Ground truth for a link: what it was handed versus what arrived.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LinkCounters {
+    pub offered: u64,
+    pub delivered: u64,
+    pub dropped: u64,
+    pub duplicated: u64,
+    pub reordered: u64,
+    pub buffered: u64,
+    pub lost_on_heal: u64,
+    pub evicted: u64,
+}
+
 // ── In-memory transport (sim) ──────────────────────────────────────────────
 
 /// Two `InMemoryEndpoint`s wired together with `mpsc` channels. Lets
 /// the sim build a ring/mesh/star of fake-networked humds inside one
 /// process with deterministic, low-latency delivery.
 ///
-/// Latency / drop / partition behaviour is a follow-up — for v0 the
-/// channels deliver instantly and never drop. The sim layer wraps
-/// these with controllable middleware.
+/// Delivery is fault-injectable via [`LinkFaults`]: loss, duplication,
+/// reordering, and partition all behave the way a real link does, and
+/// [`LinkCounters`] records what actually happened. Nothing here runs in
+/// production — the daemon only ever sees the [`PeerConnection`] trait.
 /// Max tones held while partitioned. Realistic enough for sim narratives
 /// (a few dozen petals during a partition window); large enough not to
 /// fall behind in the tests we run. If the queue fills, oldest tones drop
@@ -315,16 +450,30 @@ pub struct InMemoryEndpoint {
     peer: HumdAddr,
     caps: PeerCapabilities,
     tx: mpsc::Sender<Tone>,
-    rx: parking_lot::Mutex<Option<mpsc::Receiver<Tone>>>,
-    /// Sim-controlled link state. When `dropped == true`, `send()` accepts
-    /// the tone and buffers it (bounded VecDeque) instead of pushing it
-    /// to the peer's receiver. On `set_partitioned(false)`, the buffered
-    /// tones flush to the peer in order before normal operation resumes.
-    partition: parking_lot::Mutex<PartitionState>,
+    rx: Mutex<Option<mpsc::Receiver<Tone>>>,
+    /// Sim-controlled link state. When `partitioned == true`, `send()`
+    /// accepts the tone and buffers it (bounded VecDeque) instead of
+    /// pushing it to the peer's receiver. On `set_partitioned(false)`
+    /// the buffer is flushed — but *through the fault model*, not
+    /// replayed intact. A healing link is still a lossy link; that
+    /// asymmetry is the whole point, and it is what a real mesh does.
+    partition: Mutex<PartitionState>,
+    /// Fault profile for this link. Default = perfect, so existing tests
+    /// keep their current semantics until they opt in.
+    faults: Mutex<LinkFaults>,
+    /// Seeded PRNG for the statistical knobs. Held separately from
+    /// `faults` so `LinkFaults` stays `Clone` and comparable.
+    rng: Mutex<StdRng>,
+    /// Ground truth. Read by tests to assert the ensemble's own loss
+    /// accounting against what the link actually did.
+    counters: Mutex<LinkCounters>,
+    /// Held tone during a reorder pair, awaiting its partner so the pair
+    /// can be delivered in reverse.
+    reorder_hold: Mutex<Option<Tone>>,
 }
 
 struct PartitionState {
-    dropped: bool,
+    partitioned: bool,
     buffer: VecDeque<Tone>,
 }
 
@@ -352,25 +501,39 @@ impl InMemoryEndpoint {
     ) -> (Arc<InMemoryEndpoint>, Arc<InMemoryEndpoint>) {
         let (tx_ab, rx_ab) = mpsc::channel::<Tone>(256);
         let (tx_ba, rx_ba) = mpsc::channel::<Tone>(256);
+        // Each direction of the link gets its own PRNG stream. Sharing one
+        // seed would make both halves fail identically at the same
+        // points, which is a correlated outage — the opposite of what a
+        // two-way link actually does.
+        let seed_a = LinkFaults::default().seed;
+        let seed_b = seed_a ^ 0x9E37_79B9_7F4A_7C15;
         let a = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(b_id),
             caps: b_caps.clone(),
             tx: tx_ab,
-            rx: parking_lot::Mutex::new(Some(rx_ba)),
-            partition: parking_lot::Mutex::new(PartitionState {
-                dropped: false,
+            rx: Mutex::new(Some(rx_ba)),
+            partition: Mutex::new(PartitionState {
+                partitioned: false,
                 buffer: VecDeque::new(),
             }),
+            faults: Mutex::new(LinkFaults { seed: seed_a, ..Default::default() }),
+            rng: Mutex::new(StdRng::seed_from_u64(seed_a)),
+            counters: Mutex::new(LinkCounters::default()),
+            reorder_hold: Mutex::new(None),
         });
         let b = Arc::new(InMemoryEndpoint {
             peer: HumdAddr::new(a_id),
             caps: a_caps,
             tx: tx_ba,
-            rx: parking_lot::Mutex::new(Some(rx_ab)),
-            partition: parking_lot::Mutex::new(PartitionState {
-                dropped: false,
+            rx: Mutex::new(Some(rx_ab)),
+            partition: Mutex::new(PartitionState {
+                partitioned: false,
                 buffer: VecDeque::new(),
             }),
+            faults: Mutex::new(LinkFaults { seed: seed_b, ..Default::default() }),
+            rng: Mutex::new(StdRng::seed_from_u64(seed_b)),
+            counters: Mutex::new(LinkCounters::default()),
+            reorder_hold: Mutex::new(None),
         });
         (a, b)
     }
@@ -380,30 +543,77 @@ impl InMemoryEndpoint {
     /// when full) instead of delivering them. Flipping back to `false`
     /// flushes the buffer to the peer in original order.
     ///
-    /// Sim-facing knob — production transports never call this. Note:
-    /// partition is one-directional per endpoint. To fully isolate two
-    /// peers, the caller flips both endpoints in the pair.
-    pub fn set_partitioned(&self, dropped: bool) {
-        // Drain the buffer under the lock if we're healing — but issue
-        // the actual sends *after* releasing it so the await doesn't
-        // happen while holding a sync mutex.
-        let drained: Vec<Tone> = {
+    /// Partition is per-endpoint and per-direction; isolate a link by
+    /// flipping both of its endpoints. Healing routes the buffer back
+    /// through the fault model, so a recovered link is lossy like any
+    /// other — never a perfect replay.
+    pub fn set_partitioned(&self, partitioned: bool) {
+        let drained = {
             let mut p = self.partition.lock();
-            p.dropped = dropped;
-            if !dropped {
-                p.buffer.drain(..).collect()
-            } else {
-                Vec::new()
+            p.partitioned = partitioned;
+            match partitioned {
+                true => Vec::new(),
+                false => p.buffer.drain(..).collect(),
             }
         };
-        if !drained.is_empty() {
-            // try_send for the flush — if the receiver is closed or full
-            // we silently drop, which is the realistic "buffer overrun
-            // during long partition" semantic. Tests use a short window
-            // so this branch should never fire in practice.
-            for tone in drained {
-                let _ = self.tx.try_send(tone);
+        for tone in drained {
+            let verdict = self.take_verdict();
+            let lost = verdict.drop || self.push(tone, verdict.duplicate).is_err();
+            if lost {
+                self.counters.lock().lost_on_heal += 1;
             }
+        }
+    }
+
+    /// One tone onto the wire, optionally twice. `try_send` — a full or
+    /// dead receiver during a heal flush is a lost tone, not an error the
+    /// caller can act on.
+    fn push(&self, tone: Tone, duplicate: bool) -> Result<()> {
+        self.tx.try_send(tone.clone()).map_err(|e| anyhow::anyhow!("push: {e}"))?;
+        self.counters.lock().delivered += 1;
+        if duplicate && self.tx.try_send(tone).is_ok() {
+            let mut c = self.counters.lock();
+            c.delivered += 1;
+            c.duplicated += 1;
+        }
+        Ok(())
+    }
+
+    fn take_verdict(&self) -> Verdict {
+        let mut rng = self.rng.lock();
+        self.faults.lock().verdict(&mut *rng)
+    }
+
+    /// `reorder_next` counts *pairs*. A tone held back always pairs with
+    /// its successor, so an outstanding hold outranks the budget.
+    fn take_reorder(&self) -> bool {
+        if self.reorder_hold.lock().is_some() {
+            let mut f = self.faults.lock();
+            f.script.reorder_next = f.script.reorder_next.saturating_sub(1);
+            return true;
+        }
+        self.faults.lock().script.reorder_next > 0
+    }
+
+    pub fn set_faults(&self, faults: LinkFaults) {
+        let seed = faults.seed;
+        *self.faults.lock() = faults;
+        *self.rng.lock() = StdRng::seed_from_u64(seed);
+    }
+
+    pub fn faults(&self) -> LinkFaults { self.faults.lock().clone() }
+
+    pub fn counters(&self) -> LinkCounters { *self.counters.lock() }
+
+    pub fn buffered(&self) -> usize { self.partition.lock().buffer.len() }
+
+    pub fn is_partitioned(&self) -> bool { self.partition.lock().partitioned }
+
+    /// Frees a tone held for reorder when no partner arrives.
+    pub fn flush_reorder(&self) -> bool {
+        match self.reorder_hold.lock().take() {
+            Some(tone) => self.tx.try_send(tone).is_ok(),
+            None => false,
         }
     }
 }
@@ -414,20 +624,50 @@ impl PeerConnection for InMemoryEndpoint {
     fn capabilities(&self) -> &PeerCapabilities { &self.caps }
 
     async fn send(&self, tone: Tone) -> Result<()> {
-        // Partitioned: buffer with a bounded queue (oldest evicted when
-        // capacity is hit). Tone is "accepted" from the caller's point
-        // of view — the wire just hasn't delivered yet.
+        self.counters.lock().offered += 1;
+
         {
             let mut p = self.partition.lock();
-            if p.dropped {
+            if p.partitioned {
                 if p.buffer.len() >= PARTITION_BUFFER_CAP {
                     p.buffer.pop_front();
+                    self.counters.lock().evicted += 1;
                 }
                 p.buffer.push_back(tone);
+                self.counters.lock().buffered += 1;
                 return Ok(());
             }
         }
-        self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))
+
+        let verdict = self.take_verdict();
+        if verdict.drop {
+            self.counters.lock().dropped += 1;
+            return Ok(());
+        }
+
+        if self.take_reorder() {
+            let held = self.reorder_hold.lock().take();
+            if let Some(held) = held {
+                self.counters.lock().reordered += 1;
+                self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+                self.counters.lock().delivered += 1;
+                self.tx.send(held).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+                self.counters.lock().delivered += 1;
+                return Ok(());
+            }
+            *self.reorder_hold.lock() = Some(tone);
+            return Ok(());
+        }
+
+        self.tx.send(tone.clone()).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+        self.counters.lock().delivered += 1;
+        if verdict.duplicate {
+            self.tx.send(tone).await.map_err(|e| anyhow::anyhow!("send: {e}"))?;
+            let mut c = self.counters.lock();
+            c.delivered += 1;
+            c.duplicated += 1;
+        }
+        Ok(())
     }
 
     fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>> {
@@ -463,7 +703,7 @@ struct Peer {
 pub struct Ensemble {
     me: Hid,
     peers: Arc<RwLock<HashMap<Hid, Peer>>>,
-    inbox: broadcast::Sender<Tone>,
+    inbox: Inbox,
     /// Shared gossip seen-set + per-topic broadcast senders. One Arc per
     /// ensemble; cloned into every install() drainer task so the dedup
     /// + topic dispatch happens without locking the main peer map.
@@ -484,6 +724,79 @@ pub struct Ensemble {
     strict_auth: bool,
 }
 
+/// The local fan-out point for tones arriving from peers. Cloned into
+/// every install() drainer so the sender and its accounting travel
+/// together.
+#[derive(Clone)]
+pub struct Inbox {
+    tx: broadcast::Sender<Tone>,
+    subscribers: Arc<AtomicUsize>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl Inbox {
+    fn new() -> Self {
+        // 256 keeps recent tones available for slow subscribers without
+        // unbounded memory; lagging consumers see Lagged and resync.
+        let (tx, _) = broadcast::channel(256);
+        Self { tx, subscribers: Arc::new(AtomicUsize::new(0)), dropped: Arc::new(AtomicU64::new(0)) }
+    }
+
+    /// Hand a drained tone to local subscribers. Returns false when there
+    /// were none, in which case the tone is gone — not queued, not
+    /// retried. Counted and logged because a tone accepted off the
+    /// network and then destroyed here is otherwise invisible.
+    pub fn publish(&self, tone: Tone) -> bool {
+        if self.tx.send(tone).is_err() {
+            let total = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            tracing::warn!(
+                target: "ensemble",
+                total,
+                "inbox.publish.dropped: no local subscriber attached",
+            );
+            return false;
+        }
+        true
+    }
+
+    pub fn subscribe(&self) -> InboxSub {
+        self.subscribers.fetch_add(1, Ordering::SeqCst);
+        InboxSub { rx: self.tx.subscribe(), subscribers: self.subscribers.clone() }
+    }
+
+    pub fn has_subscribers(&self) -> bool { self.subscribers.load(Ordering::SeqCst) > 0 }
+
+    pub fn dropped(&self) -> u64 { self.dropped.load(Ordering::Relaxed) }
+}
+
+/// A live inbox subscription. Derefs to the receiver, so existing
+/// `rx.recv()` call sites are unchanged; dropping it unregisters.
+pub struct InboxSub {
+    rx: broadcast::Receiver<Tone>,
+    subscribers: Arc<AtomicUsize>,
+}
+
+impl Deref for InboxSub {
+    type Target = broadcast::Receiver<Tone>;
+    fn deref(&self) -> &Self::Target { &self.rx }
+}
+
+impl std::ops::DerefMut for InboxSub {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.rx }
+}
+
+impl Drop for InboxSub {
+    fn drop(&mut self) {
+        self.subscribers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl std::fmt::Debug for InboxSub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InboxSub").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
     #[error("no peer with id {0}")]
@@ -496,13 +809,10 @@ pub enum RouteError {
 
 impl Ensemble {
     pub fn new(me: Hid) -> Self {
-        // 256 keeps recent tones available for slow subscribers without
-        // unbounded memory; lagging consumers see Lagged and resync.
-        let (inbox, _) = broadcast::channel(256);
         Self {
             me,
             peers: Arc::new(RwLock::new(HashMap::new())),
-            inbox,
+            inbox: Inbox::new(),
             gossip: GossipState::new(),
             kad: KadState::new(me),
             strict_auth: false,
@@ -653,7 +963,7 @@ impl Ensemble {
                     }
                     // Everything else (including subsequent hellos) fans
                     // out. Receivers may be absent — broadcast drops.
-                    let _ = inbox.send(tone);
+                    inbox.publish(tone);
                 }
             });
         }
@@ -763,7 +1073,7 @@ impl Ensemble {
                             continue;
                         }
                     }
-                    let _ = inbox.send(tone);
+                    inbox.publish(tone);
                 }
             });
         }
@@ -789,11 +1099,25 @@ impl Ensemble {
         })
     }
 
+    /// True once this peer's `chi:"hello"` has been parsed and its caps
+    /// learned. A scenario that needs a clean fault budget waits on this
+    /// — the handshake is link setup and is itself faultable.
+    pub fn handshake_done(&self, id: &Hid) -> bool {
+        self.peers.read().get(id).is_some_and(|p| p.learned_caps.is_some())
+    }
+
     /// Subscribe to incoming tones from every installed peer. Hellos
     /// are absorbed by the ensemble; subscribers only see real traffic.
-    pub fn subscribe(&self) -> broadcast::Receiver<Tone> {
-        self.inbox.subscribe()
-    }
+    pub fn subscribe(&self) -> InboxSub { self.inbox.subscribe() }
+
+    /// True once something is attached to the inbox. Callers that install
+    /// peers before the local pump is up wait on this instead of racing it.
+    pub fn has_subscribers(&self) -> bool { self.inbox.has_subscribers() }
+
+    /// Tones that reached a drainer and were then destroyed because no
+    /// pump was listening. Never zero on a healthy daemon; a non-zero
+    /// value is a boot-order race that silently ate network traffic.
+    pub fn inbox_dropped(&self) -> u64 { self.inbox.dropped() }
 
     /// Publish a gossip message to every installed peer. Mints an
     /// `msg_id` from `(topic, rid, me, payload)`, marks it seen locally
@@ -1404,6 +1728,274 @@ async fn handle_gossip(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── Link fault model ───────────────────────────────────────────────
+
+    fn link_pair() -> (Arc<InMemoryEndpoint>, Arc<InMemoryEndpoint>) {
+        InMemoryEndpoint::pair_concrete(
+            Hid::random_humd(),
+            PeerCapabilities::default(),
+            Hid::random_humd(),
+            PeerCapabilities::default(),
+        )
+    }
+
+    fn tone(tag: &str) -> Tone {
+        json!({
+            "chi": "prompt",
+            "rid": tag,
+            "from": Hid::random_humd().to_hex(),
+        })
+    }
+
+    async fn drain(rx: &mut mpsc::Receiver<Tone>) -> Vec<Tone> {
+        let mut out = Vec::new();
+        while let Ok(t) = rx.try_recv() {
+            out.push(t);
+        }
+        out
+    }
+
+    fn rids(tones: &[Tone]) -> Vec<String> {
+        tones.iter().map(|t| t["rid"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn perfect_link_delivers_everything_in_order() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        for i in 0..5 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t0", "t1", "t2", "t3", "t4"]);
+        let c = a.counters();
+        assert_eq!(c, LinkCounters { offered: 5, delivered: 5, ..Default::default() });
+    }
+
+    #[tokio::test]
+    async fn drop_next_drops_exactly_n() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().drop_next(3));
+        for i in 0..6 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t3", "t4", "t5"]);
+        let c = a.counters();
+        assert_eq!(c.offered, 6);
+        assert_eq!(c.dropped, 3);
+        assert_eq!(c.delivered, 3);
+    }
+
+    #[tokio::test]
+    async fn drop_every_keeps_a_strict_period() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        let mut faults = LinkFaults::default();
+        faults.script.drop_every = 4;
+        a.set_faults(faults);
+        for i in 0..12 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t0", "t1", "t2", "t4", "t5", "t6", "t8", "t9", "t10"]);
+    }
+
+    #[tokio::test]
+    async fn dup_next_duplicates_exactly_n() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().dup_next(2));
+        for i in 0..4 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t0", "t0", "t1", "t1", "t2", "t3"]);
+        let c = a.counters();
+        assert_eq!(c.duplicated, 2);
+        assert_eq!(c.delivered, 6);
+    }
+
+    #[tokio::test]
+    async fn reorder_reverses_the_pair() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().reorder_next(1));
+        for i in 0..2 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t1", "t0"]);
+        assert_eq!(a.counters().reordered, 1);
+    }
+
+    #[tokio::test]
+    async fn reorder_hold_releases_via_flush() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().reorder_next(1));
+        a.send(tone("lonely")).await.unwrap();
+        assert!(drain(&mut rx).await.is_empty());
+        assert!(a.flush_reorder());
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["lonely"]);
+    }
+
+    #[tokio::test]
+    async fn statistical_loss_is_reproducible_from_its_seed() {
+        async fn run(seed: u64) -> usize {
+            let (a, b) = link_pair();
+            let mut rx = b.take_receiver().unwrap();
+            a.set_faults(LinkFaults::default().drop_pct(30, seed));
+            for i in 0..200 {
+                a.send(tone(&format!("t{i}"))).await.unwrap();
+            }
+            drain(&mut rx).await.len()
+        }
+        assert_eq!(run(42).await, run(42).await, "same seed, same pattern");
+        assert_ne!(run(1).await, run(2).await, "different seeds, different patterns");
+        let survived = run(42).await;
+        // 200 draws at 30% loss; sd is ~6.5, so this is a 3-sigma band.
+        assert!((120..170).contains(&survived), "survived {survived} of 200 at 30% loss");
+    }
+
+    #[tokio::test]
+    async fn partition_buffers_without_delivering() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_partitioned(true);
+        for i in 0..3 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        assert!(drain(&mut rx).await.is_empty());
+        assert_eq!(a.buffered(), 3);
+        let c = a.counters();
+        assert_eq!(c.buffered, 3);
+        assert_eq!(c.delivered, 0);
+    }
+
+    #[tokio::test]
+    async fn heal_drains_the_buffer() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_partitioned(true);
+        for i in 0..3 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        a.set_partitioned(false);
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t0", "t1", "t2"]);
+        assert_eq!(a.counters().lost_on_heal, 0);
+    }
+
+    /// The behaviour this whole model exists to make possible: a link
+    /// that recovers can still lose what it buffered. Replaying the
+    /// buffer intact would let a partition test pass without ever
+    /// exercising recovery.
+    #[tokio::test]
+    async fn heal_is_lossy_not_a_perfect_replay() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_partitioned(true);
+        for i in 0..6 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        a.set_faults(LinkFaults::default().drop_next(2));
+        a.set_partitioned(false);
+
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t2", "t3", "t4", "t5"]);
+        let c = a.counters();
+        assert_eq!(c.lost_on_heal, 2);
+        assert_eq!(c.buffered, 6);
+        assert_eq!(c.delivered, 4);
+    }
+
+    #[tokio::test]
+    async fn heal_applies_dup_too() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_partitioned(true);
+        for i in 0..3 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        a.set_faults(LinkFaults::default().dup_next(1));
+        a.set_partitioned(false);
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["t0", "t0", "t1", "t2"]);
+        assert_eq!(a.counters().duplicated, 1);
+    }
+
+    #[tokio::test]
+    async fn partition_buffer_evicts_oldest_when_full() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_partitioned(true);
+        for i in 0..(PARTITION_BUFFER_CAP + 5) {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        assert_eq!(a.buffered(), PARTITION_BUFFER_CAP);
+        assert_eq!(a.counters().evicted, 5);
+        a.set_partitioned(false);
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got.first().unwrap(), "t5");
+        assert_eq!(got.len(), PARTITION_BUFFER_CAP);
+    }
+
+    /// The oracle has to be internally consistent or no test can trust it.
+    #[tokio::test]
+    async fn counters_account_for_every_offered_tone() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        let mut faults = LinkFaults::default();
+        faults.script.drop_every = 5;
+        faults.script.dup_every = 7;
+        a.set_faults(faults);
+        a.set_partitioned(true);
+        for i in 0..3 {
+            a.send(tone(&format!("p{i}"))).await.unwrap();
+        }
+        a.set_partitioned(false);
+        for i in 0..40 {
+            a.send(tone(&format!("t{i}"))).await.unwrap();
+        }
+        a.flush_reorder();
+
+        let c = a.counters();
+        let arrived = drain(&mut rx).await.len() as u64;
+        assert_eq!(c.delivered, arrived, "delivered must match what the peer saw");
+        assert_eq!(c.offered, 43);
+        assert_eq!(c.buffered, 3);
+        // `delivered` counts duplicate copies, so discount them to
+        // compare against what was offered and not lost.
+        assert_eq!(c.offered, c.delivered - c.duplicated + c.dropped + c.lost_on_heal);
+    }
+
+    #[tokio::test]
+    async fn faults_are_per_direction() {
+        let (a, b) = link_pair();
+        let mut a_rx = a.take_receiver().unwrap();
+        let mut b_rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().drop_next(10));
+        b.send(tone("survivor")).await.unwrap();
+        a.send(tone("doomed")).await.unwrap();
+        assert_eq!(rids(&drain(&mut a_rx).await), ["survivor"], "b→a is unaffected");
+        assert!(drain(&mut b_rx).await.is_empty(), "a→b drops");
+    }
+
+    #[tokio::test]
+    async fn clear_faults_restores_a_perfect_link() {
+        let (a, b) = link_pair();
+        let mut rx = b.take_receiver().unwrap();
+        a.set_faults(LinkFaults::default().drop_next(10));
+        a.send(tone("lost")).await.unwrap();
+        a.set_faults(LinkFaults::default());
+        a.send(tone("arrives")).await.unwrap();
+        let got = rids(&drain(&mut rx).await);
+        assert_eq!(got, ["arrives"]);
+    }
 
     #[test]
     fn hid_hex_round_trips() {
