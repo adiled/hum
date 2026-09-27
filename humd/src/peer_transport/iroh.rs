@@ -62,6 +62,38 @@ pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, V
     Ok((transport, hints))
 }
 
+/// Dial one bootstrap peer and install it. Returns true when the
+/// connection is open. The redial supervisor calls this per peer so a
+/// failure is attributable to one peer rather than a whole sweep.
+pub(crate) async fn dial_one(
+    transport: &IrohTransport,
+    ens: &Arc<Ensemble>,
+    key: &HumdKey,
+    peer: &PeerConfig,
+    my_caps: &PeerCapabilities,
+) -> bool {
+    use ensemble::Transport as _;
+
+    if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
+        return false;
+    }
+    let mut peer_addr = HumdAddr::new(peer.humd_id);
+    for h in &peer.hints {
+        peer_addr.hints.push(h.clone());
+    }
+    match transport.connect(&peer_addr).await {
+        Ok(conn) => {
+            info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
+            ens.install(conn, my_caps.clone(), key);
+            true
+        }
+        Err(e) => {
+            warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
+            false
+        }
+    }
+}
+
 /// Open one iroh connection per bootstrap peer entry, install signed.
 /// Entries without an `iroh:` hint are skipped — those are for other
 /// transports.
@@ -72,26 +104,8 @@ pub(crate) async fn dial_all(
     peers: &[PeerConfig],
     my_caps: &PeerCapabilities,
 ) {
-    use ensemble::Transport as _;
-
     for peer in peers {
-        if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
-            trace!(peer = %peer.humd_id.short(), "peer.iroh.skip.no_hint");
-            continue;
-        }
-        let mut peer_addr = HumdAddr::new(peer.humd_id);
-        for h in &peer.hints {
-            peer_addr.hints.push(h.clone());
-        }
-        match transport.connect(&peer_addr).await {
-            Ok(conn) => {
-                info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
-                ens.install(conn, my_caps.clone(), key);
-            }
-            Err(e) => {
-                warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
-            }
-        }
+        dial_one(transport, ens, key, peer, my_caps).await;
     }
 }
 

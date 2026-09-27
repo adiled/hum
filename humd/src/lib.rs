@@ -27,6 +27,8 @@ mod identity;
 mod peer_transport;
 mod peers;
 mod penny;
+pub mod redial;
+mod supervisor;
 pub mod thrumd;
 pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
@@ -206,19 +208,22 @@ where
     // so the peer registry stays transport-agnostic. Failures are
     // logged and non-fatal.
     let mut peer_reach: Vec<String> = Vec::new();
+    let mut supervisor: Option<supervisor::Supervisor> = None;
     if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
         let my_caps = my_capabilities(&cfg);
+        let mut iroh_transport: Option<Arc<ensemble::IrohTransport>> = None;
 
         match peer_transport::iroh::bind(key).await {
             Ok((transport, hints)) => {
                 let transport = Arc::new(transport);
                 peer_transport::iroh::dial_all(&transport, ens, key, &cfg.bootstrap_peers, &my_caps).await;
                 peer_transport::iroh::spawn_listener(
-                    transport,
+                    transport.clone(),
                     ens.clone(),
                     key.clone(),
                     my_caps.clone(),
                 );
+                iroh_transport = Some(transport);
                 peer_reach.extend(hints);
             }
             Err(e) => warn!(err = %e, "peer.iroh.bind_failed"),
@@ -232,6 +237,21 @@ where
         }
 
         peer_transport::tcp::dial_all(ens, key, &cfg.bootstrap_peers, &my_caps).await;
+
+        // Boot dialed every peer once. The supervisor is what makes the
+        // peer set converge afterwards: a peer that dies gets evicted
+        // and redialled, so a restarted peer becomes reachable again
+        // without restarting this humd.
+        if !cfg.bootstrap_peers.is_empty() {
+            supervisor = Some(supervisor::Supervisor::new(
+                ens.clone(),
+                key.clone(),
+                Arc::new(cfg.bootstrap_peers.clone()),
+                my_caps,
+                iroh_transport,
+                supervisor::LivenessConfig::default(),
+            ));
+        }
     } else if !cfg.bootstrap_peers.is_empty() {
         warn!(
             count = cfg.bootstrap_peers.len(),
@@ -242,6 +262,11 @@ where
     // Stash so the rest of run() keeps working off the cfg-or-minted
     // ensemble instead of just cfg.ensemble.
     let ensemble_for_sink = ensemble_opt.clone();
+
+    // Detached so a failing redial can never take the daemon down.
+    if let Some(sup) = supervisor {
+        tokio::spawn(sup.run());
+    }
 
     // humd no longer hosts an in-process nest pool — worker bees
     // register over thrum as separate processes and own their own
