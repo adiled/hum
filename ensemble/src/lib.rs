@@ -57,6 +57,11 @@ pub use iroh::{IrohEndpoint, IrohTransport, IROH_ALPN};
 pub mod gossip;
 pub use gossip::{gossip_tone, mint_msg_id, GossipState, GOSSIP_CHI, GOSSIP_SEEN_CAP};
 
+pub mod liveness;
+pub use liveness::{
+    ping_tone, pong_tone, probe_seq, Lease, Liveness, LivenessSignal, PING_CHI, PONG_CHI,
+};
+
 pub mod kad;
 pub use kad::{
     find_node_resp_tone, find_node_tone, mint_query_id, parse_find_node, parse_find_node_resp,
@@ -707,6 +712,8 @@ impl PeerConnection for InMemoryEndpoint {
 struct Peer {
     conn: Arc<dyn PeerConnection>,
     learned_caps: Option<PeerCapabilities>,
+    /// Liveness lease, stamped by the drainer on every inbound tone.
+    lease: Lease,
 }
 
 /// One humd's view of the ensemble: peers it knows about, their
@@ -875,7 +882,7 @@ impl Ensemble {
         let rx = conn.take_receiver();
         self.peers.write().insert(
             id,
-            Peer { conn: conn.clone(), learned_caps: None },
+            Peer { conn: conn.clone(), learned_caps: None, lease: Lease::new() },
         );
         // Bootstrap the kad routing table with the peer we just wired.
         // The HumdAddr from the transport carries whatever dial hints
@@ -959,6 +966,9 @@ impl Ensemble {
                     // subscribers, and re-fanned to every OTHER peer.
                     // Falls through to the inbox fan-out if the tone is
                     // malformed (treats it as opaque application data).
+                    if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
+                        continue;
+                    }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
                         if handle_gossip(&gossip, &peers, &id, &tone).await {
                             continue;
@@ -980,6 +990,13 @@ impl Ensemble {
                     // Everything else (including subsequent hellos) fans
                     // out. Receivers may be absent — broadcast drops.
                     inbox.publish(tone);
+                }
+                // The transport's receiver closed. Mark the lease dead
+                // so a sweep can reap it; the registry entry itself
+                // outlives the drainer by design, because the daemon
+                // owns eviction and redial.
+                if let Some(p) = peers.write().get_mut(&id) {
+                    p.lease.observe(LivenessSignal::TransportClosed);
                 }
             });
         }
@@ -1020,7 +1037,7 @@ impl Ensemble {
         let rx = conn.take_receiver();
         self.peers.write().insert(
             id,
-            Peer { conn: conn.clone(), learned_caps: None },
+            Peer { conn: conn.clone(), learned_caps: None, lease: Lease::new() },
         );
         // Bootstrap the kad routing table — same as `install`.
         self.kad.note_peer(conn.peer().clone());
@@ -1076,6 +1093,9 @@ impl Ensemble {
                         }
                         continue;
                     }
+                    if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
+                        continue;
+                    }
                     if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
                         if handle_gossip(&gossip, &peers, &id, &tone).await {
                             continue;
@@ -1091,8 +1111,55 @@ impl Ensemble {
                     }
                     inbox.publish(tone);
                 }
+                // The transport's receiver closed. Mark the lease dead
+                // so a sweep can reap it; the registry entry itself
+                // outlives the drainer by design, because the daemon
+                // owns eviction and redial.
+                if let Some(p) = peers.write().get_mut(&id) {
+                    p.lease.observe(LivenessSignal::TransportClosed);
+                }
             });
         }
+    }
+
+    /// Send a `chi:"peer-ping"` to every installed peer. A peer whose
+    /// link is wedged will not answer, and the answer is what renews
+    /// its lease — so a sweep after `ttl` reaps it.
+    pub async fn probe_all(&self, seq: u64) {
+        let peers: Vec<(Hid, Arc<dyn PeerConnection>)> = self
+            .peers
+            .read()
+            .iter()
+            .map(|(id, p)| (*id, p.conn.clone()))
+            .collect();
+        for (id, conn) in peers {
+            let _ = conn.send(ping_tone(&self.me, &id, seq)).await;
+        }
+    }
+
+    /// Liveness of one peer. `None` if it isn't installed.
+    pub fn peer_liveness(&self, id: &Hid, ttl: std::time::Duration) -> Option<Liveness> {
+        self.peers.read().get(id).map(|p| p.lease.state(ttl))
+    }
+
+    /// Every peer that has stopped answering, and is due for eviction.
+    pub fn expired_peers(&self, ttl: std::time::Duration) -> Vec<Hid> {
+        self.peers
+            .read()
+            .iter()
+            .filter(|(_, p)| p.lease.expired(ttl))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Evict every peer whose lease has run out, closing each link.
+    /// Returns the evicted ids so the caller can redial them.
+    pub fn evict_expired(&self, ttl: std::time::Duration) -> Vec<Hid> {
+        let expired = self.expired_peers(ttl);
+        for id in &expired {
+            self.remove_peer(id);
+        }
+        expired
     }
 
     pub fn remove_peer(&self, id: &Hid) {
@@ -1694,6 +1761,36 @@ async fn handle_kad(
     } else {
         false
     }
+}
+
+/// Renew a peer's lease and answer any probe. Returns true when the
+/// tone was a liveness control message and should not reach
+/// subscribers — a `peer-ping` is answered here and swallowed, a
+/// `peer-pong` is absorbed silently, and everything else falls through.
+async fn handle_liveness(
+    peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
+    me: &Hid,
+    arrived_from: &Hid,
+    conn: &Arc<dyn PeerConnection>,
+    tone: &Tone,
+) -> bool {
+    // The arrival itself is the lease renewal, for every inbound tone.
+    if let Some(p) = peers.write().get_mut(arrived_from) {
+        p.lease.observe(LivenessSignal::Traffic);
+    }
+    let chi = tone.get("chi").and_then(|v| v.as_str());
+    if chi == Some(PONG_CHI) {
+        return true;
+    }
+    if chi != Some(PING_CHI) {
+        return false;
+    }
+    // Answer the probe, then swallow it: a probe is link maintenance,
+    // not application traffic.
+    if let Some(seq) = probe_seq(tone) {
+        let _ = conn.send(pong_tone(me, arrived_from, seq)).await;
+    }
+    true
 }
 
 async fn handle_gossip(
