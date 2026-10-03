@@ -319,7 +319,9 @@ fn prune_dir(dir: &Path, days: u32) -> Result<usize> {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
         if modified < cutoff {
             if let Err(e) = fs::remove_file(&path) {
                 tracing::warn!(error = %e, path = %path.display(), "drift.prune.unlink.failed");
@@ -361,11 +363,18 @@ mod tests {
     use std::env;
 
     fn tmp() -> PathBuf {
+        // Tests run in parallel and each one removes its directory on
+        // the way out, so the name has to be unique per call. A
+        // millisecond timestamp alone collides: two tests starting in
+        // the same millisecond shared a directory, and whichever
+        // finished first deleted the other's files.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let mut p = env::temp_dir();
         p.push(format!(
-            "drift-test-{}-{}",
+            "drift-test-{}-{}-{}",
             std::process::id(),
-            now_ms()
+            now_ms(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         p
     }

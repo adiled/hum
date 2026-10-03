@@ -100,12 +100,17 @@ pub enum Chi {
     /// ensemble-wide gossip pub-sub message —
     /// `{ topic, payload, from, msg_id }`. Fan-out broadcast above the
     /// Transport seam: every PeerConnection is a gossip neighbor. The
-    /// receiver dedups on `msg_id` (sha256("topic:rid:from:payload")[..16])
-    /// using a bounded LRU, dispatches to per-topic subscribers, and
-    /// re-fans the tone to every OTHER installed peer so the message
-    /// percolates across the mesh. Distinct from unicast `route` (which
-    /// targets ONE humd) — gossip is mesh-wide announcements: hum
-    /// relocation, humd overload, drone alerts.
+    /// receiver dedups on `msg_id` using a bounded LRU, dispatches to
+    /// per-topic subscribers, and re-fans the tone to every OTHER
+    /// installed peer so the message percolates across the mesh.
+    /// Distinct from unicast `route` (which targets ONE humd) — gossip
+    /// is mesh-wide announcements: hum relocation, humd overload, drone
+    /// alerts.
+    ///
+    /// `msg_id` is assigned by the ORIGINATOR, once per publish, and is
+    /// not derived from `rid` or the payload. A repeat of the same
+    /// content is a new message; only a byte-identical retransmission
+    /// is a duplicate, and only the sender can tell those apart.
     GossipPublish,
     /// Kademlia DHT FIND_NODE query —
     /// `{ query_id, target: <Hid hex>, from: <Hid hex> }`. The

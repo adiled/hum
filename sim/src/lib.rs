@@ -17,8 +17,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use ensemble::{hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
+use anyhow::{bail, Result};
+use ensemble::{
+    hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults,
+    PeerCapabilities,
+};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
@@ -82,6 +85,7 @@ pub struct Sim {
 /// by humd `a` (it sends through this to reach `b`); `b_end` is the
 /// mirror. To fully partition the link we flip both — each blocks its
 /// own outbound side.
+#[derive(Clone)]
 struct Link {
     a: Hid,
     b: Hid,
@@ -193,14 +197,42 @@ impl Sim {
 
         self.humds.write().insert(id, sim_humd.clone());
         sim_humd
+      }
+
+    /// Block until both gates are closed: the daemon posted a ToneSink
+    /// to its ensemble, and the ensemble inbox pump subscribed for peer
+    /// drains. Before this, any injected tone is dropped. Errors if the
+    /// humd never reaches readiness.
+    pub async fn await_ready(&self, humd: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let ready = {
+                let Some(h) = self.humds.read().get(&humd).cloned() else {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    continue;
+                };
+                h.thrum.has_sink() && h.ensemble.has_subscribers()
+            };
+            if ready {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("humd {} never became ready", humd.short())
     }
 
-    /// Wire two humds with an in-memory channel pair. Both ensembles
+      /// Wire two humds with an in-memory channel pair. Both ensembles
     /// pick up a `PeerConnection` to the other; capabilities mirror each
     /// side's current capacity — sim humds always claim `claude-cli`
     /// support so overflow routing has somewhere to land, and the
     /// advertised `free_slots` reflects the atomic set via
     /// [`Sim::set_capacity`] (default = unlimited).
+    /// Rebuild the link between `a` and `b`, replacing whatever was
+    /// there. This is what a redial does: a fresh endpoint pair, so the
+    /// previous liveness state goes with it.
+    pub fn rewire(&self, a: Hid, b: Hid) -> Result<()> {
+        self.wire(a, b)
+    }
+
     pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
@@ -433,6 +465,156 @@ impl Sim {
         Ok(())
     }
 
+    fn link(&self, a: Hid, b: Hid) -> Result<Link> {
+        self.links
+            .read()
+            .get(&link_key(a, b))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no link {}-{}", a.short(), b.short()))
+    }
+
+    /// The concrete endpoint `from` holds for its link to `to`.
+    fn end_for(&self, a: Hid, b: Hid) -> Result<Arc<InMemoryEndpoint>> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a { link.a_end } else { link.b_end })
+    }
+
+    /// Apply `faults` to one direction only. `a` is the sender.
+    pub fn impair_dir(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.end_for(a, b)?.set_faults(faults);
+        Ok(())
+    }
+
+    /// Make `a→b` stop draining. Sends into it hang instead of failing,
+    /// and `b` stays registered — the shape of a peer whose socket
+    /// buffer filled because nobody is reading.
+    pub fn stall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.stall();
+        Ok(())
+    }
+
+    pub fn unstall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.unstall();
+        Ok(())
+    }
+
+    /// Whether `a→b` is currently stalled.
+    pub fn is_stalled(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_stalled())
+    }
+
+    /// Fault both directions, resetting each endpoint's tone counter.
+    pub fn impair(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.impair_dir(a, b, faults.clone())?;
+        self.impair_dir(b, a, faults)
+    }
+
+    /// `(a→b, b→a)` ground truth for what the link actually did.
+    pub fn link_counters(&self, a: Hid, b: Hid) -> Result<(LinkCounters, LinkCounters)> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a {
+            (link.a_end.counters(), link.b_end.counters())
+        } else {
+            (link.b_end.counters(), link.a_end.counters())
+        })
+    }
+
+    /// Counters accrued since `base`. Link setup (the `wire` hello) is
+    /// traffic the link really carried, so a scenario measures a delta
+    /// rather than a total.
+    pub fn link_counters_since(
+        &self,
+        a: Hid,
+        b: Hid,
+        base: &LinkCounters,
+    ) -> Result<LinkCounters> {
+        let (ab, _) = self.link_counters(a, b)?;
+        Ok(ab.since(base))
+    }
+
+    /// Tones the `a→b` link is holding while partitioned.
+    pub fn buffered(&self, a: Hid, b: Hid) -> Result<usize> {
+        Ok(self.end_for(a, b)?.buffered())
+    }
+
+    /// Clear injected faults, restoring a clean link.
+    pub fn heal_link_faults(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.set_faults(LinkFaults::default());
+        self.end_for(b, a)?.set_faults(LinkFaults::default());
+        Ok(())
+    }
+
+    /// Drop the `a→b` direction as if `a`'s process had died: sends
+    /// fail and `b`'s drainer sees its receiver close, marking `a`
+    /// `TransportClosed` on `b`'s side.
+    pub fn kill_peer(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.kill();
+        Ok(())
+    }
+
+    /// Both directions. For "this peer is gone", which is the case a
+    /// liveness test actually wants.
+    pub fn kill_link(&self, a: Hid, b: Hid) -> Result<()> {
+        self.kill_peer(a, b)?;
+        self.kill_peer(b, a)
+    }
+
+    pub fn link_killed(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_killed())
+    }
+
+    /// Liveness of `a` as `b` sees it. The sim needs its own probe and
+    /// sweep because it drives the ensembles directly rather than
+    /// through the daemon's supervisor.
+    /// Send a liveness probe from `a` to `b`. Direction is the point:
+    /// this says whether a can still reach b, not the reverse.
+    pub async fn probe(&self, a: Hid, b: Hid) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&a)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
+        ens.ensemble.probe_one(&b, 0).await;
+        Ok(())
+    }
+
+    /// Classify every installed peer of `observer` against `ttl`.
+    pub fn peer_liveness(
+        &self,
+        observer: Hid,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<(ensemble::Hid, ensemble::Liveness)>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens
+            .ensemble
+            .peers()
+            .into_iter()
+            .filter_map(|p| ens.ensemble.peer_liveness(&p, ttl).map(|l| (p, l)))
+            .collect())
+    }
+
+    /// Evict `observer`'s expired peers, returning who was reaped.
+    pub fn evict_expired(&self, observer: Hid, ttl: std::time::Duration) -> Result<Vec<ensemble::Hid>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens.ensemble.evict_expired(ttl))
+    }
+
+    /// Peers `observer` still has installed.
+    pub fn peer_count(&self, observer: Hid) -> usize {
+        self.humds.read().get(&observer).map(|h| h.ensemble.peers().len()).unwrap_or(0)
+    }
+
     /// Drop the wired link between `a` and `b`. Both endpoints stop
     /// delivering outbound tones and instead buffer them up to
     /// `ensemble::PARTITION_BUFFER_CAP`. A subsequent [`Sim::heal`]
@@ -469,34 +651,45 @@ impl Sim {
             link.b_end.set_partitioned(false);
         }
 
-        let humds = self.humds.read();
-        let ha = humds
-            .get(&link_a)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
-        let hb = humds
-            .get(&link_b)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
-        drop(humds);
+        let (ha, hb) = {
+            let humds = self.humds.read();
+            (humds.get(&link_a).cloned(), humds.get(&link_b).cloned())
+        };
+        let ha = ha.ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
+        let hb = hb.ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
 
+        // A failed heal flush is worth a warning but not a hard error:
+        // the link is back either way, and the tips will reconcile on the
+        // next heal. Losing the log line would hide it entirely.
         for (from, to) in [(&ha, &hb), (&hb, &ha)] {
-            let snapshot = from.waneman.snapshot();
-            let mut snapshot_json = serde_json::Map::new();
-            for (sigil, n) in snapshot {
-                snapshot_json.insert(sigil, Value::from(n));
-            }
-            let tone = serde_json::json!({
-                "chi": "wane-sync",
-                "rid": hum_identity::HumId::mint().to_string(),
-                "from": from.id.to_hex(),
-                "to": to.id.to_hex(),
-                "snapshot": Value::Object(snapshot_json),
-            });
-            if let Err(e) = from.ensemble.route(tone).await {
+            if let Err(e) = self.wane_sync(from, to).await {
                 tracing::warn!(err = %e, "wane-sync.route.failed");
             }
         }
+        Ok(())
+    }
+
+    /// Emit one `chi:"wane-sync"` from `from` to `to`, carrying `from`'s
+    /// current `WaneTracker` snapshot.
+    ///
+    /// Separate from [`Self::heal`] so a test can send one *while a
+    /// partition is up* and assert it does not arrive. A partition test
+    /// that only sends during the heal cannot tell a real outage from a
+    /// silent one: no traffic means no leak, so the tips stay divergent
+    /// either way and the test passes for the wrong reason.
+    pub async fn wane_sync(&self, from: &SimHumd, to: &SimHumd) -> Result<()> {
+        let mut snapshot_json = serde_json::Map::new();
+        for (sigil, n) in from.waneman.snapshot() {
+            snapshot_json.insert(sigil, Value::from(n));
+        }
+        let tone = serde_json::json!({
+            "chi": "wane-sync",
+            "rid": hum_identity::HumId::mint().to_string(),
+            "from": from.id.to_hex(),
+            "to": to.id.to_hex(),
+            "snapshot": Value::Object(snapshot_json),
+        });
+        from.ensemble.route(tone).await?;
         Ok(())
     }
 
@@ -650,6 +843,7 @@ impl Sim {
         // each receiver out, drain non-blockingly, then put it back.
         // This keeps the per-humd state simple — no long-lived fanout
         // task per synthetic client.
+        {
         let mut queues = h.out_queues.lock();
         for (_cid, rx) in queues.iter_mut() {
             while let Ok(tone) = rx.try_recv() {
@@ -675,7 +869,7 @@ impl Sim {
                 }
             }
         }
-        drop(queues);
+        }
 
         // Now await the named sid's mailbox.
         let mut rx_opt = h.sid_mailboxes.lock().remove(sid)?;
@@ -794,6 +988,168 @@ impl Sim {
             Ok(Ok(tone)) => Some(tone),
             _ => None,
         }
+    }
+
+    /// Block until both ends have exchanged hellos, then drain them from
+    /// `b`'s inbox so a scenario's receiver starts clean. The hello is
+    /// itself faultable, so a scenario must not race it.
+    pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let done = {
+                let (ha, hb) = {
+                    let humds = self.humds.read();
+                    (humds.get(&a).cloned(), humds.get(&b).cloned())
+                };
+                match (ha, hb) {
+                    (Some(ha), Some(hb)) => {
+                        ha.ensemble.handshake_done(&b) && hb.ensemble.handshake_done(&a)
+                    }
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                }
+            };
+            if done {
+                let hb = self.humds.read().get(&b).cloned().expect("checked above");
+                let mut rx = hb.ensemble.subscribe();
+                while rx.try_recv().is_ok() {}
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("{}-{} handshake timed out", a.short(), b.short())
+    }
+
+    /// Subscribe to `humd`'s inbox now. A `broadcast::Receiver` only
+    /// sees tones published after it exists, so a test that subscribes
+    /// inside a spawned task races its own first send.
+    pub fn humd_peer_sub(&self, humd: Hid) -> Option<ensemble::InboxSub> {
+        Some(self.humds.read().get(&humd)?.ensemble.subscribe())
+    }
+
+    /// Drain up to `want` rids from an inbox handle, stopping early once
+    /// `want` land or `window` elapses. A short return is the signal.
+    pub async fn collect_rids(
+        rx: &mut ensemble::InboxSub,
+        want: usize,
+        window: Duration,
+    ) -> Vec<String> {
+        let mut out = Vec::with_capacity(want);
+        let deadline = tokio::time::Instant::now() + window;
+        while out.len() < want {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(tone)) => {
+                    if let Some(rid) = tone["rid"].as_str() {
+                        out.push(rid.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    /// `nestler_send` injects on a detached task, so consecutive sends
+    /// have no order. A scripted fault names a tone by position, so it
+    /// needs the injection to happen in the caller's task.
+    pub async fn nestler_send_ordered(&self, humd: Hid, tone: Value) -> Result<String> {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        let cid = hum_identity::HumId::mint().to_string();
+        let _ = h.thrum.register_synthetic(cid.clone());
+        h.thrum.inject_tone(&cid, tone).await;
+        Ok(cid)
+    }
+
+    /// Publish a gossip payload to a mesh topic from one of the sim's
+    /// humds.
+    pub async fn publish(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish(topic, payload).await;
+        Ok(())
+    }
+
+    /// As [`Self::publish`], with a lifetime in ms so a scenario can
+    /// assert that an expired gossip tone is dropped rather than
+    /// delivered. `None` never expires.
+    pub async fn publish_with_dusk(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+        dusk_ms: i64,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish_with_dusk(topic, payload, Some(dusk_ms)).await;
+        Ok(())
+    }
+
+    /// Subscribe to a gossip topic on one of the sim's humds. Broadcast
+    /// receivers only see what is published after they subscribe.
+    pub fn subscribe_topic(
+        &self,
+        humd: Hid,
+        topic: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        Ok(ens.ensemble.subscribe_topic(topic))
+    }
+
+    /// Tones this ensemble dropped for arriving past their `dusk`.
+    pub fn expired_dusk(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map_or(0, |h| h.ensemble.expired_dusk())
+    }
+
+    /// Route `n` tones `from` → `to`, rid-tagged `tag-<i>`, in order.
+    pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
+        for i in 0..n {
+            let tone = serde_json::json!({
+                "chi": "perf-mark",
+                "rid": format!("{tag}-{i}"),
+                "to": to.to_hex(),
+                "from": from.to_hex(),
+                "mark": tag,
+            });
+            self.nestler_send_ordered(from, tone).await?;
+        }
+        Ok(())
+    }
+
+    /// `rid`s of a collected batch, in arrival order.
+    pub fn rids(tones: &[Value]) -> Vec<String> {
+        tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+    }
+
+    /// Tones the inbox accepted from a peer then destroyed because no
+    /// local subscriber was attached. Must stay zero when a scenario
+    /// subscribes before sending — loss belongs to the link, not here.
+    pub fn ensemble_dropped(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
     }
 
     /// Shutdown all humds and drain their join handles.

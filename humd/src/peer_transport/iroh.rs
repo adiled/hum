@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use ensemble::{Ensemble, HumdAddr, HumdKey, IrohTransport, PeerCapabilities, PeerConnection};
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 use crate::peers::PeerConfig;
 
@@ -37,15 +37,61 @@ use crate::peers::PeerConfig;
 pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, Vec<String>)> {
     let transport = IrohTransport::bind_direct_with_key(humd_key).await?;
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
-    let sockets = transport.endpoint().bound_sockets();
-    info!(node_id = %&node_id_hex[..16], socket_count = sockets.len(), "peer.iroh.bound");
+    // `addr().ip_addrs()` is the routable set iroh discovered. NOT
+    // `bound_sockets()`, which reports the wildcard binds
+    // (0.0.0.0:<port>) — advertising those as dial targets is how a
+    // peering hint turns into "unreachable" and the dial silently falls
+    // back to address lookup, which is not configured in production.
+    let addrs: Vec<String> = transport
+        .endpoint()
+        .addr()
+        .ip_addrs()
+        .map(|s| s.to_string())
+        .collect();
+    info!(
+        node_id = %&node_id_hex[..16],
+        socket_count = addrs.len(),
+        "peer.iroh.bound"
+    );
 
-    let mut hints = Vec::with_capacity(1 + sockets.len());
+    let mut hints = Vec::with_capacity(1 + addrs.len());
     hints.push(format!("iroh:{node_id_hex}"));
-    for s in &sockets {
+    for s in &addrs {
         hints.push(format!("iroh-ip:{s}"));
     }
     Ok((transport, hints))
+}
+
+/// Dial one bootstrap peer and install it. Returns true when the
+/// connection is open. The redial supervisor calls this per peer so a
+/// failure is attributable to one peer rather than a whole sweep.
+pub(crate) async fn dial_one(
+    transport: &IrohTransport,
+    ens: &Arc<Ensemble>,
+    key: &HumdKey,
+    peer: &PeerConfig,
+    my_caps: &PeerCapabilities,
+) -> bool {
+    use ensemble::Transport as _;
+
+    if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
+        return false;
+    }
+    let mut peer_addr = HumdAddr::new(peer.humd_id);
+    for h in &peer.hints {
+        peer_addr.hints.push(h.clone());
+    }
+    match transport.connect(&peer_addr).await {
+        Ok(conn) => {
+            info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
+            ens.install(conn, my_caps.clone(), key);
+            true
+        }
+        Err(e) => {
+            warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
+            false
+        }
+    }
 }
 
 /// Open one iroh connection per bootstrap peer entry, install signed.
@@ -58,26 +104,8 @@ pub(crate) async fn dial_all(
     peers: &[PeerConfig],
     my_caps: &PeerCapabilities,
 ) {
-    use ensemble::Transport as _;
-
     for peer in peers {
-        if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
-            trace!(peer = %peer.humd_id.short(), "peer.iroh.skip.no_hint");
-            continue;
-        }
-        let mut peer_addr = HumdAddr::new(peer.humd_id);
-        for h in &peer.hints {
-            peer_addr.hints.push(h.clone());
-        }
-        match transport.connect(&peer_addr).await {
-            Ok(conn) => {
-                info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
-                ens.install(conn, my_caps.clone(), key);
-            }
-            Err(e) => {
-                warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
-            }
-        }
+        dial_one(transport, ens, key, peer, my_caps).await;
     }
 }
 
@@ -118,6 +146,14 @@ mod tests {
     /// each other in their peer registry after the handshake.
     #[tokio::test]
     async fn dial_then_accept_meet_via_signed_hello() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init();
+
         let a_key = Arc::new(HumdKey::generate());
         let b_key = Arc::new(HumdKey::generate());
         let a_id = a_key.hid();

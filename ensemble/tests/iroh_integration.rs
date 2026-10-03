@@ -2,9 +2,18 @@
 //! [`IrohTransport`]s in-process on loopback, dial across, run the
 //! signed ensemble handshake, and trade tones in both directions.
 //!
-//! Some CI sandboxes can't bind UDP sockets or initialise a rustls
-//! crypto provider — those failures aren't transport bugs and we skip
-//! the test gracefully so the suite still passes there.
+//! Some CI sandboxes cannot bind UDP sockets or initialise a rustls
+//! crypto provider. Those are environmental, not transport bugs — but
+//! "the test returned early" is indistinguishable from "the test
+//! passed", and a suite that can report green without asserting
+//! anything is worse than no suite: it manufactures confidence.
+//!
+//! So a skip here has to be earned. [`Skip::classify`] only forgives a
+//! closed list of environmental signatures and fails everything else,
+//! including a bind error nobody has seen before — an unrecognised
+//! failure is a bug until proven otherwise. Set
+//! `HUM_REQUIRE_TRANSPORT_TESTS=1` to turn even the forgivable cases
+//! into hard failures, which is how the job that has UDP should run.
 
 use std::time::Duration;
 
@@ -14,14 +23,91 @@ use ensemble::{
 };
 use serde_json::json;
 
-/// Try to bind a fresh iroh endpoint. If iroh refuses to come up
-/// (sandbox without UDP, missing crypto provider, etc.) return None
-/// and the caller skips. Anything else is a real failure.
+/// Set this to make an environmental skip a hard failure. Use it in the
+/// job that is supposed to have real UDP, so the suite cannot quietly
+/// lose its transport coverage.
+const REQUIRE_ENV: &str = "HUM_REQUIRE_TRANSPORT_TESTS";
+
+/// Whether a failure means "this machine can't run it" or "it is broken".
+enum Skip {
+    /// Environmental. `reason` goes in the test output.
+    Environmental(String),
+    /// Not environmental. Always a failure.
+    Real(String),
+}
+
+impl Skip {
+    /// Decide, from the error text, whether this is the environment
+    /// speaking or the transport breaking.
+    ///
+    /// Matching on text is unpleasant, but `bind_direct` collapses
+    /// everything to `anyhow!("iroh bind: {e}")`, so the chain is gone by
+    /// the time it reaches here. The list is deliberately short: every
+    /// entry is a reason we have actually seen on a sandbox, and the
+    /// fallthrough is a failure. When iroh stops wrapping its errors we
+    /// should match on variants instead — [`classify`]'s own tests are
+    /// what will tell us this went stale.
+    fn classify(what: &str, err: impl std::fmt::Display) -> Self {
+        let text = err.to_string().to_lowercase();
+        // Permission: a sandbox without network namespace access.
+        if text.contains("permission denied") {
+            return Skip::Environmental(format!("{what}: permission denied ({err})"));
+        }
+        // No usable interface at all: no loopback, no network device.
+        if text.contains("network is unreachable")
+            || text.contains("no such device")
+            || text.contains("cannot assign requested address")
+            || text.contains("no route to host")
+        {
+            return Skip::Environmental(format!("{what}: no usable network ({err})"));
+        }
+        // The port is taken by something else, or a leaked endpoint from a
+        // previous run is still bound. Ambiguous: can be environmental
+        // and can be our own leak, so it is reported loudly.
+        if text.contains("address in use") {
+            return Skip::Environmental(format!("{what}: address in use ({err})"));
+        }
+        // A crypto provider was never installed. Purely environmental —
+        // but it means the test asserted nothing, so it is still only
+        // allowed when the caller opts out of skips.
+        if text.contains("no process-level CryptoProvider available")
+            || text.contains("cryptoprovider")
+        {
+            return Skip::Environmental(format!("{what}: no crypto provider ({err})"));
+        }
+        Skip::Real(format!("{what}: {err}"))
+    }
+
+    /// Turn a skip into either a loud `eprintln!` and `None`, or a panic.
+    /// Never a silent `None` with nothing said.
+    fn resolve(self) -> Option<()> {
+        let forced = std::env::var(REQUIRE_ENV).is_ok_and(|v| v != "0" && !v.is_empty());
+        match self {
+            Skip::Environmental(reason) if forced => panic!(
+                "{REQUIRE_ENV} is set, so this failure cannot be skipped: {reason}"
+            ),
+            Skip::Environmental(reason) => {
+                eprintln!("iroh_integration: SKIPPED — {reason}");
+                eprintln!(
+                    "iroh_integration: this run proved nothing about the iroh \
+                     transport. Set {REQUIRE_ENV}=1 in a job with UDP to enforce it."
+                );
+                None
+            }
+            Skip::Real(reason) => panic!("iroh_integration: {reason}"),
+        }
+    }
+}
+
+/// Try to bind a fresh iroh endpoint, or explain why we cannot.
+///
+/// Returns `None` only when a skip was forgiven, and `resolve` has
+/// already said so on stderr. Anything else panics here.
 async fn try_bind() -> Option<IrohTransport> {
     match IrohTransport::bind_direct().await {
         Ok(t) => Some(t),
         Err(e) => {
-            eprintln!("iroh_integration: skipping — bind failed: {e}");
+            Skip::classify("bind", e).resolve();
             None
         }
     }
@@ -42,18 +128,28 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     let server_humd_id = Hid::from_pubkey(ensemble::HidPrefix::Humd, server_node_id.as_bytes());
     let client_node_id = client.node_id();
     let client_humd_id = Hid::from_pubkey(ensemble::HidPrefix::Humd, client_node_id.as_bytes());
-    // With relay disabled and no DNS lookup configured, the dialer
-    // needs explicit IP/port hints — pull them off the bound sockets.
-    let server_sockets: Vec<String> = server
-        .endpoint()
-        .bound_sockets()
-        .into_iter()
-        .map(|s| format!("iroh-ip:{}", s))
-        .collect();
+    // With relay disabled and no DNS lookup configured, the dialer needs
+    // explicit IP/port hints. `dial_hints` is not a convenience wrapper
+    // around `bound_sockets` — it maps the wildcard bind address to
+    // loopback, because a dial to `0.0.0.0` hangs instead of failing and
+    // that is what this test was silently skipping over.
+    let server_sockets: Vec<String> = server.dial_hints();
     assert!(
         !server_sockets.is_empty(),
         "iroh server endpoint reported no bound sockets"
     );
+    for hint in &server_sockets {
+        let addr = hint
+            .strip_prefix(ensemble::IROH_IP_HINT)
+            .unwrap_or_else(|| panic!("hint {hint} lost its prefix"));
+        let parsed: std::net::SocketAddr = addr
+            .parse()
+            .unwrap_or_else(|e| panic!("hint {hint} is not a SocketAddr: {e}"));
+        assert!(
+            !parsed.ip().is_unspecified(),
+            "dial hint {hint} is a wildcard address and can never be dialled"
+        );
+    }
 
     // Pin the ensemble's HumdKey to the iroh SecretKey so the signed
     // hello's pubkey hashes back to the iroh-derived Hid — the
@@ -135,7 +231,9 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     let conn = match client.connect(&server_humd_addr).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("iroh_integration: skipping — connect failed: {e}");
+            // Same rule as bind: a loopback QUIC handshake that fails is
+            // almost always our bug, not the machine's.
+            Skip::classify("connect", e).resolve();
             return;
         }
     };
@@ -192,4 +290,67 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     // Keep the outer `server` Arc alive until here so the underlying
     // iroh endpoint isn't dropped mid-test.
     drop(server);
+}
+
+/// The classifier is the thing standing between this file and a suite
+/// that forgives everything, so it gets tested like anything else. A
+/// blanket `Skip::Environmental` would make every other test in the repo
+/// pass, and the only defence is to check the classification directly.
+mod classify {
+    use super::{Skip, REQUIRE_ENV};
+
+    #[test]
+    fn sandbox_signatures_are_environmental() {
+        for msg in [
+            "iroh bind: bind: Permission denied (os error 13)",
+            "iroh bind: Address in use (os error 48)",
+            "connect: network is unreachable",
+            "bind: no such device",
+            "bind: cannot assign requested address",
+        ] {
+            assert!(
+                matches!(Skip::classify("bind", msg), Skip::Environmental(_)),
+                "{msg:?} should be environmental"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_unrecognised_is_a_real_failure() {
+        // The important one. An unfamiliar error must not be forgiven
+        // just because skipping is convenient.
+        for msg in [
+            "iroh bind: quic handshake failed",
+            "server accept: connection reset by peer",
+            "no secret found for the relay",
+            "",
+        ] {
+            assert!(
+                matches!(Skip::classify("bind", msg), Skip::Real(_)),
+                "{msg:?} must not be forgiven"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_failure_panics_even_without_the_env_var() {
+        let r = std::panic::catch_unwind(|| {
+            Skip::Real("bind: quic handshake failed".into()).resolve()
+        });
+        assert!(r.is_err(), "a real failure must never resolve to a skip");
+    }
+
+    #[test]
+    fn requiring_transport_tests_turns_a_skip_into_a_panic() {
+        // SAFETY: single-threaded, and the env is read immediately.
+        unsafe { std::env::set_var(REQUIRE_ENV, "1") };
+        let r = std::panic::catch_unwind(|| {
+            Skip::Environmental("bind: permission denied".into()).resolve()
+        });
+        unsafe { std::env::remove_var(REQUIRE_ENV) };
+        assert!(
+            r.is_err(),
+            "{REQUIRE_ENV} must make even an environmental skip fail"
+        );
+    }
 }

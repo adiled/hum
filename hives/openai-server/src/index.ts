@@ -6,6 +6,7 @@ import { join, dirname } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
+import { OpenAIWorker } from "./openai.ts";
 export { toolsFromOpenAI } from "./tools.ts";
 
 interface BeeConfig {
@@ -1224,6 +1225,24 @@ async function start(): Promise<void> {
 
   await thrum.connect({ host: actualHost, port: actualPort, scheme: "http" });
   console.log(`[hum-openai-server] connected to thrum`);
+
+  // Worker half — this hive is a hybrid bee. humd routes chi:"prompt"
+  // tones to this bee when modelId matches an advertised model; handle
+  // them by calling OpenAI's API upstream and streaming chunks back.
+  const openaiWorker = new OpenAIWorker(thrum);
+  thrum.onChi("prompt", (msg) => {
+    const sid = (msg.sid as string) ?? "";
+    if (sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
+  });
+  // Tool loop: humd routes chi:"tool-result" back to this bee (the
+  // worker that emitted the tool-call). Feed the output into the OpenAI
+  // conversation and continue streaming.
+  thrum.onChi("tool-result", (msg) => {
+    openaiWorker.handleToolResult(msg).catch(e => console.error("[worker] tool-result failed:", e));
+  });
+  thrum.onChi("cancel", (msg) => {
+    openaiWorker.cancel(msg);
+  });
 }
 
 start().catch(e => { console.error("[hum-openai-server] startup failed:", e); process.exit(1); });

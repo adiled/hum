@@ -192,7 +192,15 @@ async fn run_prompt(
     let sid = format!("bp7-{}", now_ms());
     let mut prompt = serde_json::Map::new();
     prompt.insert("chi".into(), json!(Chi::Prompt));
+    // Correlation only, and deliberately per-session: every prompt in
+    // this session shares `p-{sid}`. That is exactly why it cannot be
+    // the message identity — a second prompt under the same rid would
+    // look like a retransmit of the first.
     prompt.insert("rid".into(), Value::String(format!("p-{sid}")));
+    // At-most-once, minted per message. This is a DTN bridge, so the
+    // same bundle really can be handed to us twice by the store-and-
+    // forward path, and re-running a prompt is not idempotent.
+    prompt.insert("mid".into(), Value::String(hum_identity::HumId::mint().to_string()));
     prompt.insert("sid".into(), Value::String(sid.clone()));
     prompt.insert("text".into(), Value::String(text.to_string()));
     prompt.insert("modelId".into(), Value::String(model.to_string()));
