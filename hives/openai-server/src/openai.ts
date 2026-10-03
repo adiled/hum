@@ -41,7 +41,7 @@ const API_KEY = process.env.OPENAI_API_KEY
 interface Session {
   sid: string;
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<Record<string, unknown>>; // OpenAI message shape (role, content, tool_calls, tool_call_id)
   tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
   // callId → accumulated tool-call info, awaiting chi:"tool-result"
   pending: Map<string, { name: string; args: string }>;
