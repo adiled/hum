@@ -85,12 +85,18 @@ export class OpenAIWorker {
       }
 
       // Stream SSE lines, fold deltas into chunk tones exactly like the
-      // Rust WireListener's canonical surface.
+      // Rust WireListener's canonical surface. Each content block (text,
+      // reasoning, tool-call) gets its own blockIdx; deltas within a block
+      // carry that index, and a content_block_stop closes each block.
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      let blockIdx = 0;
-      let accumulatedToolCalls = "";
+      let textBlock = 0;           // index of the text block
+      let reasoningBlock = 0;      // index of the reasoning block
+      let toolBlocks = 0;          // count of tool-call blocks opened
+      // tool_calls arrive keyed by their own `index` (0..n-1); accumulate
+      // each one's partial-arguments JSON across chunks.
+      const toolArgs = new Map<number, { name: string; args: string }>();
       let inputTokens = 0;
       let outputTokens = 0;
 
@@ -110,21 +116,21 @@ export class OpenAIWorker {
           const choice = ev.choices?.[0];
           const delta = choice?.delta;
           if (delta?.content) {
-            this.chunk(sid, "text_delta", { blockIdx, delta: delta.content });
+            this.chunk(sid, "text_delta", { blockIdx: textBlock, delta: delta.content });
           }
           if (delta?.reasoning_content) {
-            this.chunk(sid, "reasoning_delta", { blockIdx, delta: delta.reasoning_content });
+            this.chunk(sid, "reasoning_delta", { blockIdx: reasoningBlock, delta: delta.reasoning_content });
           }
           if (Array.isArray(delta?.tool_calls)) {
             for (const tc of delta.tool_calls) {
-              if (tc.function?.name) {
-                accumulatedToolCalls += `{"name":"${tc.function.name}","arguments":`;
-              }
-              if (tc.function?.arguments) {
-                accumulatedToolCalls += tc.function.arguments;
-              }
+              const idx = tc.index ?? toolBlocks;
+              const slot = toolArgs.get(idx) ?? { name: "", args: "" };
+              if (tc.function?.name) slot.name = tc.function.name;
+              if (tc.function?.arguments) slot.args += tc.function.arguments;
+              toolArgs.set(idx, slot);
+              // A blockIdx per tool-call block, offset past text+reasoning.
+              this.chunk(sid, "tool_input_delta", { blockIdx: idx, partialJson: slot.args });
             }
-            this.chunk(sid, "tool_input_delta", { blockIdx: blockIdx + 1, partialJson: accumulatedToolCalls });
           }
           if (ev.usage) {
             inputTokens = ev.usage.prompt_tokens ?? 0;
@@ -133,7 +139,7 @@ export class OpenAIWorker {
         }
       }
       buf += decoder.decode();
-      this.chunk(sid, "content_block_stop", { blockIdx });
+      this.chunk(sid, "content_block_stop", { blockIdx: textBlock });
       this.finish(sid, "stop", inputTokens, outputTokens);
     } catch (e) {
       this.error(sid, "upstream_error", (e as Error).message ?? "upstream failed");
