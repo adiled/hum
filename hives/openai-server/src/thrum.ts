@@ -6,7 +6,14 @@ export const THRUM_VERSION = "0.7.0";
 export const HIVE_NAME = "openai-server";
 export const BEE_VERSION = pkg.version;
 export const BEE_ROLE = "forager";
+export const BEE_ROLES = ["forager", "worker"];
 export const BEE_PROVIDES = ["session"];
+// Model IDs this hive's WORKER half can serve. humd routes chi:"prompt"
+// to this bee only when modelId matches one of these. The config file
+// seeds the list; the worker bee is the source of truth for what models
+// are available on the hive at any time.
+export const BEE_MODELS: string[] = (process.env.OPENAI_WORKER_MODELS ?? "")
+  .split(",").map(s => s.trim()).filter(s => s.length > 0);
 
 // Minimal thrum client. Connects to hum's NDJSON socket, sends framed
 // tones, dispatches incoming tones to subscribers by `sid`.
@@ -36,6 +43,7 @@ export class ThrumClient {
   private sock: Socket | null = null;
   private buf = "";
   private byId = new Map<string, SidHandler>();
+  private byChi = new Map<string, SidHandler>();
   private path: string;
   private connected = false;
   private pending: string[] = [];
@@ -72,10 +80,12 @@ export class ThrumClient {
         rid: `hello-${Date.now().toString(36)}`,
         from: HIVE_NAME,
         hid: beeHid(HIVE_NAME, "fbee"),
-        bee: [BEE_ROLE],
+        bee: BEE_ROLES,
         hive: HIVE_NAME,
         version: BEE_VERSION,
         provides: BEE_PROVIDES,
+        models: BEE_MODELS,
+        propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
         protoVersion: THRUM_VERSION,
         chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
         source: "https://github.com/adiled/hum/tree/main/hives/openai-server",
@@ -98,7 +108,10 @@ export class ThrumClient {
           const msg = JSON.parse(line) as Tone;
           const sid = (msg.sid as string) ?? "";
           const handler = this.byId.get(sid);
-          if (handler) handler(msg);
+          if (handler) { handler(msg); continue; }
+          const chi = (msg.chi as string) ?? "";
+          const chiHandler = this.byChi.get(chi);
+          if (chiHandler) chiHandler(msg);
         } catch {}
       }
     });
@@ -142,6 +155,9 @@ export class ThrumClient {
 
   on(sid: string, handler: SidHandler): void { this.byId.set(sid, handler); }
   off(sid: string): void { this.byId.delete(sid); }
+
+  onChi(chi: string, handler: SidHandler): void { this.byChi.set(chi, handler); }
+  offChi(chi: string): void { this.byChi.delete(chi); }
 
   close(): void {
     this.shuttingDown = true;
