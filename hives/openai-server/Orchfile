@@ -1,3 +1,6 @@
 SERVICE openai-server
 RUN ${HOME}/.local/bin/openai-server
+ENV OPENAI_WORKER_MODELS=${OPENAI_WORKER_MODELS:-}
+ENV OPENAI_API_KEY=${OPENAI_API_KEY:-}
+ENV OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
 RESTART always
