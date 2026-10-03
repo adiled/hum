@@ -2,18 +2,22 @@
 //
 // The forager half translates OpenAI HTTP wire → chi:"prompt" out to
 // humd. This test drives the worker half the other way: a fake humd
-// routes a chi:"prompt" tone BACK to this bee (humd forwards prompts
-// whose modelId matches an advertised model), the worker calls the
-// upstream OpenAI API, and streams chi:"chunk"/"finish" tones out.
+// routes chi:"prompt"/"tool-result"/"cancel" tones back to this bee
+// (humd forwards prompts whose modelId matches an advertised model),
+// the worker calls the upstream OpenAI API, and streams
+// chi:"chunk"/"finish"/"tool-call" tones out.
 //
 // We stand up a fake upstream OpenAI-compatible server (via
-// OPENAI_API_BASE) that returns a canned SSE chat-completions stream,
-// and a fake humd that sends one prompt and captures the reply tones.
+// OPENAI_API_BASE) and a fake humd that sends tones and captures the
+// replies. The fake OpenAI answers with a canned SSE stream, and can
+// be told to return tool_calls on the first turn to exercise the tool
+// loop.
 //
-// Pins the wire: chunks must carry sid + chunkType + delta, and a
-// finish must carry finishReason + usage — the canonical surface the
-// Rust WireListener emits, so downstream foragers/consumers see the
-// same shapes regardless of which bee produced them.
+// Pins the wire: chunks carry sid + chunkType + delta, finish carries
+// finishReason + usage, and tool_calls become chi:"tool-call" tones
+// with callId/toolName/args — the canonical surface the Rust workers
+// emit, so downstream consumers see the same shapes regardless of
+// which bee produced them.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
@@ -25,20 +29,27 @@ import { spawn, type Subprocess } from "bun";
 
 type Tone = Record<string, unknown>;
 
-// Fake upstream OpenAI-compatible API: answers POST /chat/completions
-// with a streaming SSE chat-completions body.
-async function startFakeOpenAI(): Promise<{ port: number; shutdown: () => void }> {
+// Fake upstream OpenAI-compatible API. `toolCall` toggles whether the
+// first /chat/completions response returns a tool_call (then a second
+// request must include the tool result, and we answer with text).
+async function startFakeOpenAI(toolCall: boolean): Promise<{ port: number; shutdown: () => void }> {
   const server = createHttpServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c.toString(); });
     req.on("end", () => {
-      if (req.method === "POST" && (req.url?.endsWith("/chat/completions"))) {
+      if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const mk = (o: object) => `data: ${JSON.stringify(o)}\n\n`;
-        res.write(mk({ choices: [{ delta: { content: "hello" } }] }));
-        res.write(mk({ choices: [{ delta: { content: " from the" } }] }));
-        res.write(mk({ choices: [{ delta: { content: " upstream" } }] }));
-        res.write(mk({ usage: { prompt_tokens: 3, completion_tokens: 3 } }));
+        if (toolCall && !body.includes('"role":"tool"')) {
+          // First turn: the model wants to call a tool.
+          res.write(mk({ choices: [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_abc", type: "function", function: { name: "read", arguments: "{\"path\":\"" } }] } }] }));
+          res.write(mk({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "a.txt\"}" } }] } }] }));
+        } else {
+          // Second turn (after tool result) or no-tool: plain text.
+          res.write(mk({ choices: [{ delta: { content: "saw the" } }] }));
+          res.write(mk({ choices: [{ delta: { content: " file" } }] }));
+          res.write(mk({ usage: { prompt_tokens: 3, completion_tokens: 2 } }));
+        }
         res.write("data: [DONE]\n\n");
         res.end();
       } else {
@@ -53,12 +64,12 @@ async function startFakeOpenAI(): Promise<{ port: number; shutdown: () => void }
 }
 
 // Fake humd: accepts one openai-server connection, captures hello,
-// then sends a chi:"prompt" tone and records every reply tone.
+// sends tones, and records every reply tone.
 async function startFakeHumd(): Promise<{
   sockPath: string;
   capturedReplies: Tone[];
   helloReceived: Promise<Tone>;
-  sendPrompt: (t: Tone) => void;
+  send: (t: Tone) => void;
   shutdown: () => Promise<void>;
 }> {
   const dir = mkdtempSync(join(tmpdir(), "hum-worker-e2e-"));
@@ -67,7 +78,6 @@ async function startFakeHumd(): Promise<{
   let helloResolve!: (t: Tone) => void;
   const helloReceived = new Promise<Tone>((r) => { helloResolve = r; });
   let active: Socket | null = null;
-  let helloDone = false;
 
   const server: Server = createNetServer((sock) => {
     active = sock;
@@ -81,12 +91,7 @@ async function startFakeHumd(): Promise<{
         if (!line) continue;
         try {
           const tone = JSON.parse(line) as Tone;
-          if (tone.chi === "hello") {
-            helloResolve(tone);
-            helloDone = true;
-            continue;
-          }
-          // Any non-hello tone the bee emits is a reply to our prompt.
+          if (tone.chi === "hello") { helloResolve(tone); continue; }
           capturedReplies.push(tone);
         } catch {}
       }
@@ -101,7 +106,7 @@ async function startFakeHumd(): Promise<{
     sockPath,
     capturedReplies,
     helloReceived,
-    sendPrompt: (t) => { if (active) active.write(JSON.stringify(t) + "\n"); },
+    send: (t) => { if (active) active.write(JSON.stringify(t) + "\n"); },
     shutdown: async () => {
       if (active) active.destroy();
       await new Promise<void>((r) => server.close(() => r()));
@@ -124,12 +129,19 @@ async function waitForHello(hello: Promise<Tone>, timeoutMs: number): Promise<To
   throw new Error("bee never helloed");
 }
 
+async function waitFor(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !pred()) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 let openAI: { port: number; shutdown: () => void };
-let humd: ReturnType<typeof startFakeHumd> extends Promise<infer T> ? T : never;
+let humd: Awaited<ReturnType<typeof startFakeHumd>>;
 let server: Subprocess<"ignore", "pipe", "pipe">;
 
-beforeAll(async () => {
-  openAI = await startFakeOpenAI();
+async function boot(toolCall: boolean) {
+  openAI = await startFakeOpenAI(toolCall);
   humd = await startFakeHumd();
   server = spawn({
     cmd: ["bun", "src/index.ts"],
@@ -146,45 +158,67 @@ beforeAll(async () => {
     stderr: "pipe",
   });
   await waitForHello(humd.helloReceived, 5000);
-});
+}
 
-afterAll(async () => {
+async function teardown() {
   server.kill();
   await server.exited;
   await humd.shutdown();
   openAI.shutdown();
-});
+}
 
 describe("openai-server worker half — chi:prompt in, chunk/finish out", () => {
+  beforeAll(async () => { await boot(false); });
+  afterAll(async () => { await teardown(); });
+
   test("streams text_delta chunks and a finish with usage", async () => {
     const sid = "worker-test-sid";
-    humd.sendPrompt({
-      chi: "prompt",
-      sid,
-      hive: "openai-server",
-      modelId: "gpt-4o",
-      content: "hello worker",
-    });
+    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: "hello worker" });
 
-    // Wait for the reply tones to arrive.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !humd.capturedReplies.some(r => r.chi === "finish")) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "finish"), 5000);
 
     const textDeltas = humd.capturedReplies.filter(r => r.chi === "chunk" && r.chunkType === "text_delta");
     expect(textDeltas.length).toBeGreaterThan(0);
-    // All chunks carry the original sid.
     for (const c of textDeltas) expect(c.sid).toBe(sid);
 
-    // Concatenate the deltas into the upstream reply.
     const text = textDeltas.map(c => c.delta).join("");
-    expect(text).toBe("hello from the upstream");
+    expect(text).toBe("saw the file");
 
     const finish = humd.capturedReplies.find(r => r.chi === "finish");
-    expect(finish).toBeDefined();
     expect(finish!.sid).toBe(sid);
     expect(finish!.finishReason).toBe("stop");
-    expect(finish!.usage).toMatchObject({ input_tokens: 3, output_tokens: 3 });
+    expect(finish!.usage).toMatchObject({ input_tokens: 3, output_tokens: 2 });
+  });
+});
+
+describe("openai-server worker half — tool loop", () => {
+  beforeAll(async () => { await boot(true); });
+  afterAll(async () => { await teardown(); });
+
+  test("tool_calls → chi:tool-call, tool-result → resumes and finishes", async () => {
+    const sid = "worker-tool-sid";
+    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: "read the file", tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] });
+
+    // First: the model emits a tool-call; the worker must NOT finish.
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "tool-call"), 5000);
+    expect(humd.capturedReplies.some(r => r.chi === "finish")).toBe(false);
+
+    const toolCall = humd.capturedReplies.find(r => r.chi === "tool-call")!;
+    expect(toolCall.sid).toBe(sid);
+    expect(toolCall.toolName).toBe("read");
+    expect(toolCall.callId).toBeDefined();
+    expect(toolCall.args).toContain("a.txt");
+
+    // Simulate the forager returning the tool result.
+    humd.send({ chi: "tool-result", sid, callId: toolCall.callId, toolName: "read", output: "file contents" });
+
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "finish"), 5000);
+
+    const textDeltas = humd.capturedReplies.filter(r => r.chi === "chunk" && r.chunkType === "text_delta");
+    const text = textDeltas.map(c => c.delta).join("");
+    expect(text).toBe("saw the file");
+
+    const finish = humd.capturedReplies.find(r => r.chi === "finish")!;
+    expect(finish.finishReason).toBe("stop");
   });
 });

@@ -1234,6 +1234,15 @@ async function start(): Promise<void> {
     const sid = (msg.sid as string) ?? "";
     if (sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
   });
+  // Tool loop: humd routes chi:"tool-result" back to this bee (the
+  // worker that emitted the tool-call). Feed the output into the OpenAI
+  // conversation and continue streaming.
+  thrum.onChi("tool-result", (msg) => {
+    openaiWorker.handleToolResult(msg).catch(e => console.error("[worker] tool-result failed:", e));
+  });
+  thrum.onChi("cancel", (msg) => {
+    openaiWorker.cancel(msg);
+  });
 }
 
 start().catch(e => { console.error("[hum-openai-server] startup failed:", e); process.exit(1); });
