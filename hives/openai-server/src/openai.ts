@@ -113,8 +113,9 @@ export class OpenAIWorker {
     // tool output (OpenAI wire: role "tool", tool_call_id, content).
     sess.messages.push({
       role: "tool",
+      tool_call_id: callId,
       content: `[tool ${call.name}] ${(msg.output as string) ?? (msg.result as string) ?? ""}`,
-    });
+    } as any);
 
     // Resume the stream with the tool output in the conversation.
     await this.streamTurn(sess, sid);
@@ -232,14 +233,13 @@ export class OpenAIWorker {
     // If the model emitted tool calls, don't finish — emit chi:"tool-call"
     // tones so humd routes them to foragers, and wait for tool-results.
     if (toolArgs.size > 0) {
-      // Record assistant tool_calls in the conversation (OpenAI wire:
-      // assistant message with tool_calls array).
-      sess.messages.push({
-        role: "assistant",
-        content: "",
-      });
+      // Record the assistant message with its tool_calls array — OpenAI
+      // wire requires the continuation's tool messages to reference the
+      // call ids from this message.
+      const calls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = [];
       for (const [, tc] of toolArgs) {
         const callId = tc.callId || `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        calls.push({ id: callId, type: "function", function: { name: tc.name, arguments: tc.args } });
         sess.pending.set(callId, { name: tc.name, args: tc.args });
         this.thrum.send({
           chi: "tool-call",
@@ -249,6 +249,11 @@ export class OpenAIWorker {
           args: tc.args,
         } as Tone);
       }
+      sess.messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: calls,
+      } as any);
       return;
     }
 
