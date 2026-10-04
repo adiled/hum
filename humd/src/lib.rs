@@ -53,6 +53,7 @@ pub struct DaemonConfig {
     pub humd_key: Option<Arc<HumdKey>>,
     pub bootstrap_peers: Vec<PeerConfig>,
     pub thehum_cfg: Option<thehum::Config>,
+    pub trust_remote_workers: bool,
 }
 
 impl DaemonConfig {
@@ -89,6 +90,13 @@ impl DaemonConfig {
             humd_key,
             bootstrap_peers,
             thehum_cfg: None,
+            trust_remote_workers: matches!(
+                std::env::var("HUM_TRUST_REMOTE_WORKERS")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .as_deref(),
+                Some("1") | Some("true") | Some("yes")
+            ),
         }
     }
 }
@@ -290,6 +298,7 @@ where
         tool_routes_peer: tool_routes_peer.clone(),
         incoming_tool_calls: incoming_tool_calls.clone(),
         thehum: thehum_handle.clone(),
+        trust_remote_workers: cfg.trust_remote_workers,
     });
     thrum.set_sink(sink);
     if let Some(ens) = &ensemble_for_sink {
@@ -476,6 +485,7 @@ struct HumdSink {
     tool_routes_peer: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     thehum: Option<Arc<thehum::TheHum>>,
+    trust_remote_workers: bool,
 }
 
 pub struct PeersAliasResolver {
@@ -519,6 +529,13 @@ fn bees_snapshot_path() -> std::path::PathBuf {
 impl HumdSink {
     fn pick_remote_worker(&self, model: &str) -> Option<ensemble::Hid> {
         let ens = self.ensemble.as_ref()?;
+        if !self.trust_remote_workers {
+            warn!(
+                model,
+                "prompt.remote-routing.disabled — a peer can advertise any model and be handed the prompt; set HUM_TRUST_REMOTE_WORKERS=1 to accept that risk"
+            );
+            return None;
+        }
         let live: std::collections::BTreeSet<String> =
             ens.peers().iter().map(|h| h.to_hex()).collect();
         let table = self.remote_hives.read();

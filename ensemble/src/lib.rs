@@ -845,6 +845,14 @@ async fn handle_liveness(
     true
 }
 
+fn announce_claims_sender(payload: &serde_json::Value, arrived_from: &Hid) -> bool {
+    match serde_json::from_value::<hives::HiveAnnounce>(payload.clone()) {
+        Ok(hives::HiveAnnounce::Advertise { humd_id, .. }) => humd_id == arrived_from.to_hex(),
+        Ok(hives::HiveAnnounce::Retract { humd_id, .. }) => humd_id == arrived_from.to_hex(),
+        Err(_) => true,
+    }
+}
+
 async fn handle_gossip(
     send_stats: &Arc<SendStats>,
     gossip: &Arc<gossip::GossipState>,
@@ -857,6 +865,14 @@ async fn handle_gossip(
         None => return false,
     };
     if !gossip.note_seen(parsed.msg_id) {
+        return true;
+    }
+    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_claims_sender(&parsed.payload, arrived_from) {
+        tracing::warn!(
+            target: "ensemble.bees",
+            arrived_from = %arrived_from,
+            "gossip.announce.impersonation-rejected — payload claims a humd_id the sender does not own"
+        );
         return true;
     }
     if let Some(tx) = gossip.sender(parsed.topic) {
@@ -894,6 +910,41 @@ mod tests {
             "rid": tag,
             "from": Hid::random_humd().to_hex(),
         })
+    }
+
+    fn worker_announce(claimed: &str, model: &str) -> serde_json::Value {
+        let mut manifest = hives::HiveManifest::new("worker-bee", "0.1.0", "0.7.0");
+        manifest.bee = vec!["worker".to_string()];
+        manifest.models = vec![model.to_string()];
+        serde_json::to_value(hives::HiveAnnounce::Advertise {
+            humd_id: claimed.to_string(),
+            manifest: Box::new(manifest),
+        })
+        .expect("serialize announce")
+    }
+
+    #[test]
+    fn an_announce_under_the_senders_own_hid_is_accepted() {
+        let me = Hid::random_humd();
+        let payload = worker_announce(&me.to_hex(), "claude-opus-4-7");
+        assert!(announce_claims_sender(&payload, &me));
+    }
+
+    #[test]
+    fn an_announce_claiming_another_hums_hid_is_rejected() {
+        let me = Hid::random_humd();
+        let victim = Hid::random_humd();
+        let payload = worker_announce(&victim.to_hex(), "claude-opus-4-7");
+        assert!(
+            !announce_claims_sender(&payload, &me),
+            "a peer must not advertise capabilities under a Hid it does not own"
+        );
+    }
+
+    #[test]
+    fn an_unknown_payload_shape_passes_the_provenance_gate() {
+        let me = Hid::random_humd();
+        assert!(announce_claims_sender(&json!({ "kind": "something-new" }), &me));
     }
 
     async fn drain(rx: &mut mpsc::Receiver<Tone>) -> Vec<Tone> {
