@@ -152,8 +152,21 @@ async fn eviction_only_touches_the_dead_peer() {
     sim.probe(a, c).await.expect("probe");
     sim.kill_link(b, a).expect("kill b");
 
-    await_dead(&sim, a, b).await;
-    assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![b]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let reaped = loop {
+        sim.probe(a, c).await.expect("c stays live");
+        let reaped = sim.evict_expired(a, TTL).expect("sweep");
+        if reaped.contains(&b) {
+            break reaped;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a peer whose link was killed must be reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+
+    assert_eq!(reaped, vec![b]);
     assert_eq!(liveness(&sim, a, c), Some(Liveness::Live), "c is untouched");
     assert_eq!(sim.peer_count(a), 1, "only b was reaped");
 }

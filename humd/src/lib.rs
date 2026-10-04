@@ -218,6 +218,8 @@ where
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
     let hive_tag = cfg.hum_cfg.nest.default.clone();
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let remote_hives: RemoteHives =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
     if let Some(thehum) = thehum_handle.as_ref() {
         let manifests_for_replay = manifests.clone();
         if let Err(e) = thehum.replay(|event| {
@@ -279,6 +281,7 @@ where
         capacity: cfg.capacity,
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
+        remote_hives: remote_hives.clone(),
         bees_snapshot_path: bees_snapshot_path(),
         sid_origins: sid_origins.clone(),
         tool_routes,
@@ -289,6 +292,17 @@ where
         thehum: thehum_handle.clone(),
     });
     thrum.set_sink(sink);
+    if let Some(ens) = &ensemble_for_sink {
+        let ens = ens.clone();
+        let remote = remote_hives.clone();
+        tokio::spawn(async move {
+            let mut seen = ens.hive_discover_all();
+            while let Some((humd_id, manifest)) = seen.recv().await {
+                let key = bee_key(&manifest);
+                remote.write().entry(humd_id).or_default().insert(key, manifest);
+            }
+        });
+    }
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
@@ -453,6 +467,7 @@ struct HumdSink {
     capacity: LocalCapacity,
     hive_tag: String,
     manifests: Manifests,
+    remote_hives: RemoteHives,
     bees_snapshot_path: std::path::PathBuf,
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
@@ -486,12 +501,41 @@ impl ensemble::AliasResolver for PeersAliasResolver {
 }
 
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
+type RemoteHives =
+    Arc<parking_lot::RwLock<HashMap<ensemble::Hid, HashMap<String, ensemble::HiveManifest>>>>;
+
+fn bee_key(manifest: &ensemble::HiveManifest) -> String {
+    manifest
+        .hid
+        .map(|h| h.to_hex())
+        .or_else(|| manifest.nestler_id.clone())
+        .unwrap_or_else(|| manifest.name.clone())
+}
 
 fn bees_snapshot_path() -> std::path::PathBuf {
     hum_paths::bees_snapshot()
 }
 
 impl HumdSink {
+    fn pick_remote_worker(&self, model: &str) -> Option<ensemble::Hid> {
+        let ens = self.ensemble.as_ref()?;
+        let live: std::collections::BTreeSet<String> =
+            ens.peers().iter().map(|h| h.to_hex()).collect();
+        let table = self.remote_hives.read();
+        let mut found: Vec<String> = table
+            .iter()
+            .filter(|(humd, bees)| {
+                live.contains(&humd.to_hex())
+                    && bees.values().any(|m| {
+                        m.bee.iter().any(|b| b == "worker") && m.models.iter().any(|x| x == model)
+                    })
+            })
+            .map(|(humd, _)| humd.to_hex())
+            .collect();
+        found.sort();
+        Hid::from_hex(found.first()?).ok()
+    }
+
     fn snapshot_bees(&self) {
         let json = {
             let m = self.manifests.read();
@@ -1006,12 +1050,35 @@ impl ToneSink for HumdSink {
                     pick
                 };
                 let Some(worker_client) = worker_client else {
-                    warn!(sid, model, "prompt.no-worker — no worker bee advertises this model");
+                    if let Some(peer) = self.pick_remote_worker(&model)
+                        && let Some(ens) = self.ensemble.clone()
+                    {
+                        let mut forward = tone.clone();
+                        if let Some(obj) = forward.as_object_mut() {
+                            obj.insert("to".into(), Value::String(peer.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                        }
+                        trace!(sid, model, peer = %peer.short(), "prompt.forward.remote");
+                        match ens.route(forward).await {
+                            Ok(()) => return,
+                            Err(e) => warn!(sid, peer = %peer.short(), err = %e,
+                                "prompt.forward.remote.failed"),
+                        }
+                    }
+                    warn!(sid, model, "prompt.no-worker — no bee on this mesh advertises this model");
                     let err = serde_json::json!({
                         "chi": "error",
                         "sid": sid,
                         "message": format!("no worker bee advertises model '{}'", model),
                     });
+                    if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
+                        let mut out = err.clone();
+                        if let Some(obj) = out.as_object_mut() {
+                            obj.insert("to".into(), Value::String(origin.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                        }
+                        let _ = ens.route(out).await;
+                    }
                     self.thrum.thrum_broadcast(&sid, &self.hive_tag, err);
                     return;
                 };
@@ -1177,6 +1244,14 @@ impl ToneSink for HumdSink {
             Some(Chi::PeerAdd) => {
                 let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
                 trace!(client_id, humd_id, "ensemble.peer.add");
+                if let Some(ens) = self.ensemble.clone() {
+                    let known = self.manifests.read().values().cloned().collect::<Vec<_>>();
+                    tokio::spawn(async move {
+                        for manifest in known {
+                            ens.hive_advertise(manifest).await;
+                        }
+                    });
+                }
             }
             Some(Chi::PeerRemove) => {
                 let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
@@ -1186,7 +1261,11 @@ impl ToneSink for HumdSink {
                         if bytes.len() == 32 {
                             let mut id = [0u8; 32];
                             id.copy_from_slice(&bytes);
-                            ensemble.remove_peer(&ensemble::Hid::from(id));
+                            let gone = ensemble::Hid::from(id);
+                            ensemble.remove_peer(&gone);
+                            if self.remote_hives.write().remove(&gone).is_some() {
+                                trace!(peer = %gone.short(), "discovery.evicted");
+                            }
                         }
                     }
                 }
