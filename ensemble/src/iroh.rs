@@ -1,16 +1,17 @@
-
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, PublicKey, TransportAddr};
 
-use crate::{HumdAddr, Hid, PeerCapabilities, PeerConnection, Tone, Transport};
+use crate::framing;
+use crate::opening::Gate;
+use crate::{Hid, HumdAddr, PeerCapabilities, PeerConnection, Tone, Transport};
 
 pub const IROH_ALPN: &[u8] = b"hum/0.5";
 
@@ -46,8 +47,10 @@ pub struct IrohEndpoint {
     node_id: EndpointId,
     caps: PeerCapabilities,
     _connection: Connection,
-    sender: Mutex<Option<SendStream>>,
+    sender: Arc<Mutex<Option<SendStream>>>,
     rx: parking_lot::Mutex<Option<mpsc::Receiver<Tone>>>,
+    closed: AtomicBool,
+    gate: Gate,
 }
 
 impl IrohEndpoint {
@@ -59,17 +62,20 @@ impl IrohEndpoint {
         caps: PeerCapabilities,
     ) -> Arc<Self> {
         let humd_id = humd_id_from_node_id(&node_id);
-        let peer = HumdAddr::new(humd_id).with_hint(format!("{IROH_HINT}{}", hex::encode(node_id.as_bytes())));
+        let peer = HumdAddr::new(humd_id)
+            .with_hint(format!("{IROH_HINT}{}", hex::encode(node_id.as_bytes())));
         let (tx, rx) = mpsc::channel::<Tone>(RECV_CAP);
         let me = Arc::new(Self {
             peer,
             node_id,
             caps,
             _connection: conn,
-            sender: Mutex::new(Some(send)),
+            sender: Arc::new(Mutex::new(Some(send))),
             rx: parking_lot::Mutex::new(Some(rx)),
+            closed: AtomicBool::new(false),
+            gate: Gate::new(),
         });
-        tokio::spawn(read_loop(recv, tx));
+        tokio::spawn(framing::pump(recv, tx, "iroh"));
         me
     }
 
@@ -98,6 +104,19 @@ impl IrohEndpoint {
     }
 }
 
+impl IrohEndpoint {
+    async fn write(&self, tone: Tone) -> Result<()> {
+        let mut guard = self.sender.lock().await;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(anyhow!("iroh send: link closed"));
+        }
+        let s = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("iroh send: stream closed"))?;
+        framing::write_frame(s, &tone).await
+    }
+}
+
 #[async_trait]
 impl PeerConnection for IrohEndpoint {
     fn peer(&self) -> &HumdAddr {
@@ -108,61 +127,34 @@ impl PeerConnection for IrohEndpoint {
     }
 
     async fn send(&self, tone: Tone) -> Result<()> {
-        let mut line = serde_json::to_vec(&tone)
-            .map_err(|e| anyhow!("iroh send: serialize: {e}"))?;
-        line.push(b'\n');
-        let mut guard = self.sender.lock().await;
-        let s = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("iroh send: stream closed"))?;
-        s.write_all(&line)
-            .await
-            .map_err(|e| anyhow!("iroh send: write: {e}"))?;
-        Ok(())
+        self.gate.wait().await;
+        self.write(tone).await
+    }
+
+    async fn send_opening(&self, tone: Tone) -> Result<()> {
+        let result = self.write(tone).await;
+        self.gate.opened();
+        result
     }
 
     fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>> {
         self.rx.lock().take()
     }
 
-    fn close(&self) {
-        let slot = match self.sender.try_lock() {
-            Ok(mut g) => g.take(),
-            Err(_) => None,
-        };
-        if let Some(mut s) = slot {
-            tokio::spawn(async move {
-                let _ = s.finish();
-            });
-        }
-        let _ = self.rx.lock().take();
+    fn arm_opening(&self) {
+        self.gate.arm();
     }
-}
 
-async fn read_loop(recv: RecvStream, tx: mpsc::Sender<Tone>) {
-    let mut lines = BufReader::new(recv).lines();
-    loop {
-        let line = match lines.next_line().await {
-            Ok(Some(l)) => l,
-            Ok(None) => break,
-            Err(e) => {
-                tracing::trace!(target: "ensemble.iroh", err = %e, "iroh.read.failed");
-                break;
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.gate.shut();
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            if let Some(mut s) = sender.lock().await.take() {
+                let _ = s.finish();
             }
-        };
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Tone = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::trace!(target: "ensemble.iroh", err = %e, "iroh.parse.failed");
-                continue;
-            }
-        };
-        if tx.send(tone).await.is_err() {
-            break;
-        }
+        });
+        let _ = self.rx.lock().take();
     }
 }
 
@@ -284,12 +276,9 @@ impl Transport for IrohTransport {
             .map(TransportAddr::Ip)
             .collect();
         let endpoint_addr = EndpointAddr::from_parts(node_id, direct_addrs);
-        let endpoint = IrohEndpoint::connect(
-            &self.endpoint,
-            endpoint_addr,
-            PeerCapabilities::default(),
-        )
-        .await?;
+        let endpoint =
+            IrohEndpoint::connect(&self.endpoint, endpoint_addr, PeerCapabilities::default())
+                .await?;
         Ok(endpoint as Arc<dyn PeerConnection>)
     }
 }
@@ -317,7 +306,12 @@ mod dial_tests {
 
     #[test]
     fn a_concrete_address_is_left_alone() {
-        for s in ["192.168.1.5:9000", "10.0.0.7:443", "[fe80::1]:9000", "127.0.0.1:5000"] {
+        for s in [
+            "192.168.1.5:9000",
+            "10.0.0.7:443",
+            "[fe80::1]:9000",
+            "127.0.0.1:5000",
+        ] {
             let before: SocketAddr = s.parse().expect("parse");
             assert_eq!(dialable_addr(before), before, "{s} must be untouched");
         }
@@ -330,6 +324,9 @@ mod dial_tests {
         assert_eq!(dialable_addr(once), once);
         assert!(!once.ip().is_unspecified());
         assert_ne!(once.ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-        assert_ne!(dialable_addr(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)).ip(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        assert_ne!(
+            dialable_addr(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)).ip(),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        );
     }
 }

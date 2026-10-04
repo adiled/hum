@@ -13,8 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ensemble::{
-    cert_fingerprint, Ensemble, HumdAddr, HumdKey, PeerCapabilities, TlsTcpEndpoint,
-    TlsTcpListener,
+    Ensemble, HumdAddr, HumdKey, PeerCapabilities, TlsTcpEndpoint, TlsTcpListener, cert_fingerprint,
 };
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -92,7 +91,7 @@ async fn tls_endpoint_routes_tone_across_pinned_wire() {
 
     // Route a ping from A → B. First tone is A's hello (drained by B);
     // second is this ping which fans out to subscribers.
-    let ping = json!({"chi": "ping", "rid": "tls-1", "to": b_id.to_hex()});
+    let ping = json!({"chi": "ping", "rid": "tls-1", "to": b_id.to_hex(), "from": a_id.to_hex()});
     ensemble_a.route(ping).await.expect("route ping");
 
     let got = tokio::time::timeout(Duration::from_secs(2), sub_b.recv())

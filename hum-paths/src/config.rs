@@ -40,17 +40,12 @@ impl Default for HumdSection {
 
 // ── fs ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FsMode {
+    #[default]
     Rw,
     Ro,
-}
-
-impl Default for FsMode {
-    fn default() -> Self {
-        FsMode::Rw
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

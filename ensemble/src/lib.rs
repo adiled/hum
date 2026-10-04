@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -11,14 +11,13 @@ use tokio::task::JoinSet;
 
 pub mod handshake;
 pub use handshake::{
-    hello_tone, hello_tone_unsigned, parse_hello, parse_hello_caps, EnsembleHello, Hid,
-    HidParseError, HidPrefix, HelloParse, HumdAddr, HumdKey, PeerCapabilities, PeerConnection,
-    Transport,
+    EnsembleHello, HelloParse, Hid, HidParseError, HidPrefix, HumdAddr, HumdKey, PeerCapabilities,
+    PeerConnection, Transport, hello_tone, hello_tone_unsigned, parse_hello, parse_hello_caps,
 };
 
 pub mod link;
 pub use link::{
-    InMemoryEndpoint, LinkCounters, LinkFaults, Noise, Script, Verdict, PARTITION_BUFFER_CAP,
+    InMemoryEndpoint, LinkCounters, LinkFaults, Noise, PARTITION_BUFFER_CAP, Script, Verdict,
 };
 
 pub mod tcp;
@@ -26,39 +25,42 @@ pub use tcp::{TcpEndpoint, TcpListener, TcpTransport};
 
 pub mod tls;
 pub use tls::{
-    cert_fingerprint, client_config_pinned, PinnedFingerprintVerifier, TlsTcpEndpoint,
-    TlsTcpListener, TlsTcpTransport, TLS_FP_HINT, TLS_HINT,
+    PinnedFingerprintVerifier, TLS_FP_HINT, TLS_HINT, TlsTcpEndpoint, TlsTcpListener,
+    TlsTcpTransport, cert_fingerprint, client_config_pinned,
 };
 
 pub mod iroh;
-pub use iroh::{dialable_addr, IrohEndpoint, IrohTransport, IROH_ALPN, IROH_IP_HINT};
+pub use iroh::{IROH_ALPN, IROH_IP_HINT, IrohEndpoint, IrohTransport, dialable_addr};
 
 pub mod delivery;
+pub mod framing;
+pub mod opening;
 pub mod send;
-pub use send::{send_bounded, SendError, SendStats, SEND_TIMEOUT};
-pub use delivery::{DeliveryState, DELIVERY_SEEN_CAP};
+pub use delivery::{DELIVERY_SEEN_CAP, DeliveryState};
+pub use framing::MAX_FRAME_BYTES;
+pub use opening::Gate;
+pub use send::{SEND_TIMEOUT, SendError, SendStats, fanout, send_bounded};
 
 pub mod gossip;
 pub use gossip::{
-    gossip_tone, gossip_tone_with_dusk, mint_msg_id, GossipState, GOSSIP_CHI,
-    GOSSIP_SEEN_CAP,
+    GOSSIP_CHI, GOSSIP_SEEN_CAP, GossipState, gossip_tone, gossip_tone_with_dusk, mint_msg_id,
 };
 
 pub mod liveness;
 pub use liveness::{
-    ping_tone, pong_tone, probe_seq, Lease, Liveness, LivenessSignal, PING_CHI, PONG_CHI,
+    Lease, Liveness, LivenessSignal, PING_CHI, PONG_CHI, ping_tone, pong_tone, probe_seq,
 };
 
 pub mod kad;
 pub use kad::{
-    find_node_resp_tone, find_node_tone, mint_query_id, parse_find_node, parse_find_node_resp,
-    KBucket, KadFindOutcome, KadState, RoutingTable, XorDistance, KAD_ALPHA,
-    KAD_FIND_NODE_CHI, KAD_FIND_NODE_RESP_CHI, KAD_K, KAD_MAX_ROUNDS,
+    KAD_ALPHA, KAD_FIND_NODE_CHI, KAD_FIND_NODE_RESP_CHI, KAD_K, KAD_MAX_ROUNDS, KBucket,
+    KadFindOutcome, KadState, RoutingTable, XorDistance, find_node_resp_tone, find_node_tone,
+    mint_query_id, parse_find_node, parse_find_node_resp,
 };
 
 pub mod hives;
 pub mod uri;
-pub use hives::{BindAddr, HiveAnnounce, HiveManifest, Propensity, ToolEntry, ANNOUNCE_TOPIC};
+pub use hives::{ANNOUNCE_TOPIC, BindAddr, HiveAnnounce, HiveManifest, Propensity, ToolEntry};
 pub use uri::{AliasResolver, HostRef, HumUri, UriParseError};
 
 pub mod headroom;
@@ -96,6 +98,7 @@ pub struct Ensemble {
     expired_dusk: Arc<AtomicU64>,
     delivery: Arc<DeliveryState>,
     send_stats: Arc<SendStats>,
+    unverified: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -108,7 +111,11 @@ pub struct Inbox {
 impl Inbox {
     fn new() -> Self {
         let (tx, _) = broadcast::channel(256);
-        Self { tx, subscribers: Arc::new(AtomicUsize::new(0)), dropped: Arc::new(AtomicU64::new(0)) }
+        Self {
+            tx,
+            subscribers: Arc::new(AtomicUsize::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn publish(&self, tone: Tone) -> bool {
@@ -126,12 +133,19 @@ impl Inbox {
 
     pub fn subscribe(&self) -> InboxSub {
         self.subscribers.fetch_add(1, Ordering::SeqCst);
-        InboxSub { rx: self.tx.subscribe(), subscribers: self.subscribers.clone() }
+        InboxSub {
+            rx: self.tx.subscribe(),
+            subscribers: self.subscribers.clone(),
+        }
     }
 
-    pub fn has_subscribers(&self) -> bool { self.subscribers.load(Ordering::SeqCst) > 0 }
+    pub fn has_subscribers(&self) -> bool {
+        self.subscribers.load(Ordering::SeqCst) > 0
+    }
 
-    pub fn dropped(&self) -> u64 { self.dropped.load(Ordering::Relaxed) }
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
 }
 
 pub struct InboxSub {
@@ -141,11 +155,15 @@ pub struct InboxSub {
 
 impl Deref for InboxSub {
     type Target = broadcast::Receiver<Tone>;
-    fn deref(&self) -> &Self::Target { &self.rx }
+    fn deref(&self) -> &Self::Target {
+        &self.rx
+    }
 }
 
 impl std::ops::DerefMut for InboxSub {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.rx }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rx
+    }
 }
 
 impl Drop for InboxSub {
@@ -180,10 +198,11 @@ impl Ensemble {
             inbox: Inbox::new(),
             gossip: GossipState::new(),
             kad: KadState::new(me),
-            strict_auth: false,
+            strict_auth: true,
             expired_dusk: Arc::new(AtomicU64::new(0)),
             delivery: DeliveryState::new(),
             send_stats: SendStats::new(),
+            unverified: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -193,9 +212,13 @@ impl Ensemble {
         e
     }
 
-    pub fn me(&self) -> Hid { self.me }
+    pub fn me(&self) -> Hid {
+        self.me
+    }
 
-    pub fn strict_auth(&self) -> bool { self.strict_auth }
+    pub fn strict_auth(&self) -> bool {
+        self.strict_auth
+    }
 
     pub fn install(
         &self,
@@ -203,100 +226,7 @@ impl Ensemble {
         my_caps: PeerCapabilities,
         my_key: &HumdKey,
     ) {
-        let id = conn.peer().id;
-        let hello = hello_tone(&self.me, my_key, &my_caps);
-        let hello_conn = conn.clone();
-        tokio::spawn(async move {
-            let _ = hello_conn.send(hello).await;
-        });
-
-        let rx = conn.take_receiver();
-        self.peers.write().insert(
-            id,
-            Peer { conn: conn.clone(), learned_caps: None, lease: Lease::new() },
-        );
-        self.kad.note_peer(conn.peer().clone());
-
-        if let Some(mut rx) = rx {
-            let peers = self.peers.clone();
-            let inbox = self.inbox.clone();
-            let conn_for_drain = conn.clone();
-            let strict = self.strict_auth;
-            let gossip = self.gossip.clone();
-            let expired_dusk = self.expired_dusk.clone();
-            let delivery = self.delivery.clone();
-            let send_stats = self.send_stats.clone();
-            let kad = self.kad.clone();
-            let my_id = self.me;
-            tokio::spawn(async move {
-                let mut id = id;
-                let mut handshake_seen = false;
-                while let Some(tone) = rx.recv().await {
-                    let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
-                    if is_hello && !handshake_seen {
-                        handshake_seen = true;
-                        match parse_hello(&tone) {
-                            HelloParse::Verified(claimed_id, caps) => {
-                                if claimed_id != id {
-                                    rekey_peer(&peers, &kad, &conn_for_drain, id, claimed_id);
-                                    id = claimed_id;
-                                }
-                                if let Some(p) = peers.write().get_mut(&id) {
-                                    p.learned_caps = Some(caps);
-                                }
-                            }
-                            HelloParse::Unsigned(claimed_id, caps) => {
-                                if strict {
-                                    tracing::warn!(
-                                        target: "ensemble",
-                                        transport_id = %id.short(),
-                                        claimed_id = %claimed_id.short(),
-                                        "hello.rejected: strict_auth requires signed hello"
-                                    );
-                                    peers.write().remove(&id);
-                                    conn_for_drain.close();
-                                    return;
-                                }
-                                if claimed_id == id {
-                                    if let Some(p) = peers.write().get_mut(&id) {
-                                        p.learned_caps = Some(caps);
-                                    }
-                                }
-                            }
-                            HelloParse::Invalid => {
-                                peers.write().remove(&id);
-                                conn_for_drain.close();
-                                return;
-                            }
-                        }
-                        continue;
-                    }
-                    if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
-                        continue;
-                    }
-                    if !delivery::dispatchable(&tone, &delivery, &expired_dusk) {
-                        continue;
-                    }
-                    if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
-                        if handle_gossip(&send_stats, &gossip, &peers, &id, &tone).await {
-                            continue;
-                        }
-                    }
-                    let chi_val = tone.get("chi").and_then(|v| v.as_str());
-                    if chi_val == Some(KAD_FIND_NODE_CHI)
-                        || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
-                    {
-                        if handle_kad(&send_stats, &kad, &peers, &id, &my_id, &tone).await {
-                            continue;
-                        }
-                    }
-                    inbox.publish(tone);
-                }
-                if let Some(p) = peers.write().get_mut(&id) {
-                    p.lease.observe(LivenessSignal::TransportClosed);
-                }
-            });
-        }
+        self.admit(conn, hello_tone(&self.me, my_key, &my_caps), true);
     }
 
     pub fn add_peer(&self, conn: Arc<dyn PeerConnection>) {
@@ -307,105 +237,51 @@ impl Ensemble {
         self.install_unsigned(conn, caps);
     }
 
-    pub fn install_unsigned(
-        &self,
-        conn: Arc<dyn PeerConnection>,
-        my_caps: PeerCapabilities,
-    ) {
+    pub fn install_unsigned(&self, conn: Arc<dyn PeerConnection>, my_caps: PeerCapabilities) {
+        self.admit(conn, hello_tone_unsigned(&self.me, &my_caps), false);
+    }
+
+    fn admit(&self, conn: Arc<dyn PeerConnection>, hello: Tone, rekey: bool) {
         let id = conn.peer().id;
-        let hello = hello_tone_unsigned(&self.me, &my_caps);
+        conn.arm_opening();
+
+        let stats = self.send_stats.clone();
         let hello_conn = conn.clone();
         tokio::spawn(async move {
-            let _ = hello_conn.send(hello).await;
+            if send::send_opening_bounded(&hello_conn, hello, &stats, send::SEND_TIMEOUT)
+                .await
+                .is_err()
+            {
+                hello_conn.close();
+            }
         });
 
         let rx = conn.take_receiver();
         self.peers.write().insert(
             id,
-            Peer { conn: conn.clone(), learned_caps: None, lease: Lease::new() },
+            Peer {
+                conn: conn.clone(),
+                learned_caps: None,
+                lease: Lease::new(),
+            },
         );
         self.kad.note_peer(conn.peer().clone());
 
-        if let Some(mut rx) = rx {
-            let peers = self.peers.clone();
-            let inbox = self.inbox.clone();
-            let conn_for_drain = conn.clone();
-            let strict = self.strict_auth;
-            let gossip = self.gossip.clone();
-            let expired_dusk = self.expired_dusk.clone();
-            let delivery = self.delivery.clone();
-            let send_stats = self.send_stats.clone();
-            let kad = self.kad.clone();
-            let my_id = self.me;
-            tokio::spawn(async move {
-                let mut handshake_seen = false;
-                while let Some(tone) = rx.recv().await {
-                    let is_hello = tone.get("chi").and_then(|v| v.as_str()) == Some("hello");
-                    if is_hello && !handshake_seen {
-                        handshake_seen = true;
-                        match parse_hello(&tone) {
-                            HelloParse::Verified(claimed_id, caps) if claimed_id == id => {
-                                if let Some(p) = peers.write().get_mut(&id) {
-                                    p.learned_caps = Some(caps);
-                                }
-                            }
-                            HelloParse::Verified(claimed_id, _) => {
-                                tracing::warn!(
-                                    target: "ensemble",
-                                    transport_id = %id.short(),
-                                    claimed_id = %claimed_id.short(),
-                                    "hello.rejected: claimed humd_id does not match transport-peer id"
-                                );
-                                peers.write().remove(&id);
-                                conn_for_drain.close();
-                                return;
-                            }
-                            HelloParse::Unsigned(claimed_id, caps) => {
-                                if strict {
-                                    peers.write().remove(&id);
-                                    conn_for_drain.close();
-                                    return;
-                                }
-                                if claimed_id == id {
-                                    if let Some(p) = peers.write().get_mut(&id) {
-                                        p.learned_caps = Some(caps);
-                                    }
-                                }
-                            }
-                            HelloParse::Invalid => {
-                                peers.write().remove(&id);
-                                conn_for_drain.close();
-                                return;
-                            }
-                        }
-                        continue;
-                    }
-                    if handle_liveness(&peers, &my_id, &id, &conn_for_drain, &tone).await {
-                        continue;
-                    }
-                    if !delivery::dispatchable(&tone, &delivery, &expired_dusk) {
-                        continue;
-                    }
-                    if tone.get("chi").and_then(|v| v.as_str()) == Some(GOSSIP_CHI) {
-                        if handle_gossip(&send_stats, &gossip, &peers, &id, &tone).await {
-                            continue;
-                        }
-                    }
-                    let chi_val = tone.get("chi").and_then(|v| v.as_str());
-                    if chi_val == Some(KAD_FIND_NODE_CHI)
-                        || chi_val == Some(KAD_FIND_NODE_RESP_CHI)
-                    {
-                        if handle_kad(&send_stats, &kad, &peers, &id, &my_id, &tone).await {
-                            continue;
-                        }
-                    }
-                    inbox.publish(tone);
-                }
-                if let Some(p) = peers.write().get_mut(&id) {
-                    p.lease.observe(LivenessSignal::TransportClosed);
-                }
-            });
-        }
+        let Some(rx) = rx else { return };
+        let drain = Drain {
+            me: self.me,
+            peers: self.peers.clone(),
+            inbox: self.inbox.clone(),
+            gossip: self.gossip.clone(),
+            kad: self.kad.clone(),
+            delivery: self.delivery.clone(),
+            expired_dusk: self.expired_dusk.clone(),
+            send_stats: self.send_stats.clone(),
+            unverified: self.unverified.clone(),
+            strict: self.strict_auth,
+            rekey,
+        };
+        tokio::spawn(drain.run(rx, conn));
     }
 
     pub async fn probe_all(&self, seq: u64) {
@@ -415,8 +291,12 @@ impl Ensemble {
             .iter()
             .map(|(id, p)| (*id, p.conn.clone()))
             .collect();
-        for (id, conn) in peers {
-            let _ = send_bounded(&conn, ping_tone(&self.me, &id, seq), &self.send_stats).await;
+        let sends = peers
+            .into_iter()
+            .map(|(id, conn)| (conn, ping_tone(&self.me, &id, seq)))
+            .collect();
+        for e in fanout(sends, &self.send_stats).await {
+            tracing::debug!(target: "ensemble.liveness", error = %e, "probe.failed");
         }
     }
 
@@ -455,9 +335,18 @@ impl Ensemble {
     }
 
     pub fn remove_peer(&self, id: &Hid) {
+        self.kad.forget(id);
         if let Some(p) = self.peers.write().remove(id) {
             p.conn.close();
         }
+    }
+
+    pub fn routing_snapshot(&self) -> Vec<HumdAddr> {
+        self.kad.snapshot()
+    }
+
+    pub fn routing_restore(&self, addrs: Vec<HumdAddr>) -> usize {
+        self.kad.restore(addrs)
     }
 
     pub fn peers(&self) -> Vec<Hid> {
@@ -473,14 +362,23 @@ impl Ensemble {
     }
 
     pub fn handshake_done(&self, id: &Hid) -> bool {
-        self.peers.read().get(id).is_some_and(|p| p.learned_caps.is_some())
+        self.peers
+            .read()
+            .get(id)
+            .is_some_and(|p| p.learned_caps.is_some())
     }
 
-    pub fn subscribe(&self) -> InboxSub { self.inbox.subscribe() }
+    pub fn subscribe(&self) -> InboxSub {
+        self.inbox.subscribe()
+    }
 
-    pub fn has_subscribers(&self) -> bool { self.inbox.has_subscribers() }
+    pub fn has_subscribers(&self) -> bool {
+        self.inbox.has_subscribers()
+    }
 
-    pub fn inbox_dropped(&self) -> u64 { self.inbox.dropped() }
+    pub fn inbox_dropped(&self) -> u64 {
+        self.inbox.dropped()
+    }
 
     pub fn expired_dusk(&self) -> u64 {
         self.expired_dusk.load(Ordering::SeqCst)
@@ -492,6 +390,10 @@ impl Ensemble {
 
     pub fn send_timeouts(&self) -> u64 {
         self.send_stats.timed_out()
+    }
+
+    pub fn tones_before_handshake(&self) -> u64 {
+        self.unverified.load(Ordering::SeqCst)
     }
 
     pub fn send_failures(&self) -> u64 {
@@ -512,20 +414,14 @@ impl Ensemble {
         let rid = format!("gossip-{msg_id}");
         self.gossip.note_seen(&msg_id);
         let tone = gossip_tone_with_dusk(topic, &rid, &self.me, payload, &msg_id, dusk_ms);
-        let conns: Vec<Arc<dyn PeerConnection>> = {
-            let peers = self.peers.read();
-            peers.values().map(|p| p.conn.clone()).collect()
-        };
-        for conn in conns {
-            if let Err(e) = send_bounded(&conn, tone.clone(), &self.send_stats).await {
-                tracing::debug!(
-                    target: "ensemble.gossip",
-                    peer = %conn.peer().id.short(),
-                    topic = topic,
-                    error = %e,
-                    "publish send failed"
-                );
-            }
+        let sends: Vec<(Arc<dyn PeerConnection>, Tone)> = self
+            .peers
+            .read()
+            .values()
+            .map(|p| (p.conn.clone(), tone.clone()))
+            .collect();
+        for e in fanout(sends, &self.send_stats).await {
+            tracing::debug!(target: "ensemble.gossip", topic, error = %e, "publish.failed");
         }
     }
 
@@ -536,7 +432,7 @@ impl Ensemble {
     pub async fn hive_advertise(&self, manifest: hives::HiveManifest) {
         let env = hives::HiveAnnounce::Advertise {
             humd_id: self.me.to_hex(),
-            manifest,
+            manifest: Box::new(manifest),
         };
         match serde_json::to_value(&env) {
             Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
@@ -582,7 +478,10 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover(&self, name: impl Into<String>) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
+    pub fn hive_discover(
+        &self,
+        name: impl Into<String>,
+    ) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
         let needle = name.into();
         let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
@@ -590,16 +489,15 @@ impl Ensemble {
             loop {
                 match raw.recv().await {
                     Ok(v) => {
-                        let parsed: Result<hives::HiveAnnounce, _> =
-                            serde_json::from_value(v);
+                        let parsed: Result<hives::HiveAnnounce, _> = serde_json::from_value(v);
                         if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed {
                             if manifest.name != needle {
                                 continue;
                             }
-                            if let Ok(id) = Hid::from_hex(&humd_id) {
-                                if tx.send((id, manifest)).await.is_err() {
-                                    break;
-                                }
+                            if let Ok(id) = Hid::from_hex(&humd_id)
+                                && tx.send((id, *manifest)).await.is_err()
+                            {
+                                break;
                             }
                         }
                     }
@@ -654,28 +552,35 @@ impl Ensemble {
                 };
                 if let Some(conn) = conn {
                     let kad = self.kad.clone();
+                    let stats = self.send_stats.clone();
                     let me = self.me;
                     let tgt = target;
                     joinset.spawn(async move {
-                        kad::query_peer(&kad, &conn, &me, &tgt, per_query_timeout).await
+                        kad::query_peer(&kad, &conn, &stats, &me, &tgt, per_query_timeout).await
                     });
                 }
             }
             if joinset.is_empty() {
                 continue;
             }
-            while let Some(res) = joinset.join_next().await {
-                let advertised_list = match res {
-                    Ok(list) => list,
-                    Err(_) => continue,
-                };
-                for advertised in advertised_list {
-                    self.kad.note_peer(advertised.clone());
-                    if advertised.id == self.me {
-                        continue;
+            let drain = async {
+                while let Some(res) = joinset.join_next().await {
+                    let advertised_list = match res {
+                        Ok(list) => list,
+                        Err(_) => continue,
+                    };
+                    for advertised in advertised_list {
+                        self.kad.note_peer(advertised.clone());
+                        if advertised.id == self.me {
+                            continue;
+                        }
+                        shortlist.insert(advertised);
                     }
-                    shortlist.insert(advertised);
                 }
+            };
+            if tokio::time::timeout_at(deadline, drain).await.is_err() {
+                joinset.abort_all();
+                return self.kad.get(&target);
             }
 
             if let Some(addr) = self.kad.get(&target) {
@@ -721,6 +626,122 @@ impl Ensemble {
     }
 }
 
+struct Drain {
+    me: Hid,
+    peers: Arc<RwLock<HashMap<Hid, Peer>>>,
+    inbox: Inbox,
+    gossip: Arc<GossipState>,
+    kad: Arc<KadState>,
+    delivery: Arc<DeliveryState>,
+    expired_dusk: Arc<AtomicU64>,
+    send_stats: Arc<SendStats>,
+    unverified: Arc<AtomicU64>,
+    strict: bool,
+    rekey: bool,
+}
+
+impl Drain {
+    async fn run(self, mut rx: mpsc::Receiver<Tone>, conn: Arc<dyn PeerConnection>) {
+        let mut id = conn.peer().id;
+        let mut handshook = false;
+
+        while let Some(tone) = rx.recv().await {
+            let chi = tone.get("chi").and_then(|v| v.as_str());
+
+            if !handshook {
+                if chi == Some("hello") {
+                    handshook = true;
+                    if self.hello(&mut id, &conn, parse_hello(&tone)).is_err() {
+                        self.peers.write().remove(&id);
+                        conn.close();
+                        return;
+                    }
+                } else {
+                    self.unverified.fetch_add(1, Ordering::SeqCst);
+                    continue;
+                }
+                continue;
+            }
+            if handle_liveness(&self.peers, &self.send_stats, &self.me, &id, &conn, &tone).await {
+                continue;
+            }
+            if !delivery::dispatchable(&tone, &self.delivery, &self.expired_dusk) {
+                continue;
+            }
+            if chi == Some(GOSSIP_CHI)
+                && handle_gossip(&self.send_stats, &self.gossip, &self.peers, &id, &tone).await
+            {
+                continue;
+            }
+            if matches!(chi, Some(KAD_FIND_NODE_CHI) | Some(KAD_FIND_NODE_RESP_CHI))
+                && handle_kad(
+                    &self.send_stats,
+                    &self.kad,
+                    &self.peers,
+                    &id,
+                    &self.me,
+                    &tone,
+                )
+                .await
+            {
+                continue;
+            }
+            self.inbox.publish(tone);
+        }
+
+        if let Some(p) = self.peers.write().get_mut(&id) {
+            p.lease.observe(LivenessSignal::TransportClosed);
+        }
+    }
+
+    fn hello(
+        &self,
+        id: &mut Hid,
+        conn: &Arc<dyn PeerConnection>,
+        parsed: HelloParse,
+    ) -> Result<(), ()> {
+        match parsed {
+            HelloParse::Verified(claimed, caps) => {
+                if claimed != *id && !self.rekey {
+                    tracing::warn!(
+                        target: "ensemble",
+                        transport_id = %id.short(),
+                        claimed_id = %claimed.short(),
+                        "hello.rejected: claimed id differs from the id this link was admitted under"
+                    );
+                    return Err(());
+                }
+                if claimed != *id {
+                    rekey_peer(&self.peers, &self.kad, conn, *id, claimed);
+                    *id = claimed;
+                }
+                if let Some(p) = self.peers.write().get_mut(id) {
+                    p.learned_caps = Some(caps);
+                }
+                Ok(())
+            }
+            HelloParse::Unsigned(claimed, caps) => {
+                if self.strict {
+                    tracing::warn!(
+                        target: "ensemble",
+                        transport_id = %id.short(),
+                        claimed_id = %claimed.short(),
+                        "hello.rejected: strict_auth requires a signed hello"
+                    );
+                    return Err(());
+                }
+                if claimed == *id
+                    && let Some(p) = self.peers.write().get_mut(id)
+                {
+                    p.learned_caps = Some(caps);
+                }
+                Ok(())
+            }
+            HelloParse::Invalid => Err(()),
+        }
+    }
+}
+
 fn rekey_peer(
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
     kad: &Arc<KadState>,
@@ -753,21 +774,24 @@ async fn handle_kad(
             None => return false,
         };
         let closest = kad.closest_to(&parsed.target, KAD_K);
-        let resp_rid = format!("kad-resp-{}", &parsed.query_id[..8.min(parsed.query_id.len())]);
+        let resp_rid = format!(
+            "kad-resp-{}",
+            &parsed.query_id[..8.min(parsed.query_id.len())]
+        );
         let resp = kad::find_node_resp_tone(&resp_rid, &parsed.query_id, me, &closest);
         let conn = {
             let peers = peers.read();
             peers.get(arrived_from).map(|p| p.conn.clone())
         };
-        if let Some(conn) = conn {
-            if let Err(e) = send_bounded(&conn, resp, send_stats).await {
-                tracing::debug!(
-                    target: "ensemble.kad",
-                    peer = %arrived_from.short(),
-                    error = %e,
-                    "find-node response send failed"
-                );
-            }
+        if let Some(conn) = conn
+            && let Err(e) = send_bounded(&conn, resp, send_stats).await
+        {
+            tracing::debug!(
+                target: "ensemble.kad",
+                peer = %arrived_from.short(),
+                error = %e,
+                "find-node response send failed"
+            );
         }
         true
     } else if chi_val == Some(kad::KAD_FIND_NODE_RESP_CHI) {
@@ -787,6 +811,7 @@ async fn handle_kad(
 
 async fn handle_liveness(
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
+    send_stats: &Arc<SendStats>,
     me: &Hid,
     arrived_from: &Hid,
     conn: &Arc<dyn PeerConnection>,
@@ -803,13 +828,13 @@ async fn handle_liveness(
         return false;
     }
     if let Some(seq) = probe_seq(tone) {
-        let _ = conn.send(pong_tone(me, arrived_from, seq)).await;
+        let _ = send_bounded(conn, pong_tone(me, arrived_from, seq), send_stats).await;
     }
     true
 }
 
 async fn handle_gossip(
-    send_stats: &SendStats,
+    send_stats: &Arc<SendStats>,
     gossip: &Arc<gossip::GossipState>,
     peers: &Arc<RwLock<HashMap<Hid, Peer>>>,
     arrived_from: &Hid,
@@ -825,23 +850,14 @@ async fn handle_gossip(
     if let Some(tx) = gossip.sender(parsed.topic) {
         let _ = tx.send(parsed.payload.clone());
     }
-    let others: Vec<Arc<dyn PeerConnection>> = {
-        let peers = peers.read();
-        peers
-            .iter()
-            .filter(|(id, _)| *id != arrived_from)
-            .map(|(_, p)| p.conn.clone())
-            .collect()
-    };
-    for conn in others {
-        if let Err(e) = send_bounded(&conn, tone.clone(), send_stats).await {
-            tracing::debug!(
-                target: "ensemble.gossip",
-                peer = %conn.peer().id.short(),
-                error = %e,
-                "re-fan send failed"
-            );
-        }
+    let sends: Vec<(Arc<dyn PeerConnection>, Tone)> = peers
+        .read()
+        .iter()
+        .filter(|(id, _)| *id != arrived_from)
+        .map(|(_, p)| (p.conn.clone(), tone.clone()))
+        .collect();
+    for e in fanout(sends, send_stats).await {
+        tracing::debug!(target: "ensemble.gossip", error = %e, "refan.failed");
     }
     true
 }
@@ -877,7 +893,10 @@ mod tests {
     }
 
     fn rids(tones: &[Tone]) -> Vec<String> {
-        tones.iter().map(|t| t["rid"].as_str().unwrap().to_string()).collect()
+        tones
+            .iter()
+            .map(|t| t["rid"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[tokio::test]
@@ -890,7 +909,14 @@ mod tests {
         let got = rids(&drain(&mut rx).await);
         assert_eq!(got, ["t0", "t1", "t2", "t3", "t4"]);
         let c = a.counters();
-        assert_eq!(c, LinkCounters { offered: 5, delivered: 5, ..Default::default() });
+        assert_eq!(
+            c,
+            LinkCounters {
+                offered: 5,
+                delivered: 5,
+                ..Default::default()
+            }
+        );
     }
 
     #[tokio::test]
@@ -975,9 +1001,16 @@ mod tests {
             drain(&mut rx).await.len()
         }
         assert_eq!(run(42).await, run(42).await, "same seed, same pattern");
-        assert_ne!(run(1).await, run(2).await, "different seeds, different patterns");
+        assert_ne!(
+            run(1).await,
+            run(2).await,
+            "different seeds, different patterns"
+        );
         let survived = run(42).await;
-        assert!((120..170).contains(&survived), "survived {survived} of 200 at 30% loss");
+        assert!(
+            (120..170).contains(&survived),
+            "survived {survived} of 200 at 30% loss"
+        );
     }
 
     #[tokio::test]
@@ -1079,10 +1112,16 @@ mod tests {
 
         let c = a.counters();
         let arrived = drain(&mut rx).await.len() as u64;
-        assert_eq!(c.delivered, arrived, "delivered must match what the peer saw");
+        assert_eq!(
+            c.delivered, arrived,
+            "delivered must match what the peer saw"
+        );
         assert_eq!(c.offered, 43);
         assert_eq!(c.buffered, 3);
-        assert_eq!(c.offered, c.delivered - c.duplicated + c.dropped + c.lost_on_heal);
+        assert_eq!(
+            c.offered,
+            c.delivered - c.duplicated + c.dropped + c.lost_on_heal
+        );
     }
 
     #[tokio::test]
@@ -1093,7 +1132,11 @@ mod tests {
         a.set_faults(LinkFaults::default().drop_next(10));
         b.send(tone("survivor")).await.unwrap();
         a.send(tone("doomed")).await.unwrap();
-        assert_eq!(rids(&drain(&mut a_rx).await), ["survivor"], "b→a is unaffected");
+        assert_eq!(
+            rids(&drain(&mut a_rx).await),
+            ["survivor"],
+            "b→a is unaffected"
+        );
         assert!(drain(&mut b_rx).await.is_empty(), "a→b drops");
     }
 
@@ -1150,11 +1193,21 @@ mod tests {
         let a_id = Hid::random_humd();
         let b_id = Hid::random_humd();
         let (a, b) = InMemoryEndpoint::pair(
-            a_id, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() },
-            b_id, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() },
+            a_id,
+            PeerCapabilities {
+                proto_version: "0.2.0".into(),
+                ..Default::default()
+            },
+            b_id,
+            PeerCapabilities {
+                proto_version: "0.2.0".into(),
+                ..Default::default()
+            },
         );
         let mut rx_b = b.take_receiver().unwrap();
-        a.send(json!({"chi": "hello", "rid": "1", "from": a_id.to_hex()})).await.unwrap();
+        a.send(json!({"chi": "hello", "rid": "1", "from": a_id.to_hex()}))
+            .await
+            .unwrap();
         let received = rx_b.recv().await.unwrap();
         assert_eq!(received.get("chi").unwrap(), "hello");
     }
@@ -1167,8 +1220,10 @@ mod tests {
 
         let ensemble = Ensemble::new(me);
         let (mine, theirs) = InMemoryEndpoint::pair(
-            me, PeerCapabilities::default(),
-            peer_id, PeerCapabilities::default(),
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
         );
         ensemble.add_peer(mine);
         let mut rx = theirs.take_receiver().unwrap();
@@ -1212,10 +1267,7 @@ mod tests {
             free_slots: None,
             headroom: headroom::CellHeadroom::default(),
         };
-        let (a_side, b_side) = InMemoryEndpoint::pair(
-            a_id, b_caps.clone(),
-            b_id, a_caps.clone(),
-        );
+        let (a_side, b_side) = InMemoryEndpoint::pair(a_id, b_caps.clone(), b_id, a_caps.clone());
 
         let ensemble_a = Ensemble::new(a_id);
         let ensemble_b = Ensemble::new(b_id);
@@ -1261,16 +1313,32 @@ mod tests {
         let me = me_key.hid();
         let peer_id = peer_key.hid();
         let (mine, theirs) = InMemoryEndpoint::pair(
-            me, PeerCapabilities::default(),
-            peer_id, PeerCapabilities::default(),
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
         );
 
         let ensemble = Ensemble::new(me);
         let mut sub = ensemble.subscribe();
-        ensemble.install(mine, PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }, &me_key);
+        ensemble.install(
+            mine,
+            PeerCapabilities {
+                proto_version: "0.3.0".into(),
+                ..Default::default()
+            },
+            &me_key,
+        );
 
         theirs
-            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities { proto_version: "0.3.0".into(), ..Default::default() }))
+            .send(hello_tone(
+                &peer_id,
+                &peer_key,
+                &PeerCapabilities {
+                    proto_version: "0.3.0".into(),
+                    ..Default::default()
+                },
+            ))
             .await
             .unwrap();
         theirs
@@ -1299,16 +1367,32 @@ mod tests {
         let me = me_key.hid();
         let peer_id = peer_key.hid();
         let (mine, theirs) = InMemoryEndpoint::pair(
-            me, PeerCapabilities::default(),
-            peer_id, PeerCapabilities::default(),
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
         );
 
         let ensemble = Ensemble::new(me);
         let mut sub = ensemble.subscribe();
-        ensemble.install(mine, PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() }, &me_key);
+        ensemble.install(
+            mine,
+            PeerCapabilities {
+                proto_version: "0.2.0".into(),
+                ..Default::default()
+            },
+            &me_key,
+        );
 
         theirs
-            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities { proto_version: "0.2.0".into(), ..Default::default() }))
+            .send(hello_tone(
+                &peer_id,
+                &peer_key,
+                &PeerCapabilities {
+                    proto_version: "0.2.0".into(),
+                    ..Default::default()
+                },
+            ))
             .await
             .unwrap();
         theirs
@@ -1322,5 +1406,128 @@ mod tests {
             .expect("subscribe channel closed");
         assert_eq!(got.get("chi").unwrap(), "ping");
         assert_eq!(got.get("rid").unwrap(), "r1");
+    }
+}
+
+#[cfg(test)]
+mod invariants {
+    use super::*;
+    use serde_json::json;
+
+    fn caps() -> PeerCapabilities {
+        PeerCapabilities::default()
+    }
+
+    #[tokio::test]
+    async fn the_opening_frame_precedes_application_traffic() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let key = HumdKey::generate();
+        let ensemble = Ensemble::new(me);
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+        let mut rx = theirs
+            .take_receiver()
+            .expect("far end must expose a receiver");
+
+        ensemble.install(mine, caps(), &key);
+        ensemble
+            .route(json!({"chi": "prompt", "rid": "r1", "to": peer.to_hex()}))
+            .await
+            .expect("routing to the only peer cannot fail");
+
+        let first = rx.recv().await.expect("receiver closed");
+        assert_eq!(first["chi"], "hello", "the hello must be the first frame");
+        let second = rx.recv().await.expect("receiver closed");
+        assert_eq!(second["rid"], "r1", "application traffic follows the hello");
+    }
+
+    #[tokio::test]
+    async fn a_tone_that_outruns_the_handshake_is_never_published() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let key = HumdKey::generate();
+        let ensemble = Ensemble::new(me);
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+
+        ensemble.install(mine, caps(), &key);
+
+        let mut inbox = ensemble.subscribe();
+        theirs
+            .send(json!({"chi": "prompt", "rid": "early", "to": me.to_hex()}))
+            .await
+            .expect("in-memory send cannot fail");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            ensemble.tones_before_handshake(),
+            1,
+            "the drop must be counted"
+        );
+        assert!(
+            inbox.try_recv().is_err(),
+            "an unauthenticated tone must not publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsigned_hello_is_refused_under_the_default_posture() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let ensemble = Ensemble::new(me);
+        assert!(
+            ensemble.strict_auth(),
+            "strict auth must be the default posture"
+        );
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+
+        ensemble.install_unsigned(mine, caps());
+        theirs
+            .send(hello_tone_unsigned(&peer, &caps()))
+            .await
+            .expect("in-memory send cannot fail");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(
+            !ensemble.peers().contains(&peer),
+            "an unsigned peer must not be admitted under strict auth"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_unsigned_hello_is_accepted_when_strictness_is_waived() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let ensemble = Ensemble::with_strict_auth(me, false);
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+
+        ensemble.install_unsigned(mine, caps());
+        theirs
+            .send(hello_tone_unsigned(&peer, &caps()))
+            .await
+            .expect("in-memory send cannot fail");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(
+            ensemble.handshake_done(&peer),
+            "waived strictness must admit the peer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_removed_peer_leaves_the_routing_table() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let ensemble = Ensemble::new(me);
+        let (mine, _theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+
+        ensemble.add_peer(mine);
+        assert!(ensemble.kad_closest(&peer, 4).iter().any(|a| a.id == peer));
+
+        ensemble.remove_peer(&peer);
+        assert_eq!(
+            ensemble.kad_routing_table_len(),
+            0,
+            "a dead peer must not route"
+        );
     }
 }

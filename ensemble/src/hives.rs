@@ -213,7 +213,7 @@ pub enum HiveAnnounce {
     /// Bee is live on `humd_id`.
     Advertise {
         humd_id: String,
-        manifest: HiveManifest,
+        manifest: Box<HiveManifest>,
     },
     /// Bee has shut down on `humd_id`.
     Retract { humd_id: String, name: String },
@@ -248,14 +248,17 @@ mod tests {
         let back: HiveManifest = serde_json::from_value(j).unwrap();
         assert_eq!(back.chis.len(), 4);
         assert_eq!(back.propensity.statefulness.as_deref(), Some("stateless"));
-        assert_eq!(back.source.as_deref(), Some("https://github.com/example/mm-bee"));
+        assert_eq!(
+            back.source.as_deref(),
+            Some("https://github.com/example/mm-bee")
+        );
     }
 
     #[test]
     fn announce_envelope_tags_kind() {
         let env = HiveAnnounce::Advertise {
             humd_id: "deadbeef".into(),
-            manifest: HiveManifest::new("mm", "0.1.0", "0.7.0"),
+            manifest: Box::new(HiveManifest::new("mm", "0.1.0", "0.7.0")),
         };
         let s = serde_json::to_string(&env).unwrap();
         assert!(s.contains("\"kind\":\"advertise\""));

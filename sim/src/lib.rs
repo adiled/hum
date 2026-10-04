@@ -95,7 +95,7 @@ impl Sim {
 
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
         let thrum = Thrum::new();
-        let ensemble = Arc::new(Ensemble::new(id));
+        let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
@@ -115,6 +115,8 @@ impl Sim {
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
+            routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
+            routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
             penny_persist_interval: Duration::from_secs(3600),
@@ -172,6 +174,8 @@ impl Sim {
         self.wire(a, b)
     }
 
+    /// Unauthenticated mesh link. Use [`Sim::wire_signed`] when the test is
+    /// about identity.
     pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
@@ -232,6 +236,8 @@ impl Sim {
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
             penny_path,
+            routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
+            routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
             penny_persist_interval: Duration::from_secs(3600),

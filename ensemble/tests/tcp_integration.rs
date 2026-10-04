@@ -6,9 +6,7 @@
 
 use std::time::Duration;
 
-use ensemble::{
-    Ensemble, HumdAddr, HumdKey, PeerCapabilities, TcpEndpoint, TcpListener,
-};
+use ensemble::{Ensemble, HumdAddr, HumdKey, PeerCapabilities, TcpEndpoint, TcpListener};
 use serde_json::json;
 
 #[tokio::test]
@@ -82,7 +80,7 @@ async fn tcp_endpoint_routes_tone_across_wire() {
     // Route a ping from A → B. The first tone over the wire is A's
     // hello (absorbed by B's drainer), the second is this ping (fans
     // out to subscribers).
-    let ping = json!({"chi": "ping", "rid": "tcp-1", "to": b_id.to_hex()});
+    let ping = json!({"chi": "ping", "rid": "tcp-1", "to": b_id.to_hex(), "from": a_id.to_hex()});
     ensemble_a.route(ping).await.expect("route ping");
 
     // Wait for the ping on B's subscribe channel.

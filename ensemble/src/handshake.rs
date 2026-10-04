@@ -7,7 +7,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{headroom, now_ms, Tone, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS};
+use super::{HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms};
 
 pub use hum_identity::{Hid, HidParseError, HidPrefix};
 
@@ -47,7 +47,12 @@ pub struct HumdAddr {
 }
 
 impl HumdAddr {
-    pub fn new(id: Hid) -> Self { Self { id, hints: Vec::new() } }
+    pub fn new(id: Hid) -> Self {
+        Self {
+            id,
+            hints: Vec::new(),
+        }
+    }
     pub fn with_hint(mut self, h: impl Into<String>) -> Self {
         self.hints.push(h.into());
         self
@@ -123,6 +128,11 @@ pub trait PeerConnection: Send + Sync {
     async fn send(&self, tone: Tone) -> Result<()>;
     fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>>;
     fn close(&self);
+
+    fn arm_opening(&self) {}
+    async fn send_opening(&self, tone: Tone) -> Result<()> {
+        self.send(tone).await
+    }
 }
 
 #[async_trait]
@@ -196,30 +206,46 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
     let nests = tone
         .get("nests")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let hosts = tone
         .get("hosts")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    let can_relay = tone.get("can_relay").and_then(|v| v.as_bool()).unwrap_or(false);
-    let free_slots = tone
-        .get("free_slots")
-        .and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_u64().map(|n| n as usize)
-            }
-        });
+    let can_relay = tone
+        .get("can_relay")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let free_slots = tone.get("free_slots").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_u64().map(|n| n as usize)
+        }
+    });
     let headroom = tone
         .get("headroom")
         .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
         .unwrap_or_default();
     Some((
         claimed_id,
-        PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots, headroom },
+        PeerCapabilities {
+            proto_version,
+            nests,
+            hosts,
+            can_relay,
+            free_slots,
+            headroom,
+        },
     ))
 }
 
@@ -247,24 +273,46 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let nests = tone
             .get("nests")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let hosts = tone
             .get("hosts")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
-        let can_relay = tone.get("can_relay").and_then(|v| v.as_bool()).unwrap_or(false);
-        let free_slots = tone
-            .get("free_slots")
-            .and_then(|v| if v.is_null() { None } else { v.as_u64().map(|n| n as usize) });
+        let can_relay = tone
+            .get("can_relay")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let free_slots = tone.get("free_slots").and_then(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_u64().map(|n| n as usize)
+            }
+        });
         let headroom = tone
             .get("headroom")
             .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
             .unwrap_or_default();
         HelloParse::Unsigned(
             claimed_id,
-            PeerCapabilities { proto_version, nests, hosts, can_relay, free_slots, headroom },
+            PeerCapabilities {
+                proto_version,
+                nests,
+                hosts,
+                can_relay,
+                free_slots,
+                headroom,
+            },
         )
     }
 }

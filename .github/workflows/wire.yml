@@ -26,6 +26,24 @@ jobs:
       - name: Golden fixture round-trips through views
         run: cargo test -p thrum-core
 
+  mesh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy on the crates this layer owns
+        # type_complexity — a tuple-of-tuples in thrum-core's build script.
+        # double_must_use — async_trait stamps #[must_use] onto a
+        #   Pin<Box<dyn Future>>; the lint fires in macro expansion, not our source.
+        # Both lints landed after this branch's local toolchain (1.98.1), so they
+        # are allowed rather than fixed blind.
+        run: cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
+      - name: Ensemble, daemon and mesh simulation
+        run: cargo test --locked -p ensemble -p sim -p humd -p hum -p humctl
+
   go:
     runs-on: ubuntu-latest
     steps:

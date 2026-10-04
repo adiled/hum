@@ -120,15 +120,12 @@ fn simplify(ty: &Type) -> (bool, Repr) {
     if let Type::Path(p) = ty {
         // Check the leading segment name directly: syn's `is_ident` rejects
         // paths with generic arguments, so `Option<String>` would slip by.
-        if let Some(seg) = p.path.segments.first() {
-            if seg.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(a) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = a.args.first() {
+        if let Some(seg) = p.path.segments.first()
+            && seg.ident == "Option"
+                && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = a.args.first() {
                         return (true, simplify(inner).1);
                     }
-                }
-            }
-        }
     }
     (false, repr_of(ty))
 }
@@ -145,12 +142,12 @@ fn repr_of(ty: &Type) -> Repr {
         "bool" => Repr::Bool,
         "Value" => Repr::Json,
         "Vec" => {
-            let inner = angle_ty(&seg.arguments, 0).unwrap_or_else(|| Repr::Json);
+            let inner = angle_ty(&seg.arguments, 0).unwrap_or(Repr::Json);
             Repr::Arr(Box::new(inner))
         }
         "BTreeMap" => {
             // The value type is the SECOND generic arg (first is the key).
-            let inner = angle_ty(&seg.arguments, 1).unwrap_or_else(|| Repr::Json);
+            let inner = angle_ty(&seg.arguments, 1).unwrap_or(Repr::Json);
             Repr::Map(Box::new(inner))
         }
         other => {
@@ -169,11 +166,10 @@ fn repr_of(ty: &Type) -> Repr {
 }
 
 fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
-    if let syn::PathArguments::AngleBracketed(a) = args {
-        if let Some(syn::GenericArgument::Type(t)) = a.args.iter().nth(nth) {
+    if let syn::PathArguments::AngleBracketed(a) = args
+        && let Some(syn::GenericArgument::Type(t)) = a.args.iter().nth(nth) {
             return Some(simplify(t).1);
         }
-    }
     None
 }
 
@@ -576,8 +572,8 @@ mod tests {
         let f = &ts[0].fields;
         assert_eq!(f.len(), 4);
         assert_eq!(f[0].json, "chunkType");
-        assert_eq!(f[0].repr.matches(&Repr::Str), true);
-        assert_eq!(f[1].optional, true);
+        assert!(f[0].repr.matches(&Repr::Str));
+        assert!(f[1].optional);
         assert!(matches!(f[1].repr, Repr::Json));
         assert!(matches!(f[2].repr, Repr::Arr(_)));
         assert!(matches!(f[3].repr, Repr::Map(_)));

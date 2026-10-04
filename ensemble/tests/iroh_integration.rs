@@ -1,9 +1,8 @@
-
 use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use ensemble::{
-    Ensemble, HumdAddr, Hid, HumdKey, IrohTransport, PeerCapabilities, PeerConnection, Transport,
+    Ensemble, Hid, HumdAddr, HumdKey, IrohTransport, PeerCapabilities, PeerConnection, Transport,
 };
 use serde_json::json;
 
@@ -41,9 +40,9 @@ impl Skip {
     fn resolve(self) -> Option<()> {
         let forced = std::env::var(REQUIRE_ENV).is_ok_and(|v| v != "0" && !v.is_empty());
         match self {
-            Skip::Environmental(reason) if forced => panic!(
-                "{REQUIRE_ENV} is set, so this failure cannot be skipped: {reason}"
-            ),
+            Skip::Environmental(reason) if forced => {
+                panic!("{REQUIRE_ENV} is set, so this failure cannot be skipped: {reason}")
+            }
             Skip::Environmental(reason) => {
                 eprintln!("iroh_integration: SKIPPED — {reason}");
                 eprintln!(
@@ -106,8 +105,12 @@ async fn iroh_endpoint_routes_tones_both_ways() {
         );
     }
 
-    let server_key = HumdKey(SigningKey::from_bytes(&server.endpoint().secret_key().to_bytes()));
-    let client_key = HumdKey(SigningKey::from_bytes(&client.endpoint().secret_key().to_bytes()));
+    let server_key = HumdKey(SigningKey::from_bytes(
+        &server.endpoint().secret_key().to_bytes(),
+    ));
+    let client_key = HumdKey(SigningKey::from_bytes(
+        &client.endpoint().secret_key().to_bytes(),
+    ));
     assert_eq!(server_key.hid(), server_humd_id);
     assert_eq!(client_key.hid(), client_humd_id);
 
@@ -140,6 +143,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
             "chi": "ping",
             "rid": "iroh-pong-1",
             "to": client_humd_for_task.to_hex(),
+            "from": server_humd_id.to_hex(),
         });
         ensemble
             .route(pong)
@@ -150,10 +154,8 @@ async fn iroh_endpoint_routes_tones_both_ways() {
         Ok::<(), String>(())
     });
 
-    let mut server_humd_addr = HumdAddr::new(server_humd_id).with_hint(format!(
-        "iroh:{}",
-        hex::encode(server_node_id.as_bytes())
-    ));
+    let mut server_humd_addr = HumdAddr::new(server_humd_id)
+        .with_hint(format!("iroh:{}", hex::encode(server_node_id.as_bytes())));
     for hint in server_sockets {
         server_humd_addr = server_humd_addr.with_hint(hint);
     }
@@ -174,11 +176,9 @@ async fn iroh_endpoint_routes_tones_both_ways() {
         "chi": "perf-mark",
         "rid": "iroh-mark-1",
         "to": server_humd_id.to_hex(),
+        "from": client_humd_id.to_hex(),
     });
-    ensemble
-        .route(mark)
-        .await
-        .expect("route perf-mark");
+    ensemble.route(mark).await.expect("route perf-mark");
 
     let mut server_task = server_task;
     let got = tokio::select! {
@@ -211,7 +211,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
 }
 
 mod classify {
-    use super::{force_transport_tests, Skip, REQUIRE_ENV};
+    use super::{REQUIRE_ENV, Skip, force_transport_tests};
 
     #[test]
     fn sandbox_signatures_are_environmental() {
@@ -246,9 +246,8 @@ mod classify {
 
     #[test]
     fn a_real_failure_panics_even_without_the_env_var() {
-        let r = std::panic::catch_unwind(|| {
-            Skip::Real("bind: quic handshake failed".into()).resolve()
-        });
+        let r =
+            std::panic::catch_unwind(|| Skip::Real("bind: quic handshake failed".into()).resolve());
         assert!(r.is_err(), "a real failure must never resolve to a skip");
     }
 
