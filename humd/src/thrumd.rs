@@ -182,6 +182,15 @@ impl Thrum {
         self.inner.clients.write().remove(client_id);
     }
 
+
+    /// Drop a client from the registry. Any tones already queued for it
+    /// still drain; once the queue empties the socket handler sees the
+    /// channel close and the connection ends. Used to refuse a bee that
+    /// failed admission instead of leaving it connected but unregistered.
+    pub fn thrum_close(&self, client_id: &str) {
+        self.inner.clients.write().remove(client_id);
+    }
+
     /// Inject a tone as if it arrived from `client_id`. Bypasses the
     /// NDJSON socket and goes straight to the installed sink. No
     /// envelope validation, no auto-echo — sim drives the shape it
@@ -309,4 +318,59 @@ pub fn echo_tone(rid: &str, ok: bool, error: Option<&str>) -> Tone {
         v.as_object_mut().unwrap().insert("error".into(), json!(e));
     }
     v
+}
+
+
+/// How a bee's declared `protoVersion` compares to the one humd speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtoVerdict {
+    Same,
+    SameMajor,
+    Incompatible,
+}
+
+fn parse_proto(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.trim().split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+pub fn proto_verdict(declared: &str, current: &str) -> ProtoVerdict {
+    match (parse_proto(declared), parse_proto(current)) {
+        (Some(d), Some(c)) if d == c => ProtoVerdict::Same,
+        (Some(d), Some(c)) if d.0 == c.0 => ProtoVerdict::SameMajor,
+        _ => ProtoVerdict::Incompatible,
+    }
+}
+
+#[cfg(test)]
+mod proto_tests {
+    use super::*;
+
+    #[test]
+    fn an_exact_match_is_same() {
+        assert_eq!(proto_verdict("0.7.0", "0.7.0"), ProtoVerdict::Same);
+    }
+
+    #[test]
+    fn drift_inside_a_major_is_admitted() {
+        assert_eq!(proto_verdict("0.6.2", "0.7.0"), ProtoVerdict::SameMajor);
+        assert_eq!(proto_verdict("0.9.9", "0.7.0"), ProtoVerdict::SameMajor);
+        assert_eq!(proto_verdict("0.7", "0.7.0"), ProtoVerdict::Same);
+    }
+
+    #[test]
+    fn a_different_major_is_incompatible() {
+        assert_eq!(proto_verdict("1.0.0", "0.7.0"), ProtoVerdict::Incompatible);
+        assert_eq!(proto_verdict("0.7.0", "1.0.0"), ProtoVerdict::Incompatible);
+    }
+
+    #[test]
+    fn an_unparseable_declaration_is_incompatible() {
+        assert_eq!(proto_verdict("banana", "0.7.0"), ProtoVerdict::Incompatible);
+        assert_eq!(proto_verdict("", "0.7.0"), ProtoVerdict::Incompatible);
+        assert_eq!(proto_verdict("x.y.z", "0.7.0"), ProtoVerdict::Incompatible);
+    }
 }

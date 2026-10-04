@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use thrumd::{serve_with_hook as thrum_serve_with_hook, Thrum, Tone, ToneSink};
 use thrum_core::{Chi, WaneTracker};
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 mod drone;
 mod drift;
@@ -811,6 +811,56 @@ impl ToneSink for HumdSink {
         match chi {
             Some(Chi::Hello) => {
                 trace!(client_id, %chi_str, "thrum.recv.hello");
+
+                let rid = tone
+                    .get("rid")
+                    .and_then(Value::as_str)
+                    .unwrap_or("hello-1")
+                    .to_string();
+
+                match tone.get("protoVersion").and_then(Value::as_str) {
+                    None => {
+                        error!(
+                            client_id,
+                            "thrum.hello.proto-missing — hello declares no protoVersion. \
+                             Not registered, not announced to the ensemble."
+                        );
+                        self.thrum.thrum_to(
+                            client_id,
+                            thrumd::echo_tone(&rid, false, Some("protoVersion is required")),
+                        );
+                        self.thrum.thrum_close(client_id);
+                        return;
+                    }
+                    Some(declared) => {
+                        match thrumd::proto_verdict(declared, thrum_core::THRUM_VERSION) {
+                            thrumd::ProtoVerdict::Same => {}
+                            thrumd::ProtoVerdict::SameMajor => {
+                                warn!(
+                                    client_id,
+                                    declared,
+                                    current = thrum_core::THRUM_VERSION,
+                                    "thrum.hello.proto-drift — admitted within major"
+                                );
+                            }
+                            thrumd::ProtoVerdict::Incompatible => {
+                                error!(
+                                    client_id,
+                                    declared,
+                                    current = thrum_core::THRUM_VERSION,
+                                    "thrum.hello.proto-incompatible — rejected, not announced"
+                                );
+                                self.thrum.thrum_to(
+                                    client_id,
+                                    thrumd::echo_tone(&rid, false, Some("protoVersion incompatible")),
+                                );
+                                self.thrum.thrum_close(client_id);
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 let breath = thrumd::breath_tone(serde_json::json!({}));
                 self.thrum.thrum_to(client_id, breath);
 
