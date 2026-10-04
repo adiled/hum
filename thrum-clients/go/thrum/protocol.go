@@ -220,6 +220,7 @@ type Envelope struct {
 	Wane *uint64 `json:"wane,omitempty"`
 	SentAt *int64 `json:"sentAt,omitempty"`
 	Dusk *int64 `json:"dusk,omitempty"`
+	Mid *string `json:"mid,omitempty"`
 	Ext map[string]map[string]json.RawMessage `json:"ext,omitempty"`
 }
 

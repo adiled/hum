@@ -42,14 +42,15 @@ Every tone is a JSON object with these top-level fields:
 | key | type | required | meaning |
 |---|---|---|---|
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
-| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. |
+| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. **Not a dedup key** — see [Identity](#identity). |
 | `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
 | `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
 | `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same (nest, sid). |
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
-| `dusk` | integer | optional | Absolute ms expiry. If `now > dusk`, the receiver MAY drop. |
+| `dusk` | integer | optional | Absolute ms expiry. humd drops a tone arriving with `now > dusk`, and counts it — see [Identity](#identity). |
+| `mid` | string | optional | Originator-assigned message id. Presence is an at-most-once claim: a receiver that has already dispatched this `mid` drops the repeat. Distinct from `rid` — see [Identity](#identity). |
 | `ext` | object | optional | Per-bee extension bag. Key it by your bee name; ignore other keys. |
 
 Beyond the envelope, **each chi defines its own body fields**. A
@@ -170,6 +171,10 @@ registry by one bump.
 
 ### Nestler → daemon
 
+`body fields` below are the chi-specific fields only. `sid` is not
+among them — it is an [envelope](#envelope) field, and a tone carries it
+alongside any of these.
+
 | chi | body fields | meaning |
 |---|---|---|
 | `hello` | `bee`, `protoVersion`, optional `version`/`propensity`/`chi`/`source` | first frame after connect |
@@ -177,9 +182,9 @@ registry by one bump.
 | `cancel` | `sid` | interrupt the current turn for this sid |
 | `cleanup` | `sid` | drop daemon state for this session |
 | `curate` | `sid` | manual compaction request |
-| `release-permit` | `sid`, `permitId`, `decision` | answer a `permission-ask` |
+| `release-permit` | `callId`, `ok`, optional `error` | answer a `permission-ask` |
 | `tendril-result` | `sid`, `callId`, `result` | task subagent answered |
-| `tool-result` | `sid`, `callId`, `result` | nestler-declared tool answered |
+| `tool-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | nestler-declared tool answered |
 | `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) |
 
 ### Daemon → nestler
@@ -187,15 +192,15 @@ registry by one bump.
 | chi | body fields | meaning |
 |---|---|---|
 | `breath` | (state snapshot, usually `{}`) | reply to hello |
-| `chunk` | `sid`, `part` (text/reasoning/tool fragment), `index` | streamed model output |
-| `finish` | `sid`, `finishReason`, `usage` | turn complete |
-| `error` | `sid`, `code`, `message`, optional protocol payload | turn aborted / hard error |
-| `session-ready` | `sid`, `claudeSessionId` | nest spawned, ready for prompts |
-| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `cellId` | process lifecycle event |
-| `permission-ask` | `sid`, `permitId`, `question`, `context` | mid-stream permission needed |
-| `tendril-reach` | `sid`, `callId`, `name`, `args` | task subagent dispatch |
+| `chunk` | `chunkType`, `blockIdx`, `delta`, `partialJson` | streamed model output |
+| `finish` | `finishReason`, `usage`, optional `exitCode`, `subtype` | turn complete |
+| `error` | `message`, `code`, optional `subtype`, `usage` | turn aborted / hard error |
+| `session-ready` | `nestId`, `model`, `tools` | nest spawned, ready for prompts |
+| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `pid` | process lifecycle event |
+| `permission-ask` | `callId`, `toolName`, `message`, `arg` | mid-stream permission needed |
+| `tendril-reach` | `task`, `tools` | task subagent dispatch |
 | `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch |
-| `tool-meta` | `sid`, `callId`, `meta` | out-of-band metadata for a tool result |
+| `tool-meta` | `callId`, `toolName`, `metadata` | out-of-band metadata for a tool result |
 
 ### Either direction
 
@@ -214,6 +219,17 @@ Only emitted across the ensemble layer (not by local nestlers):
 `peer-add`, `peer-remove`, `attach`, `detach`, `wane-sync`,
 `gossip-publish`, `kad-find-node`, `kad-find-node-resp`.
 See [`ensemble/README.md`](../ensemble/README.md).
+
+**Send deadline.** Every inter-humd send is bounded at 5s
+(`ensemble::SEND_TIMEOUT`). A peer that stops reading fills its socket
+buffer rather than closing, so the write stalls indefinitely while the
+connection still looks healthy to a liveness lease. On timeout humd
+closes that connection, counts the event in `send_timeouts`, and lets
+the lease mark the peer dead — a bounded send is what keeps one stalled
+peer from wedging a fan-out to every other peer. Implementations that
+speak this wire should impose an equivalent deadline; a peer that wants
+larger tones or a slower link should say so rather than write without
+one.
 
 ## Helpers
 
@@ -241,6 +257,70 @@ rid = base36(now_ms) + "-" + base36(counter++)
 Monotonic correlation id. Counter is per-process and starts at 0.
 Format-agnostic on receive — only the originator's correlation logic
 cares about the exact format.
+
+### Identity
+
+`rid` is correlation, not identity. Three things follow, and all three
+are load-bearing:
+
+- A request and its correlated response share one `rid`. `chi:"echo"`
+  is the ack *for* an `rid`, so a receiver that deduped on `rid` would
+  drop every response as a duplicate of its request.
+- `rid` is explicitly format-agnostic and per-originator, so two humds
+  can mint the same value. Reference clients mint per-session values
+  (`p-<sid>`, `prompt-<sid>`) that recur across restarts.
+- A sender that means to publish the same content twice is not
+  transmitting a duplicate. Repeats are ordinary for the tones gossip
+  carries — a heartbeat, a standing overload alert, a retry.
+
+So a message that needs at-most-once delivery carries its own
+originator-assigned id, minted once per publish and never reused:
+
+| chi | id field | who mints it |
+|---|---|---|
+| `gossip-publish` | `msg_id` | originator, once per publish |
+| any, when at-most-once is wanted | `mid` | originator, once per logical message |
+
+Receivers dedup on that field and never mint one themselves. The
+reference `Ensemble::publish` mints `"{origin6}-{ms:x}-{seq:x}"`: a
+per-process counter makes each publish distinct regardless of clock or
+content, and the origin prefix keeps two humds from colliding.
+
+`mid` extends the same rule to unicast, and the distinction is the
+whole design. `mid` answers *which message is this*; `rid` answers
+*which conversation is it in*. A response therefore carries the
+request's `rid` and its own `mid` — same rid, different mid, both
+delivered. That is what a retry looks like too: same rid, same mid,
+delivered once.
+
+`mid` is optional, and its absence is meaningful rather than a
+shortcoming. A tone with no `mid` makes no at-most-once claim and is
+delivered every time it is sent, so a sender may repeat a body as often
+as it likes. Suppressing those would be the original mistake in another
+guise — dropping a message the sender meant to send. A receiver must
+not substitute `rid` for a missing `mid`.
+
+Each receiver enforces `mid` and `dusk` at its own edge, once per hop,
+and keeps the two independent:
+
+- `dusk` is checked first, so a dead tone never occupies seen-set
+  capacity and cannot displace a live id.
+- The `mid` seen-set is separate from the gossip `msg_id` seen-set. A
+  `mid` records that this node already *delivered* a tone; a `msg_id`
+  also governs whether it is *re-fanned*. Sharing one set would couple
+  two unrelated decisions and let one evict the other's entries early.
+
+Content-addressing an id (`sha256(topic:rid:from:payload)`) cannot
+work here. It conflates "delivered twice" with "sent twice", and since
+a sender typically marks its own publish seen before sending, a repeat
+that hashed alike was dropped before it ever left the origin.
+
+`dusk` bounds the window a duplicate can be recognised in at all: a
+tone past its `dusk` is dropped on arrival rather than delivered, so
+the seen-set only has to remember ids for as long as they can still be
+legitimately in flight. A tone with no `dusk` can be re-fanned
+arbitrarily late, so such ids are bounded by the seen-set cap instead
+of by any deadline.
 
 ### `WaneTracker`
 

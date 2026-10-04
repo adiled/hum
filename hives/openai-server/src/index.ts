@@ -1,18 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
+import { OpenAIWorker } from "./openai.ts";
 export { toolsFromOpenAI } from "./tools.ts";
 
 interface BeeConfig {
   host?: string;
   port?: number;
   apiKey?: string;
-  models?: string[];
 }
 
 function readConfigFile(): BeeConfig {
@@ -27,14 +27,8 @@ function readConfigFile(): BeeConfig {
 }
 
 const fileConfig = readConfigFile();
-// Model IDs advertised on /v1/models come from the bee's per-kind
-// config (~/.config/hum/hives/openai-server.json). When unset, the
-// list is empty — /v1/models returns an empty array. The recipe that
-// installs this bee is responsible for seeding the model id-set
-// it wants exposed; the bee itself stays model-agnostic.
-const MODEL_IDS: string[] = Array.isArray(fileConfig.models) ? fileConfig.models : [];
+let MODEL_IDS: string[] = [];
 
-// Precedence: env > config file > built-in defaults.
 const PORT = process.env.OPENAI_SERVER_PORT !== undefined
   ? parseInt(process.env.OPENAI_SERVER_PORT, 10)
   : (typeof fileConfig.port === "number" ? fileConfig.port : 14620);
@@ -65,22 +59,21 @@ function bad(res: ServerResponse, msg: string): void {
 }
 
 function checkAuth(req: IncomingMessage): boolean {
-  if (!API_KEY) return true; // unauthenticated mode for local dev
+  if (!API_KEY) return true;
   const auth = req.headers["authorization"];
   if (typeof auth !== "string") return false;
   const [scheme, token] = auth.split(" ");
   return scheme === "Bearer" && token === API_KEY;
 }
 
-// ── tenant + audit + usage + rate-limit ──────────────────────────────
-// Lightweight gateway concerns. None of these are kernel-level — they
-// live in the bee because the wire format (OpenAI shape) is
-// where multi-tenant routing, per-tenant billing, audit trails, and
-// quota enforcement belong. hum's kernel stays format-neutral.
-
 const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/openai-server";
 const AUDIT_LOG = join(STATE_DIR, "audit.log");
 const USAGE_PATH = join(STATE_DIR, "usage.json");
+const USAGE_TMP_PATH = `${USAGE_PATH}.tmp`;
+const USAGE_FLUSH_INTERVAL_MS = 30_000;
+const NO_MODEL = "unspecified";
+const SSE_DATA_RE = /^data: (.+)\n\n$/;
+const DATA_URI_RE = /^data:([^;]+);base64,(.+)$/;
 try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}
 
 function tenantOf(req: IncomingMessage): string {
@@ -100,21 +93,19 @@ interface TenantUsage {
   totalTokens: number;
   requests: number;
 }
+const USAGE_DEFAULTS: TenantUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  requests: 0,
+};
 const USAGE: Record<string, TenantUsage> = (() => {
   try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
 })();
 
-// sid → claude session_id. Populated from chi:"session-ready" so
-// follow-up turns can ship `resume` in chi:"prompt".
 const sid_to_nestid: Map<string, string> = new Map();
-
-// responseId → sid. Lets callers chain via OpenAI Responses
-// `previous_response_id` even though hum's sid is independent.
-// Capped to avoid unbounded growth; oldest entries evicted FIFO.
 const bloom_to_sid: Map<string, string> = new Map();
 
-// sid → caller-owned bookkeeping (metadata, safety_identifier,
-// prompt_cache_key). Echoed back on response.completed per spec.
 interface SidMeta {
   metadata?: Record<string, string>;
   safety_identifier?: string;
@@ -140,7 +131,7 @@ function rememberResponse(responseId: string, sid: string): void {
 }
 let usageDirty = false;
 function trackUsage(tenant: string, prompt: number, completion: number): void {
-  const u = USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 };
+  const u = USAGE[tenant] ?? { ...USAGE_DEFAULTS };
   u.promptTokens += prompt;
   u.completionTokens += completion;
   u.totalTokens += prompt + completion;
@@ -148,20 +139,15 @@ function trackUsage(tenant: string, prompt: number, completion: number): void {
   USAGE[tenant] = u;
   usageDirty = true;
 }
-// Flush usage to disk every 30s. Atomicity not critical — counters
-// are monotonic, a missed update at most undercounts on crash.
 setInterval(() => {
   if (!usageDirty) return;
   try {
-    appendFileSync(USAGE_PATH + ".tmp", JSON.stringify(USAGE, null, 2));
-    // Best-effort atomic-ish rename.
-    require("node:fs").renameSync(USAGE_PATH + ".tmp", USAGE_PATH);
+    appendFileSync(USAGE_TMP_PATH, JSON.stringify(USAGE, null, 2));
+    renameSync(USAGE_TMP_PATH, USAGE_PATH);
     usageDirty = false;
   } catch {}
-}, 30_000).unref();
+}, USAGE_FLUSH_INTERVAL_MS).unref();
 
-// Token bucket per tenant. Default 60 requests/min, configurable
-// via per-tenant config later. Capacity = burst, refill = sustained.
 interface Bucket { tokens: number; lastRefill: number; }
 const BUCKETS: Record<string, Bucket> = {};
 const RATE_CAPACITY = parseInt(process.env.OPENAI_SERVER_RATE_CAPACITY ?? "60", 10);
@@ -180,7 +166,7 @@ function allow(tenant: string): boolean {
 function tooManyRequests(res: ServerResponse, tenant: string): void {
   res.writeHead(429, {
     "Content-Type": "application/json",
-    "Retry-After": "60",
+    "Retry-After": String(RATE_REFILL_PER_SEC * 60),
     "X-RateLimit-Tenant": tenant,
   });
   res.end(JSON.stringify({ error: { message: `rate limit exceeded for tenant '${tenant}'`, type: "rate_limit_exceeded" } }));
@@ -208,49 +194,37 @@ interface ThrumAttachment {
   url?: string;
 }
 
-// Pull non-text parts out of a content array and translate them to
-// thrum-shape attachments. Today: image_url (both data: URIs and
-// http(s) URLs). Future: input_audio, file refs.
+function imageAttachmentFromUrl(url: string): ThrumAttachment | null {
+  const inline = url.match(DATA_URI_RE);
+  if (inline) return { kind: "image", mediaType: inline[1], data: inline[2] };
+  return { kind: "image", mediaType: "image/*", url };
+}
+
 function attachmentsFromContent(content: OpenAIMessage["content"]): ThrumAttachment[] {
   if (!Array.isArray(content)) return [];
   const out: ThrumAttachment[] = [];
   for (const part of content) {
-    if (part.type === "image_url") {
-      const url = (part as { image_url?: { url?: string } }).image_url?.url;
-      if (!url) continue;
-      if (url.startsWith("data:")) {
-        // data:<media-type>;base64,<payload>
-        const m = url.match(/^data:([^;]+);base64,(.+)$/);
-        if (m) out.push({ kind: "image", mediaType: m[1], data: m[2] });
-      } else {
-        out.push({ kind: "image", mediaType: "image/*", url });
-      }
-    }
+    if (part.type !== "image_url") continue;
+    const url = (part as { image_url?: { url?: string } }).image_url?.url;
+    if (!url) continue;
+    const attachment = imageAttachmentFromUrl(url);
+    if (attachment) out.push(attachment);
   }
   return out;
 }
 
-// Collect attachments from every message in the conversation (not
-// just the last). hum's worker sees the union; multi-turn vision is
-// then a worker-side concern (whichever worker knows how to interleave
-// image blocks with text turns).
 function allAttachments(messages: OpenAIMessage[]): ThrumAttachment[] {
   const out: ThrumAttachment[] = [];
   for (const m of messages) out.push(...attachmentsFromContent(m.content));
   return out;
 }
 
-// The OpenAI chat-completions wire is stateless: every request carries
-// the full conversation. Whatever worker humd picks behind the prompt
-// may or may not retain state — that's the worker's propensity, not
-// this bee's concern. The neutral, always-correct move is to
-// forward the entire transcript every call; workers that are stateful
-// will see a redundant prefix and respond just fine, workers that are
-// stateless will get the context they need.
-//
-// (A future revision can opt in to delta-mode when humd's hello-ack
-//  announces a stateful propensity for the target nest. Until that
-//  wire piece lands, neutrality wins.)
+function isFirstTurn(messages: OpenAIMessage[]): boolean {
+  const userTurns = messages.filter(m => m.role === "user").length;
+  const assistantTurns = messages.filter(m => m.role === "assistant").length;
+  return userTurns === 1 && assistantTurns === 0;
+}
+
 function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; userPrompt: string } {
   const systemPieces: string[] = [];
   const turns: string[] = [];
@@ -263,35 +237,26 @@ function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; u
       const text = flatten(msg.content);
       if (text) turns.push(`Assistant: ${text}`);
     }
-    // role:"tool" handled separately via trailingToolReturns.
   }
-  // Single user turn — emit verbatim; the "User:" label only helps
-  // disambiguate when there's prior history.
-  const userTurnCount = messages.filter(m => m.role === "user").length;
-  const assistantTurnCount = messages.filter(m => m.role === "assistant").length;
-  const single = userTurnCount === 1 && assistantTurnCount === 0;
   return {
     systemPrompt: systemPieces.length > 0 ? systemPieces.join("\n\n") : undefined,
-    userPrompt: single ? (turns[0]?.replace(/^User: /, "") ?? "") : turns.join("\n\n"),
+    userPrompt: isFirstTurn(messages)
+      ? (turns[0]?.replace(/^User: /, "") ?? "")
+      : turns.join("\n\n"),
   };
 }
 
-// Stable sid keyed on the conversation anchor — same OC chat lands
-// on the same hum sid across turns. Lets stateful workers reuse a
-// cell when humd's pool keeps one warm; stateless workers just ignore
-// the repeat. Either way the sid is meaningful, not random.
+function hash16(value: string): string {
+  return createHash("sha1").update(value).digest("hex").slice(0, 16);
+}
+
 function sessionKey(messages: OpenAIMessage[]): string {
   const firstUser = messages.find(m => m.role === "user");
-  const anchor = firstUser ? flatten(firstUser.content) : `none-${Date.now()}`;
-  return createHash("sha1").update(anchor).digest("hex").slice(0, 16);
+  return hash16(firstUser ? flatten(firstUser.content) : `none-${Date.now()}`);
 }
 
 interface ToolReturn { tool_call_id: string; result: string; }
 
-// A continuation request carries the prior tool_calls plus their
-// answers as role:"tool" messages. Hum's daemon is parked inside
-// execNestlerTool waiting for chi:"tool-result" — collect the
-// trailing tool messages and forward them.
 function trailingToolReturns(messages: OpenAIMessage[]): ToolReturn[] {
   const out: ToolReturn[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -312,6 +277,53 @@ function hasTrailingUserAfterTool(messages: OpenAIMessage[]): boolean {
   return false;
 }
 
+interface ResponsesSidAnchors {
+  prefix: string;
+  isDeltaMode: boolean;
+  previousResponseId?: string;
+  conversationId?: string;
+  metaSessionId?: string;
+  firstItemId: string;
+  firstUserMsg: string;
+}
+
+function responsesSid(anchors: ResponsesSidAnchors): string {
+  const { prefix, isDeltaMode, previousResponseId, conversationId, metaSessionId } = anchors;
+  if (isDeltaMode && previousResponseId) {
+    return bloom_to_sid.get(previousResponseId) ?? `${prefix}${hash16(previousResponseId)}`;
+  }
+  for (const anchor of [conversationId, metaSessionId, anchors.firstItemId || undefined]) {
+    if (anchor) return `${prefix}${hash16(anchor)}`;
+  }
+  return `${prefix}${hash16(anchors.firstUserMsg.slice(0, 256))}`;
+}
+
+const JSON_MODE_HINT = "Respond with valid JSON only. No prose, no markdown fences.";
+
+interface JsonModeFormat {
+  type: string;
+  json_schema?: { schema?: unknown } | unknown;
+}
+
+function jsonModeSchema(format: JsonModeFormat): unknown {
+  if (format.type !== "json_schema") return undefined;
+  const jsonSchema = format.json_schema as { schema?: unknown } | undefined;
+  return jsonSchema?.schema;
+}
+
+function injectJsonMode(
+  systemPrompt: string | undefined,
+  format: JsonModeFormat | undefined,
+): string | undefined {
+  if (!format || format.type === "text") return systemPrompt;
+  let hint = JSON_MODE_HINT;
+  const shown = jsonModeSchema(format);
+  if (shown !== undefined) {
+    hint += `\nConform to this JSON Schema:\n${JSON.stringify(shown, null, 2)}`;
+  }
+  return systemPrompt ? `${systemPrompt}\n\n${hint}` : hint;
+}
+
 const thrum = new ThrumClient();
 
 async function start(): Promise<void> {
@@ -328,8 +340,6 @@ async function start(): Promise<void> {
       return;
     }
 
-    // /v1/models/{id} — single-model GET. Returns 404 when the id
-    // isn't in our advertised set.
     if (req.method === "GET" && url.pathname.startsWith("/v1/models/")) {
       if (!checkAuth(req)) return unauthorized(res);
       const id = decodeURIComponent(url.pathname.slice("/v1/models/".length));
@@ -353,9 +363,6 @@ async function start(): Promise<void> {
         stream?: boolean;
         user?: string;
         tools?: OpenAITool[];
-        // Pass-through sampling knobs. nest doesn't act on them; workers
-        // that honor them (future native-API workers) read from the
-        // chi:"prompt" tone they're forwarded on.
         temperature?: number;
         top_p?: number;
         max_completion_tokens?: number;
@@ -376,50 +383,24 @@ async function start(): Promise<void> {
       const messages = body.messages ?? [];
       if (messages.length === 0) return bad(res, "messages required");
 
-      // OpenAI's `n` requests multiple completions per call — we serve
-      // one worker session per prompt, so reject explicitly instead of
-      // silently returning n=1.
       if (typeof body.n === "number" && body.n > 1) {
         return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
       }
-      // logprobs / top_logprobs aren't emitted by the workers we
-      // ship today. Spec-compliant explicit reject beats silent ignore.
       if (body.logprobs === true || (typeof body.top_logprobs === "number" && body.top_logprobs > 0)) {
         return bad(res, "logprobs unsupported by hum workers (claude-cli doesn't emit token probabilities)");
       }
 
-      const stream = body.stream !== false; // default to streaming
+      const stream = body.stream !== false;
       const includeUsage = body.stream_options?.include_usage !== false;
-      // body.model is the only correct source — the client picks. If
-      // absent, fall back to the first advertised id; if none, use a
-      // pass-through tag humd will reject loudly rather than guess.
-      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
-      // body.user wins when the client supplies a session id; otherwise
-      // derive a stable one from the conversation anchor. Tenant is
-      // prefixed so different tenants never collide on the same sid.
+      const model = body.model ?? MODEL_IDS[0] ?? NO_MODEL;
       const sid = `${tenant === "default" ? "" : tenant + ":"}${body.user ?? `oai-${sessionKey(messages)}`}`;
       audit({ endpoint: "chat.completions", tenant, model, sid, stream: body.stream ?? true });
       let { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
       const attachments = allAttachments(messages);
 
-      // response_format: JSON mode. OpenAI's contract is "the model is
-      // constrained to emit valid JSON." We inject the constraint into
-      // the system prompt — model-side enforcement (no grammar lock
-      // available across all workers). json_schema gets the schema
-      // shown verbatim so the model can mirror it.
-      if (body.response_format && body.response_format.type !== "text") {
-        const fmt = body.response_format;
-        let jsonHint = "Respond with valid JSON only. No prose, no markdown fences.";
-        if (fmt.type === "json_schema" && fmt.json_schema?.schema) {
-          jsonHint += `\nConform to this JSON Schema:\n${JSON.stringify(fmt.json_schema.schema, null, 2)}`;
-        }
-        systemPrompt = systemPrompt ? `${systemPrompt}\n\n${jsonHint}` : jsonHint;
-      }
+      systemPrompt = injectJsonMode(systemPrompt, body.response_format);
 
-      // Sampling/limit knobs — pass to humd via a sampling block so
-      // workers that honor them (anthropic-native, ollama, etc.) can.
-      // claude-cli today ignores them; that's fine, they're optional.
       const sampling: Record<string, unknown> = {};
       if (typeof body.temperature === "number") sampling.temperature = body.temperature;
       if (typeof body.top_p === "number") sampling.topP = body.top_p;
@@ -451,8 +432,7 @@ async function start(): Promise<void> {
               thrum.off(sid);
               return;
             }
-            // Capture per-tenant usage from the dedicated usage frame.
-            const um = f.match(/^data: (.+)\n\n$/);
+            const um = f.match(SSE_DATA_RE);
             if (um) {
               try {
                 const parsed = JSON.parse(um[1]) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
@@ -465,9 +445,6 @@ async function start(): Promise<void> {
           }
         });
       } else {
-        // Non-streaming: accumulate streamed deltas, fold into a single
-        // chat completion response when [DONE] arrives. Spec-compliant
-        // OpenAI shape — clients that opt out of SSE get one JSON body.
         let accumulatedContent = "";
         let accumulatedReasoning = "";
         const accumulatedToolCalls: Array<{
@@ -506,8 +483,7 @@ async function start(): Promise<void> {
               thrum.off(sid);
               return;
             }
-            // Parse the SSE frame to fold into the accumulator.
-            const m = f.match(/^data: (.+)\n\n$/);
+            const m = f.match(SSE_DATA_RE);
             if (!m) continue;
             try {
               const chunk = JSON.parse(m[1]) as {
@@ -548,8 +524,6 @@ async function start(): Promise<void> {
 
       req.on("close", () => {
         thrum.off(sid);
-        // Don't cancel on disconnect when the daemon is mid-tool — the
-        // model is parked awaiting a tool-result, not actively generating.
       });
 
       const toolReturns = trailingToolReturns(messages);
@@ -574,12 +548,6 @@ async function start(): Promise<void> {
       return;
     }
 
-    // ── /v1/responses — OpenAI's newer state-aware API ────────────────
-    // Translates Responses-shape I/O into the same thrum flow as
-    // chat/completions. State continuity rides on hum's session sid
-    // (derived from `previous_response_id` when given, else from
-    // input). Streaming emits Responses-shape SSE events; non-stream
-    // returns the single-object Response body.
     if (req.method === "POST" && url.pathname === "/v1/responses") {
       if (!checkAuth(req)) return unauthorized(res);
       const tenant = tenantOf(req);
@@ -625,19 +593,10 @@ async function start(): Promise<void> {
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
       if (!body.input) return bad(res, "input required");
 
-      // Two input modes per OpenAI Responses contract:
-      //   - delta: previous_response_id present, input = new turn only
-      //   - full-history: no previous_response_id, input = whole convo
-      // sid derivation follows the same split so continuity binds
-      // to a stable anchor without depending on out-of-spec headers.
       const stream = body.stream === true;
-      const model = body.model ?? MODEL_IDS[0] ?? "unspecified";
+      const model = body.model ?? MODEL_IDS[0] ?? NO_MODEL;
       const isDeltaMode = typeof body.previous_response_id === "string" && body.previous_response_id.length > 0;
 
-      // Walk the input items. In full-history mode we keep the FIRST
-      // user message (sid anchor) and the LATEST (new turn text); in
-      // delta mode we flatten every user-text item since input ≡ new
-      // turn. Image attachments collected either way.
       let userText = "";
       let firstUserMsg = "";
       let firstItemId = "";
@@ -653,11 +612,6 @@ async function start(): Promise<void> {
         const allUserTurns: string[] = [];
         for (const item of body.input) {
           const it = item as ResponsesInputItem & { role?: string; type?: string };
-          // Non-message item types: function_call, function_call_output,
-          // mcp_call, reasoning, custom tool calls, apply_patch,
-          // file_search_call, image_generation_call, provider extensions
-          // (provider_slug:custom_type). All skipped — claude pulls
-          // history via --resume; provider extensions are opaque.
           if (typeof it.type === "string" && it.type !== "message") continue;
           if ((it as { role?: string }).role !== "user" || !("content" in it)) continue;
           const content = (it as { content?: unknown }).content;
@@ -671,11 +625,9 @@ async function start(): Promise<void> {
                 if (p.text) parts.push(p.text);
               } else if (p.type === "input_image" || p.type === "image_url") {
                 const u = p.image_url?.url;
-                if (u?.startsWith("data:")) {
-                  const m = u.match(/^data:([^;]+);base64,(.+)$/);
-                  if (m) respAttachments.push({ kind: "image", mediaType: m[1], data: m[2] });
-                } else if (u) {
-                  respAttachments.push({ kind: "image", mediaType: "image/*", url: u });
+                if (u) {
+                  const attachment = imageAttachmentFromUrl(u);
+                  if (attachment) respAttachments.push(attachment);
                 }
               }
             }
@@ -689,14 +641,7 @@ async function start(): Promise<void> {
           : (allUserTurns[allUserTurns.length - 1] ?? "");
       }
 
-      // Sid resolver cascade:
-      //   1. previous_response_id → bloom_to_sid lookup (or self-hash on miss)
-      //   2. conversation          → canonical session anchor per spec
-      //   3. metadata.session_id   → caller-explicit metadata convention
-      //   4. firstItemId           → spec-required item id when present
-      //   5. hash(firstUserMsg)    → fragile last-resort
       const prefix = `${tenant === "default" ? "" : tenant + ":"}oai-r-`;
-      const hash16 = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 16);
       const conversationId = typeof body.conversation === "string"
         ? body.conversation
         : (body.conversation && typeof body.conversation === "object" && typeof body.conversation.id === "string")
@@ -705,19 +650,15 @@ async function start(): Promise<void> {
       const metaSessionId = typeof body.metadata?.session_id === "string"
         ? body.metadata.session_id
         : undefined;
-      let sid: string;
-      if (isDeltaMode) {
-        const known = bloom_to_sid.get(body.previous_response_id!);
-        sid = known ?? `${prefix}${hash16(body.previous_response_id!)}`;
-      } else if (conversationId && conversationId.length > 0) {
-        sid = `${prefix}${hash16(conversationId)}`;
-      } else if (metaSessionId && metaSessionId.length > 0) {
-        sid = `${prefix}${hash16(metaSessionId)}`;
-      } else if (firstItemId.length > 0) {
-        sid = `${prefix}${hash16(firstItemId)}`;
-      } else {
-        sid = `${prefix}${hash16(firstUserMsg.slice(0, 256))}`;
-      }
+      const sid = responsesSid({
+        prefix,
+        isDeltaMode,
+        previousResponseId: body.previous_response_id,
+        conversationId,
+        metaSessionId,
+        firstItemId,
+        firstUserMsg,
+      });
       const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       rememberResponse(responseId, sid);
       rememberSidMeta(sid, {
@@ -727,11 +668,7 @@ async function start(): Promise<void> {
       });
       audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
 
-      let systemPrompt = body.instructions;
-      if (body.response_format && body.response_format.type !== "text") {
-        const jsonHint = "Respond with valid JSON only. No prose, no markdown fences.";
-        systemPrompt = systemPrompt ? `${systemPrompt}\n\n${jsonHint}` : jsonHint;
-      }
+      let systemPrompt = injectJsonMode(body.instructions, body.response_format);
 
       const sampling: Record<string, unknown> = {};
       if (typeof body.temperature === "number") sampling.temperature = body.temperature;
@@ -881,7 +818,6 @@ async function start(): Promise<void> {
             const delta = (msg.delta as string) ?? "";
             if (!delta) return;
             open.text += delta;
-            // Raw thinking text stream.
             sse("response.reasoning.delta", {
               type: "response.reasoning.delta",
               item_id: open.itemId,
@@ -889,8 +825,6 @@ async function start(): Promise<void> {
               content_index: 0,
               delta,
             });
-            // Summary-stream surface (what most OAI Responses
-            // consumers key on for showing a reasoning panel).
             sse("response.reasoning_summary_text.delta", {
               type: "response.reasoning_summary_text.delta",
               item_id: open.itemId,
@@ -921,7 +855,6 @@ async function start(): Promise<void> {
           if (chi === "chunk" && chunkType === "text_delta") {
             const open = openItems.get(blockIdx);
             if (!open || open.kind !== "message") {
-              // Fallback: text without a text_start — lazily open a message item.
               const idx = nextOutputIndex++;
               const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
               const fresh: OpenItem = { kind: "message", outputIndex: idx, itemId: msgId, text: "" };
@@ -1002,8 +935,6 @@ async function start(): Promise<void> {
           }
           if (chi === "finish") {
             usage = msg.usage as typeof usage;
-            // Close any items the worker left open (no explicit
-            // content_block_stop for them).
             for (const idx of [...openItems.keys()]) closeItem(idx);
             const inputT = (usage?.input_tokens ?? 0)
               + (usage?.cache_read_input_tokens ?? 0)
@@ -1041,9 +972,6 @@ async function start(): Promise<void> {
           }
         });
       } else {
-        // Non-stream: accumulate all output items, return as one
-        // Response body. Mirrors stream-path semantics: reasoning,
-        // message, mcp_call all preserved in output[].
         let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
         type NSOpen =
           | { kind: "reasoning"; itemId: string; text: string }
@@ -1169,13 +1097,6 @@ async function start(): Promise<void> {
 
       req.on("close", () => { thrum.off(sid); });
 
-      // Resume token: when we have a previously-seen claude session_id
-      // for this sid, ship it so the worker spawns claude with
-      // `--resume <id>` and the model rehydrates full prior context
-      // (tool calls + results) from its session file. First turn:
-      // no entry yet, claude spawns fresh and reports its
-      // session_id back via chi:"session-ready" which we capture
-      // for the next turn.
       const resume = sid_to_nestid.get(sid);
       thrum.send({
         chi: "prompt",
@@ -1193,12 +1114,11 @@ async function start(): Promise<void> {
       return;
     }
 
-    // ── /v1/usage — read-only per-tenant usage ledger ─────────────────
     if (req.method === "GET" && url.pathname === "/v1/usage") {
       if (!checkAuth(req)) return unauthorized(res);
       const tenant = tenantOf(req);
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ tenant, usage: USAGE[tenant] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 } }));
+      res.end(JSON.stringify({ tenant, usage: USAGE[tenant] ?? { ...USAGE_DEFAULTS } }));
       return;
     }
 
@@ -1216,14 +1136,28 @@ async function start(): Promise<void> {
     server.listen(PORT, HOST, () => resolve());
   });
 
-  // Determine the real bound address (handles port: 0 / wildcard host).
   const addr = server.address();
   const actualHost = (addr && typeof addr === "object" && addr.address) ? addr.address : HOST;
   const actualPort = (addr && typeof addr === "object" && typeof addr.port === "number") ? addr.port : PORT;
   console.log(`[hum-openai-server] listening on http://${actualHost}:${actualPort}`);
 
+  const openaiWorker = new OpenAIWorker(thrum);
+  await openaiWorker.discover();
+  MODEL_IDS = openaiWorker.models();
+  thrum.setModels(MODEL_IDS);
+
   await thrum.connect({ host: actualHost, port: actualPort, scheme: "http" });
   console.log(`[hum-openai-server] connected to thrum`);
+  thrum.onChi("prompt", (msg) => {
+    const sid = (msg.sid as string) ?? "";
+    if (sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
+  });
+  thrum.onChi("tool-result", (msg) => {
+    openaiWorker.handleToolResult(msg).catch(e => console.error("[worker] tool-result failed:", e));
+  });
+  thrum.onChi("cancel", (msg) => {
+    openaiWorker.cancel(msg);
+  });
 }
 
 start().catch(e => { console.error("[hum-openai-server] startup failed:", e); process.exit(1); });

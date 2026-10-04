@@ -446,6 +446,7 @@ class Envelope:
     wane: Optional[int] = None
     sent_at: Optional[int] = None
     dusk: Optional[int] = None
+    mid: Optional[str] = None
     ext: Optional[dict[str, dict[str, Any]]] = None
 
     # rust field name -> wire key (single source in views.rs)
@@ -459,6 +460,7 @@ class Envelope:
         "wane": "wane",
         "sent_at": "sentAt",
         "dusk": "dusk",
+        "mid": "mid",
         "ext": "ext",
     }
 

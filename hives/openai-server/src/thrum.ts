@@ -6,10 +6,15 @@ export const THRUM_VERSION = "0.7.0";
 export const HIVE_NAME = "openai-server";
 export const BEE_VERSION = pkg.version;
 export const BEE_ROLE = "forager";
+export const BEE_ROLES = ["forager", "worker"];
 export const BEE_PROVIDES = ["session"];
 
-// Minimal thrum client. Connects to hum's NDJSON socket, sends framed
-// tones, dispatches incoming tones to subscribers by `sid`.
+const RECONNECT_BASE_MS = 250;
+const RECONNECT_CEILING_MS = 30_000;
+
+function reconnectDelayMs(attempt: number): number {
+  return Math.min(RECONNECT_CEILING_MS, RECONNECT_BASE_MS * Math.pow(2, attempt));
+}
 
 export type Tone = Record<string, unknown>;
 export type SidHandler = (msg: Tone) => void;
@@ -21,12 +26,8 @@ export interface BindInfo {
 }
 
 function defaultThrumPath(): string {
-  // Canonical resolution mirrors thrumd::default_socket_path() in Rust.
-  // HUM_THRUM_SOCK wins; HUM_SOCKET is the legacy fallback so an
-  // in-flight upgrade doesn't strand bees.
   const explicit = process.env.HUM_THRUM_SOCK ?? process.env.HUM_SOCKET;
   if (explicit) return explicit;
-  // Rust: state_dir() = $XDG_STATE_HOME/hum or ~/.local/state/hum
   const stateHome = process.env.XDG_STATE_HOME
     ?? `${process.env.HOME ?? "/tmp"}/.local/state`;
   return `${stateHome}/hum/thrum.sock`;
@@ -36,7 +37,9 @@ export class ThrumClient {
   private sock: Socket | null = null;
   private buf = "";
   private byId = new Map<string, SidHandler>();
+  private byChi = new Map<string, SidHandler>();
   private path: string;
+  private models: string[];
   private connected = false;
   private pending: string[] = [];
   private bind?: BindInfo;
@@ -44,13 +47,12 @@ export class ThrumClient {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
-  constructor(path?: string) {
+  constructor(path?: string, models?: string[]) {
     this.path = path ?? defaultThrumPath();
+    this.models = models ?? [];
   }
 
   async connect(bind?: BindInfo): Promise<void> {
-    // First-connect resolves on hello write; subsequent reconnects
-    // are silent (driven by the close handler's backoff loop).
     this.bind = bind;
     return new Promise((resolve, reject) => {
       this.attempt(resolve, reject);
@@ -72,19 +74,19 @@ export class ThrumClient {
         rid: `hello-${Date.now().toString(36)}`,
         from: HIVE_NAME,
         hid: beeHid(HIVE_NAME, "fbee"),
-        bee: [BEE_ROLE],
+        bee: BEE_ROLES,
         hive: HIVE_NAME,
         version: BEE_VERSION,
         provides: BEE_PROVIDES,
+        models: this.models,
+        propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
         protoVersion: THRUM_VERSION,
         chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
         source: "https://github.com/adiled/hum/tree/main/hives/openai-server",
       };
       if (this.bind) hello.bind = this.bind;
       s.write(JSON.stringify(hello) + "\n");
-      // Flush anything queued during the disconnect window.
-      for (const line of this.pending) s.write(line);
-      this.pending = [];
+      this.flushPending(s);
       if (!settled && resolve) { settled = true; resolve(); }
     });
     s.on("data", (chunk: Buffer) => {
@@ -98,13 +100,14 @@ export class ThrumClient {
           const msg = JSON.parse(line) as Tone;
           const sid = (msg.sid as string) ?? "";
           const handler = this.byId.get(sid);
-          if (handler) handler(msg);
+          if (handler) { handler(msg); continue; }
+          const chi = (msg.chi as string) ?? "";
+          const chiHandler = this.byChi.get(chi);
+          if (chiHandler) chiHandler(msg);
         } catch {}
       }
     });
     s.on("error", (err) => {
-      // Only reject if we never connected on this attempt; otherwise
-      // let the `close` handler schedule a reconnect.
       if (!settled && !this.connected && reject) {
         settled = true;
         reject(err);
@@ -122,16 +125,23 @@ export class ThrumClient {
     });
   }
 
+  private flushPending(s: Socket): void {
+    for (const line of this.pending) s.write(line);
+    this.pending = [];
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
-    // Exponential backoff capped at 30s. Pending writes queue
-    // forward — they ship on the next successful connect.
-    const delay = Math.min(30_000, 250 * Math.pow(2, this.reconnectAttempt));
+    const delay = reconnectDelayMs(this.reconnectAttempt);
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.attempt();
     }, delay);
+  }
+
+  setModels(models: string[]): void {
+    this.models = models.slice();
   }
 
   send(msg: Tone): void {
@@ -142,6 +152,9 @@ export class ThrumClient {
 
   on(sid: string, handler: SidHandler): void { this.byId.set(sid, handler); }
   off(sid: string): void { this.byId.delete(sid); }
+
+  onChi(chi: string, handler: SidHandler): void { this.byChi.set(chi, handler); }
+  offChi(chi: string): void { this.byChi.delete(chi); }
 
   close(): void {
     this.shuttingDown = true;

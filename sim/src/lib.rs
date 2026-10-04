@@ -1,15 +1,3 @@
-//! sim — in-process ensemble simulator.
-//!
-//! Spin up N `humd` instances in one process, wire them with
-//! `ensemble::InMemoryEndpoint::pair`, fake-network them, and run
-//! narrative tests against the result. No sockets, no real subprocesses,
-//! no I/O — every humd's `Thrum` is in-memory and every nest uses
-//! `nest::MockWorkerBee`.
-//!
-//! This crate is the foundation for the narrative test suite. It owns
-//! lifecycle (spawn/wire/shutdown) and the synthetic-nestler hooks
-//! (`nestler_send`, `nestler_recv`). The tests themselves live in the
-//! caller (smoke test here is just a vital-signs check).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,71 +5,60 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use ensemble::{hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
+use anyhow::{bail, Result};
+use ensemble::{
+    hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults,
+    PeerCapabilities,
+};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
 use humd::thrumd::Thrum;
 use tokio::sync::{mpsc, oneshot};
 
-/// Sentinel meaning "unlimited capacity" — round-trips through
-/// `set_capacity` / `wire` without overflow concerns and reads as
-/// `None` in caps advertised on the wire.
 const CAPACITY_UNLIMITED: usize = usize::MAX;
 
-/// One in-process humd inside the sim: its identity, its Thrum (so the
-/// sim can drive tones), its Ensemble (so the sim can wire peers), and
-/// the shutdown handle for the spawned task.
+const SIM_NEST_KIND: &str = "claude-repl";
+
+fn sim_caps(humd: &SimHumd) -> PeerCapabilities {
+    let cap = humd.capacity.load(Ordering::SeqCst);
+    PeerCapabilities {
+        proto_version: thrum_core::THRUM_VERSION.to_string(),
+        nests: vec![SIM_NEST_KIND.to_string()],
+        free_slots: (cap != CAPACITY_UNLIMITED).then_some(cap),
+        ..Default::default()
+    }
+}
+
+fn local_capacity(max_concurrent: usize) -> humd::LocalCapacity {
+    match max_concurrent {
+        0 => humd::LocalCapacity::OverflowAlways,
+        CAPACITY_UNLIMITED => humd::LocalCapacity::Unlimited,
+        n => humd::LocalCapacity::Slots(n),
+    }
+}
+
 pub struct SimHumd {
     pub id: Hid,
     pub thrum: Thrum,
     pub ensemble: Arc<Ensemble>,
     pub shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     pub join: Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
-    /// Per-synthetic-client outbound queues. `nestler_recv` pops from
-    /// these. Keyed by the synthetic client_id we minted on send.
-    /// Each entry is the receiver Thrum hands back from
-    /// `register_synthetic`.
     out_queues: Mutex<HashMap<String, mpsc::Receiver<Value>>>,
-    /// Per-sid mailbox: any tone whose `sid` matches drops in here.
-    /// Built lazily by `nestler_recv`; fed by a fanout task per
-    /// synthetic client.
     sid_mailboxes: Mutex<HashMap<String, mpsc::UnboundedReceiver<Value>>>,
     sid_senders: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
-    /// Max concurrent local hums this humd will accept. `usize::MAX` ==
-    /// unlimited. Read by `wire` to populate the cap advertisement and
-    /// by `spawn_humd` to set `DaemonConfig::capacity_override`.
     capacity: AtomicUsize,
-    /// Per-humd WaneTracker. Built sim-side so tests can read/write wane
-    /// values directly (`sim_humd.waneman.get("sigil")`) and so the
-    /// partition-heal reconciliation handshake can snapshot the local
-    /// state. Shared with the daemon's HumdSink via
-    /// `DaemonConfig::waneman`.
     pub waneman: Arc<WaneTracker>,
-    /// Ed25519 signing identity, when the humd was spawned via
-    /// [`Sim::spawn_humd_with_identity`]. Federation paths
-    /// ([`Sim::wire_signed`]) require this; legacy `spawn_humd(id)` calls
-    /// leave it `None` and use unsigned hellos.
     pub key: Option<Arc<HumdKey>>,
 }
 
 pub struct Sim {
     humds: RwLock<HashMap<Hid, Arc<SimHumd>>>,
-    /// Capacities set via `set_capacity` BEFORE the humd was spawned.
-    /// Drained by `spawn_humd` on entry.
     pending_capacities: RwLock<HashMap<Hid, usize>>,
-    /// In-memory link endpoints, keyed by (lower-id, higher-id). Each
-    /// entry holds the two `InMemoryEndpoint` Arcs so `partition` /
-    /// `heal` can flip them in both directions. The map is canonicalised
-    /// so `partition(a, b)` and `partition(b, a)` reach the same entry.
     links: RwLock<HashMap<(Hid, Hid), Link>>,
 }
 
-/// One sim-managed link between two humds. `a_end` is the endpoint held
-/// by humd `a` (it sends through this to reach `b`); `b_end` is the
-/// mirror. To fully partition the link we flip both — each blocks its
-/// own outbound side.
+#[derive(Clone)]
 struct Link {
     a: Hid,
     b: Hid,
@@ -89,7 +66,6 @@ struct Link {
     b_end: Arc<InMemoryEndpoint>,
 }
 
-/// Canonical key so (a, b) and (b, a) hash to the same slot.
 fn link_key(x: Hid, y: Hid) -> (Hid, Hid) {
     if x.to_hex() <= y.to_hex() { (x, y) } else { (y, x) }
 }
@@ -109,11 +85,6 @@ impl Sim {
         }
     }
 
-    /// Cap how many concurrent local hums a humd will host. `0` forces
-    /// every prompt to overflow to a peer; `usize::MAX` means unlimited
-    /// (the default). Must be called BEFORE the humd is spawned OR after
-    /// — if after, the cap takes effect on next prompt but advertised
-    /// caps to existing peers are not updated (re-wire to refresh).
     pub fn set_capacity(&self, humd: Hid, max_concurrent: usize) {
         if let Some(h) = self.humds.read().get(&humd).cloned() {
             h.capacity.store(max_concurrent, Ordering::SeqCst);
@@ -122,36 +93,21 @@ impl Sim {
         self.pending_capacities.write().insert(humd, max_concurrent);
     }
 
-    /// Spawn an in-process humd with the given id. Builds a fresh
-    /// `Thrum` and `Ensemble`, plugs both into a `humd::DaemonConfig`,
-    /// and launches `humd::run` on a task. Returns immediately. If the
-    /// caller called [`Sim::set_capacity`] for this id BEFORE the spawn,
-    /// the stored value is consumed here and threaded into the daemon
-    /// config + the `SimHumd`'s atomic.
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
         let thrum = Thrum::new();
         let ensemble = Arc::new(Ensemble::new(id));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        // Dummy paths — they're inert when bind_mcp=false and thrum_override
-        // is supplied, but DaemonConfig wants something to hold.
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
         let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
 
-        // Drain any pre-spawn capacity hint and reuse it for both the
-        // daemon's overflow policy AND the SimHumd's published atomic so
-        // `wire` and the daemon agree on the same number.
         let initial_capacity = self
             .pending_capacities
             .write()
             .remove(&id)
             .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity_override = if initial_capacity == CAPACITY_UNLIMITED {
-            None
-        } else {
-            Some(initial_capacity)
-        };
+        let capacity = local_capacity(initial_capacity);
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
@@ -165,7 +121,7 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             bind_mcp: false,
-            capacity_override,
+            capacity,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
@@ -193,14 +149,29 @@ impl Sim {
 
         self.humds.write().insert(id, sim_humd.clone());
         sim_humd
+      }
+
+    pub async fn await_ready(&self, humd: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let ready = {
+                let Some(h) = self.humds.read().get(&humd).cloned() else {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    continue;
+                };
+                h.thrum.has_sink() && h.ensemble.has_subscribers()
+            };
+            if ready {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("humd {} never became ready", humd.short())
     }
 
-    /// Wire two humds with an in-memory channel pair. Both ensembles
-    /// pick up a `PeerConnection` to the other; capabilities mirror each
-    /// side's current capacity — sim humds always claim `claude-cli`
-    /// support so overflow routing has somewhere to land, and the
-    /// advertised `free_slots` reflects the atomic set via
-    /// [`Sim::set_capacity`] (default = unlimited).
+    pub fn rewire(&self, a: Hid, b: Hid) -> Result<()> {
+        self.wire(a, b)
+    }
+
     pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
@@ -213,34 +184,14 @@ impl Sim {
             .ok_or_else(|| anyhow::anyhow!("no humd {}", b.short()))?;
         drop(humds);
 
-        let caps_for = |humd: &SimHumd| {
-            let cap = humd.capacity.load(Ordering::SeqCst);
-            let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
-            PeerCapabilities {
-                proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
-                // → nest.default = "claude-repl"). Overflow lookup keys on
-                // this nest name; mismatch with the daemon's tag breaks
-                // the test deterministically.
-                nests: vec!["claude-repl".to_string()],
-                free_slots,
-                ..Default::default()
-            }
-        };
-        let a_caps = caps_for(&ha);
-        let b_caps = caps_for(&hb);
-        // Each InMemoryEndpoint stores the *peer*'s transport-claimed
-        // caps. So a's view of b carries b_caps; b's view of a carries
-        // a_caps. The handshake's `learned_caps` will overwrite this
-        // when the hello arrives.
+        let a_caps = sim_caps(&ha);
+        let b_caps = sim_caps(&hb);
         let (a_view, b_view) = InMemoryEndpoint::pair_concrete(
             ha.id,
             b_caps.clone(),
             hb.id,
             a_caps.clone(),
         );
-        // Stash the typed handles before we hand them off as trait objects
-        // — `partition` / `heal` flip them through `set_partitioned`.
         let key = link_key(ha.id, hb.id);
         self.links.write().insert(
             key,
@@ -251,10 +202,6 @@ impl Sim {
                 b_end: b_view.clone(),
             },
         );
-        // Unsigned-hello install — each side announces its OWN caps so
-        // the other side's `peer_caps` lookup returns the real nests +
-        // free_slots. Without this, every sim humd's peers learn nothing
-        // and the overflow router has no signal.
         ha.ensemble
             .add_peer_with_caps(a_view as Arc<dyn ensemble::PeerConnection>, a_caps);
         hb.ensemble
@@ -262,12 +209,6 @@ impl Sim {
         Ok(())
     }
 
-    /// Spawn an in-process humd whose [`Hid`] is derived from a real
-    /// Ed25519 keypair. The id comes from the key — `humd_id =
-    /// sha256(pubkey)` is one-way, so the caller can't pin both. Use
-    /// this for federation tests where `wire_signed` needs a real key.
-    /// The resulting ensemble has `strict_auth=true`, so unsigned or
-    /// invalid hellos from peers are rejected.
     pub async fn spawn_humd_with_identity(&self, key: HumdKey) -> Arc<SimHumd> {
         let id = key.hid();
         let thrum = Thrum::new();
@@ -283,11 +224,7 @@ impl Sim {
             .write()
             .remove(&id)
             .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity_override = if initial_capacity == CAPACITY_UNLIMITED {
-            None
-        } else {
-            Some(initial_capacity)
-        };
+        let capacity = local_capacity(initial_capacity);
 
         let waneman = Arc::new(WaneTracker::new());
         let cfg = humd::DaemonConfig {
@@ -301,7 +238,7 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             bind_mcp: false,
-            capacity_override,
+            capacity,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
@@ -329,11 +266,6 @@ impl Sim {
         sim_humd
     }
 
-    /// Wire two humds with **signed** hellos under strict auth — the
-    /// federation path. Both humds must have been spawned via
-    /// [`Sim::spawn_humd_with_identity`]. Each side announces a signed
-    /// `chi:"hello"` and verifies the other's signature before
-    /// admitting the peer.
     pub fn wire_signed(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds.get(&a).cloned()
@@ -350,22 +282,8 @@ impl Sim {
             b.short()
         ))?;
 
-        let caps_for = |humd: &SimHumd| {
-            let cap = humd.capacity.load(Ordering::SeqCst);
-            let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
-            PeerCapabilities {
-                proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
-                // → nest.default = "claude-repl"). Overflow lookup keys on
-                // this nest name; mismatch with the daemon's tag breaks
-                // the test deterministically.
-                nests: vec!["claude-repl".to_string()],
-                free_slots,
-                ..Default::default()
-            }
-        };
-        let a_caps = caps_for(&ha);
-        let b_caps = caps_for(&hb);
+        let a_caps = sim_caps(&ha);
+        let b_caps = sim_caps(&hb);
         let (a_view, b_view) = InMemoryEndpoint::pair(
             ha.id, b_caps.clone(),
             hb.id, a_caps.clone(),
@@ -375,12 +293,6 @@ impl Sim {
         Ok(())
     }
 
-    /// Federation negative-path test fixture: install A's side honestly
-    /// under strict auth, then have C send a **tampered** hello whose
-    /// `pubkey` does NOT hash to the claimed `humd_id`. A's drainer
-    /// classifies the hello as `Invalid` and ejects the peer entry — so
-    /// A's `peers()` won't include C. Both humds must come from
-    /// [`Sim::spawn_humd_with_identity`].
     pub fn wire_signed_tampered(&self, a: Hid, c: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds.get(&a).cloned()
@@ -392,52 +304,149 @@ impl Sim {
             "humd {} has no signing key", a.short()
         ))?;
 
-        let caps_for = |humd: &SimHumd| {
-            let cap = humd.capacity.load(Ordering::SeqCst);
-            let free_slots = if cap == CAPACITY_UNLIMITED { None } else { Some(cap) };
-            PeerCapabilities {
-                proto_version: thrum_core::THRUM_VERSION.to_string(),
-                // Match humd's default hive_tag (hum_paths::config::HumConfig::default
-                // → nest.default = "claude-repl"). Overflow lookup keys on
-                // this nest name; mismatch with the daemon's tag breaks
-                // the test deterministically.
-                nests: vec!["claude-repl".to_string()],
-                free_slots,
-                ..Default::default()
-            }
-        };
-        let a_caps = caps_for(&ha);
-        let c_caps = caps_for(&hc);
+        let a_caps = sim_caps(&ha);
+        let c_caps = sim_caps(&hc);
         let (a_view, c_view) = InMemoryEndpoint::pair(
             ha.id, c_caps.clone(),
             hc.id, a_caps.clone(),
         );
 
-        // A installs honestly with strict auth.
         ha.ensemble.install(a_view, a_caps, &a_key);
 
-        // C sends a hello that LIES: the `humd_id` field claims c.id,
-        // but the `pubkey` is from a freshly-minted attacker key. The
-        // signature is valid for the attacker key over c.id, but
-        // `sha256(attacker_pubkey) != c.id`, so A's `parse_hello`
-        // returns `Invalid` → A's drainer ejects.
         let attacker_key = HumdKey::generate();
         let tampered = hello_tone(&hc.id, &attacker_key, &c_caps);
         let c_for_send = c_view.clone();
         tokio::spawn(async move {
             let _ = c_for_send.send(tampered).await;
         });
-        // C also installs its side (so its drainer exists), but the
-        // test only asserts A's view of the registry.
         hc.ensemble.install_unsigned(c_view, c_caps);
         Ok(())
     }
 
-    /// Drop the wired link between `a` and `b`. Both endpoints stop
-    /// delivering outbound tones and instead buffer them up to
-    /// `ensemble::PARTITION_BUFFER_CAP`. A subsequent [`Sim::heal`]
-    /// flushes the buffer to the peer in original order. Errors if
-    /// the pair was never wired.
+    fn link(&self, a: Hid, b: Hid) -> Result<Link> {
+        self.links
+            .read()
+            .get(&link_key(a, b))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no link {}-{}", a.short(), b.short()))
+    }
+
+    fn end_for(&self, a: Hid, b: Hid) -> Result<Arc<InMemoryEndpoint>> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a { link.a_end } else { link.b_end })
+    }
+
+    pub fn impair_dir(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.end_for(a, b)?.set_faults(faults);
+        Ok(())
+    }
+
+    pub fn stall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.stall();
+        Ok(())
+    }
+
+    pub fn unstall_dir(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.unstall();
+        Ok(())
+    }
+
+    pub fn is_stalled(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_stalled())
+    }
+
+    pub fn impair(&self, a: Hid, b: Hid, faults: LinkFaults) -> Result<()> {
+        self.impair_dir(a, b, faults.clone())?;
+        self.impair_dir(b, a, faults)
+    }
+
+    pub fn link_counters(&self, a: Hid, b: Hid) -> Result<(LinkCounters, LinkCounters)> {
+        let link = self.link(a, b)?;
+        Ok(if link.a == a {
+            (link.a_end.counters(), link.b_end.counters())
+        } else {
+            (link.b_end.counters(), link.a_end.counters())
+        })
+    }
+
+    pub fn link_counters_since(
+        &self,
+        a: Hid,
+        b: Hid,
+        base: &LinkCounters,
+    ) -> Result<LinkCounters> {
+        let (ab, _) = self.link_counters(a, b)?;
+        Ok(ab.since(base))
+    }
+
+    pub fn buffered(&self, a: Hid, b: Hid) -> Result<usize> {
+        Ok(self.end_for(a, b)?.buffered())
+    }
+
+    pub fn heal_link_faults(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.set_faults(LinkFaults::default());
+        self.end_for(b, a)?.set_faults(LinkFaults::default());
+        Ok(())
+    }
+
+    pub fn kill_peer(&self, a: Hid, b: Hid) -> Result<()> {
+        self.end_for(a, b)?.kill();
+        Ok(())
+    }
+
+    pub fn kill_link(&self, a: Hid, b: Hid) -> Result<()> {
+        self.kill_peer(a, b)?;
+        self.kill_peer(b, a)
+    }
+
+    pub fn link_killed(&self, a: Hid, b: Hid) -> Result<bool> {
+        Ok(self.end_for(a, b)?.is_killed())
+    }
+
+    pub async fn probe(&self, a: Hid, b: Hid) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&a)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
+        ens.ensemble.probe_one(&b, 0).await;
+        Ok(())
+    }
+
+    pub fn peer_liveness(
+        &self,
+        observer: Hid,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<(ensemble::Hid, ensemble::Liveness)>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens
+            .ensemble
+            .peers()
+            .into_iter()
+            .filter_map(|p| ens.ensemble.peer_liveness(&p, ttl).map(|l| (p, l)))
+            .collect())
+    }
+
+    pub fn evict_expired(&self, observer: Hid, ttl: std::time::Duration) -> Result<Vec<ensemble::Hid>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&observer)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", observer.short()))?;
+        Ok(ens.ensemble.evict_expired(ttl))
+    }
+
+    pub fn peer_count(&self, observer: Hid) -> usize {
+        self.humds.read().get(&observer).map(|h| h.ensemble.peers().len()).unwrap_or(0)
+    }
+
     pub fn partition(&self, a: Hid, b: Hid) -> Result<()> {
         let links = self.links.read();
         let link = links
@@ -448,12 +457,6 @@ impl Sim {
         Ok(())
     }
 
-    /// Restore the wired link. Flushes any buffered tones in both
-    /// directions and then emits a `chi:"wane-sync"` from each side
-    /// carrying the local `WaneTracker` snapshot — the receiver merges
-    /// by max so wane values reconverge after the partition. v0
-    /// reconciliation: just the Lamport tip exchange, no event-log
-    /// replay. Errors if the pair was never wired.
     pub async fn heal(&self, a: Hid, b: Hid) -> Result<()> {
         let (link_a, link_b) = {
             let links = self.links.read();
@@ -469,43 +472,37 @@ impl Sim {
             link.b_end.set_partitioned(false);
         }
 
-        let humds = self.humds.read();
-        let ha = humds
-            .get(&link_a)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
-        let hb = humds
-            .get(&link_b)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
-        drop(humds);
+        let (ha, hb) = {
+            let humds = self.humds.read();
+            (humds.get(&link_a).cloned(), humds.get(&link_b).cloned())
+        };
+        let ha = ha.ok_or_else(|| anyhow::anyhow!("no humd {}", link_a.short()))?;
+        let hb = hb.ok_or_else(|| anyhow::anyhow!("no humd {}", link_b.short()))?;
 
         for (from, to) in [(&ha, &hb), (&hb, &ha)] {
-            let snapshot = from.waneman.snapshot();
-            let mut snapshot_json = serde_json::Map::new();
-            for (sigil, n) in snapshot {
-                snapshot_json.insert(sigil, Value::from(n));
-            }
-            let tone = serde_json::json!({
-                "chi": "wane-sync",
-                "rid": hum_identity::HumId::mint().to_string(),
-                "from": from.id.to_hex(),
-                "to": to.id.to_hex(),
-                "snapshot": Value::Object(snapshot_json),
-            });
-            if let Err(e) = from.ensemble.route(tone).await {
+            if let Err(e) = self.wane_sync(from, to).await {
                 tracing::warn!(err = %e, "wane-sync.route.failed");
             }
         }
         Ok(())
     }
 
-    /// Attach a synthetic mock worker bee to `humd`. Registers a fresh
-    /// thrum client, hello's it as `bee:["worker"]` advertising `models`,
-    /// then spawns a task that turns every inbound chi:"prompt" into
-    /// a canned chunk sequence (text_delta "HELLO" + finish/end_turn).
-    /// Mirrors what the old in-process `nest::MockWorkerBee` did, just
-    /// over the wire so it works under the external-worker model.
+    pub async fn wane_sync(&self, from: &SimHumd, to: &SimHumd) -> Result<()> {
+        let mut snapshot_json = serde_json::Map::new();
+        for (sigil, n) in from.waneman.snapshot() {
+            snapshot_json.insert(sigil, Value::from(n));
+        }
+        let tone = serde_json::json!({
+            "chi": "wane-sync",
+            "rid": hum_identity::HumId::mint().to_string(),
+            "from": from.id.to_hex(),
+            "to": to.id.to_hex(),
+            "snapshot": Value::Object(snapshot_json),
+        });
+        from.ensemble.route(tone).await?;
+        Ok(())
+    }
+
     pub async fn attach_mock_worker(&self, humd: Hid, models: Vec<String>) -> Result<String> {
         let h = self
             .humds
@@ -513,22 +510,12 @@ impl Sim {
             .get(&humd)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
-        // Wait until humd has installed its ToneSink — spawn_humd's
-        // `tokio::spawn(humd::run)` may not have reached `set_sink` yet
-        // when this method is awaited. Without this guard the hello
-        // inject races boot and humd never registers the worker.
         for _ in 0..200 {
             if h.thrum.has_sink() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        // Hello first so humd records bee:["worker"] + models before the
-        // first prompt arrives.
-        // Use the default hive_tag as the hive name so the ensemble's
-        // overflow gossip (which keys peer capabilities by nest name)
-        // sees a matching advertised hive. Tests that exercise overflow
-        // routing rely on this match.
         let hello = serde_json::json!({
             "chi": "hello",
             "bee": ["worker"],
@@ -538,12 +525,7 @@ impl Sim {
             "models": models,
             "chis": ["hello", "prompt", "chunk", "finish"],
         });
-        // Await the hello inject directly so the worker is registered
-        // in humd's manifests by the time this method returns.
         h.thrum.inject_tone(&client_id, hello).await;
-        // Pump: on inbound prompt, inject synthetic chunks + finish
-        // back through the sink so humd's passthrough block forwards
-        // them to the originating nestler's sigil claim.
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
         tokio::spawn(async move {
@@ -566,12 +548,6 @@ impl Sim {
         Ok(client_id)
     }
 
-    /// Mock-send a tone into humd's Thrum as if from a connected
-    /// nestler. Registers a synthetic client on first call per humd,
-    /// spawns a fanout task that immediately routes incoming tones
-    /// into per-sid mailboxes, then injects the tone through the sink.
-    /// Returns the synthetic client_id so callers can correlate
-    /// replies.
     pub fn nestler_send(&self, humd: Hid, tone: Value) -> Result<String> {
         let h = self
             .humds
@@ -582,11 +558,6 @@ impl Sim {
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
 
-        // Fanout task: drain this synthetic's outbound queue and route
-        // each tone into its sid's mailbox (lazily creating mailboxes
-        // for new sids). Without this, tones sit in the mpsc receiver
-        // forever and nestler_recv only drains on entry — racing the
-        // detached inject_tone.
         let h_for_pump = h.clone();
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
@@ -611,9 +582,6 @@ impl Sim {
             }
         });
 
-        // Inject on a detached task so the sync API stays sync. The
-        // sink is async; we don't want to block the caller while a
-        // nest spawns.
         let thrum = h.thrum.clone();
         let cid = client_id.clone();
         tokio::spawn(async move {
@@ -622,9 +590,6 @@ impl Sim {
         Ok(client_id)
     }
 
-    /// Take the next tone broadcast on `humd` whose `sid` matches.
-    /// Best-effort: drains every synthetic out_queue into per-sid
-    /// mailboxes, then waits up to `timeout` for the named sid.
     pub async fn nestler_recv(
         &self,
         humd: Hid,
@@ -633,9 +598,6 @@ impl Sim {
     ) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
 
-        // Bind a mailbox sender for this sid if absent. We pump every
-        // synthetic out_queue's items in here, keyed by their `sid`
-        // field. Tones without a sid get dropped.
         {
             let mut senders = h.sid_senders.lock();
             let mut mailboxes = h.sid_mailboxes.lock();
@@ -646,10 +608,7 @@ impl Sim {
             }
         }
 
-        // Drain all out_queues into the per-sid mailboxes. We move
-        // each receiver out, drain non-blockingly, then put it back.
-        // This keeps the per-humd state simple — no long-lived fanout
-        // task per synthetic client.
+        {
         let mut queues = h.out_queues.lock();
         for (_cid, rx) in queues.iter_mut() {
             while let Ok(tone) = rx.try_recv() {
@@ -666,8 +625,6 @@ impl Sim {
                     let _ = tx.send(tone);
                 } else {
                     drop(senders);
-                    // Lazily mint a mailbox so future recv calls for
-                    // this sid see the message.
                     let (tx, rx2) = mpsc::unbounded_channel::<Value>();
                     let _ = tx.send(tone);
                     h.sid_senders.lock().insert(tone_sid.clone(), tx);
@@ -675,27 +632,14 @@ impl Sim {
                 }
             }
         }
-        drop(queues);
+        }
 
-        // Now await the named sid's mailbox.
         let mut rx_opt = h.sid_mailboxes.lock().remove(sid)?;
         let result = tokio::time::timeout(timeout, rx_opt.recv()).await.ok().flatten();
-        // Put the mailbox back so subsequent recvs can use it.
         h.sid_mailboxes.lock().insert(sid.to_string(), rx_opt);
         result
     }
 
-    /// Attach a mock forager-hive bee that advertises a set of tool
-    /// names and dispatches each `chi:"tool-call"` it receives back
-    /// to humd as a `chi:"tool-result"` carrying the response text
-    /// produced by the supplied closure.
-    ///
-    /// Mirrors `attach_mock_worker` but on the forager side — bee
-    /// declares `bee: ["forager"]`, hive name `hive`, and a `tools[]`
-    /// array of `{name, description, inputSchema}` so humd's hello
-    /// parser populates the manifest. After this method returns,
-    /// the forager is registered and humd's `chi:"tool-call"` router
-    /// will route by `toolName` here.
     pub async fn attach_mock_forager<F>(
         &self,
         humd: Hid,
@@ -760,11 +704,6 @@ impl Sim {
         Ok(client_id)
     }
 
-    /// Mock-attach a hearOnly observer nestler on `observer_humd` to
-    /// the hum `sid` hosted on `host_humd`. Returns the synthetic client
-    /// id so the caller can drain replies via `nestler_recv`. Sends a
-    /// `chi:"attach"` tone whose `to:` is the host and whose `from:` is
-    /// the observer — the standard cross-humd routing path delivers it.
     pub fn attach_observer(
         &self,
         observer_humd: Hid,
@@ -784,9 +723,6 @@ impl Sim {
         )
     }
 
-    /// Tap the next tone arriving from a peer (via the ensemble) at
-    /// `humd`. Returns `None` on timeout. Useful for tests that prove
-    /// pure routing — no nest, no sid claim, no broadcast required.
     pub async fn humd_peer_tap(&self, humd: Hid, timeout: Duration) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
         let mut rx = h.ensemble.subscribe();
@@ -796,7 +732,144 @@ impl Sim {
         }
     }
 
-    /// Shutdown all humds and drain their join handles.
+    pub async fn await_handshake(&self, a: Hid, b: Hid) -> Result<()> {
+        for _ in 0..200 {
+            let done = {
+                let (ha, hb) = {
+                    let humds = self.humds.read();
+                    (humds.get(&a).cloned(), humds.get(&b).cloned())
+                };
+                match (ha, hb) {
+                    (Some(ha), Some(hb)) => {
+                        ha.ensemble.handshake_done(&b) && hb.ensemble.handshake_done(&a)
+                    }
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                }
+            };
+            if done {
+                let hb = self.humds.read().get(&b).cloned().expect("checked above");
+                let mut rx = hb.ensemble.subscribe();
+                while rx.try_recv().is_ok() {}
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        bail!("{}-{} handshake timed out", a.short(), b.short())
+    }
+
+    pub fn humd_peer_sub(&self, humd: Hid) -> Option<ensemble::InboxSub> {
+        Some(self.humds.read().get(&humd)?.ensemble.subscribe())
+    }
+
+    pub async fn collect_rids(
+        rx: &mut ensemble::InboxSub,
+        want: usize,
+        window: Duration,
+    ) -> Vec<String> {
+        let mut out = Vec::with_capacity(want);
+        let deadline = tokio::time::Instant::now() + window;
+        while out.len() < want {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(tone)) => {
+                    if let Some(rid) = tone["rid"].as_str() {
+                        out.push(rid.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    pub async fn nestler_send_ordered(&self, humd: Hid, tone: Value) -> Result<String> {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        let cid = hum_identity::HumId::mint().to_string();
+        let _ = h.thrum.register_synthetic(cid.clone());
+        h.thrum.inject_tone(&cid, tone).await;
+        Ok(cid)
+    }
+
+    pub async fn publish(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish(topic, payload).await;
+        Ok(())
+    }
+
+    pub async fn publish_with_dusk(
+        &self,
+        from: Hid,
+        topic: &str,
+        payload: serde_json::Value,
+        dusk_ms: i64,
+    ) -> Result<()> {
+        let ens = self
+            .humds
+            .read()
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
+        ens.ensemble.publish_with_dusk(topic, payload, Some(dusk_ms)).await;
+        Ok(())
+    }
+
+    pub fn subscribe_topic(
+        &self,
+        humd: Hid,
+        topic: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
+        let ens = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        Ok(ens.ensemble.subscribe_topic(topic))
+    }
+
+    pub fn expired_dusk(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map_or(0, |h| h.ensemble.expired_dusk())
+    }
+
+    pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
+        for i in 0..n {
+            let tone = serde_json::json!({
+                "chi": "perf-mark",
+                "rid": format!("{tag}-{i}"),
+                "to": to.to_hex(),
+                "from": from.to_hex(),
+                "mark": tag,
+            });
+            self.nestler_send_ordered(from, tone).await?;
+        }
+        Ok(())
+    }
+
+    pub fn rids(tones: &[Value]) -> Vec<String> {
+        tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+    }
+
+    pub fn ensemble_dropped(&self, humd: Hid) -> u64 {
+        self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
+    }
+
     pub async fn shutdown(self) {
         let humds: Vec<Arc<SimHumd>> = self.humds.read().values().cloned().collect();
         for h in &humds {
@@ -813,6 +886,5 @@ impl Sim {
     }
 }
 
-// Silence the "field never read" warning for penny_path placeholder.
 #[allow(dead_code)]
 fn _keep_path_alive(_p: PathBuf) {}

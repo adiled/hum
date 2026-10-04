@@ -32,6 +32,33 @@ use crate::peers::PeerConfig;
 /// Open one TCP connection per bootstrap peer entry, install signed.
 /// Entries without a `tcp:` hint are skipped — those are for other
 /// transports.
+pub(crate) async fn dial_and_install_peer(
+    ens: &Arc<Ensemble>,
+    key: &HumdKey,
+    peer: &PeerConfig,
+    my_caps: &PeerCapabilities,
+) -> bool {
+    let Some(addr) = peer.hints.iter().find_map(|h| h.strip_prefix("tcp:")) else {
+        trace!(peer = %peer.humd_id.short(), "peer.tcp.skip.no_hint");
+        return false;
+    };
+    let mut peer_addr = HumdAddr::new(peer.humd_id);
+    for h in &peer.hints {
+        peer_addr.hints.push(h.clone());
+    }
+    match TcpEndpoint::connect(addr, peer_addr, PeerCapabilities::default()).await {
+        Ok(conn) => {
+            info!(peer = %peer.humd_id.short(), addr, "peer.tcp.dial.ok");
+            ens.install(conn as Arc<dyn PeerConnection>, my_caps.clone(), key);
+            true
+        }
+        Err(e) => {
+            warn!(peer = %peer.humd_id.short(), addr, err = %e, "peer.tcp.dial.failed");
+            false
+        }
+    }
+}
+
 pub(crate) async fn dial_all(
     ens: &Arc<Ensemble>,
     key: &HumdKey,
@@ -39,23 +66,7 @@ pub(crate) async fn dial_all(
     my_caps: &PeerCapabilities,
 ) {
     for peer in peers {
-        let Some(addr) = peer.hints.iter().find_map(|h| h.strip_prefix("tcp:")) else {
-            trace!(peer = %peer.humd_id.short(), "peer.tcp.skip.no_hint");
-            continue;
-        };
-        let mut peer_addr = HumdAddr::new(peer.humd_id);
-        for h in &peer.hints {
-            peer_addr.hints.push(h.clone());
-        }
-        match TcpEndpoint::connect(addr, peer_addr, PeerCapabilities::default()).await {
-            Ok(conn) => {
-                info!(peer = %peer.humd_id.short(), addr, "peer.tcp.dial.ok");
-                ens.install(conn as Arc<dyn PeerConnection>, my_caps.clone(), key);
-            }
-            Err(e) => {
-                warn!(peer = %peer.humd_id.short(), addr, err = %e, "peer.tcp.dial.failed");
-            }
-        }
+        dial_and_install_peer(ens, key, peer, my_caps).await;
     }
 }
 

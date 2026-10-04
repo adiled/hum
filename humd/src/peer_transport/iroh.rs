@@ -24,10 +24,11 @@
 //! Relay is disabled — this is the loopback/LAN/direct path. WAN over
 //! a relay mesh lands later via a sibling bind path on this module.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use ensemble::{Ensemble, HumdAddr, HumdKey, IrohTransport, PeerCapabilities, PeerConnection};
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 use crate::peers::PeerConfig;
 
@@ -37,15 +38,60 @@ use crate::peers::PeerConfig;
 pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, Vec<String>)> {
     let transport = IrohTransport::bind_direct_with_key(humd_key).await?;
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
-    let sockets = transport.endpoint().bound_sockets();
-    info!(node_id = %&node_id_hex[..16], socket_count = sockets.len(), "peer.iroh.bound");
-
-    let mut hints = Vec::with_capacity(1 + sockets.len());
-    hints.push(format!("iroh:{node_id_hex}"));
-    for s in &sockets {
-        hints.push(format!("iroh-ip:{s}"));
-    }
+    let discovered: Vec<SocketAddr> = transport
+        .endpoint()
+        .addr()
+        .ip_addrs()
+        .copied()
+        .collect();
+    let hints = dial_hints(&node_id_hex, &discovered);
+    info!(
+        node_id = %&node_id_hex[..16],
+        socket_count = hints.len() - 1,
+        "peer.iroh.bound"
+    );
     Ok((transport, hints))
+}
+
+fn dial_hints(node_id_hex: &str, addrs: &[SocketAddr]) -> Vec<String> {
+    let routable: Vec<String> = addrs
+        .iter()
+        .filter(|addr| !addr.ip().is_unspecified())
+        .map(|addr| format!("iroh-ip:{addr}"))
+        .collect();
+    let mut hints = Vec::with_capacity(1 + routable.len());
+    hints.push(format!("iroh:{node_id_hex}"));
+    hints.extend(routable);
+    hints
+}
+
+pub(crate) async fn dial_and_install_peer(
+    transport: &IrohTransport,
+    ens: &Arc<Ensemble>,
+    key: &HumdKey,
+    peer: &PeerConfig,
+    my_caps: &PeerCapabilities,
+) -> bool {
+    use ensemble::Transport as _;
+
+    if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
+        return false;
+    }
+    let mut peer_addr = HumdAddr::new(peer.humd_id);
+    for h in &peer.hints {
+        peer_addr.hints.push(h.clone());
+    }
+    match transport.connect(&peer_addr).await {
+        Ok(conn) => {
+            info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
+            ens.install(conn, my_caps.clone(), key);
+            true
+        }
+        Err(e) => {
+            warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
+            false
+        }
+    }
 }
 
 /// Open one iroh connection per bootstrap peer entry, install signed.
@@ -58,26 +104,8 @@ pub(crate) async fn dial_all(
     peers: &[PeerConfig],
     my_caps: &PeerCapabilities,
 ) {
-    use ensemble::Transport as _;
-
     for peer in peers {
-        if !peer.hints.iter().any(|h| h.starts_with(ensemble::iroh::IROH_HINT)) {
-            trace!(peer = %peer.humd_id.short(), "peer.iroh.skip.no_hint");
-            continue;
-        }
-        let mut peer_addr = HumdAddr::new(peer.humd_id);
-        for h in &peer.hints {
-            peer_addr.hints.push(h.clone());
-        }
-        match transport.connect(&peer_addr).await {
-            Ok(conn) => {
-                info!(peer = %peer.humd_id.short(), "peer.iroh.dial.ok");
-                ens.install(conn, my_caps.clone(), key);
-            }
-            Err(e) => {
-                warn!(peer = %peer.humd_id.short(), err = %e, "peer.iroh.dial.failed");
-            }
-        }
+        dial_and_install_peer(transport, ens, key, peer, my_caps).await;
     }
 }
 
@@ -109,6 +137,18 @@ pub(crate) fn spawn_listener(
 
 #[cfg(test)]
 mod tests {
+    use super::dial_hints;
+
+    #[test]
+    fn wildcard_binds_are_never_advertised_as_dial_targets() {
+        let routable: SocketAddr = "10.0.0.5:4556".parse().unwrap();
+        let wildcard: SocketAddr = "0.0.0.0:4556".parse().unwrap();
+        assert_eq!(
+            dial_hints("node", &[routable, wildcard]),
+            vec!["iroh:node".to_string(), "iroh-ip:10.0.0.5:4556".to_string()],
+        );
+    }
+
     use super::*;
     use ensemble::{Ensemble, HumdKey};
     use std::time::Duration;
@@ -118,6 +158,14 @@ mod tests {
     /// each other in their peer registry after the handshake.
     #[tokio::test]
     async fn dial_then_accept_meet_via_signed_hello() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init();
+
         let a_key = Arc::new(HumdKey::generate());
         let b_key = Arc::new(HumdKey::generate());
         let a_id = a_key.hid();

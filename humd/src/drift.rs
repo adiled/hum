@@ -319,7 +319,9 @@ fn prune_dir(dir: &Path, days: u32) -> Result<usize> {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
         if modified < cutoff {
             if let Err(e) = fs::remove_file(&path) {
                 tracing::warn!(error = %e, path = %path.display(), "drift.prune.unlink.failed");
@@ -360,12 +362,14 @@ mod tests {
     use serde_json::json;
     use std::env;
 
-    fn tmp() -> PathBuf {
+    fn unique_tmp_dir() -> PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let mut p = env::temp_dir();
         p.push(format!(
-            "drift-test-{}-{}",
+            "drift-test-{}-{}-{}",
             std::process::id(),
-            now_ms()
+            now_ms(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         p
     }
@@ -405,7 +409,7 @@ mod tests {
 
     #[test]
     fn flag_persists_through_wilt() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "open");
         d.flag("s1", "warm", json!(true));
@@ -421,7 +425,7 @@ mod tests {
 
     #[test]
     fn prune_keeps_fresh_files() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "x");
         d.wilt("s1");
@@ -433,7 +437,7 @@ mod tests {
 
     #[test]
     fn persist_today_writes_active_blooms() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "open");
         d.persist_today().unwrap();

@@ -1,12 +1,3 @@
-//! humd — the hum daemon as a library.
-//!
-//! `cargo run -p humd` is the binary at `src/main.rs`; this lib is the
-//! reusable boot path. Tests, simulators (`p2p-sim`), and embedders all
-//! call [`run`] with a [`DaemonConfig`] instead of duplicating the wiring.
-//!
-//! Boot order is fixed: state crates → trackers → nest pool → thrum →
-//! MCP → wait for shutdown. Tracing setup is the binary's job; the lib
-//! never touches the global subscriber.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,30 +16,24 @@ mod drone;
 mod drift;
 mod identity;
 mod peer_transport;
-mod peers;
+pub mod peers;
 mod penny;
+pub mod redial;
+pub mod supervisor;
 pub mod thrumd;
 pub use identity::{key_path, load_or_mint_key, read_key};
 pub use peers::{peers_path, PeerConfig};
 
-/// Per-sid observer roster. Maps a hum's `sid` to a list of peer humds
-/// that have asked (via `chi:"attach"`) to receive a copy of every
-/// outbound reply tone. Shared between the HumdSink (writer on attach /
-/// detach) and every NestListener serving that sid (reader on each
-/// reply).
 type Observers = Arc<RwLock<HashMap<String, Vec<Hid>>>>;
 
-// ── Public config ──────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocalCapacity {
+    #[default]
+    Unlimited,
+    OverflowAlways,
+    Slots(usize),
+}
 
-/// Where the daemon listens, and how it should pace itself. Construct
-/// via [`DaemonConfig::from_env`] for production defaults or build one
-/// by hand for tests / simulators.
-///
-/// humd is a router: worker bees register over thrum via `chi:"hello"`
-/// with `bee: ["worker"]`. There's no in-process worker hosting anymore.
-/// The sim hooks layer on top: `thrum_override` (caller-owned Thrum,
-/// skip the socket listener), `ensemble` (peer registry for `to:`-
-/// addressed tones), `bind_mcp` (skip the HTTP MCP listener).
 pub struct DaemonConfig {
     pub thrum_path: PathBuf,
     pub http_path: PathBuf,
@@ -57,49 +42,24 @@ pub struct DaemonConfig {
     pub hum_cfg: hum_paths::config::HumConfig,
     pub cli_path: String,
     pub penny_persist_interval: Duration,
-    /// When set, sim provides the Thrum and the daemon does NOT bind a
-    /// unix socket. When None, humd builds its own Thrum and binds.
     pub thrum_override: Option<Thrum>,
-    /// When set, daemon installs this Ensemble for inter-humd routing.
-    /// When None, the daemon runs without a peer set (legacy single-host).
     pub ensemble: Option<Arc<Ensemble>>,
-    /// When false, skip mcp_serve too (sim doesn't need a live HTTP MCP).
     pub bind_mcp: bool,
-    /// Cap on concurrent local hums. `Some(0)` means "always overflow to a
-    /// peer"; `None` means unbounded (legacy behaviour). Used by the
-    /// overflow-routing policy in the prompt arm of [`HumdSink::hear`].
-    pub capacity_override: Option<usize>,
-    /// Caller-owned WaneTracker. Sim supplies one so it can read/write
-    /// wane values from the test driver. Production leaves this None and
-    /// the daemon mints its own. Either way the sink uses the same
-    /// shared Arc.
+    pub capacity: LocalCapacity,
     pub waneman: Option<Arc<WaneTracker>>,
-    /// Persistent humd identity. `from_env` loads (or mints + persists)
-    /// from `$XDG_STATE_HOME/hum/humd.key`. Tests / sims leave this None
-    /// and continue to generate ephemeral keys per spawn.
     pub humd_key: Option<Arc<HumdKey>>,
-    /// Peers to dial on boot. `from_env` reads
-    /// `$XDG_CONFIG_HOME/hum/peers.json`; missing file = empty list.
     pub bootstrap_peers: Vec<PeerConfig>,
-    /// thehum persistence config (retention, snapshot cadence, encryption).
-    /// `from_env` defaults to `thehum::Config::default()` unless hum.json
-    /// carries a `thehum` section.
     pub thehum_cfg: Option<thehum::Config>,
 }
 
 impl DaemonConfig {
     pub fn from_env() -> Self {
-        // Canonical thrum socket path — honors HUM_THRUM_SOCK (and the
-        // legacy HUM_SOCKET fallback). thrumd owns the source of truth;
-        // humd just reuses it so binary + protocol agree.
         let thrum_path = thrumd::default_socket_path();
         let http_path = hum_paths::http_sock();
         let mcp_port: u16 = std::env::var("HUM_MCP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(29147);
-        // Identity is not fatal — if the state dir is unwritable we log
-        // and run without a persisted key (legacy single-host).
         let humd_key = match identity::load_or_mint_key() {
             Ok(k) => Some(Arc::new(k)),
             Err(e) => {
@@ -119,7 +79,7 @@ impl DaemonConfig {
             thrum_override: None,
             ensemble: None,
             bind_mcp: true,
-            capacity_override: None,
+            capacity: LocalCapacity::default(),
             waneman: None,
             humd_key,
             bootstrap_peers,
@@ -128,16 +88,6 @@ impl DaemonConfig {
     }
 }
 
-
-
-// ── Public entry point ─────────────────────────────────────────────────────
-
-/// Build a daemon and run until `shutdown` resolves.
-///
-/// `shutdown` is parameterized so the binary can plug ctrl-c/SIGTERM
-/// while the simulator can plug an in-memory cancel token. The function
-/// returns once the shutdown future resolves AND best-effort state has
-/// been flushed.
 pub async fn run<F>(mut cfg: DaemonConfig, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send,
@@ -187,10 +137,6 @@ where
         info!(author = %t.author_hid(), dir = %t.dir().display(), "thehum.opened");
     }
 
-    // Bring up an Ensemble from the persisted identity when the caller
-    // didn't supply one. Sim provides its own pre-wired Ensemble (with
-    // InMemoryEndpoints); the production binary lets us mint one here so
-    // peer dialling has something to install into.
     let ensemble_opt: Option<Arc<Ensemble>> = match cfg.ensemble.clone() {
         Some(e) => Some(e),
         None => cfg.humd_key.as_ref().map(|k| {
@@ -200,25 +146,23 @@ where
         }),
     };
 
-    // Bring up the transport surfaces — iroh always, tcp when
-    // configured — dial peers across both, detach accept loops. Each
-    // accepted/dialed connection lands at Ensemble::install (signed)
-    // so the peer registry stays transport-agnostic. Failures are
-    // logged and non-fatal.
     let mut peer_reach: Vec<String> = Vec::new();
+    let mut supervisor: Option<supervisor::Supervisor> = None;
     if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
         let my_caps = my_capabilities(&cfg);
+        let mut iroh_transport: Option<Arc<ensemble::IrohTransport>> = None;
 
         match peer_transport::iroh::bind(key).await {
             Ok((transport, hints)) => {
                 let transport = Arc::new(transport);
                 peer_transport::iroh::dial_all(&transport, ens, key, &cfg.bootstrap_peers, &my_caps).await;
                 peer_transport::iroh::spawn_listener(
-                    transport,
+                    transport.clone(),
                     ens.clone(),
                     key.clone(),
                     my_caps.clone(),
                 );
+                iroh_transport = Some(transport);
                 peer_reach.extend(hints);
             }
             Err(e) => warn!(err = %e, "peer.iroh.bind_failed"),
@@ -232,6 +176,17 @@ where
         }
 
         peer_transport::tcp::dial_all(ens, key, &cfg.bootstrap_peers, &my_caps).await;
+
+        if !cfg.bootstrap_peers.is_empty() {
+            supervisor = Some(supervisor::Supervisor::new(
+                ens.clone(),
+                key.clone(),
+                Arc::new(cfg.bootstrap_peers.clone()),
+                my_caps,
+                iroh_transport,
+                supervisor::LivenessConfig::default(),
+            ));
+        }
     } else if !cfg.bootstrap_peers.is_empty() {
         warn!(
             count = cfg.bootstrap_peers.len(),
@@ -239,17 +194,12 @@ where
         );
     }
 
-    // Stash so the rest of run() keeps working off the cfg-or-minted
-    // ensemble instead of just cfg.ensemble.
     let ensemble_for_sink = ensemble_opt.clone();
 
-    // humd no longer hosts an in-process nest pool — worker bees
-    // register over thrum as separate processes and own their own
-    // MCP servers (when their compute speaks MCP at all). humd
-    // doesn't bind an MCP HTTP endpoint anymore.
+    if let Some(sup) = supervisor {
+        tokio::spawn(sup.run());
+    }
 
-    // Caller-owned Thrum (sim) vs daemon-owned (production). When the
-    // caller owns it, we install our sink onto theirs and never bind.
     let is_embedded = cfg.thrum_override.is_some();
     let (thrum, bind_thrum) = match cfg.thrum_override.take() {
         Some(t) => (t, false),
@@ -316,7 +266,7 @@ where
         waneman: waneman.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
-        capacity_override: cfg.capacity_override,
+        capacity: cfg.capacity,
         hive_tag: hive_tag.clone(),
         manifests: manifests.clone(),
         bees_snapshot_path: bees_snapshot_path(),
@@ -361,10 +311,6 @@ where
         trace!("thrum.override.installed");
     }
 
-    // Ensemble inbound pump — every tone arriving from a peer humd is
-    // injected back through our own Thrum's sink as if it had arrived
-    // from a special "ensemble" client. This is how `to:`-routed tones
-    // from peer-A reach peer-B's HumdSink dispatch.
     if let Some(ens) = ensemble_for_sink.clone() {
         let mut rx = ens.subscribe();
         let thrum_for_pump = thrum.clone();
@@ -418,11 +364,6 @@ where
         });
     }
 
-    // Auto-update — in-process daily check. Skipped under sim/test
-    // (caller-owned thrum means we're embedded in someone else's
-    // runtime, not a real boot). The job shells to curl + the
-    // canonical installer; the installer rebuilds humd and bounces the
-    // service, which kills this task naturally.
     if !is_embedded {
         tokio::spawn(autoupdate_loop());
     }
@@ -437,15 +378,7 @@ where
     Ok(())
 }
 
-/// Daily self-update — once every 24h, compare the running version to
-/// the upstream release and re-run the canonical installer if newer.
-///
-/// Single retry on transient network failure (15-min retry, then back
-/// to the daily cadence). Errors are logged but never fatal — a humd
-/// that can't reach github should keep humming.
 async fn autoupdate_loop() {
-    // Initial sleep — avoid update storm at boot if the user just
-    // ran `./install` (which already pulled the latest).
     tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -462,8 +395,6 @@ async fn autoupdate_loop() {
     }
 }
 
-/// One iteration of the auto-update check. Returns Ok(true) if the
-/// installer ran, Ok(false) if we're already up to date.
 async fn autoupdate_check_once() -> Result<bool> {
     let local = env!("CARGO_PKG_VERSION").to_string();
     let body = tokio::process::Command::new("curl")
@@ -478,8 +409,6 @@ async fn autoupdate_check_once() -> Result<bool> {
         anyhow::bail!("github releases fetch failed: {}", body.status);
     }
     let body = String::from_utf8(body.stdout)?;
-    // Inline `"tag_name":"vX.Y.Z"` lookup — avoids dragging a JSON
-    // parser into this hot path for one field.
     let upstream = parse_tag_name(&body).ok_or_else(|| anyhow::anyhow!("no tag_name in response"))?;
     let upstream_trim = upstream.trim_start_matches('v');
     if upstream_trim == local {
@@ -506,78 +435,24 @@ fn parse_tag_name(body: &str) -> Option<String> {
     Some(rest[q1..q1 + q2].to_string())
 }
 
-// ── ToneSink — the big chi dispatch ────────────────────────────────────────
-
 struct HumdSink {
     thrum: Thrum,
     waneman: Arc<WaneTracker>,
-    /// When present, tones with a `to:` hex addressed to a *different*
-    /// humd are routed through here instead of being dispatched locally.
     ensemble: Option<Arc<Ensemble>>,
-    /// Per-sid roster of peer humds tapping us in `hearOnly` mode. Read
-    /// by every NestListener on each reply; written here on `attach` /
-    /// `detach`.
     observers: Observers,
-    /// Concurrent-hum cap. `Some(0)` triggers overflow routing in the
-    /// prompt arm — local prompts get forwarded to a peer with spare
-    /// capacity instead of awakening here. `None` = unbounded.
-    capacity_override: Option<usize>,
-    /// Routing tag used in thrum_broadcast + sigil for all reply tones.
-    /// Comes from cfg.hum_cfg.nest.default so the daemon never hardcodes
-    /// a specific hive name; whichever hive is configured is the tag.
+    capacity: LocalCapacity,
     hive_tag: String,
-    /// Live registry of every chi:"hello" we've received. Keyed by
-    /// thrum client_id. Routing scans this for bee/models matches.
     manifests: Manifests,
-    /// Where to mirror `manifests` as JSON so the `hum` CLI can render
-    /// full bee info (hid, tools, models, source) without an RPC.
-    /// Rewritten on every register + disconnect.
     bees_snapshot_path: std::path::PathBuf,
-    /// Map sid → originating peer humd. Populated in the prompt arm
-    /// when a prompt arrives via the ensemble pump (client_id ==
-    /// "ensemble" and the tone carries a peer `from` humd id). Read
-    /// in the passthrough block: chi:"chunk"/"finish" tones whose
-    /// sid is in this map get stamped `to: <origin>` and routed via
-    /// the ensemble back to the originating humd.
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
-    /// Map callId → originator client_id for tool-calls routed to a
-    /// forager hive. Populated when humd intercepts a worker's
-    /// chi:"tool-call" whose toolName matches an advertised tool;
-    /// consumed when the forager's chi:"tool-result" lands so humd
-    /// can return the result to the original worker.
     tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
-    /// Map sid → fs-hive humd (the Hid extracted from the prompt's
-    /// `cwd` field when it carried a `hum://<host>/<path>` URI).
-    /// Tool-call interception consults this before falling back to
-    /// the local forager scan — if the URI pinned a peer humd as
-    /// the fs host, the tone routes via ensemble instead.
     sid_fs: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
-    /// Asker-side alias resolver: peers.json `alias` field → Hid.
-    /// Used by the prompt arm's URI canonicalization step. Empty
-    /// when no peers carry aliases (every URI host then must be a
-    /// shortid / full hid form).
     alias_resolver: Arc<PeersAliasResolver>,
-    /// callId → peer humd that holds the originating worker for
-    /// cross-humd tool-call dispatch. Populated when humd-S stamps
-    /// `to:<fs_hid>` on a chi:"tool-call" and routes via ensemble;
-    /// consumed when the matching chi:"tool-result" arrives back
-    /// from humd-W so humd-S can forward to the worker. Distinct
-    /// from `tool_routes` (which maps callId → local worker client
-    /// id when the forager was colocated).
     tool_routes_peer: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
-    /// Inverse map for the forager-host side (humd-W). Records the
-    /// `from` peer for each inbound cross-humd chi:"tool-call" so
-    /// the forager's outbound chi:"tool-result" can be stamped
-    /// `to:<origin-peer>` and routed back through the ensemble.
     incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
-    /// Per-humd authored chi log. Every tone seen by `hear()` lands
-    /// here before dispatch. None in tests/sims without a humd_key.
     thehum: Option<Arc<thehum::TheHum>>,
 }
 
-/// AliasResolver backed by the bootstrap peers.json `alias` field.
-/// Other resolvers (ENS / HNS / DID / libp2p kademlia) chain on
-/// top via [`ensemble::AliasResolver`] — peers.json is the v0 floor.
 pub struct PeersAliasResolver {
     by_alias: HashMap<String, ensemble::Hid>,
 }
@@ -600,36 +475,13 @@ impl ensemble::AliasResolver for PeersAliasResolver {
     }
 }
 
-/// Live registry of every client that handshook via `chi:"hello"`.
-/// Keyed by thrum client_id. The manifest carries `bee` kinds,
-/// advertised models, propensity, chi vocabulary, etc. — humd queries
-/// this to route prompts to worker bees, to identify which clients are
-/// workers vs foragers, and to fan out gossip on connect.
-///
-/// Volatile: cleared on humd restart; entries pruned on disconnect.
-/// Same data shape ensemble gossips, just held in-process for
-/// routing decisions humd makes locally.
 type Manifests = Arc<parking_lot::RwLock<HashMap<String, ensemble::HiveManifest>>>;
 
 fn bees_snapshot_path() -> std::path::PathBuf {
     hum_paths::bees_snapshot()
 }
 
-// humd doesn't host an MCP server — tool-call routing is purely
-// thrum-native: workers emit chi:"tool-call", humd intercepts in
-// the worker-passthrough block and routes to the matching forager
-// hive (local or peer). Worker bees expose their own MCP listener
-// for compute that needs one.
-
-// (NestListener removed — worker bees emit chi:"chunk"/"finish"
-// directly over thrum from their own process. humd just routes; see
-// the passthrough block in ToneSink::hear that re-broadcasts those
-// tones on the sigil sid claimed by the originating forager bee.)
-
 impl HumdSink {
-    /// Mirror the live manifest registry to `bees_snapshot_path` as a
-    /// JSON object (client_id → manifest) so the `hum` CLI can show full
-    /// bee info offline. Atomic write; best-effort (logs on failure).
     fn snapshot_bees(&self) {
         let json = {
             let m = self.manifests.read();
@@ -646,17 +498,9 @@ impl HumdSink {
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
-    /// A bee's thrum connection dropped. Evict its manifest so its
-    /// tools stop being advertised immediately, and drop any pending
-    /// tool routes that pointed back at it. This is the durable cure
-    /// for ghost manifests: dedup no longer depends on a same-hid
-    /// re-hello, so a bee with a missing/stub hid can't pile up stale
-    /// registrations across reconnects.
     async fn forget(&self, client_id: &str) {
         if client_id == "ensemble" { return; }
         let had_manifest = self.manifests.write().remove(client_id).is_some();
-        // Pending tool-call routes whose originator was this client are
-        // now undeliverable — drop them so the table doesn't grow.
         self.tool_routes.write().retain(|_, originator| originator != client_id);
         if had_manifest {
             trace!(client_id, "manifest.evict.disconnect");
@@ -671,9 +515,6 @@ impl ToneSink for HumdSink {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
 
-        // Authored chi log: every locally-originated tone is appended
-        // before dispatch. Ensemble-injected tones are peers' authored
-        // events and are never re-attributed here.
         if let Some(thehum) = self.thehum.as_ref() {
             if client_id != "ensemble" {
                 let sid = tone.get("sid").and_then(Value::as_str).and_then(|s| {
@@ -689,19 +530,6 @@ impl ToneSink for HumdSink {
             }
         }
 
-        // Worker passthrough: any output tone (chunk / finish / error /
-        // tool-call / tool-info / session-ready) coming from a client
-        // whose manifest declares `bee` containing "worker" gets
-        // re-broadcast on the sid sigil so the originating forager
-        // receives it. Hello arrives from the worker but is handled
-        // normally below.
-        // Inbound tool-call from a peer humd (cross-humd routing): a
-        // remote worker emitted chi:tool-call addressed at our local
-        // forager hive. Dispatch to the matching forager by toolName.
-        // Trust gate: the ensemble pump only delivers tones from
-        // wire-authenticated peers, so reaching this arm means the
-        // sender already passed handshake. No per-call signature
-        // verification yet (T2+ hardening).
         if client_id == "ensemble" && matches!(chi, Some(Chi::ToolCall)) {
             let tool_name = tone.get("toolName").and_then(Value::as_str)
                 .or_else(|| tone.get("name").and_then(Value::as_str))
@@ -715,8 +543,6 @@ impl ToneSink for HumdSink {
                     }).map(|(cid, _)| cid.clone())
                 };
                 if let Some(fcid) = forager_cid {
-                    // Remember the origin peer so the forager's
-                    // outbound chi:tool-result can route back to it.
                     let call_id = tone.get("callId").and_then(Value::as_str)
                         .unwrap_or("").to_string();
                     let from_peer = tone.get("from").and_then(Value::as_str)
@@ -746,10 +572,6 @@ impl ToneSink for HumdSink {
                 m.get(client_id).map(|man| man.bee.clone()).unwrap_or_default()
             };
             let is_worker = bee_kind.iter().any(|b| b == "worker");
-            // chi:"tool-call" from any sender — workers emit them
-            // mid-turn, askers/foragers fire them to consume each
-            // others' surfaces. The routing is the same: find a
-            // forager whose tools[] advertises this toolName.
             let _ = &is_worker;
             if !is_worker
                 && matches!(chi, Some(Chi::ToolCall))
@@ -782,28 +604,9 @@ impl ToneSink for HumdSink {
                 }
             }
             if is_worker {
-                // tool-call interception. Three-tier routing:
-                //
-                // 1. Pinned fs-hive (cross-humd): if the prompt's
-                //    cwd was a `hum://<host>/<path>` URI naming a
-                //    peer humd, that pin lives in `sid_fs`. Stamp
-                //    `to:<fs_hid>` and route via ensemble. Record
-                //    callId → fs_hid in `tool_routes_peer` so the
-                //    result returns through humd-W's ensemble pump.
-                // 2. Local forager match: pre-existing P8 path —
-                //    any local forager hive advertising the
-                //    toolName gets the tone via thrum_to.
-                // 3. Sigil broadcast: fall through to the legacy
-                //    fan-out (covers nestler-declared MCP tools).
                 if matches!(chi, Some(Chi::ToolCall)) {
                     let sid_for_lookup = tone.get("sid").and_then(Value::as_str)
                         .map(str::to_string).unwrap_or_default();
-                    // The originator (asker bee) gets the sid sigil so any
-                    // chi:"tool-result" / chi:"error" broadcasted on this
-                    // sid reaches its mailbox. Foragers like paid-oracle
-                    // reply with chi:"error" 402 before chi:"tool-result"
-                    // ever fires; without this claim the buyer never sees
-                    // the challenge.
                     if !sid_for_lookup.is_empty() {
                         self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid_for_lookup, &self.hive_tag));
                         self.thrum.claim_sigil(client_id, &sid_for_lookup);
@@ -875,13 +678,6 @@ impl ToneSink for HumdSink {
                         | Some(Chi::ToolCall) | Some(Chi::ToolInfo) | Some(Chi::SessionReady)
                         | Some(Chi::Pulse) | Some(Chi::Breath)
                     ) {
-                        // Fan out to every peer humd that attached as
-                        // a hearOnly observer on this sid. Each gets
-                        // its own copy stamped `to: <observer>` so the
-                        // ensemble routes correctly. Await in-line so
-                        // chunk ordering is preserved across multi-
-                        // chunk turns (spawn would race chunks vs
-                        // finish at the receiver).
                         if let Some(ens) = &self.ensemble {
                             let obs = self.observers.read().get(&sid).cloned().unwrap_or_default();
                             for peer in obs {
@@ -895,9 +691,6 @@ impl ToneSink for HumdSink {
                                 }
                             }
                         }
-                        // Cross-humd return path: if the prompt arrived
-                        // from a peer humd, stamp `to: <origin>` and
-                        // route via the ensemble back to it.
                         let origin = self.sid_origins.read().get(&sid).cloned();
                         if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
                             let mut copy = tone.clone();
@@ -916,12 +709,6 @@ impl ToneSink for HumdSink {
             }
         }
 
-        // Attach from a local nestler addressed at a peer humd needs a
-        // sigil claim here *before* the cross-humd router whisks the tone
-        // away — otherwise reply tones flowing back across the ensemble
-        // pump get broadcast on the sid and find no claimant, falling
-        // back to the unregistered-clients branch by luck. Claim first,
-        // then let the standard routing block forward.
         if matches!(chi, Some(Chi::Attach)) && client_id != "ensemble" {
             if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
                 if !sid.is_empty() {
@@ -933,9 +720,6 @@ impl ToneSink for HumdSink {
             }
         }
 
-        // Cross-humd routing — if tone is addressed to a *different* humd
-        // and we have an Ensemble, hand it off and stop here. Without an
-        // Ensemble, `to:` is ignored (legacy single-host behaviour).
         if let Some(ensemble) = &self.ensemble {
             if let Some(to) = tone.get("to").and_then(Value::as_str) {
                 if !to.is_empty() && to != ensemble.me().to_hex() {
@@ -948,11 +732,6 @@ impl ToneSink for HumdSink {
             }
         }
 
-        // Inbound from a peer humd carrying daemon→nestler chi: forward
-        // to local clients claiming the sid (the synthetic nestler that
-        // originated the prompt). Without this, replies routed back
-        // across the ensemble hit the daemon but never reach the
-        // nestler tap.
         if client_id == "ensemble" {
             let is_reply = matches!(
                 chi,
@@ -981,10 +760,6 @@ impl ToneSink for HumdSink {
                 let breath = thrumd::breath_tone(serde_json::json!({}));
                 self.thrum.thrum_to(client_id, breath);
 
-                // Build the manifest once from the hello tone.
-                // Bee + models come from the new fields; everything
-                // else (name, version, proto, propensity, chis, source,
-                // bind, nestlerId) lives where it always did.
                 let bee: Vec<String> = match tone.get("bee") {
                     Some(Value::Array(arr)) => arr.iter()
                         .filter_map(Value::as_str)
@@ -1027,9 +802,6 @@ impl ToneSink for HumdSink {
                     manifest.nestler_id = Some(nestler_id);
                     manifest.bee = bee.clone();
                     manifest.models = models.clone();
-                    // Stable role-tagged bee identity. Survives
-                    // reconnect — humd indexes by it (alongside
-                    // client_id, which is per-thrum-conn).
                     let raw_hid = tone.get("hid").and_then(Value::as_str);
                     manifest.hid = raw_hid.and_then(|s| ensemble::Hid::from_hex(s).ok());
                     match (raw_hid, manifest.hid) {
@@ -1037,12 +809,6 @@ impl ToneSink for HumdSink {
                             trace!(client_id, hid = %hid.short(), "bee.hid.registered");
                         }
                         (Some(bad), None) => {
-                            // A hello carrying a hid that won't parse as a
-                            // canonical `fbee_<hex>` / `wbee_<hex>` Hid.
-                            // humd can't dedupe by it, so every reconnect
-                            // leaks a fresh manifest (ghost tools). Warn
-                            // loudly — silent acceptance is what let stub
-                            // hids pile up unnoticed.
                             warn!(client_id, bad_hid = %bad,
                                 "bee.hid.invalid — not a canonical Hid; reconnect dedup disabled for this bee. \
                                  Derive a stable hid from a persisted key (see hives/common identity).");
@@ -1053,10 +819,6 @@ impl ToneSink for HumdSink {
                                  Ghost manifests will accumulate on reconnect.");
                         }
                     }
-                    // Forager tool advertisement — fills the manifest's
-                    // tools[] array. humd routes chi:"tool-call" by
-                    // toolName to whichever hive's manifest carries
-                    // that name in tools[].name.
                     if let Some(arr) = tone.get("tools").and_then(Value::as_array) {
                         manifest.tools = arr.iter().filter_map(|v| {
                             let name = v.get("name").and_then(Value::as_str)?.to_string();
@@ -1087,11 +849,6 @@ impl ToneSink for HumdSink {
                         }
                     }
 
-                    // Single source of truth for humd's routing
-                    // (worker lookup, passthrough membership). thrumd
-                    // disconnect doesn't notify humd, so a same-hid
-                    // re-hello must evict prior client_id entries to
-                    // keep tool-call routing live across bee restarts.
                     if client_id != "ensemble" {
                         let mut m = self.manifests.write();
                         if let Some(new_hid) = manifest.hid {
@@ -1115,8 +872,6 @@ impl ToneSink for HumdSink {
                         }
                     }
 
-                    // Gossip to peers via ensemble. Same manifest. Peer
-                    // humds learn about workers and foragers the same way.
                     if client_id != "ensemble" {
                         if let Some(ensemble) = &self.ensemble {
                             let ens = ensemble.clone();
@@ -1133,21 +888,12 @@ impl ToneSink for HumdSink {
                     warn!(client_id, "prompt.no-sid");
                     return;
                 }
-                // Overflow routing — if this prompt came from a local
-                // forager AND we have no spare capacity, hand it to a
-                // peer that advertises the hive with free slots.
-                // Prompts arriving from a peer (`client_id == "ensemble"`)
-                // are work *we* accepted from somebody else; never bounce
-                // them again.
                 if client_id != "ensemble"
-                    && self.capacity_override.map(|c| c == 0).unwrap_or(false)
+                    && self.capacity == LocalCapacity::OverflowAlways
                 {
                     if let Some(ensemble) = &self.ensemble {
                         let target = pick_overflow_peer(ensemble, &self.hive_tag);
                         if let Some(peer) = target {
-                            // Claim the sid so reply tones (chunks +
-                            // finish) routed back via the ensemble pump
-                            // reach this client's queue.
                             self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                             self.thrum.claim_sigil(client_id, &sid);
                             if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
@@ -1172,12 +918,6 @@ impl ToneSink for HumdSink {
                 let cwd_raw = tone.get("cwd").and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| "/".into());
-                // cwd may carry a `hum://<host>/<path>` URI pinning a
-                // remote fs hive. Parse, resolve alias to Hid via the
-                // peers.json resolver, stash (sid → fs_hid) so the
-                // tool-call interceptor knows where humfs lives. The
-                // path component (with leading slash restored) is
-                // what the worker actually sees.
                 let cwd = if ensemble::HumUri::starts_with_scheme(&cwd_raw) {
                     match ensemble::HumUri::parse(&cwd_raw) {
                         Ok(uri) => {
@@ -1194,10 +934,6 @@ impl ToneSink for HumdSink {
                             } else {
                                 warn!(sid, uri = %cwd_raw, "prompt.fs.alias.unknown");
                             }
-                            // Hand the worker just the path component
-                            // (leading slash restored). Worker has no
-                            // hum-uri awareness today; humd handles
-                            // the routing pin internally.
                             format!("/{}", uri.path)
                         }
                         Err(e) => {
@@ -1217,11 +953,6 @@ impl ToneSink for HumdSink {
                 }
                 self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                 self.thrum.claim_sigil(client_id, &sid);
-                // Origin detection: if the prompt arrived from a peer
-                // (we received it via the ensemble pump, whose synthetic
-                // client_id is "ensemble", and the tone carries a `from`
-                // humd id that isn't us), reply tones must route back
-                // there via the ensemble.
                 let origin = if client_id == "ensemble" {
                     tone.get("from")
                         .and_then(Value::as_str)
@@ -1237,10 +968,6 @@ impl ToneSink for HumdSink {
                 };
                 trace!(sid, model, ?origin, "thrum.recv.prompt");
 
-                // Look up a registered worker bee by advertised model —
-                // scan manifests for bee.contains("worker") + a matching
-                // models entry. Lazy-prune stale entries (worker
-                // disconnected since hello) on the same pass.
                 let worker_client = {
                     let mut to_prune: Vec<String> = Vec::new();
                     let pick = {
@@ -1279,9 +1006,6 @@ impl ToneSink for HumdSink {
                     return;
                 };
 
-                // Forward the prompt tone to the worker. Nestler
-                // tools[] pass through unchanged; cwd is filled in
-                // when absent. mcpUrl is the worker's concern.
                 let mut forward = tone.clone();
                 if let Some(obj) = forward.as_object_mut() {
                     if obj.get("cwd").is_none() {
@@ -1295,9 +1019,6 @@ impl ToneSink for HumdSink {
                             obj.insert("systemPrompt".into(), Value::String(sp.clone()));
                         }
                     }
-                    // Inject the merged forager catalogue so the
-                    // worker sees every advertised tool on the
-                    // mesh, regardless of which forager owns it.
                     let (forager_tools_json, provided_caps): (Vec<Value>, Vec<String>) = {
                         let m = self.manifests.read();
                         let mut tools: Vec<Value> = Vec::new();
@@ -1326,12 +1047,6 @@ impl ToneSink for HumdSink {
                             Value::Array(provided_caps.iter().cloned().map(Value::String).collect()));
                     }
 
-                    // disallowedTools: union of asker-requested
-                    // names + the names in any capability the
-                    // mesh declares ownership of. Generic; no
-                    // hardcoded list — the capability table in
-                    // hum_mcp::capability holds the per-category
-                    // canonical name set.
                     let mut disallowed: std::collections::BTreeSet<String> =
                         obj.get("disallowedTools")
                             .and_then(Value::as_array)
@@ -1348,8 +1063,6 @@ impl ToneSink for HumdSink {
                     }
                 }
                 trace!(sid, model, worker_client = %worker_client, "prompt.forward.to-worker");
-                // Record origin so reply tones from the worker route
-                // back to the originating peer humd via ensemble.
                 if let Some(origin) = origin {
                     self.sid_origins.write().insert(sid.clone(), origin);
                 }
@@ -1358,9 +1071,6 @@ impl ToneSink for HumdSink {
             }
             Some(Chi::Cancel) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward cancel to every registered worker — they
-                    // no-op on unknown sids. sid→worker routing is a
-                    // future optimization.
                     let workers: Vec<String> = self.manifests.read()
                         .iter()
                         .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
@@ -1374,7 +1084,6 @@ impl ToneSink for HumdSink {
             }
             Some(Chi::Cleanup) => {
                 if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward cleanup to all registered workers.
                     let workers: Vec<String> = self.manifests.read()
                         .iter()
                         .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
@@ -1393,8 +1102,6 @@ impl ToneSink for HumdSink {
                 }
                 let hear_only = tone.get("hearOnly").and_then(Value::as_bool).unwrap_or(false);
                 if client_id == "ensemble" {
-                    // A peer humd is registering itself as an observer of
-                    // a hum hosted here. Record so reply tones fan out.
                     let peer = tone.get("from").and_then(Value::as_str).and_then(parse_humd_id);
                     if let Some(peer) = peer {
                         let mut obs = self.observers.write();
@@ -1407,11 +1114,6 @@ impl ToneSink for HumdSink {
                         warn!(client_id, sid, "attach.bad-from");
                     }
                 } else {
-                    // A local nestler is announcing it wants to observe a
-                    // sid hosted on a peer. Claim the sigil so reply
-                    // tones (which arrive via the ensemble pump and get
-                    // broadcast on the sid) land in this client's queue,
-                    // then forward the attach to the host humd.
                     self.thrum.claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
                     self.thrum.claim_sigil(client_id, &sid);
                     if let Some(ensemble) = &self.ensemble {
@@ -1463,9 +1165,6 @@ impl ToneSink for HumdSink {
                 }
             }
             Some(Chi::PeerAdd) => {
-                // Sim wires the connection into Ensemble directly; this
-                // arm just records intent so peer-add tones round-trip
-                // through the dispatcher for tests/logs.
                 let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
                 trace!(client_id, humd_id, "ensemble.peer.add");
             }
@@ -1483,10 +1182,6 @@ impl ToneSink for HumdSink {
                 }
             }
             Some(Chi::WaneSync) => {
-                // Partition-heal reconciliation. Snapshot is a JSON object
-                // of sigil → u64. Merge by max — wane is a Lamport clock,
-                // max is the convergent join. We don't reply; both sides
-                // emit on heal so each is informed exactly once.
                 let snapshot = tone
                     .get("snapshot")
                     .and_then(Value::as_object)
@@ -1507,9 +1202,6 @@ impl ToneSink for HumdSink {
                 );
             }
             Some(Chi::Error) => {
-                // Foragers can reply chi:"error" instead of chi:"tool-result"
-                // (paid-oracle returns 402 challenges this way). Same
-                // routing as tool-result: callId → originator.
                 let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
                 if let Some(cid) = call_id.as_deref() {
                     let origin_peer = self.incoming_tool_calls.read().get(cid).copied();
@@ -1537,32 +1229,9 @@ impl ToneSink for HumdSink {
                 }
             }
             Some(Chi::ToolResult) => {
-                // Four-arm resolution:
-                //
-                // 1. Cross-humd return (humd-W → humd-S): the local
-                //    forager finished a tool-call that arrived via
-                //    a peer. callId is in `incoming_tool_calls`;
-                //    stamp `to:<origin-peer>` and route via ensemble.
-                // 2. Forager-hive return (local, humd-S): a local
-                //    forager finished a tool-call humd routed to it.
-                //    callId is in `tool_routes` — forward to the
-                //    originating worker client_id.
-                // 3. Cross-humd worker forward (humd-S inbound from
-                //    humd-W via ensemble): result arriving for a
-                //    tool-call we sent to a peer; callId is in
-                //    `tool_routes_peer`. Forward to the worker via
-                //    `tool_routes[call_id]` (recorded at dispatch).
-                // 4. Broker-tool path: a nestler-declared tool
-                //    dispatch parked on a oneshot keyed by callId.
-                //
-                // Missing callId means the bee echoed after timeout —
-                // silent drop.
                 let call_id = tone.get("callId").and_then(Value::as_str);
 
                 if let Some(call_id) = call_id {
-                    // Arm 1: local forager → cross-humd return.
-                    // Drop the MutexGuard before the await below
-                    // (Send bound on the ToneSink future).
                     let origin_peer = self.incoming_tool_calls.write().remove(call_id);
                     if let Some(origin_peer) = origin_peer {
                         if let Some(ens) = &self.ensemble {
@@ -1579,11 +1248,7 @@ impl ToneSink for HumdSink {
                             return;
                         }
                     }
-                    // Arm 3: cross-humd worker forward — clean up
-                    // tool_routes_peer (callId fully resolved) before
-                    // delivering to local worker.
                     self.tool_routes_peer.write().remove(call_id);
-                    // Arm 2: local forager → local worker.
                     if let Some(worker_cid) = self.tool_routes.write().remove(call_id) {
                         trace!(call_id, %worker_cid, "tool_result.route.to-worker");
                         self.thrum.thrum_to(&worker_cid, tone.clone());
@@ -1595,8 +1260,6 @@ impl ToneSink for HumdSink {
                 }
             }
             Some(Chi::Backfill) => {
-                // Requester wants this humd's authored events for `author`
-                // from `from` seq onward. One backfill-event tone per row.
                 let Some(thehum) = self.thehum.as_ref() else {
                     trace!(client_id, "backfill.no-thehum");
                     return;
@@ -1625,10 +1288,6 @@ impl ToneSink for HumdSink {
             }
             Some(Chi::Curate) => {
                 if let Some(_sid) = tone.get("sid").and_then(Value::as_str) {
-                    // Forward the curate to all registered workers — same
-                    // shape as cancel/cleanup above. Workers no-op on an
-                    // unknown sid, so spraying is safe until sid→worker
-                    // routing exists.
                     let workers: Vec<String> = self.manifests.read()
                         .iter()
                         .filter(|(_, m)| m.bee.iter().any(|b| b == "worker"))
@@ -1659,11 +1318,6 @@ impl ToneSink for HumdSink {
     }
 }
 
-/// Capabilities the daemon advertises in the hello we send when dialling
-/// a bootstrap peer. Mirrors the local nest config so peers selecting an
-/// overflow target see what we can actually host. `free_slots` is left
-/// `None` (unspecified / unbounded) — the overflow heuristic in
-/// `pick_overflow_peer` treats `None` as "available."
 fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
     let nest_name = cfg.hum_cfg.nest.default.clone();
     let total_slots = cfg.hum_cfg.nest.max_active_cells;
@@ -1678,13 +1332,8 @@ fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
     }
 }
 
-/// Pick a peer to forward a prompt to when local capacity is exhausted.
-/// Prefers peers that advertise the requested nest kind AND claim a
-/// non-zero `free_slots`. Falls back to any peer with the nest kind.
-/// Returns `None` if no peer in the ensemble is eligible.
 fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
     let peers = ensemble.peers();
-    // First pass: peer with the right nest kind AND advertised slots.
     let mut fallback: Option<Hid> = None;
     for id in peers {
         let Some(caps) = ensemble.peer_caps(&id) else { continue };
@@ -1692,7 +1341,7 @@ fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
         if !has_nest { continue; }
         match caps.free_slots {
             Some(n) if n > 0 => return Some(id),
-            None => return Some(id), // unbounded
+            None => return Some(id),
             Some(0) => { /* peer is full, skip but remember as fallback */
                 if fallback.is_none() { fallback = Some(id); }
             }
@@ -1702,9 +1351,6 @@ fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
     fallback
 }
 
-/// Parse a Hid string (either `<prefix>_<hex>` or bare 64-hex
-/// legacy) back into the typed [`ensemble::Hid`]. Returns None on
-/// malformed input.
 fn parse_humd_id(s: &str) -> Option<ensemble::Hid> {
     ensemble::Hid::from_hex(s).ok()
 }
