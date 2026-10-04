@@ -32,10 +32,7 @@ use crate::peers::PeerConfig;
 /// Open one TCP connection per bootstrap peer entry, install signed.
 /// Entries without a `tcp:` hint are skipped — those are for other
 /// transports.
-/// Dial one bootstrap peer and install it. Returns true when the
-/// connection is open, so the redial supervisor can arm or clear that
-/// peer's backoff.
-pub(crate) async fn dial_one(
+pub(crate) async fn dial_and_install_peer(
     ens: &Arc<Ensemble>,
     key: &HumdKey,
     peer: &PeerConfig,
@@ -69,7 +66,7 @@ pub(crate) async fn dial_all(
     my_caps: &PeerCapabilities,
 ) {
     for peer in peers {
-        dial_one(ens, key, peer, my_caps).await;
+        dial_and_install_peer(ens, key, peer, my_caps).await;
     }
 }
 

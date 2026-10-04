@@ -1,33 +1,3 @@
-//! `gossip` — ensemble-wide pub-sub fan-out above the Transport seam.
-//!
-//! Each `PeerConnection` becomes a gossip neighbor. A `publish(topic,
-//! payload)` mints one `chi:"gossip-publish"` tone and ships it to every
-//! installed peer; their `install()` drainers see the chi, check the
-//! `msg_id` against a bounded LRU "seen" set, dispatch to local
-//! subscribers, and re-fan to every OTHER installed peer. Duplicates
-//! short-circuit at the seen-set check, so the same `msg_id` never
-//! crosses the same node twice.
-//!
-//! Sits ABOVE the unicast `route()` path — gossip is mesh-wide
-//! announcements (hum relocated, humd overloaded, drone alerts);
-//! `route()` stays the way to send to ONE specific humd. They share the
-//! same `PeerConnection.send` wire but are semantically distinct.
-//!
-//! ## Why homegrown vs `libp2p-gossipsub`
-//!
-//! `libp2p-gossipsub` is a `NetworkBehaviour` glued to `libp2p::Swarm`.
-//! Using it would mean either (a) bringing the full Swarm + libp2p
-//! transport stack alongside our `Transport` trait — two parallel wire
-//! abstractions — or (b) writing a `Transport` shim that pretends to be
-//! a libp2p transport carrying our `PeerConnection`s. Both are heavier
-//! than the v0 goal: light-touch fan-out with dedup, no peer scoring,
-//! no eager/lazy push split, no IHAVE/IWANT gossip.
-//!
-//! What we DON'T get (and don't need yet): mesh maintenance heuristics,
-//! peer scoring, message validation hooks, lazy pull gossip, graft/prune
-//! topology messages. When the mesh grows past low-hundreds of peers per
-//! topic, swapping in `libp2p-gossipsub` becomes worthwhile — the chi
-//! and the `Ensemble::publish` / `subscribe_topic` surface stay the same.
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -40,33 +10,16 @@ use tokio::sync::broadcast;
 
 use crate::{Hid, Tone};
 
-/// Wire-level chi string for gossip-publish tones. Mirrors
-/// `thrum_core::Chi::GossipPublish` — kept as a literal here so the
-/// ensemble crate doesn't pull the chi enum just to read one variant.
 pub const GOSSIP_CHI: &str = "gossip-publish";
 
-/// Bound on the per-Ensemble seen-set. ~1k entries keeps memory tiny
-/// (each entry is a 32-char hex string) while comfortably covering any
-/// realistic fan-out window across the mesh.
 pub const GOSSIP_SEEN_CAP: usize = 1024;
 
-/// Bound on per-topic broadcast::Sender capacity. Subscribers that fall
-/// behind by more than this see `RecvError::Lagged` and resync from a
-/// future message — same semantic the main inbox uses.
 pub const GOSSIP_TOPIC_BUF: usize = 256;
 
-/// State shared between `Ensemble::publish` / `subscribe_topic` and the
-/// `install()` drainer task. Sits behind one `Arc` per ensemble so the
-/// drainer can mutate the seen-set + dispatch to topic senders without
-/// reaching back through `Ensemble`.
+const MSG_ID_ORIGIN_CHARS: usize = 12;
+
 pub struct GossipState {
-    /// LRU of recently-seen `msg_id` strings. Bounded — oldest evicted
-    /// when capacity is hit.
     seen: Mutex<LruCache<String, ()>>,
-    /// One `broadcast::Sender` per subscribed topic. Created lazily on
-    /// the first `subscribe_topic(topic)` call and reused across
-    /// subscribers. Senders persist for the ensemble's lifetime — the
-    /// memory cost is one sender + receiver count per active topic.
     topics: Mutex<HashMap<String, broadcast::Sender<Value>>>,
 }
 
@@ -82,13 +35,9 @@ impl GossipState {
         })
     }
 
-    /// Returns true if `msg_id` was not previously in the seen-set
-    /// (i.e. caller should process + re-fan). Inserts on every call so
-    /// the second observation of the same id returns false.
     pub fn note_seen(&self, msg_id: &str) -> bool {
         let mut seen = self.seen.lock();
         if seen.contains(msg_id) {
-            // Touch for LRU recency, then signal duplicate.
             seen.get(msg_id);
             false
         } else {
@@ -97,8 +46,6 @@ impl GossipState {
         }
     }
 
-    /// Subscribe to a topic, lazily creating the broadcast channel if
-    /// this is the first subscriber for it.
     pub fn subscribe(&self, topic: &str) -> broadcast::Receiver<Value> {
         let mut topics = self.topics.lock();
         topics
@@ -110,50 +57,20 @@ impl GossipState {
             .subscribe()
     }
 
-    /// Lookup the sender for a topic — `None` if no subscribers have
-    /// asked for it yet. Drainer uses this to decide whether to
-    /// dispatch the payload locally (it still re-fans either way).
     pub fn sender(&self, topic: &str) -> Option<broadcast::Sender<Value>> {
         self.topics.lock().get(topic).cloned()
     }
 }
 
-/// Mint the wire `msg_id` for one publish: `{origin6}-{ms:x}-{seq:x}`.
-///
-/// The originator assigns this, and it is deliberately not derived from
-/// the payload. Content addressing cannot tell "the network delivered
-/// this twice" from "we published this twice on purpose", and a repeat
-/// is ordinary for the tones gossip exists to carry — a heartbeat, a
-/// standing overload alert, a retry after a resync. Hashing the payload
-/// swallows those as duplicates; only the sender can know which it meant.
-///
-/// A per-process counter makes every publish distinct whatever the clock
-/// or the content does, and the origin prefix keeps two humds from
-/// minting the same id. Receivers dedup on this and never mint it
-/// themselves.
 pub fn mint_msg_id(from: &Hid) -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // Slice on a char boundary rather than byte 12, and fall back to
-    // the whole hex if a Hid ever renders shorter. A panic here would
-    // take down a publisher, and the prefix is cosmetic anyway.
     let hex = from.to_hex();
-    let origin: String = hex.chars().take(12).collect(); // 6 bytes of origin
+    let origin: String = hex.chars().take(MSG_ID_ORIGIN_CHARS).collect();
     let origin = origin.as_str();
     format!("{origin}-{:x}-{seq:x}", crate::now_ms())
 }
 
-/// Build a `chi:"gossip-publish"` tone with the given fields. Kept here
-/// so `Ensemble::publish` and the install drainer's re-fan path agree
-/// on the wire shape.
-///
-/// `dusk_ms` is a lifetime, and it is `None` by default on purpose. A
-/// gossip message is re-fanned by every hop, so a slow mesh can deliver
-/// one arbitrarily late; whether a stale announcement is worse than no
-/// announcement is the publisher's call, not the library's. A heartbeat
-/// wants a tight lifetime, a "worker moved" notice wants a long one, and
-/// a default TTL would silently drop the second kind on a congested
-/// mesh. `None` means no expiry.
 pub fn gossip_tone_with_dusk(
     topic: &str,
     rid: &str,
@@ -182,17 +99,12 @@ pub fn gossip_tone(topic: &str, rid: &str, from: &Hid, payload: Value, msg_id: &
     gossip_tone_with_dusk(topic, rid, from, payload, msg_id, None)
 }
 
-/// Parsed view of an incoming gossip tone. Drainer pulls these fields
-/// to decide whether to dispatch + re-fan; callers don't construct it.
 pub struct ParsedGossip<'a> {
     pub topic: &'a str,
     pub msg_id: &'a str,
     pub payload: &'a Value,
 }
 
-/// Pull the gossip fields out of a tone. Returns `None` if any required
-/// field is missing or the wrong type — the drainer treats that as
-/// "not a gossip tone, fan into the regular inbox like everything else."
 pub fn parse_gossip(tone: &Tone) -> Option<ParsedGossip<'_>> {
     let topic = tone.get("topic")?.as_str()?;
     let msg_id = tone.get("msg_id")?.as_str()?;
@@ -219,7 +131,7 @@ mod tests {
         let b = mint_msg_id(&Hid::random_humd());
         let origin = |id: &str| id.split('-').next().unwrap().to_string();
         assert_ne!(origin(&a), origin(&b), "two humds must not mint alike");
-        assert_eq!(origin(&a).len(), 12);
+        assert_eq!(origin(&a).len(), MSG_ID_ORIGIN_CHARS);
     }
 
     #[test]
@@ -231,8 +143,6 @@ mod tests {
         assert!(!state.note_seen("a"));
     }
 
-    /// The cap is the only thing bounding this set, so eviction has to
-    /// be exercised at a cap small enough to reach.
     #[test]
     fn seen_set_evicts_at_its_cap() {
         let state = GossipState::with_cap(2);

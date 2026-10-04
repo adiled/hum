@@ -28,7 +28,7 @@ async fn overflow_inference() {
     let humd_b = ensemble::Hid::random_humd();
 
     // Cap humd-A at zero BEFORE it spawns so the daemon's
-    // `capacity_override` is 0 from boot. humd-B stays at default
+    // `capacity` is OverflowAlways from boot. humd-B stays at default
     // (unlimited).
     sim.set_capacity(humd_a, 0);
 

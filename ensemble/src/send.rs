@@ -1,23 +1,3 @@
-//! Bounded peer sends.
-//!
-//! A peer that stops reading is not a peer that closes. The connection
-//! stays up, the handshake stays valid, and the lease keeps renewing
-//! from whatever else is still arriving — so nothing looks wrong until
-//! the socket buffer fills and the write stops completing.
-//!
-//! That is the wedge. `send` awaits the write, and on most transports
-//! holds the connection's write mutex while it does, so one stalled peer
-//! blocks every later send to that peer. When the caller is the single
-//! task that dispatches to *all* peers, one stalled peer becomes
-//! mesh-wide message loss. The only symptom is a `Lagged(n)` on a
-//! broadcast receiver, which reports how many tones were skipped and
-//! nothing about why.
-//!
-//! So every send is bounded. On timeout the connection is closed rather
-//! than merely retried: a peer that cannot take a write is not slow, and
-//! closing it is what lets the liveness lease mark it dead and the
-//! supervisor redial it. Bounding the send is what turns a silent
-//! mesh-wide stall into one eviction.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -25,30 +5,16 @@ use std::time::Duration;
 
 use crate::{PeerConnection, Tone};
 
-/// How long one send may take before the peer is declared unusable.
-///
-/// Sized for a slow-but-alive link, not a fast one: a tone is a few KB
-/// of NDJSON, so anything that has not drained in this long is not
-/// draining at all. A liveness probe shares this deadline deliberately
-/// — a probe that blocks forever is a probe that never reports the
-/// stall it exists to find.
 pub const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Why a bounded send failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SendError {
-    /// The peer stopped reading and the write did not complete in time.
     #[error("peer stalled: no write completed within the send deadline")]
     TimedOut,
-    /// The write failed outright, or the transport refused it. Keeps the
-    /// transport's own message: "it failed" is not actionable and the
-    /// whole reason this module exists is that failures were invisible.
     #[error("write failed: {0}")]
     Failed(String),
 }
 
-/// Sends that did not complete. A number, not a log line — a stall is
-/// something to alert on, and `warn!` is what made it invisible before.
 #[derive(Debug, Default)]
 pub struct SendStats {
     pub timed_out: AtomicU64,
@@ -69,11 +35,6 @@ impl SendStats {
     }
 }
 
-/// One send to one peer, under [`SEND_TIMEOUT`].
-///
-/// On timeout the connection is closed. That is the point: a stalled
-/// write is not a slow write, and leaving the connection open would let
-/// the lease keep calling a dead peer live.
 pub async fn send_bounded(
     conn: &Arc<dyn PeerConnection>,
     tone: Tone,
@@ -82,8 +43,6 @@ pub async fn send_bounded(
     send_bounded_with(conn, tone, stats, SEND_TIMEOUT).await
 }
 
-/// [`send_bounded`] with an explicit deadline, so tests need not wait
-/// out the production timeout.
 pub async fn send_bounded_with(
     conn: &Arc<dyn PeerConnection>,
     tone: Tone,
@@ -117,9 +76,6 @@ mod tests {
     use parking_lot::Mutex;
     use std::sync::atomic::AtomicBool;
 
-    /// A peer that accepts a connection and then stops reading — what a
-    /// full socket buffer with a non-reading peer looks like from the
-    /// writer's side. `stalled == true` never completes the write.
     struct Stalled {
         addr: HumdAddr,
         caps: PeerCapabilities,
@@ -139,7 +95,6 @@ mod tests {
         async fn send(&self, _tone: Tone) -> anyhow::Result<()> {
             *self.sends.lock() += 1;
             if self.stalled.load(Ordering::SeqCst) {
-                // Never completes. This is the wedge.
                 std::future::pending::<()>().await;
             }
             Ok(())
@@ -166,8 +121,6 @@ mod tests {
         c.clone()
     }
 
-    /// The whole point: a stalled peer must not hold the caller. Run with
-    /// a short deadline so the test is not paced by production's 5s.
     #[tokio::test]
     async fn a_stalled_peer_times_out_rather_than_hanging() {
         let c = conn(false);
@@ -187,8 +140,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "returned promptly");
     }
 
-    /// Bounding the send is pointless unless it also *removes* the peer:
-    /// a connection left open keeps the lease calling a dead peer live.
     #[tokio::test]
     async fn a_stalled_peer_is_closed_on_timeout() {
         let c = conn(false);
@@ -205,7 +156,6 @@ mod tests {
         assert_eq!(stats.timed_out(), 1);
     }
 
-    /// The healthy path is untouched, and not counted.
     #[tokio::test]
     async fn a_healthy_peer_sends_and_is_not_counted() {
         let c = conn(false);
@@ -219,8 +169,6 @@ mod tests {
         assert!(!c.closed.load(Ordering::SeqCst), "a working peer stays open");
     }
 
-    /// A transport that errors is a different failure from one that
-    /// hangs, and the two should be distinguishable in the counts.
     #[tokio::test]
     async fn a_failed_write_is_counted_separately_from_a_stall() {
         struct Broken(HumdAddr, PeerCapabilities);

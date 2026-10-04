@@ -1,16 +1,3 @@
-//! Minimum routing proof: two humds, wired, one sends a tone targeting
-//! the other's Hid, the other observes it on the ensemble inbound
-//! tap.
-//!
-//! Narrative: humd-A and humd-B are peers in the same ensemble. From
-//! humd-B's mock-nestler surface we inject a tone with
-//! `to: <humd-A id hex>`. humd-B's HumdSink recognises `to:`, hands the
-//! tone to its ensemble, ensemble pushes it across the wired
-//! `InMemoryEndpoint::pair` link, humd-A's ensemble drains it into
-//! `subscribe()`. We tap that subscription via `Sim::humd_peer_tap`.
-//!
-//! This test only validates the *transport seam* — no worker, no nest,
-//! no prompt pipeline. If it fails, ensemble routing is broken.
 
 use std::time::Duration;
 
@@ -27,9 +14,6 @@ async fn two_humds_ping_pong() {
     sim.await_ready(b.id).await.expect("b ready");
     sim.wire(a.id, b.id).expect("wire humd-A and humd-B");
 
-    // Tap humd-A's inbound peer stream BEFORE sending so we don't race
-    // the broadcast (broadcast::Receiver only sees tones sent after it
-    // was created — earlier ones are gone).
     let a_id = a.id;
     let sim_arc = std::sync::Arc::new(sim);
     let sim_for_tap = sim_arc.clone();
@@ -39,11 +23,6 @@ async fn two_humds_ping_pong() {
             .await
     });
 
-    // From humd-B's mock nestler, send a tone addressed to humd-A.
-    // Note: `chi: "hello"` is the ensemble's peer-handshake tone and
-    // gets absorbed by the drainer. Use `perf-mark` for the routing
-    // test — it's a non-handshake chi, and the sink's `to:` rule routes
-    // it to the ensemble before chi-specific dispatch.
     let tone = serde_json::json!({
         "chi": "perf-mark",
         "rid": "ping-1",

@@ -37,10 +37,6 @@ pub fn load_or_mint_key() -> Result<HumdKey> {
     load_or_mint_key_at(&key_path())
 }
 
-/// As [`load_or_mint_key`], against an explicit path. Split out so a
-/// test can name its own file instead of setting `XDG_STATE_HOME`,
-/// which is process-global and would point every other test in the
-/// binary at this test's key.
 pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
     if path.exists() {
         let bytes = fs::read(path)
@@ -144,10 +140,6 @@ mod tests {
 
     /// Mint a key, drop it, reload from the same path — same Hid.
     /// Also checks file perms are 0o600.
-    ///
-    /// Names its own file rather than setting `XDG_STATE_HOME`: that
-    /// variable is process-global, and these tests share a binary with
-    /// others that read config and state paths.
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();

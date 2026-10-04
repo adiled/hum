@@ -362,12 +362,7 @@ mod tests {
     use serde_json::json;
     use std::env;
 
-    fn tmp() -> PathBuf {
-        // Tests run in parallel and each one removes its directory on
-        // the way out, so the name has to be unique per call. A
-        // millisecond timestamp alone collides: two tests starting in
-        // the same millisecond shared a directory, and whichever
-        // finished first deleted the other's files.
+    fn unique_tmp_dir() -> PathBuf {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let mut p = env::temp_dir();
         p.push(format!(
@@ -414,7 +409,7 @@ mod tests {
 
     #[test]
     fn flag_persists_through_wilt() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "open");
         d.flag("s1", "warm", json!(true));
@@ -430,7 +425,7 @@ mod tests {
 
     #[test]
     fn prune_keeps_fresh_files() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "x");
         d.wilt("s1");
@@ -442,7 +437,7 @@ mod tests {
 
     #[test]
     fn persist_today_writes_active_blooms() {
-        let dir = tmp();
+        let dir = unique_tmp_dir();
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "open");
         d.persist_today().unwrap();

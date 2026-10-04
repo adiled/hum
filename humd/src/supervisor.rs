@@ -1,15 +1,3 @@
-//! The redial supervisor: one loop that keeps the peer set matching
-//! the bootstrap set.
-//!
-//! Boot dials every peer once and never looks back, so a peer that
-//! dies stays in the registry forever: routing keeps addressing a dead
-//! link, and a peer that restarts is unreachable because nobody dials
-//! it again. This loop closes that gap.
-//!
-//! Each tick probes, then sweeps. A peer that stops answering goes
-//! `Stale`; after `ttl` it is evicted, and the redial attempt that
-//! follows carries its own exponential backoff so a peer that stays
-//! down doesn't turn into a dial spin.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,16 +10,10 @@ use crate::peer_transport::{iroh, tcp};
 use crate::peers::PeerConfig;
 use crate::redial::Backoff;
 
-/// Tuning for the supervisor. Timeouts are short by default: a
-/// distributed peer is expected to be a LAN hop or a relay, and a slow
-/// ping should be a warning, not a half-minute stall.
 #[derive(Debug, Clone)]
 pub struct LivenessConfig {
-    /// Silence after which an un-probed peer is reaped.
     pub ttl: Duration,
-    /// How often to probe and sweep.
     pub interval: Duration,
-    /// Backoff bounds for a peer that fails to redial.
     pub backoff_base: Duration,
     pub backoff_max: Duration,
 }
@@ -47,23 +29,14 @@ impl Default for LivenessConfig {
     }
 }
 
-/// What one tick decided, so a caller (or a test) can observe the
-/// supervisor without reading logs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepReport {
-    /// Peers evicted this tick, in registry order.
     pub evicted: Vec<Hid>,
-    /// Evicted peers that were dialled again this tick.
     pub redialed: Vec<Hid>,
-    /// Evicted peers whose redial was still inside its backoff window.
     pub backed_off: Vec<Hid>,
-    /// Peers that were evicted and redialled unsuccessfully.
     pub dial_failed: Vec<Hid>,
 }
 
-/// The transports a peer may be reachable over. A peer with both an
-/// `iroh:` and a `tcp:` hint gets tried over both; the first that
-/// connects wins and the other is not attempted.
 pub struct Supervisor {
     ens: Arc<Ensemble>,
     key: Arc<HumdKey>,
@@ -96,14 +69,24 @@ impl Supervisor {
         }
     }
 
+    fn is_configured(&self, id: &Hid) -> bool {
+        self.peers.iter().any(|p| p.humd_id == *id)
+    }
+
+    fn absent_configured_peers(&self) -> Vec<PeerConfig> {
+        self.peers
+            .iter()
+            .filter(|p| !self.ens.peers().contains(&p.humd_id))
+            .cloned()
+            .collect()
+    }
+
     fn backoff_for(&mut self, id: &Hid) -> &mut Backoff {
         self.backoff
             .entry(*id)
             .or_insert_with(|| Backoff::new(self.cfg.backoff_base, self.cfg.backoff_max))
     }
 
-    /// Probe, sweep, redial. One pass. Exposed so a test can drive the
-    /// supervisor deterministically instead of waiting on a timer.
     pub async fn tick(&mut self) -> SweepReport {
         self.seq += 1;
         self.ens.probe_all(self.seq).await;
@@ -113,26 +96,13 @@ impl Supervisor {
             evicted: evicted.clone(),
             ..Default::default()
         };
-        for id in evicted {
-            if !self.peers.iter().any(|p| p.humd_id == id) {
-                // Evicted a peer we didn't dial (inbound-only). Nothing
-                // to redial, but it's no longer in the registry.
+        for id in &evicted {
+            if !self.is_configured(id) {
                 debug!(peer = %id.short(), "liveness.evicted.inbound_only");
             }
         }
 
-        // The redial set is "configured but absent", not "just evicted".
-        // A peer whose *first* dial failed was never installed, so no
-        // sweep will ever name it — and a peer that is down at boot is
-        // exactly the one that must come back.
-        let wanted: Vec<PeerConfig> = self
-            .peers
-            .iter()
-            .filter(|p| !self.ens.peers().contains(&p.humd_id))
-            .cloned()
-            .collect();
-
-        for peer in wanted {
+        for peer in self.absent_configured_peers() {
             let id = peer.humd_id;
             if !self.backoff_for(&id).ready() {
                 report.backed_off.push(id);
@@ -151,57 +121,44 @@ impl Supervisor {
         report
     }
 
-    /// Try each transport this peer advertises, in preference order.
-    /// A transport this daemon isn't running is skipped rather than
-    /// failed — an iroh-only daemon shouldn't count TCP's absence
-    /// against the peer.
-    ///
-    /// A peer that advertises nothing we can dial fails: reporting
-    /// success would clear its backoff, and the peer would be
-    /// re-evicted and re-"dialled" on every tick forever.
     async fn dial(&self, peer: &PeerConfig) -> bool {
-        let mut dialable = false;
+        let mut attempted = false;
         if let Some(transport) = &self.iroh {
             let iroh_hints = peer
                 .hints
                 .iter()
                 .any(|h| h.starts_with(ensemble::iroh::IROH_HINT));
             if iroh_hints {
-                dialable = true;
-                if iroh::dial_one(transport, &self.ens, &self.key, peer, &self.my_caps).await {
+                attempted = true;
+                if iroh::dial_and_install_peer(transport, &self.ens, &self.key, peer, &self.my_caps).await {
                     return true;
                 }
             }
         }
         if peer.hints.iter().any(|h| h.starts_with("tcp:")) {
-            dialable = true;
-            if tcp::dial_one(&self.ens, &self.key, peer, &self.my_caps).await {
+            attempted = true;
+            if tcp::dial_and_install_peer(&self.ens, &self.key, peer, &self.my_caps).await {
                 return true;
             }
         }
-        if !dialable {
+        if !attempted {
             warn!(peer = %peer.humd_id.short(), "liveness.redial.undialable");
         }
         false
     }
 
-    /// Liveness of a single peer, for reporting.
     pub fn peer_liveness(&self, id: &Hid) -> Option<Liveness> {
         self.ens.peer_liveness(id, self.cfg.ttl)
     }
 
-    /// Consecutive failed redials for a peer.
-    pub fn attempts(&self, id: &Hid) -> u32 {
-        self.backoff.get(id).map(|b| b.attempts()).unwrap_or(0)
+    pub fn consecutive_failures(&self, id: &Hid) -> u32 {
+        self.backoff.get(id).map(|b| b.failures()).unwrap_or(0)
     }
 
-    /// Run until cancelled. Probes, sweeps, and redials on every tick.
     pub async fn run(mut self) {
         let mut ticker = tokio::time::interval(self.cfg.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // The first tick fires immediately; the boot dial has already
-        // happened, so that pass would only duplicate work.
-        ticker.tick().await;
+        drop_immediate_boot_tick(&mut ticker).await;
         loop {
             ticker.tick().await;
             self.tick().await;
@@ -209,15 +166,21 @@ impl Supervisor {
     }
 }
 
+async fn drop_immediate_boot_tick(ticker: &mut tokio::time::Interval) {
+    let _ = ticker.tick().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PROBES_BEFORE_EXPIRY: u32 = 3;
 
     #[test]
     fn default_config_probes_far_inside_ttl() {
         let c = LivenessConfig::default();
         assert!(
-            c.interval * 3 <= c.ttl,
+            c.interval * PROBES_BEFORE_EXPIRY <= c.ttl,
             "a peer must be probed repeatedly before it can expire"
         );
     }

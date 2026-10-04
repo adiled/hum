@@ -65,10 +65,6 @@ pub(crate) fn load() -> Vec<PeerConfig> {
     load_from(&peers_path())
 }
 
-/// As [`load`], against an explicit path. Split out so a test can name
-/// its own file: `XDG_CONFIG_HOME` is process-global, and a test that
-/// sets it races every other test in the same binary that reads a
-/// config path.
 pub(crate) fn load_from(path: &std::path::Path) -> Vec<PeerConfig> {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -117,13 +113,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// These tests name their own file instead of setting
-    /// `XDG_CONFIG_HOME`. That variable is process-global, and the test
-    /// binary runs these in parallel threads: setting it here pointed
-    /// every other test in the process at this fixture, and the
-    /// `remove_var` on the way out left the rest reading whatever
-    /// happened to be next.
-    fn fixture() -> (TempDir, PathBuf) {
+    fn peers_file() -> (TempDir, PathBuf) {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("peers.json");
         (tmp, path)
@@ -132,7 +122,7 @@ mod tests {
     /// Fixture file with two good entries + one malformed → 2 loaded.
     #[test]
     fn load_parses_fixture_and_skips_bad_rows() {
-        let (_tmp, path) = fixture();
+        let (_tmp, path) = peers_file();
         let good_a = "a".repeat(64);
         let good_b = "b".repeat(64);
         let bad = "nope";
@@ -156,7 +146,7 @@ mod tests {
     /// Missing file returns empty without error.
     #[test]
     fn load_missing_file_is_empty() {
-        let (_tmp, path) = fixture();
+        let (_tmp, path) = peers_file();
         assert!(load_from(&path).is_empty());
     }
 }

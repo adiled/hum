@@ -1,23 +1,3 @@
-// worker-half — the inverse direction of openai-server.
-//
-// The forager half translates OpenAI HTTP wire → chi:"prompt" out to
-// humd. This test drives the worker half the other way: a fake humd
-// routes chi:"prompt"/"tool-result"/"cancel" tones back to this bee
-// (humd forwards prompts whose modelId matches an advertised model),
-// the worker calls the upstream OpenAI API, and streams
-// chi:"chunk"/"finish"/"tool-call" tones out.
-//
-// We stand up a fake upstream OpenAI-compatible server (via
-// OPENAI_API_BASE) and a fake humd that sends tones and captures the
-// replies. The fake OpenAI answers with a canned SSE stream, and can
-// be told to return tool_calls on the first turn to exercise the tool
-// loop.
-//
-// Pins the wire: chunks carry sid + chunkType + delta, finish carries
-// finishReason + usage, and tool_calls become chi:"tool-call" tones
-// with callId/toolName/args — the canonical surface the Rust workers
-// emit, so downstream consumers see the same shapes regardless of
-// which bee produced them.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
@@ -29,10 +9,7 @@ import { spawn, type Subprocess } from "bun";
 
 type Tone = Record<string, unknown>;
 
-// Fake upstream OpenAI-compatible API. `toolCall` toggles whether the
-// first /chat/completions response returns a tool_call (then a second
-// request must include the tool result, and we answer with text).
-async function startFakeOpenAI(toolCall: boolean): Promise<{ port: number; shutdown: () => void }> {
+async function startFakeOpenAI(toolCallsFirstTurn: boolean): Promise<{ port: number; shutdown: () => void }> {
   const server = createHttpServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c.toString(); });
@@ -40,12 +17,10 @@ async function startFakeOpenAI(toolCall: boolean): Promise<{ port: number; shutd
       if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const mk = (o: object) => `data: ${JSON.stringify(o)}\n\n`;
-        if (toolCall && !body.includes('"role":"tool"')) {
-          // First turn: the model wants to call a tool.
+        if (toolCallsFirstTurn && !body.includes('"role":"tool"')) {
           res.write(mk({ choices: [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_abc", type: "function", function: { name: "read", arguments: "{\"path\":\"" } }] } }] }));
           res.write(mk({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "a.txt\"}" } }] } }] }));
         } else {
-          // Second turn (after tool result) or no-tool: plain text.
           res.write(mk({ choices: [{ delta: { content: "saw the" } }] }));
           res.write(mk({ choices: [{ delta: { content: " file" } }] }));
           res.write(mk({ usage: { prompt_tokens: 3, completion_tokens: 2 } }));
@@ -63,8 +38,6 @@ async function startFakeOpenAI(toolCall: boolean): Promise<{ port: number; shutd
   return { port, shutdown: () => server.close() };
 }
 
-// Fake humd: accepts one openai-server connection, captures hello,
-// sends tones, and records every reply tone.
 async function startFakeHumd(): Promise<{
   sockPath: string;
   capturedReplies: Tone[];
@@ -140,8 +113,8 @@ let openAI: { port: number; shutdown: () => void };
 let humd: Awaited<ReturnType<typeof startFakeHumd>>;
 let server: Subprocess<"ignore", "pipe", "pipe">;
 
-async function boot(toolCall: boolean) {
-  openAI = await startFakeOpenAI(toolCall);
+async function boot(toolCallsFirstTurn: boolean) {
+  openAI = await startFakeOpenAI(toolCallsFirstTurn);
   humd = await startFakeHumd();
   server = spawn({
     cmd: ["bun", "src/index.ts"],
@@ -199,7 +172,6 @@ describe("openai-server worker half — tool loop", () => {
     const sid = "worker-tool-sid";
     humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: "read the file", tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] });
 
-    // First: the model emits a tool-call; the worker must NOT finish.
     await waitFor(() => humd.capturedReplies.some(r => r.chi === "tool-call"), 5000);
     expect(humd.capturedReplies.some(r => r.chi === "finish")).toBe(false);
 
@@ -209,7 +181,6 @@ describe("openai-server worker half — tool loop", () => {
     expect(toolCall.callId).toBeDefined();
     expect(toolCall.args).toContain("a.txt");
 
-    // Simulate the forager returning the tool result.
     humd.send({ chi: "tool-result", sid, callId: toolCall.callId, toolName: "read", output: "file contents" });
 
     await waitFor(() => humd.capturedReplies.some(r => r.chi === "finish"), 5000);
