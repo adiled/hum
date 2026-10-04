@@ -14,7 +14,10 @@ async function startFakeOpenAI(toolCallsFirstTurn: boolean): Promise<{ port: num
     let body = "";
     req.on("data", (c) => { body += c.toString(); });
     req.on("end", () => {
-      if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
+      if (req.method === "GET" && req.url?.endsWith("/models")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "gpt-4o", object: "model", created: 0, owned_by: "fake" }] }));
+      } else if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const mk = (o: object) => `data: ${JSON.stringify(o)}\n\n`;
         if (toolCallsFirstTurn && !body.includes('"role":"tool"')) {
@@ -143,6 +146,11 @@ async function teardown() {
 describe("openai-server worker half — chi:prompt in, chunk/finish out", () => {
   beforeAll(async () => { await boot(false); });
   afterAll(async () => { await teardown(); });
+
+  test("hello advertises the worker's discovered models", async () => {
+    const hello = await waitForHello(humd.helloReceived, 5000);
+    expect(hello.models).toEqual(["gpt-4o"]);
+  });
 
   test("streams text_delta chunks and a finish with usage", async () => {
     const sid = "worker-test-sid";

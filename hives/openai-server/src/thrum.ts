@@ -8,8 +8,6 @@ export const BEE_VERSION = pkg.version;
 export const BEE_ROLE = "forager";
 export const BEE_ROLES = ["forager", "worker"];
 export const BEE_PROVIDES = ["session"];
-export const BEE_MODELS: string[] = (process.env.OPENAI_WORKER_MODELS ?? "")
-  .split(",").map(s => s.trim()).filter(s => s.length > 0);
 
 const RECONNECT_BASE_MS = 250;
 const RECONNECT_CEILING_MS = 30_000;
@@ -41,6 +39,7 @@ export class ThrumClient {
   private byId = new Map<string, SidHandler>();
   private byChi = new Map<string, SidHandler>();
   private path: string;
+  private models: string[];
   private connected = false;
   private pending: string[] = [];
   private bind?: BindInfo;
@@ -48,8 +47,9 @@ export class ThrumClient {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
-  constructor(path?: string) {
+  constructor(path?: string, models?: string[]) {
     this.path = path ?? defaultThrumPath();
+    this.models = models ?? [];
   }
 
   async connect(bind?: BindInfo): Promise<void> {
@@ -78,7 +78,7 @@ export class ThrumClient {
         hive: HIVE_NAME,
         version: BEE_VERSION,
         provides: BEE_PROVIDES,
-        models: BEE_MODELS,
+        models: this.models,
         propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
         protoVersion: THRUM_VERSION,
         chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
@@ -138,6 +138,10 @@ export class ThrumClient {
       this.reconnectTimer = null;
       this.attempt();
     }, delay);
+  }
+
+  setModels(models: string[]): void {
+    this.models = models.slice();
   }
 
   send(msg: Tone): void {

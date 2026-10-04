@@ -88,7 +88,6 @@ conversation and continues streaming. Everything gets hummed.
 | `OPENAI_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
 | `OPENAI_SERVER_API_KEY` | _(unset → no auth)_ | bearer token required on requests |
 | `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
-| `OPENAI_WORKER_MODELS` | _(empty → none)_ | model IDs the worker half advertises (comma-separated) |
 | `OPENAI_API_KEY` | `OPENAI_SERVER_API_KEY` | upstream OpenAI bearer (worker half) |
 | `OPENAI_API_BASE` | `https://api.openai.com/v1` | upstream OpenAI-compatible base URL (worker half) |
 
@@ -100,15 +99,16 @@ The bee's own kind (`openai-server`) is its env namespace —
 Also reads `~/.config/hum/hives/openai-server.json` if present:
 
 ```json
-{ "host": "127.0.0.1", "port": 14620, "apiKey": "secret", "models": ["gpt-4o"] }
+{ "host": "127.0.0.1", "port": 14620, "apiKey": "secret" }
 ```
 
-`models` seeds the model list exposed on `/v1/models` **and** advertised
-by the worker half. The worker bee is the source of truth for what
-models the hive can serve at any time — humd routes `chi:"prompt"`
-to this bee only when `modelId` matches an advertised model.
-
-Resolution precedence: **env > config file > built-in defaults**.
+The worker bee is the source of truth for what models the hive can
+serve. On startup the worker half calls the upstream OpenAI-compatible
+spec's own model listing (`GET {OPENAI_API_BASE}/models`) and reports
+the discovered ids on its `chi:"hello"` and on this server's
+`/v1/models`. Nothing hive-side governs the list — no env, no config
+seed. humd routes `chi:"prompt"` to this bee only when `modelId`
+matches a discovered model, and the worker rejects unknown ids.
 
 ## Run
 

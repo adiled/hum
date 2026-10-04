@@ -41,17 +41,46 @@ export class OpenAIWorker {
   private thrum: ThrumClient;
   private sessions = new Map<string, Session>();
   private static readonly MAX_SESSIONS = 32;
+  private discovered: string[] = [];
 
   constructor(thrum: ThrumClient) {
     this.thrum = thrum;
+  }
+
+  async discover(): Promise<void> {
+    let ids: string[] = [];
+    try {
+      const resp = await fetch(`${API_BASE}/models`, {
+        headers: API_KEY ? { "Authorization": `Bearer ${API_KEY}` } : {},
+      });
+      if (resp.ok) {
+        const body = await resp.json() as { data?: Array<{ id?: unknown }> };
+        if (Array.isArray(body.data)) {
+          ids = body.data
+            .map(d => typeof d?.id === "string" ? d.id : "")
+            .filter(s => s.length > 0);
+        }
+      }
+    } catch {}
+    this.discovered = ids;
+  }
+
+  models(): string[] {
+    return this.discovered.slice();
   }
 
   async handlePrompt(msg: Tone): Promise<void> {
     const sid = (msg.sid as string) ?? "";
     if (!sid) return;
 
+    const modelId = (msg.modelId as string) ?? "";
+    if (!this.discovered.includes(modelId)) {
+      this.error(sid, "unknown_model", `worker does not serve model '${modelId}'`);
+      return;
+    }
+
     const sess = this.sessionFor(sid);
-    sess.model = (msg.modelId as string) ?? sess.model;
+    sess.model = modelId;
     const tools = msg.tools as ToolDef[] | undefined;
     if (Array.isArray(tools) && tools.length > 0) sess.tools = tools;
 
@@ -102,7 +131,7 @@ export class OpenAIWorker {
         body: JSON.stringify(body),
       });
     } catch (e) {
-      if (gen !== sess.generation) return; // superseded by a newer turn
+      if (gen !== sess.generation) return;
       this.error(sid, "upstream_error", (e as Error).message ?? "upstream failed");
       return;
     }

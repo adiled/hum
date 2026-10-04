@@ -13,7 +13,6 @@ interface BeeConfig {
   host?: string;
   port?: number;
   apiKey?: string;
-  models?: string[];
 }
 
 function readConfigFile(): BeeConfig {
@@ -28,7 +27,7 @@ function readConfigFile(): BeeConfig {
 }
 
 const fileConfig = readConfigFile();
-const MODEL_IDS: string[] = Array.isArray(fileConfig.models) ? fileConfig.models : [];
+let MODEL_IDS: string[] = [];
 
 const PORT = process.env.OPENAI_SERVER_PORT !== undefined
   ? parseInt(process.env.OPENAI_SERVER_PORT, 10)
@@ -1142,10 +1141,13 @@ async function start(): Promise<void> {
   const actualPort = (addr && typeof addr === "object" && typeof addr.port === "number") ? addr.port : PORT;
   console.log(`[hum-openai-server] listening on http://${actualHost}:${actualPort}`);
 
+  const openaiWorker = new OpenAIWorker(thrum);
+  await openaiWorker.discover();
+  MODEL_IDS = openaiWorker.models();
+  thrum.setModels(MODEL_IDS);
+
   await thrum.connect({ host: actualHost, port: actualPort, scheme: "http" });
   console.log(`[hum-openai-server] connected to thrum`);
-
-  const openaiWorker = new OpenAIWorker(thrum);
   thrum.onChi("prompt", (msg) => {
     const sid = (msg.sid as string) ?? "";
     if (sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
