@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use ensemble::Liveness;
@@ -25,6 +24,21 @@ fn liveness(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) -> Option<L
         .into_iter()
         .find(|(p, _)| *p == peer)
         .map(|(_, l)| l)
+}
+
+/// Transport death propagates asynchronously: killing a link drops the
+/// sender, humd's drain loop ends, and only then does the lease flip to
+/// TransportClosed. Poll for it rather than assuming a fixed sleep is long
+/// enough — under CI load it is not.
+async fn await_dead(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while liveness(sim, observer, peer) != Some(Liveness::Dead) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a peer whose link was killed must go Dead"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -56,16 +70,15 @@ async fn a_killed_peer_goes_dead() {
     assert_eq!(liveness(&sim, a, b), Some(Liveness::Live));
 
     sim.kill_peer(b, a).expect("kill b→a");
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    assert_eq!(liveness(&sim, a, b), Some(Liveness::Dead));
+    await_dead(&sim, a, b).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dead_peer_survives_until_swept() {
     let (sim, a, b) = pair().await;
     sim.kill_link(a, b).expect("kill");
-    tokio::time::sleep(Duration::from_millis(40)).await;
     assert_eq!(sim.peer_count(a), 1, "transport death does not self-evict");
+    await_dead(&sim, a, b).await;
 
     let evicted = sim.evict_expired(a, TTL).expect("sweep");
     assert_eq!(evicted, vec![b]);
@@ -109,7 +122,7 @@ async fn a_partitioned_peer_is_not_dead() {
 async fn a_rewired_peer_is_live_again() {
     let (sim, a, b) = pair().await;
     sim.kill_link(a, b).expect("kill");
-    tokio::time::sleep(Duration::from_millis(40)).await;
+    await_dead(&sim, a, b).await;
     assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![b]);
     assert_eq!(sim.peer_count(a), 0);
 
@@ -138,8 +151,8 @@ async fn eviction_only_touches_the_dead_peer() {
     sim.probe(a, b).await.expect("probe");
     sim.probe(a, c).await.expect("probe");
     sim.kill_link(b, a).expect("kill b");
-    tokio::time::sleep(Duration::from_millis(40)).await;
 
+    await_dead(&sim, a, b).await;
     assert_eq!(sim.evict_expired(a, TTL).expect("sweep"), vec![b]);
     assert_eq!(liveness(&sim, a, c), Some(Liveness::Live), "c is untouched");
     assert_eq!(sim.peer_count(a), 1, "only b was reaped");
