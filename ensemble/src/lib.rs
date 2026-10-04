@@ -867,7 +867,7 @@ async fn handle_gossip(
     if !gossip.note_seen(parsed.msg_id) {
         return true;
     }
-    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_claims_sender(&parsed.payload, arrived_from) {
+    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_claims_sender(parsed.payload, arrived_from) {
         tracing::warn!(
             target: "ensemble.bees",
             arrived_from = %arrived_from,
