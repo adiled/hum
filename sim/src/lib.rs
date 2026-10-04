@@ -94,6 +94,16 @@ impl Sim {
     }
 
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
+        self.spawn_humd_inner(id, true).await
+    }
+
+    /// A humd that refuses to route prompts on a peer's advertised model
+    /// claim — the production default.
+    pub async fn spawn_humd_not_trusting_remote_workers(&self, id: Hid) -> Arc<SimHumd> {
+        self.spawn_humd_inner(id, false).await
+    }
+
+    async fn spawn_humd_inner(&self, id: Hid, trust_remote_workers: bool) -> Arc<SimHumd> {
         let thrum = Thrum::new();
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -128,6 +138,7 @@ impl Sim {
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
+            trust_remote_workers,
         };
 
         let shutdown_fut = async move {
@@ -249,6 +260,7 @@ impl Sim {
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
+            trust_remote_workers: true,
         };
 
         let shutdown_fut = async move { let _ = shutdown_rx.await; };

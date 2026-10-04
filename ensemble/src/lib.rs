@@ -845,6 +845,26 @@ async fn handle_liveness(
     true
 }
 
+/// Whether an announce is internally consistent: the `humd_id` it claims must
+/// match the `from` of the tone carrying it. Binds to the tone's own origin
+/// field, not the connection it arrived on, so a legitimate multi-hop
+/// advertise still percolates while a peer cannot stamp someone else's Hid.
+fn announce_origin_matches_payload(tone: &Tone) -> bool {
+    let Some(from) = tone.get("from").and_then(|v| v.as_str()) else {
+        return true;
+    };
+    let Ok(payload) = serde_json::from_value::<hives::HiveAnnounce>(
+        tone.get("payload").cloned().unwrap_or(serde_json::Value::Null),
+    ) else {
+        return true;
+    };
+    let claimed = match payload {
+        hives::HiveAnnounce::Advertise { humd_id, .. } => humd_id,
+        hives::HiveAnnounce::Retract { humd_id, .. } => humd_id,
+    };
+    claimed == from
+}
+
 async fn handle_gossip(
     send_stats: &Arc<SendStats>,
     gossip: &Arc<gossip::GossipState>,
@@ -857,6 +877,14 @@ async fn handle_gossip(
         None => return false,
     };
     if !gossip.note_seen(parsed.msg_id) {
+        return true;
+    }
+    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
+        tracing::warn!(
+            target: "ensemble.bees",
+            topic = parsed.topic,
+            "gossip.announce.impersonation-rejected — payload claims a humd_id the tone origin does not match"
+        );
         return true;
     }
     if let Some(tx) = gossip.sender(parsed.topic) {
@@ -894,6 +922,64 @@ mod tests {
             "rid": tag,
             "from": Hid::random_humd().to_hex(),
         })
+    }
+
+    fn worker_announce(claimed: &str, model: &str) -> serde_json::Value {
+        let mut manifest = hives::HiveManifest::new("worker-bee", "0.1.0", "0.7.0");
+        manifest.bee = vec!["worker".to_string()];
+        manifest.models = vec![model.to_string()];
+        serde_json::to_value(hives::HiveAnnounce::Advertise {
+            humd_id: claimed.to_string(),
+            manifest: Box::new(manifest),
+        })
+        .expect("serialize announce")
+    }
+
+    fn announce_tone(origin: &str, payload: serde_json::Value) -> Tone {
+        json!({
+            "chi": "gossip-publish",
+            "rid": "g1",
+            "topic": hives::ANNOUNCE_TOPIC,
+            "from": origin,
+            "msg_id": "m1",
+            "payload": payload,
+        })
+    }
+
+    #[test]
+    fn an_announce_matching_its_tone_origin_is_accepted() {
+        let me = Hid::random_humd();
+        let tone = announce_tone(&me.to_hex(), worker_announce(&me.to_hex(), "claude-opus-4-7"));
+        assert!(announce_origin_matches_payload(&tone));
+    }
+
+    #[test]
+    fn an_announce_claiming_another_hums_hid_is_rejected() {
+        let me = Hid::random_humd();
+        let victim = Hid::random_humd();
+        let tone = announce_tone(&me.to_hex(), worker_announce(&victim.to_hex(), "claude-opus-4-7"));
+        assert!(
+            !announce_origin_matches_payload(&tone),
+            "a peer must not advertise capabilities under a Hid it does not own"
+        );
+    }
+
+    #[test]
+    fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
+        // A advertises, B relays, C receives. C sees B as the connection but
+        // the tone's origin is still A — the claim must survive the hop.
+        let a = Hid::random_humd();
+        let b = Hid::random_humd();
+        let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));
+        assert!(announce_origin_matches_payload(&tone), "relay was blocked");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn an_unknown_payload_shape_passes_the_provenance_gate() {
+        let me = Hid::random_humd().to_hex();
+        let tone = announce_tone(&me, json!({ "kind": "something-new" }));
+        assert!(announce_origin_matches_payload(&tone));
     }
 
     async fn drain(rx: &mut mpsc::Receiver<Tone>) -> Vec<Tone> {
