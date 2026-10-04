@@ -105,8 +105,15 @@ single protocol.
   ensemble on the `hum/hives/announce` topic.
 - humd replies with `chi:"breath"` — a snapshot of any state relevant
   to this nestler (today: `{}`; reserved for future state sync).
-- A `protoVersion` mismatch is **a warning, not a hard error**. The
-  bumping rules:
+- A hello with **no** `protoVersion` is **refused**: the bee is not
+  registered, not announced to the ensemble, and the connection is closed.
+- A `protoVersion` whose **major** differs from humd's is **refused** the
+  same way.
+- A `protoVersion` that differs only in minor or patch is admitted, with a
+  `thrum.hello.proto-drift` warning.
+- An unparseable `protoVersion` is refused.
+
+The bumping rules humd applies:
   - **patch** — docstring tweaks, additive-optional fields
   - **minor** — new chi value, new required field with compat path
   - **major** — removed chi, renamed chi, semantics changed
