@@ -19,7 +19,7 @@ the noise of test fixtures. The matching test under `sim/` asserts the
 same story in Rust, against the in-memory ensemble transport
 (`ensemble::InMemoryEndpoint`) wired by [`/root/hum/sim/`](../sim/).
 
-Pairing is strict — one MD, one test:
+Pairing is the rule, not yet the state of the directory:
 
 | scenario | test |
 |---|---|
@@ -29,6 +29,13 @@ Pairing is strict — one MD, one test:
 | `overflow-inference.md` | `sim/tests/overflow_inference.rs` |
 | `partition-and-heal.md` | `sim/tests/partition_and_heal.rs` |
 | `eggs-on-the-hum.md` | `sim/tests/eggs_on_the_hum.rs` |
+| `find-the-worker.md` | `sim/tests/remote_discovery.rs` |
+
+Tests with no scenario prose yet: `delivery.rs`, `liveness.rs`,
+`lossy_link.rs`, `mock_prompt.rs`, `overflow_inference.rs`,
+`phone_laptop_roam.rs`, `smoke.rs`, `stalled_peer.rs`,
+`tool_catalogue.rs`, `two_humds_ping_pong.rs`. `wifi-p2p-meetup.md`
+has prose with no test.
 
 Each MD covers five sections in the same order: **setup**, **happy
 path**, **failure modes**, **success criteria**, **what this validates**.
