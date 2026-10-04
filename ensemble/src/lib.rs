@@ -478,11 +478,7 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover(
-        &self,
-        name: impl Into<String>,
-    ) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
-        let needle = name.into();
+    pub fn hive_discover_all(&self) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
         let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
@@ -490,19 +486,35 @@ impl Ensemble {
                 match raw.recv().await {
                     Ok(v) => {
                         let parsed: Result<hives::HiveAnnounce, _> = serde_json::from_value(v);
-                        if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed {
-                            if manifest.name != needle {
-                                continue;
-                            }
-                            if let Ok(id) = Hid::from_hex(&humd_id)
-                                && tx.send((id, *manifest)).await.is_err()
-                            {
-                                break;
-                            }
+                        if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed
+                            && let Ok(id) = Hid::from_hex(&humd_id)
+                            && tx.send((id, *manifest)).await.is_err()
+                        {
+                            break;
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+        rx
+    }
+
+    pub fn hive_discover(
+        &self,
+        name: impl Into<String>,
+    ) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
+        let needle = name.into();
+        let mut raw = self.hive_discover_all();
+        let (tx, rx) = mpsc::channel(64);
+        tokio::spawn(async move {
+            while let Some((id, manifest)) = raw.recv().await {
+                if manifest.name != needle {
+                    continue;
+                }
+                if tx.send((id, manifest)).await.is_err() {
+                    break;
                 }
             }
         });
