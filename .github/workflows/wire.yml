@@ -26,6 +26,19 @@ jobs:
       - name: Golden fixture round-trips through views
         run: cargo test -p thrum-core
 
+  mesh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy on the crates this layer owns
+        run: cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity
+      - name: Ensemble, daemon and mesh simulation
+        run: cargo test --locked -p ensemble -p sim -p humd -p hum -p humctl
+
   go:
     runs-on: ubuntu-latest
     steps:

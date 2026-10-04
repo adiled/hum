@@ -1,9 +1,8 @@
-
 use std::time::Duration;
 
 use ensemble::{
-    gossip::{gossip_tone, mint_msg_id, GOSSIP_CHI},
     Ensemble, HumdKey, InMemoryEndpoint, PeerCapabilities,
+    gossip::{GOSSIP_CHI, gossip_tone, mint_msg_id},
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -22,14 +21,8 @@ async fn gossip_percolates_one_hop_and_dedupes_duplicates() {
         ..Default::default()
     };
 
-    let (a_to_b, b_to_a) = InMemoryEndpoint::pair(
-        a_id, caps.clone(),
-        b_id, caps.clone(),
-    );
-    let (b_to_c, c_to_b) = InMemoryEndpoint::pair(
-        b_id, caps.clone(),
-        c_id, caps.clone(),
-    );
+    let (a_to_b, b_to_a) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+    let (b_to_c, c_to_b) = InMemoryEndpoint::pair(b_id, caps.clone(), c_id, caps.clone());
 
     let ens_a = Ensemble::new(a_id);
     let ens_b = Ensemble::new(b_id);
@@ -55,12 +48,12 @@ async fn gossip_percolates_one_hop_and_dedupes_duplicates() {
 
     let x_key = HumdKey::generate();
     let x_id = x_key.hid();
-    let (x_to_b, b_to_x) = InMemoryEndpoint::pair(
-        x_id, caps.clone(),
-        b_id, caps.clone(),
-    );
+    let (x_to_b, b_to_x) = InMemoryEndpoint::pair(x_id, caps.clone(), b_id, caps.clone());
     ens_b.install(b_to_x, caps.clone(), &b_key);
+    let ens_x = Ensemble::new(x_id);
+    ens_x.install(x_to_b.clone(), caps.clone(), &x_key);
     tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(ens_b.handshake_done(&x_id), "B must complete X's handshake");
 
     while let Ok(Ok(_)) = timeout(Duration::from_millis(1), sub_c.recv()).await {}
 

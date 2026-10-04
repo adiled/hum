@@ -15,18 +15,13 @@ use serde::{Deserialize, Serialize};
 ///   Refuse — > 95%, do not route new prompts here (humd will reject)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum Pressure {
+    #[default]
     Cool,
     Warm,
     Hot,
     Refuse,
-}
-
-impl Default for Pressure {
-    fn default() -> Self {
-        // No-op advertise — an empty humd is at rest, not refusing.
-        Pressure::Cool
-    }
 }
 
 impl Pressure {
@@ -78,11 +73,7 @@ impl CellHeadroom {
     /// When `total_slots == 0` (no nest), pressure is `Cool` and
     /// `free_slots` is forced to 0 — the humd is honest about having
     /// nothing to offer rather than misrepresenting itself as full.
-    pub fn from_counts(
-        free_slots: u32,
-        total_slots: u32,
-        p95_latency_ms: Option<u32>,
-    ) -> Self {
+    pub fn from_counts(free_slots: u32, total_slots: u32, p95_latency_ms: Option<u32>) -> Self {
         if total_slots == 0 {
             return Self {
                 free_slots: 0,
@@ -216,6 +207,10 @@ mod tests {
         // skip_serializing_if for None p95.
         let no_latency = CellHeadroom::from_counts(5, 10, None);
         let s = serde_json::to_string(&no_latency).unwrap();
-        assert!(!s.contains("p95_latency_ms"), "None should be skipped: {}", s);
+        assert!(
+            !s.contains("p95_latency_ms"),
+            "None should be skipped: {}",
+            s
+        );
     }
 }

@@ -4,11 +4,12 @@ use parking_lot::Mutex;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 use super::{Hid, HumdAddr, PeerCapabilities, PeerConnection, Tone};
+use crate::opening::Gate;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Script {
@@ -22,7 +23,7 @@ pub struct Script {
 impl Script {
     fn take(counted: &mut usize, every: usize, offered: u64) -> bool {
         match *counted {
-            0 => every > 0 && offered % every as u64 == 0,
+            0 => every > 0 && offered.is_multiple_of(every as u64),
             n => {
                 *counted = n - 1;
                 true
@@ -68,7 +69,12 @@ pub struct LinkFaults {
 
 impl Default for LinkFaults {
     fn default() -> Self {
-        Self { script: Script::default(), noise: Noise::default(), seed: 0x5EED_C0DE, offered: 0 }
+        Self {
+            script: Script::default(),
+            noise: Noise::default(),
+            seed: 0x5EED_C0DE,
+            offered: 0,
+        }
     }
 }
 
@@ -111,7 +117,9 @@ impl LinkFaults {
 
     fn verdict(&mut self, rng: &mut impl Rng) -> Verdict {
         self.offered += 1;
-        self.script.verdict(self.offered).unwrap_or_else(|| self.noise.verdict(rng))
+        self.script
+            .verdict(self.offered)
+            .unwrap_or_else(|| self.noise.verdict(rng))
     }
 }
 
@@ -158,6 +166,7 @@ pub struct InMemoryEndpoint {
     reorder_hold: Mutex<Option<Tone>>,
     killed: AtomicBool,
     stalled: AtomicBool,
+    gate: Gate,
 }
 
 struct PartitionState {
@@ -195,10 +204,14 @@ impl InMemoryEndpoint {
                 partitioned: false,
                 buffer: VecDeque::new(),
             }),
-            faults: Mutex::new(LinkFaults { seed: seed_a, ..Default::default() }),
+            faults: Mutex::new(LinkFaults {
+                seed: seed_a,
+                ..Default::default()
+            }),
             rng: Mutex::new(StdRng::seed_from_u64(seed_a)),
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
+            gate: Gate::new(),
             killed: AtomicBool::new(false),
             stalled: AtomicBool::new(false),
         });
@@ -211,10 +224,14 @@ impl InMemoryEndpoint {
                 partitioned: false,
                 buffer: VecDeque::new(),
             }),
-            faults: Mutex::new(LinkFaults { seed: seed_b, ..Default::default() }),
+            faults: Mutex::new(LinkFaults {
+                seed: seed_b,
+                ..Default::default()
+            }),
             rng: Mutex::new(StdRng::seed_from_u64(seed_b)),
             counters: Mutex::new(LinkCounters::default()),
             reorder_hold: Mutex::new(None),
+            gate: Gate::new(),
             killed: AtomicBool::new(false),
             stalled: AtomicBool::new(false),
         });
@@ -250,7 +267,10 @@ impl InMemoryEndpoint {
     async fn emit(&self, tone: Tone) -> Result<()> {
         if self.stalled.load(Ordering::SeqCst) {
             self.counters.lock().stalled_sends += 1;
-            return Ok(std::future::pending::<()>().await);
+            return {
+                let _: () = std::future::pending::<()>().await;
+                Ok(())
+            };
         }
         let tx = {
             let mut guard = self.tx.lock();
@@ -298,13 +318,21 @@ impl InMemoryEndpoint {
         *self.rng.lock() = StdRng::seed_from_u64(seed);
     }
 
-    pub fn faults(&self) -> LinkFaults { self.faults.lock().clone() }
+    pub fn faults(&self) -> LinkFaults {
+        self.faults.lock().clone()
+    }
 
-    pub fn counters(&self) -> LinkCounters { *self.counters.lock() }
+    pub fn counters(&self) -> LinkCounters {
+        *self.counters.lock()
+    }
 
-    pub fn buffered(&self) -> usize { self.partition.lock().buffer.len() }
+    pub fn buffered(&self) -> usize {
+        self.partition.lock().buffer.len()
+    }
 
-    pub fn is_partitioned(&self) -> bool { self.partition.lock().partitioned }
+    pub fn is_partitioned(&self) -> bool {
+        self.partition.lock().partitioned
+    }
 
     pub fn flush_reorder(&self) -> bool {
         match self.reorder_hold.lock().take() {
@@ -337,10 +365,41 @@ impl InMemoryEndpoint {
 
 #[async_trait]
 impl PeerConnection for InMemoryEndpoint {
-    fn peer(&self) -> &HumdAddr { &self.peer }
-    fn capabilities(&self) -> &PeerCapabilities { &self.caps }
+    fn peer(&self) -> &HumdAddr {
+        &self.peer
+    }
+    fn capabilities(&self) -> &PeerCapabilities {
+        &self.caps
+    }
 
     async fn send(&self, tone: Tone) -> Result<()> {
+        self.gate.wait().await;
+        self.deliver(tone).await
+    }
+
+    async fn send_opening(&self, tone: Tone) -> Result<()> {
+        let result = self.deliver(tone).await;
+        self.gate.opened();
+        result
+    }
+
+    fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>> {
+        self.rx.lock().take()
+    }
+
+    fn arm_opening(&self) {
+        self.gate.arm();
+    }
+
+    fn close(&self) {
+        self.gate.shut();
+        self.tx.lock().take();
+        let _ = self.rx.lock().take();
+    }
+}
+
+impl InMemoryEndpoint {
+    async fn deliver(&self, tone: Tone) -> Result<()> {
         if self.killed.load(Ordering::SeqCst) {
             return Err(anyhow::anyhow!("link to {} is dead", self.peer.id.short()));
         }
@@ -388,14 +447,5 @@ impl PeerConnection for InMemoryEndpoint {
             c.duplicated += 1;
         }
         Ok(())
-    }
-
-    fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>> {
-        self.rx.lock().take()
-    }
-
-    fn close(&self) {
-        self.tx.lock().take();
-        let _ = self.rx.lock().take();
     }
 }

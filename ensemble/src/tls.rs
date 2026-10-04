@@ -1,61 +1,34 @@
-//! TLS-over-TCP transport for the ensemble.
+//! TLS-over-TCP transport for the ensemble. Sibling of [`crate::tcp`]:
+//! same framing, same contracts, wrapped in a [`tokio_rustls::TlsStream`].
 //!
-//! Sibling of [`crate::tcp`] — same NDJSON framing, same `Transport` +
-//! `PeerConnection` contract, but the underlying `TcpStream` is wrapped
-//! in a [`tokio_rustls::TlsStream`]. T2+ peers run over the public
-//! internet; plaintext is the loopback/LAN path only.
-//!
-//! ## Trust model — pinned fingerprints, no CA
-//!
-//! Self-signed cert on the server. The dialer carries the expected
-//! cert fingerprint (SHA-256 of the DER bytes) and accepts ONLY that
-//! one cert — see [`PinnedFingerprintVerifier`]. This matches the T2
-//! "known peers" model: trust is established out of band when you put
-//! a peer's fingerprint in `peers.json`; the TLS layer is just a
-//! confidentiality + integrity tunnel that proves the box on the other
-//! end really holds the private key for the fingerprint you wrote down.
-//! No CA, no chain validation, no SNI matching, no expiry handling —
-//! those belong to T4 with a real PKI.
-//!
-//! Shape:
-//! - [`TlsTcpEndpoint`] — one live [`PeerConnection`] over a TLS-wrapped
-//!   TCP stream. Reader task drains NDJSON into the receiver mpsc;
-//!   `send` writes a serialised tone + newline under a `tokio::Mutex`.
-//! - [`TlsTcpListener`] — accepts inbound TLS connections. The
-//!   accepted endpoint starts with a placeholder [`HumdAddr`]; the
-//!   ensemble drainer learns the real id once the peer's first hello
-//!   arrives — same as plaintext.
-//! - [`TlsTcpTransport`] — [`Transport`] impl. `connect` dials the
-//!   first `tls:host:port` hint in the [`HumdAddr`], using a
-//!   pre-configured client config that pins one fingerprint.
+//! Trust model: pinned fingerprints, no CA, no chain, no SNI, no expiry.
+//! The dialer accepts exactly one cert — the SHA-256 of its DER bytes
+//! written down out of band in `peers.json`. See [`PinnedFingerprintVerifier`].
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+use tokio::io::{WriteHalf, split};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
 
-use crate::{HumdAddr, Hid, PeerCapabilities, PeerConnection, Tone, Transport};
+use crate::framing;
+use crate::opening::Gate;
+use crate::{Hid, HumdAddr, PeerCapabilities, PeerConnection, Tone, Transport};
 
-/// Inbound-channel capacity — matches `InMemoryEndpoint` / `TcpEndpoint`.
 const RECV_CAP: usize = 256;
 
-/// Hint prefix on a [`HumdAddr`] that signals "dial this `host:port`
-/// over TLS-pinned TCP." Sibling of `tcp:` so peers can advertise both
-/// plaintext and TLS endpoints and dialers pick the right one.
 pub const TLS_HINT: &str = "tls:";
 
-/// SHA-256 of a certificate's DER bytes. The bytes used for pinning in
-/// `peers.json` — write this on the server, paste it on the client.
 pub fn cert_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(cert.as_ref());
@@ -67,22 +40,16 @@ pub fn cert_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
 
 // ── Endpoint ───────────────────────────────────────────────────────────────
 
-/// One TLS-over-TCP peer link. Same NDJSON framing as the plaintext
-/// path — the TLS layer is invisible to the framing code, we just hand
-/// it a `TlsStream` instead of a `TcpStream`.
 pub struct TlsTcpEndpoint {
     peer: HumdAddr,
     caps: PeerCapabilities,
-    /// Serialises concurrent writers. `Option` so `close` can drop the
-    /// write half and subsequent sends fail cleanly.
-    writer: Mutex<Option<WriteHalf<TlsStream<TcpStream>>>>,
-    /// Inbound stream. Take-once.
+    writer: Arc<Mutex<Option<WriteHalf<TlsStream<TcpStream>>>>>,
     rx: parking_lot::Mutex<Option<mpsc::Receiver<Tone>>>,
+    closed: AtomicBool,
+    gate: Gate,
 }
 
 impl TlsTcpEndpoint {
-    /// Wrap an already-handshaken TLS stream. Used by both the client
-    /// and listener paths once rustls has finished the handshake.
     pub fn from_stream(
         stream: TlsStream<TcpStream>,
         peer: HumdAddr,
@@ -93,11 +60,23 @@ impl TlsTcpEndpoint {
         let me = Arc::new(Self {
             peer,
             caps,
-            writer: Mutex::new(Some(write_half)),
+            writer: Arc::new(Mutex::new(Some(write_half))),
             rx: parking_lot::Mutex::new(Some(rx)),
+            closed: AtomicBool::new(false),
+            gate: Gate::new(),
         });
-        tokio::spawn(read_loop(read_half, tx));
+        tokio::spawn(framing::pump(read_half, tx, "tls"));
         me
+    }
+    async fn write(&self, tone: Tone) -> Result<()> {
+        let mut guard = self.writer.lock().await;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(anyhow!("tls send: link closed"));
+        }
+        let w = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("tls send: writer closed"))?;
+        framing::write_frame(w, &tone).await
     }
 
     /// Dial a remote `host:port` with a fingerprint-pinned TLS config.
@@ -135,68 +114,34 @@ impl PeerConnection for TlsTcpEndpoint {
     }
 
     async fn send(&self, tone: Tone) -> Result<()> {
-        let mut line = serde_json::to_vec(&tone)
-            .map_err(|e| anyhow!("tls send: serialize: {e}"))?;
-        line.push(b'\n');
-        let mut guard = self.writer.lock().await;
-        let w = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("tls send: writer closed"))?;
-        w.write_all(&line)
-            .await
-            .map_err(|e| anyhow!("tls send: write: {e}"))?;
-        Ok(())
+        self.gate.wait().await;
+        self.write(tone).await
+    }
+
+    async fn send_opening(&self, tone: Tone) -> Result<()> {
+        let result = self.write(tone).await;
+        self.gate.opened();
+        result
     }
 
     fn take_receiver(&self) -> Option<mpsc::Receiver<Tone>> {
         self.rx.lock().take()
     }
 
-    fn close(&self) {
-        // Drop the writer half and the receiver. Best-effort, idempotent.
-        let slot = match self.writer.try_lock() {
-            Ok(mut g) => g.take(),
-            Err(_) => None, // contended — holder's next write fails when peer drops
-        };
-        if let Some(mut w) = slot {
-            tokio::spawn(async move {
-                let _ = w.shutdown().await;
-            });
-        }
-        let _ = self.rx.lock().take();
+    fn arm_opening(&self) {
+        self.gate.arm();
     }
-}
 
-/// Reader loop — parses NDJSON lines off the TLS read half and forwards
-/// them. Identical control flow to the plaintext path; the TLS framing
-/// is fully encapsulated inside `TlsStream`.
-async fn read_loop(
-    read_half: ReadHalf<TlsStream<TcpStream>>,
-    tx: mpsc::Sender<Tone>,
-) {
-    let mut lines = BufReader::new(read_half).lines();
-    loop {
-        let line = match lines.next_line().await {
-            Ok(Some(l)) => l,
-            Ok(None) => break, // EOF
-            Err(e) => {
-                tracing::trace!(target: "ensemble.tls", err = %e, "tls.read.failed");
-                break;
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.gate.shut();
+        let writer = self.writer.clone();
+        tokio::spawn(async move {
+            if let Some(mut w) = writer.lock().await.take() {
+                let _ = tokio::io::AsyncWriteExt::shutdown(&mut w).await;
             }
-        };
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Tone = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::trace!(target: "ensemble.tls", err = %e, "tls.parse.failed");
-                continue;
-            }
-        };
-        if tx.send(tone).await.is_err() {
-            break;
-        }
+        });
+        let _ = self.rx.lock().take();
     }
 }
 
@@ -409,8 +354,8 @@ impl Transport for TlsTcpTransport {
             .iter()
             .find_map(|h| h.strip_prefix(TLS_FP_HINT))
             .ok_or_else(|| anyhow!("tls transport: no `tls-fp:` hint in HumdAddr"))?;
-        let fp_bytes = hex::decode(fp_hex)
-            .map_err(|e| anyhow!("tls transport: fingerprint hex: {e}"))?;
+        let fp_bytes =
+            hex::decode(fp_hex).map_err(|e| anyhow!("tls transport: fingerprint hex: {e}"))?;
         if fp_bytes.len() != 32 {
             return Err(anyhow!(
                 "tls transport: fingerprint must be 32 bytes (got {})",
@@ -419,13 +364,9 @@ impl Transport for TlsTcpTransport {
         }
         let mut fp = [0u8; 32];
         fp.copy_from_slice(&fp_bytes);
-        let endpoint = TlsTcpEndpoint::connect(
-            host_port,
-            addr.clone(),
-            PeerCapabilities::default(),
-            fp,
-        )
-        .await?;
+        let endpoint =
+            TlsTcpEndpoint::connect(host_port, addr.clone(), PeerCapabilities::default(), fp)
+                .await?;
         Ok(endpoint as Arc<dyn PeerConnection>)
     }
 }

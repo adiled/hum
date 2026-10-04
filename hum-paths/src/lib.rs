@@ -72,6 +72,7 @@ pub const RUNTIME_INFO_BASENAME: &str = "runtime.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
+pub const ROUTING_JSON_BASENAME: &str = "routing.json";
 /// Subdirectory of a hum source tree that holds hive crates.
 pub const HIVES_SUBDIR: &str = "hives";
 /// Subdirectory of a hum source tree that holds recipes (installable bundles).
@@ -108,6 +109,11 @@ pub fn thrum_sock_resolved() -> PathBuf {
 
 /// humd HTTP control socket.
 pub fn http_sock() -> PathBuf { runtime_dir().join(HTTP_SOCK_BASENAME) }
+
+/// Kademlia routing table, restored on boot.
+pub fn routing_json() -> PathBuf {
+    state_dir().join(ROUTING_JSON_BASENAME)
+}
 
 /// Penny lifetime counters.
 pub fn penny() -> PathBuf { runtime_dir().join(PENNY_BASENAME) }
@@ -237,10 +243,10 @@ pub fn daemon_logs(name: &str) -> DaemonLogs {
     #[cfg(target_os = "macos")]
     {
         let base = home().join("Library/Logs");
-        return DaemonLogs::Files {
+        DaemonLogs::Files {
             stdout: base.join(format!("sh.hum.{name}.out.log")),
             stderr: base.join(format!("sh.hum.{name}.err.log")),
-        };
+        }
     }
     #[cfg(not(target_os = "macos"))]
     DaemonLogs::Journald { unit: name.to_string() }

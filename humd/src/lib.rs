@@ -19,6 +19,7 @@ mod peer_transport;
 pub mod peers;
 mod penny;
 pub mod redial;
+mod routing_store;
 pub mod supervisor;
 pub mod thrumd;
 pub use identity::{key_path, load_or_mint_key, read_key};
@@ -39,9 +40,11 @@ pub struct DaemonConfig {
     pub http_path: PathBuf,
     pub mcp_addr: std::net::SocketAddr,
     pub penny_path: PathBuf,
+    pub routing_path: PathBuf,
     pub hum_cfg: hum_paths::config::HumConfig,
     pub cli_path: String,
     pub penny_persist_interval: Duration,
+    pub routing_persist_interval: Duration,
     pub thrum_override: Option<Thrum>,
     pub ensemble: Option<Arc<Ensemble>>,
     pub bind_mcp: bool,
@@ -73,9 +76,11 @@ impl DaemonConfig {
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
             penny_path: hum_paths::penny(),
+            routing_path: hum_paths::routing_json(),
             hum_cfg: hum_paths::config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             penny_persist_interval: Duration::from_secs(10),
+            routing_persist_interval: Duration::from_secs(30),
             thrum_override: None,
             ensemble: None,
             bind_mcp: true,
@@ -145,6 +150,11 @@ where
             Arc::new(Ensemble::new(me))
         }),
     };
+
+    if let Some(ens) = &ensemble_opt {
+        routing_store::restore_on_boot(ens, &cfg.routing_path);
+        routing_store::spawn_persister(ens.clone(), cfg.routing_path.clone(), cfg.routing_persist_interval);
+    }
 
     let mut peer_reach: Vec<String> = Vec::new();
     let mut supervisor: Option<supervisor::Supervisor> = None;

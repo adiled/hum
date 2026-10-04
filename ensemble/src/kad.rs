@@ -50,7 +50,7 @@ use rand::RngCore;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use crate::{HumdAddr, Hid, Tone};
+use crate::{Hid, HumdAddr, Tone};
 
 /// Kademlia replication / bucket-size parameter (paper default).
 pub const KAD_K: usize = 20;
@@ -82,8 +82,8 @@ impl XorDistance {
     /// 256-bit big-endian number), the closer the two ids.
     pub fn distance(a: &Hid, b: &Hid) -> [u8; 32] {
         let mut out = [0u8; 32];
-        for i in 0..32 {
-            out[i] = a.as_bytes()[i] ^ b.as_bytes()[i];
+        for (slot, (x, y)) in out.iter_mut().zip(a.as_bytes().iter().zip(b.as_bytes())) {
+            *slot = x ^ y;
         }
         out
     }
@@ -116,12 +116,20 @@ pub struct KBucket {
 
 impl KBucket {
     pub fn new() -> Self {
-        Self { entries: VecDeque::with_capacity(KAD_K) }
+        Self {
+            entries: VecDeque::with_capacity(KAD_K),
+        }
     }
 
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn iter(&self) -> impl Iterator<Item = &HumdAddr> { self.entries.iter() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &HumdAddr> {
+        self.entries.iter()
+    }
 
     /// Insert (or refresh) `addr`. If the bucket already holds an entry
     /// with the same id, that entry is moved to the back (most-recent
@@ -166,7 +174,9 @@ impl RoutingTable {
         }
     }
 
-    pub fn me(&self) -> Hid { self.me }
+    pub fn me(&self) -> Hid {
+        self.me
+    }
 
     /// Insert `addr` into the appropriate bucket. Inserting the table's
     /// own id is a no-op (returns false). Returns true on insert/refresh.
@@ -198,12 +208,31 @@ impl RoutingTable {
         all
     }
 
+    pub fn forget(&mut self, id: &Hid) -> bool {
+        let mut dropped = false;
+        for bucket in &mut self.buckets {
+            let before = bucket.len();
+            bucket.entries.retain(|a| &a.id != id);
+            dropped |= bucket.len() != before;
+        }
+        dropped
+    }
+
+    pub fn entries(&self) -> Vec<HumdAddr> {
+        self.buckets
+            .iter()
+            .flat_map(|b| b.iter().cloned())
+            .collect()
+    }
+
     /// Total number of peers currently in the table.
     pub fn len(&self) -> usize {
         self.buckets.iter().map(|b| b.len()).sum()
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Direct lookup: does the table hold a HumdAddr for `id`?
     pub fn get(&self, id: &Hid) -> Option<HumdAddr> {
@@ -211,10 +240,7 @@ impl RoutingTable {
         if idx >= 256 {
             return None;
         }
-        self.buckets[idx]
-            .iter()
-            .find(|a| &a.id == id)
-            .cloned()
+        self.buckets[idx].iter().find(|a| &a.id == id).cloned()
     }
 }
 
@@ -241,6 +267,22 @@ impl KadState {
     /// Stash a HumdAddr into the routing table. Used at install-time
     /// (bootstrap a peer we just connected to) and when FIND_NODE resps
     /// advertise new peers.
+    pub fn forget(&self, id: &Hid) -> bool {
+        self.table.lock().forget(id)
+    }
+
+    pub fn snapshot(&self) -> Vec<HumdAddr> {
+        self.table.lock().entries()
+    }
+
+    pub fn restore(self: &Arc<Self>, addrs: Vec<HumdAddr>) -> usize {
+        let mut table = self.table.lock();
+        addrs
+            .into_iter()
+            .filter(|a| table.insert(a.clone()))
+            .count()
+    }
+
     pub fn note_peer(&self, addr: HumdAddr) {
         self.table.lock().insert(addr);
     }
@@ -304,12 +346,7 @@ pub fn find_node_tone(rid: &str, query_id: &str, target: &Hid, from: &Hid) -> To
 }
 
 /// Build a `chi:"kad-find-node-resp"` tone carrying up to K HumdAddrs.
-pub fn find_node_resp_tone(
-    rid: &str,
-    query_id: &str,
-    from: &Hid,
-    closest: &[HumdAddr],
-) -> Tone {
+pub fn find_node_resp_tone(rid: &str, query_id: &str, from: &Hid, closest: &[HumdAddr]) -> Tone {
     serde_json::json!({
         "chi": KAD_FIND_NODE_RESP_CHI,
         "rid": rid,
@@ -348,7 +385,12 @@ pub fn parse_find_node(tone: &Tone) -> Option<ParsedFindNode> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    Some(ParsedFindNode { query_id, target, from, rid })
+    Some(ParsedFindNode {
+        query_id,
+        target,
+        from,
+        rid,
+    })
 }
 
 /// Pull fields out of a `chi:"kad-find-node-resp"` tone.
@@ -360,7 +402,11 @@ pub fn parse_find_node_resp(tone: &Tone) -> Option<ParsedFindNodeResp> {
         .iter()
         .filter_map(|v| serde_json::from_value::<HumdAddr>(v.clone()).ok())
         .collect();
-    Some(ParsedFindNodeResp { query_id, from, closest })
+    Some(ParsedFindNodeResp {
+        query_id,
+        from,
+        closest,
+    })
 }
 
 // ── Lookup driver ──────────────────────────────────────────────────────────
@@ -455,6 +501,7 @@ impl LookupShortlist {
 pub(crate) async fn query_peer(
     kad: &Arc<KadState>,
     conn: &Arc<dyn crate::PeerConnection>,
+    stats: &Arc<crate::SendStats>,
     me: &Hid,
     target: &Hid,
     per_query_timeout: Duration,
@@ -463,7 +510,7 @@ pub(crate) async fn query_peer(
     let rid = format!("kad-find-{}", &query_id[..8]);
     let rx = kad.register_query(query_id.clone());
     let tone = find_node_tone(&rid, &query_id, target, me);
-    if conn.send(tone).await.is_err() {
+    if crate::send_bounded(conn, tone, stats).await.is_err() {
         kad.cancel_query(&query_id);
         return Vec::new();
     }
@@ -587,7 +634,7 @@ mod tests {
     fn parse_find_node_resp_round_trip() {
         let me = Hid::random_humd();
         let peer = HumdAddr::new(Hid::random_humd()).with_hint("tcp:1.2.3.4:9000");
-        let tone = find_node_resp_tone("rid-1", "qid-1", &me, &[peer.clone()]);
+        let tone = find_node_resp_tone("rid-1", "qid-1", &me, std::slice::from_ref(&peer));
         let parsed = parse_find_node_resp(&tone).expect("parse");
         assert_eq!(parsed.query_id, "qid-1");
         assert_eq!(parsed.from, me);
