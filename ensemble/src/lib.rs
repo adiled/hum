@@ -845,12 +845,24 @@ async fn handle_liveness(
     true
 }
 
-fn announce_claims_sender(payload: &serde_json::Value, arrived_from: &Hid) -> bool {
-    match serde_json::from_value::<hives::HiveAnnounce>(payload.clone()) {
-        Ok(hives::HiveAnnounce::Advertise { humd_id, .. }) => humd_id == arrived_from.to_hex(),
-        Ok(hives::HiveAnnounce::Retract { humd_id, .. }) => humd_id == arrived_from.to_hex(),
-        Err(_) => true,
-    }
+/// Whether an announce is internally consistent: the `humd_id` it claims must
+/// match the `from` of the tone carrying it. Binds to the tone's own origin
+/// field, not the connection it arrived on, so a legitimate multi-hop
+/// advertise still percolates while a peer cannot stamp someone else's Hid.
+fn announce_origin_matches_payload(tone: &Tone) -> bool {
+    let Some(from) = tone.get("from").and_then(|v| v.as_str()) else {
+        return true;
+    };
+    let Ok(payload) = serde_json::from_value::<hives::HiveAnnounce>(
+        tone.get("payload").cloned().unwrap_or(serde_json::Value::Null),
+    ) else {
+        return true;
+    };
+    let claimed = match payload {
+        hives::HiveAnnounce::Advertise { humd_id, .. } => humd_id,
+        hives::HiveAnnounce::Retract { humd_id, .. } => humd_id,
+    };
+    claimed == from
 }
 
 async fn handle_gossip(
@@ -867,11 +879,11 @@ async fn handle_gossip(
     if !gossip.note_seen(parsed.msg_id) {
         return true;
     }
-    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_claims_sender(parsed.payload, arrived_from) {
+    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
         tracing::warn!(
             target: "ensemble.bees",
-            arrived_from = %arrived_from,
-            "gossip.announce.impersonation-rejected — payload claims a humd_id the sender does not own"
+            topic = parsed.topic,
+            "gossip.announce.impersonation-rejected — payload claims a humd_id the tone origin does not match"
         );
         return true;
     }
@@ -923,28 +935,51 @@ mod tests {
         .expect("serialize announce")
     }
 
+    fn announce_tone(origin: &str, payload: serde_json::Value) -> Tone {
+        json!({
+            "chi": "gossip-publish",
+            "rid": "g1",
+            "topic": hives::ANNOUNCE_TOPIC,
+            "from": origin,
+            "msg_id": "m1",
+            "payload": payload,
+        })
+    }
+
     #[test]
-    fn an_announce_under_the_senders_own_hid_is_accepted() {
+    fn an_announce_matching_its_tone_origin_is_accepted() {
         let me = Hid::random_humd();
-        let payload = worker_announce(&me.to_hex(), "claude-opus-4-7");
-        assert!(announce_claims_sender(&payload, &me));
+        let tone = announce_tone(&me.to_hex(), worker_announce(&me.to_hex(), "claude-opus-4-7"));
+        assert!(announce_origin_matches_payload(&tone));
     }
 
     #[test]
     fn an_announce_claiming_another_hums_hid_is_rejected() {
         let me = Hid::random_humd();
         let victim = Hid::random_humd();
-        let payload = worker_announce(&victim.to_hex(), "claude-opus-4-7");
+        let tone = announce_tone(&me.to_hex(), worker_announce(&victim.to_hex(), "claude-opus-4-7"));
         assert!(
-            !announce_claims_sender(&payload, &me),
+            !announce_origin_matches_payload(&tone),
             "a peer must not advertise capabilities under a Hid it does not own"
         );
     }
 
     #[test]
+    fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
+        // A advertises, B relays, C receives. C sees B as the connection but
+        // the tone's origin is still A — the claim must survive the hop.
+        let a = Hid::random_humd();
+        let b = Hid::random_humd();
+        let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));
+        assert!(announce_origin_matches_payload(&tone), "relay was blocked");
+        assert_ne!(a, b);
+    }
+
+    #[test]
     fn an_unknown_payload_shape_passes_the_provenance_gate() {
-        let me = Hid::random_humd();
-        assert!(announce_claims_sender(&json!({ "kind": "something-new" }), &me));
+        let me = Hid::random_humd().to_hex();
+        let tone = announce_tone(&me, json!({ "kind": "something-new" }));
+        assert!(announce_origin_matches_payload(&tone));
     }
 
     async fn drain(rx: &mut mpsc::Receiver<Tone>) -> Vec<Tone> {
