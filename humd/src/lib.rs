@@ -1485,6 +1485,7 @@ fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
         can_relay: false,
         free_slots: Some(total_slots as usize),
         headroom,
+        ..Default::default()
     }
 }
 

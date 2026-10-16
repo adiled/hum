@@ -7,7 +7,9 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms};
+use super::{
+    CAPS_HANDSHAKE_DOMAIN, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms,
+};
 
 pub use hum_identity::{Hid, HidParseError, HidPrefix};
 
@@ -37,6 +39,25 @@ impl fmt::Debug for HumdKey {
 
 fn handshake_message(humd_id: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", HANDSHAKE_DOMAIN, humd_id.to_hex(), signed_at_ms).into_bytes()
+}
+
+/// What the claims signature covers: identity, timestamp, and the claims
+/// themselves. Fixed field order so verification is deterministic.
+fn caps_message(humd_id: &Hid, caps: &PeerCapabilities, signed_at_ms: i64) -> Vec<u8> {
+    let nests = caps.nests.join(",");
+    let hosts = caps.hosts.join(",");
+    let free_slots = caps.free_slots.unwrap_or(0);
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        CAPS_HANDSHAKE_DOMAIN,
+        humd_id.to_hex(),
+        signed_at_ms,
+        nests,
+        hosts,
+        caps.can_relay,
+        free_slots
+    )
+    .into_bytes()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +93,11 @@ pub struct PeerCapabilities {
     pub free_slots: Option<usize>,
     #[serde(default)]
     pub headroom: headroom::CellHeadroom,
+    /// Whether the claims in this hello were covered by a signature the
+    /// receiver verified. False for unsigned hellos and for hellos from a
+    /// peer too old to send one.
+    #[serde(skip)]
+    pub caps_signed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +131,10 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let signed_at = now_ms();
     let msg = handshake_message(me, signed_at);
     let sig: Signature = key.0.sign(&msg);
+    // Second signature, over the claims. Identity stays covered by the
+    // first so an old peer verifying `signature` sees an unchanged message.
+    let caps_msg = caps_message(me, caps, signed_at);
+    let caps_sig: Signature = key.0.sign(&caps_msg);
     serde_json::json!({
         "chi": "hello",
         "rid": hum_identity::HumId::mint().to_string(),
@@ -118,6 +148,7 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
         "free_slots": caps.free_slots,
         "signed_at": signed_at,
         "signature": hex::encode(sig.to_bytes()),
+        "capsSignature": hex::encode(caps_sig.to_bytes()),
     })
 }
 
@@ -203,7 +234,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         return None;
     }
 
-    let nests = tone
+    let nests: Vec<String> = tone
         .get("nests")
         .and_then(|v| v.as_array())
         .map(|a| {
@@ -212,7 +243,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
                 .collect()
         })
         .unwrap_or_default();
-    let hosts = tone
+    let hosts: Vec<String> = tone
         .get("hosts")
         .and_then(|v| v.as_array())
         .map(|a| {
@@ -236,6 +267,54 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         .get("headroom")
         .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
         .unwrap_or_default();
+
+    // The claims signature is optional — a peer that predates it sends none
+    // and is admitted as unsigned. A peer that sends one and gets it wrong is
+    // either broken or lying, and either way the claims cannot be trusted, so
+    // the whole hello fails rather than degrading to unsigned.
+    let mut caps_signed = false;
+    match tone.get("capsSignature").and_then(|v| v.as_str()) {
+        None => {
+            tracing::warn!(
+                target: "ensemble",
+                humd_id = %claimed_id.short(),
+                "hello.claims.unsigned — nests/hosts/can_relay/free_slots are self-declared"
+            );
+        }
+        Some(caps_hex) => {
+            let Ok(caps_bytes) = hex::decode(caps_hex) else {
+                tracing::warn!(target: "ensemble", "hello.rejected: capsSignature unparseable");
+                return None;
+            };
+            if caps_bytes.len() != 64 {
+                tracing::warn!(target: "ensemble", "hello.rejected: capsSignature wrong length");
+                return None;
+            }
+            let mut caps_arr = [0u8; 64];
+            caps_arr.copy_from_slice(&caps_bytes);
+            let caps_signature = Signature::from_bytes(&caps_arr);
+            let claims = PeerCapabilities {
+                proto_version: proto_version.clone(),
+                nests: nests.clone(),
+                hosts: hosts.clone(),
+                can_relay,
+                free_slots,
+                headroom: headroom.clone(),
+                caps_signed: false,
+            };
+            let caps_msg = caps_message(&claimed_id, &claims, signed_at);
+            if verifying_key.verify(&caps_msg, &caps_signature).is_err() {
+                tracing::warn!(
+                    target: "ensemble",
+                    humd_id = %claimed_id.short(),
+                    "hello.rejected: capsSignature verification failed — claims are not what this peer signed"
+                );
+                return None;
+            }
+            caps_signed = true;
+        }
+    }
+
     Some((
         claimed_id,
         PeerCapabilities {
@@ -245,6 +324,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
             can_relay,
             free_slots,
             headroom,
+            caps_signed,
         },
     ))
 }
@@ -270,7 +350,7 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let Ok(claimed_id) = Hid::from_hex(humd_hex) else {
             return HelloParse::Invalid;
         };
-        let nests = tone
+    let nests: Vec<String> = tone
             .get("nests")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -279,7 +359,7 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
                     .collect()
             })
             .unwrap_or_default();
-        let hosts = tone
+    let hosts: Vec<String> = tone
             .get("hosts")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -312,7 +392,99 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
                 can_relay,
                 free_slots,
                 headroom,
+                caps_signed: false,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signed_hello(caps: &PeerCapabilities) -> (Hid, HumdKey, Tone) {
+        let key = HumdKey::generate();
+        let id = key.hid();
+        let tone = hello_tone(&id, &key, caps);
+        (id, key, tone)
+    }
+
+    fn caps() -> PeerCapabilities {
+        PeerCapabilities {
+            proto_version: "0.7.0".into(),
+            nests: vec!["claude-cli".into()],
+            hosts: vec!["alice".into()],
+            can_relay: false,
+            free_slots: Some(4),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_signed_hello_carries_a_verified_claims_signature() {
+        let (id, _key, tone) = signed_hello(&caps());
+        let parsed = parse_hello_caps(&tone).expect("hello parses");
+        assert_eq!(parsed.0, id);
+        assert!(
+            parsed.1.caps_signed,
+            "a hello from a current peer must be marked as having signed claims"
+        );
+    }
+
+    #[test]
+    fn tampering_with_a_claim_after_signing_fails_verification() {
+        let (_id, _key, mut tone) = signed_hello(&caps());
+        // The peer signed can_relay: false, then ships can_relay: true.
+        tone["can_relay"] = serde_json::json!(true);
+        assert!(
+            parse_hello_caps(&tone).is_none(),
+            "a claim the peer did not sign must not be admitted"
+        );
+    }
+
+    #[test]
+    fn widening_the_hosts_list_after_signing_fails_verification() {
+        let (_id, _key, mut tone) = signed_hello(&caps());
+        tone["hosts"] = serde_json::json!(["alice", "mallory"]);
+        assert!(parse_hello_caps(&tone).is_none());
+    }
+
+    #[test]
+    fn a_forged_caps_signature_is_rejected() {
+        let (_id, _key, mut tone) = signed_hello(&caps());
+        let other = HumdKey::generate();
+        let id = other.hid();
+        let claims = PeerCapabilities {
+            proto_version: "0.7.0".into(),
+            nests: vec!["claude-cli".into()],
+            hosts: vec!["alice".into()],
+            can_relay: true,
+            free_slots: Some(4),
+            ..Default::default()
+        };
+        let sig = other.0.sign(&caps_message(&id, &claims, now_ms()));
+        tone["capsSignature"] = serde_json::json!(hex::encode(sig.to_bytes()));
+        assert!(parse_hello_caps(&tone).is_none());
+    }
+
+    #[test]
+    fn a_hello_without_a_claims_signature_still_admits_as_unsigned() {
+        // Backward compatibility: a peer predating this field sends none.
+        let (_id, _key, mut tone) = signed_hello(&caps());
+        tone.as_object_mut().expect("tone object").remove("capsSignature");
+        let parsed = parse_hello_caps(&tone).expect("still parses");
+        assert!(
+            !parsed.1.caps_signed,
+            "an unsigned hello must not be marked as signed"
+        );
+    }
+
+    #[test]
+    fn a_replayed_claims_signature_from_another_peer_is_rejected() {
+        let (_id_a, _key_a, tone_a) = signed_hello(&caps());
+        let (id_b, _key_b, mut tone_b) = signed_hello(&caps());
+        // B claims A's signature while presenting its own pubkey and Hid.
+        tone_b["capsSignature"] = tone_a["capsSignature"].clone();
+        assert!(parse_hello_caps(&tone_b).is_none(), "B={}", id_b.short());
     }
 }
