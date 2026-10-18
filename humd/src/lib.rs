@@ -924,20 +924,46 @@ impl ToneSink for HumdSink {
                     manifest.bee = bee.clone();
                     manifest.models = models.clone();
                     let raw_hid = tone.get("hid").and_then(Value::as_str);
-                    manifest.hid = raw_hid.and_then(|s| ensemble::Hid::from_hex(s).ok());
-                    match (raw_hid, manifest.hid) {
-                        (Some(_), Some(hid)) => {
-                            trace!(client_id, hid = %hid.short(), "bee.hid.registered");
+                    // A bee that signs its hello proves the declared hid is
+                    // its own key. One that doesn't is admitted as before —
+                    // this binds identity where identity is offered, without
+                    // breaking every hive that hasn't caught up.
+                    match ensemble::parse_socket_identity(&tone) {
+                        ensemble::SocketIdentity::Verified(hid) => {
+                            manifest.hid = Some(hid);
+                            manifest.hid_verified = true;
+                            trace!(client_id, hid = %hid.short(),
+                                "bee.hid.verified — declared hid proven against a signed hello");
                         }
-                        (Some(bad), None) => {
-                            warn!(client_id, bad_hid = %bad,
-                                "bee.hid.invalid — not a canonical Hid; reconnect dedup disabled for this bee. \
-                                 Derive a stable hid from a persisted key (see hives/common identity).");
+                        ensemble::SocketIdentity::Unsigned(declared) => {
+                            manifest.hid = declared;
+                            match (raw_hid, declared) {
+                                (Some(_), Some(hid)) => {
+                                    trace!(client_id, hid = %hid.short(),
+                                        "bee.hid.registered — self-declared, not signed");
+                                }
+                                (Some(bad), None) => {
+                                    warn!(client_id, bad_hid = %bad,
+                                        "bee.hid.invalid — not a canonical Hid; reconnect dedup disabled for this bee. \
+                                         Derive a stable hid from a persisted key (see hum-identity).");
+                                }
+                                (None, _) => {
+                                    warn!(client_id,
+                                        "bee.hid.missing — hello has no hid; reconnect dedup disabled. \
+                                         Ghost manifests will accumulate on reconnect.");
+                                }
+                            }
                         }
-                        (None, _) => {
-                            warn!(client_id,
-                                "bee.hid.missing — hello has no hid; reconnect dedup disabled. \
-                                 Ghost manifests will accumulate on reconnect.");
+                        ensemble::SocketIdentity::Invalid(why) => {
+                            error!(client_id, reason = why,
+                                "bee.hid.bad-signature — hello signed its hid and the signature failed. \
+                                 Not registered, not announced.");
+                            self.thrum.thrum_to(
+                                client_id,
+                                thrumd::echo_tone(&rid, false, Some("hid signature invalid")),
+                            );
+                            self.thrum.thrum_close(client_id);
+                            return;
                         }
                     }
                     if let Some(arr) = tone.get("tools").and_then(Value::as_array) {

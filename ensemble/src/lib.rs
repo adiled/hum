@@ -12,7 +12,8 @@ use tokio::task::JoinSet;
 pub mod handshake;
 pub use handshake::{
     EnsembleHello, HelloParse, Hid, HidParseError, HidPrefix, HumdAddr, HumdKey, PeerCapabilities,
-    PeerConnection, Transport, hello_tone, hello_tone_unsigned, parse_hello, parse_hello_caps,
+    PeerConnection, SocketIdentity, Transport, hello_tone, hello_tone_unsigned, parse_hello,
+    parse_hello_caps, parse_socket_identity,
 };
 
 pub mod link;

@@ -85,6 +85,14 @@ pub struct HiveManifest {
     /// when a bee drops + comes back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hid: Option<crate::Hid>,
+    /// Whether the `hid` above was proven against a signed hello rather
+    /// than self-declared. A bee that signs its socket hello with the
+    /// key its hid derives from gets `true`; one that sends no signature
+    /// gets `false` and is admitted as it always was. False is not a
+    /// defect — it is an older or simpler bee — but callers routing on
+    /// identity should know which they have.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hid_verified: bool,
     /// Model ids this entry can serve. Meaningful when
     /// `bee.contains("worker")`; foragers may carry an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -171,6 +179,7 @@ impl HiveManifest {
             provides: Vec::new(),
             nestler_id: None,
             hid: None,
+            hid_verified: false,
         }
     }
 
