@@ -66,12 +66,9 @@ async fn a_scoped_client_does_not_receive_an_undeclared_chi() {
 
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
-    // This client only wants prompts, not chunks.
     humd.thrum
         .inject_tone(&cid, base_hello(Some(&["prompt"])))
         .await;
-
-    // A chunk arrives from a peer.
     humd.thrum
         .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
         .await;
@@ -110,8 +107,6 @@ async fn a_scoped_client_receives_a_declared_chi() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_declared_nothing_still_receives_everything() {
-    // The backward-compatibility case. Every existing hive sends no chis
-    // or an empty list; scoping must not starve them.
     let (_sim, humd) = spawn().await;
 
     let cid = hum_identity::HumId::mint().to_string();

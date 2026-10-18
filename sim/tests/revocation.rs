@@ -50,7 +50,9 @@ async fn a_revoked_bee_is_refused_the_socket() {
 
     let cid = hum_identity::HumId::mint().to_string();
     let _rx = humd.thrum.register_synthetic(cid.clone());
-    humd.thrum.inject_tone(&cid, hello_with_identity(&bee)).await;
+    humd.thrum
+        .inject_tone(&cid, hello_with_identity(&bee))
+        .await;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(
@@ -61,9 +63,6 @@ async fn a_revoked_bee_is_refused_the_socket() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_the_signature_does_not_evade_revocation() {
-    // The evasion this exists to close: the bee proved nothing, so it
-    // might reasonably think the check applies only to proofs. It does
-    // not — a revoked hid is refused however it is presented.
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
 
@@ -94,22 +93,20 @@ async fn dropping_the_signature_does_not_evade_revocation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unrevoked_bee_is_unaffected() {
-    // The control: a revocation list that names someone else must not
-    // lock out a well-behaved bee.
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
 
     let bee = fresh_bee();
     let other = fresh_bee();
     let id = ensemble::Hid::random_humd();
-    let humd = sim
-        .spawn_humd_revoking(id, &[&other.hid.to_hex()])
-        .await;
+    let humd = sim.spawn_humd_revoking(id, &[&other.hid.to_hex()]).await;
     sim.await_ready(humd.id).await.expect("humd ready");
 
     let cid = hum_identity::HumId::mint().to_string();
     let _rx = humd.thrum.register_synthetic(cid.clone());
-    humd.thrum.inject_tone(&cid, hello_with_identity(&bee)).await;
+    humd.thrum
+        .inject_tone(&cid, hello_with_identity(&bee))
+        .await;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(

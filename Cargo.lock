@@ -1733,6 +1733,7 @@ dependencies = [
  "jsonschema",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

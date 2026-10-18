@@ -4,7 +4,7 @@
 
 use std::process::{Command, ExitCode};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use service_manager::{
     ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
 };

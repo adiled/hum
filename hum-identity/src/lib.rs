@@ -20,7 +20,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ed25519_dalek::{Signer, SigningKey};
 mod ids;
 pub use ids::*;
@@ -152,10 +152,6 @@ mod tests {
     use ed25519_dalek::Verifier;
     use std::sync::Mutex;
     use tempfile::TempDir;
-
-    // Serialize tests because they share the XDG_STATE_HOME env var.
-    // Without this lock, parallel cargo-test threads race the env and
-    // the second test sees the first's tempdir (or an empty value).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -197,9 +193,6 @@ mod tests {
 
         let key = load_or_mint_bee_key("sig-bind", HidPrefix::Wbee).expect("mint");
         let (pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
-
-        // The pubkey the verifier will hash must be the same one the hid
-        // came from, or the whole point is moot.
         assert_eq!(pubkey_hex, hex::encode(key.pubkey_bytes()));
 
         let msg = socket_hello_message(&key.hid, signed_at);
@@ -226,9 +219,6 @@ mod tests {
         let other = Hid::random(HidPrefix::Wbee);
 
         let (_pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
-
-        // Someone claiming another bee's hid with this signature must fail —
-        // otherwise a bee could replay a signature to adopt someone's identity.
         let msg = socket_hello_message(&other, signed_at);
         let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
         let mut sig_arr = [0u8; 64];
@@ -257,10 +247,6 @@ mod tests {
         sig_arr.copy_from_slice(&sig_bytes);
         let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
         let verifying = key.signing.verifying_key();
-
-        // Re-binding the same signature to any other timestamp fails. That is
-        // the property that makes the skew window enforceable: an attacker
-        // holding a valid hello cannot slide its clock forward or back.
         for other in [1_700_000_000_001, 1_600_000_000_000, 0] {
             let msg = socket_hello_message(&key.hid, other);
             assert!(

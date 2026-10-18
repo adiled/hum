@@ -24,8 +24,6 @@ fn fresh_bee() -> BeeKey {
     BeeKey { signing, hid }
 }
 
-/// A structurally valid hello that would pass the protoVersion gate, so a
-/// failure can only be the identity check.
 fn hello_with_identity(tone: &mut serde_json::Value, bee: &BeeKey) {
     let (pubkey, signed_at, signature) = bee.sign_socket_hello(now_ms());
     let obj = tone.as_object_mut().expect("object");
@@ -70,8 +68,6 @@ async fn a_bee_that_signs_its_hid_stays_connected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bee_with_no_signature_is_still_admitted() {
-    // Backward compatibility: every hive today sends no signature. If this
-    // breaks, every existing bee breaks with it.
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
     let humd = sim.spawn_humd(ensemble::Hid::random_humd()).await;
@@ -105,7 +101,6 @@ async fn a_bee_with_a_forged_signature_is_disconnected() {
     let bee = fresh_bee();
     let mut hello = base_hello();
     hello_with_identity(&mut hello, &bee);
-    // Correct shape, wrong bytes.
     hello["signature"] = serde_json::json!(hex::encode([0u8; 64]));
 
     humd.thrum.inject_tone(&cid, hello).await;
@@ -119,9 +114,6 @@ async fn a_bee_with_a_forged_signature_is_disconnected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bee_claiming_anothers_hid_is_disconnected() {
-    // The attack the hid/pubkey binding exists for: Mallory signs with her
-    // own key, but over her victim's hid, so her hid/pubkey pair is not
-    // internally consistent.
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
     let humd = sim.spawn_humd(ensemble::Hid::random_humd()).await;
@@ -162,8 +154,6 @@ async fn a_replayed_hello_outside_the_skew_window_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
-    // Sign an old hello. Everything is cryptographically valid; only the
-    // timestamp is stale. That is the whole point of the skew window.
     let stale = now_ms() - 3_600_000;
     let (pubkey, _signed_at, signature) = bee.sign_socket_hello(stale);
     let mut hello = base_hello();

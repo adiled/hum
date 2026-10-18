@@ -1,19 +1,18 @@
-
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ensemble::{
-    hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults,
-    PeerCapabilities,
+    Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults, PeerCapabilities,
+    hello_tone,
 };
+use humd::thrumd::Thrum;
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
-use humd::thrumd::Thrum;
 use tokio::sync::{mpsc, oneshot};
 
 const CAPACITY_UNLIMITED: usize = usize::MAX;
@@ -67,7 +66,11 @@ struct Link {
 }
 
 fn link_key(x: Hid, y: Hid) -> (Hid, Hid) {
-    if x.to_hex() <= y.to_hex() { (x, y) } else { (y, x) }
+    if x.to_hex() <= y.to_hex() {
+        (x, y)
+    } else {
+        (y, x)
+    }
 }
 
 impl Default for Sim {
@@ -107,7 +110,8 @@ impl Sim {
     /// is written before the daemon reads it, matching how an operator
     /// would have populated it on a previous run.
     pub async fn spawn_humd_revoking(&self, id: Hid, revoked: &[&str]) -> Arc<SimHumd> {
-        self.spawn_humd_inner_with_revocations(id, true, revoked).await
+        self.spawn_humd_inner_with_revocations(id, true, revoked)
+            .await
     }
 
     async fn spawn_humd_inner(&self, id: Hid, trust_remote_workers: bool) -> Arc<SimHumd> {
@@ -128,17 +132,16 @@ impl Sim {
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
         let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
-
-        // Preload before the daemon constructs its sink, which reads once
-        // at boot. A stale file from a previous run would otherwise leak
-        // revocations into an unrelated test.
         let revoked_path = tmp.join(hum_paths::REVOKED_BEES_BASENAME);
         let _ = std::fs::remove_file(&revoked_path);
         if !revoked.is_empty() {
             let list: Vec<String> = revoked.iter().map(|s| s.to_string()).collect();
-            hum_paths::Revocations { version: 1, revoked: list }
-                .write_to(&revoked_path)
-                .expect("write revocation list");
+            hum_paths::Revocations {
+                version: 1,
+                revoked: list,
+            }
+            .write_to(&revoked_path)
+            .expect("write revocation list");
         }
 
         let initial_capacity = self
@@ -192,7 +195,7 @@ impl Sim {
 
         self.humds.write().insert(id, sim_humd.clone());
         sim_humd
-      }
+    }
 
     pub async fn await_ready(&self, humd: Hid) -> Result<()> {
         for _ in 0..200 {
@@ -231,12 +234,8 @@ impl Sim {
 
         let a_caps = sim_caps(&ha);
         let b_caps = sim_caps(&hb);
-        let (a_view, b_view) = InMemoryEndpoint::pair_concrete(
-            ha.id,
-            b_caps.clone(),
-            hb.id,
-            a_caps.clone(),
-        );
+        let (a_view, b_view) =
+            InMemoryEndpoint::pair_concrete(ha.id, b_caps.clone(), hb.id, a_caps.clone());
         let key = link_key(ha.id, hb.id);
         self.links.write().insert(
             key,
@@ -294,7 +293,9 @@ impl Sim {
             trust_remote_workers: true,
         };
 
-        let shutdown_fut = async move { let _ = shutdown_rx.await; };
+        let shutdown_fut = async move {
+            let _ = shutdown_rx.await;
+        };
         let join = tokio::spawn(humd::run(cfg, shutdown_fut));
 
         let sim_humd = Arc::new(SimHumd {
@@ -317,26 +318,31 @@ impl Sim {
 
     pub fn wire_signed(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
-        let ha = humds.get(&a).cloned()
+        let ha = humds
+            .get(&a)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
-        let hb = humds.get(&b).cloned()
+        let hb = humds
+            .get(&b)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", b.short()))?;
         drop(humds);
-        let a_key = ha.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key — spawn via spawn_humd_with_identity",
-            a.short()
-        ))?;
-        let b_key = hb.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key — spawn via spawn_humd_with_identity",
-            b.short()
-        ))?;
+        let a_key = ha.key.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "humd {} has no signing key — spawn via spawn_humd_with_identity",
+                a.short()
+            )
+        })?;
+        let b_key = hb.key.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "humd {} has no signing key — spawn via spawn_humd_with_identity",
+                b.short()
+            )
+        })?;
 
         let a_caps = sim_caps(&ha);
         let b_caps = sim_caps(&hb);
-        let (a_view, b_view) = InMemoryEndpoint::pair(
-            ha.id, b_caps.clone(),
-            hb.id, a_caps.clone(),
-        );
+        let (a_view, b_view) = InMemoryEndpoint::pair(ha.id, b_caps.clone(), hb.id, a_caps.clone());
         ha.ensemble.install(a_view, a_caps, &a_key);
         hb.ensemble.install(b_view, b_caps, &b_key);
         Ok(())
@@ -344,21 +350,23 @@ impl Sim {
 
     pub fn wire_signed_tampered(&self, a: Hid, c: Hid) -> Result<()> {
         let humds = self.humds.read();
-        let ha = humds.get(&a).cloned()
+        let ha = humds
+            .get(&a)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
-        let hc = humds.get(&c).cloned()
+        let hc = humds
+            .get(&c)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", c.short()))?;
         drop(humds);
-        let a_key = ha.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key", a.short()
-        ))?;
+        let a_key = ha
+            .key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("humd {} has no signing key", a.short()))?;
 
         let a_caps = sim_caps(&ha);
         let c_caps = sim_caps(&hc);
-        let (a_view, c_view) = InMemoryEndpoint::pair(
-            ha.id, c_caps.clone(),
-            hc.id, a_caps.clone(),
-        );
+        let (a_view, c_view) = InMemoryEndpoint::pair(ha.id, c_caps.clone(), hc.id, a_caps.clone());
 
         ha.ensemble.install(a_view, a_caps, &a_key);
 
@@ -418,12 +426,7 @@ impl Sim {
         })
     }
 
-    pub fn link_counters_since(
-        &self,
-        a: Hid,
-        b: Hid,
-        base: &LinkCounters,
-    ) -> Result<LinkCounters> {
+    pub fn link_counters_since(&self, a: Hid, b: Hid, base: &LinkCounters) -> Result<LinkCounters> {
         let (ab, _) = self.link_counters(a, b)?;
         Ok(ab.since(base))
     }
@@ -482,7 +485,11 @@ impl Sim {
             .collect())
     }
 
-    pub fn evict_expired(&self, observer: Hid, ttl: std::time::Duration) -> Result<Vec<ensemble::Hid>> {
+    pub fn evict_expired(
+        &self,
+        observer: Hid,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<ensemble::Hid>> {
         let ens = self
             .humds
             .read()
@@ -493,7 +500,11 @@ impl Sim {
     }
 
     pub fn peer_count(&self, observer: Hid) -> usize {
-        self.humds.read().get(&observer).map(|h| h.ensemble.peers().len()).unwrap_or(0)
+        self.humds
+            .read()
+            .get(&observer)
+            .map(|h| h.ensemble.peers().len())
+            .unwrap_or(0)
     }
 
     pub fn partition(&self, a: Hid, b: Hid) -> Result<()> {
@@ -560,7 +571,9 @@ impl Sim {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
         for _ in 0..200 {
-            if h.thrum.has_sink() { break; }
+            if h.thrum.has_sink() {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let client_id = hum_identity::HumId::mint().to_string();
@@ -579,10 +592,22 @@ impl Sim {
         let cid_for_pump = client_id.clone();
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
-                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if chi != "prompt" { continue; }
-                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if sid.is_empty() { continue; }
+                let chi = tone
+                    .get("chi")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if chi != "prompt" {
+                    continue;
+                }
+                let sid = tone
+                    .get("sid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if sid.is_empty() {
+                    continue;
+                }
                 let frames = vec![
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
@@ -615,7 +640,9 @@ impl Sim {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if sid.is_empty() { continue; }
+                if sid.is_empty() {
+                    continue;
+                }
                 let tx = {
                     let mut senders = h_for_pump.sid_senders.lock();
                     if let Some(tx) = senders.get(&sid) {
@@ -639,12 +666,7 @@ impl Sim {
         Ok(client_id)
     }
 
-    pub async fn nestler_recv(
-        &self,
-        humd: Hid,
-        sid: &str,
-        timeout: Duration,
-    ) -> Option<Value> {
+    pub async fn nestler_recv(&self, humd: Hid, sid: &str, timeout: Duration) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
 
         {
@@ -658,33 +680,36 @@ impl Sim {
         }
 
         {
-        let mut queues = h.out_queues.lock();
-        for (_cid, rx) in queues.iter_mut() {
-            while let Ok(tone) = rx.try_recv() {
-                let tone_sid = tone
-                    .get("sid")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if tone_sid.is_empty() {
-                    continue;
-                }
-                let senders = h.sid_senders.lock();
-                if let Some(tx) = senders.get(&tone_sid) {
-                    let _ = tx.send(tone);
-                } else {
-                    drop(senders);
-                    let (tx, rx2) = mpsc::unbounded_channel::<Value>();
-                    let _ = tx.send(tone);
-                    h.sid_senders.lock().insert(tone_sid.clone(), tx);
-                    h.sid_mailboxes.lock().insert(tone_sid, rx2);
+            let mut queues = h.out_queues.lock();
+            for (_cid, rx) in queues.iter_mut() {
+                while let Ok(tone) = rx.try_recv() {
+                    let tone_sid = tone
+                        .get("sid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if tone_sid.is_empty() {
+                        continue;
+                    }
+                    let senders = h.sid_senders.lock();
+                    if let Some(tx) = senders.get(&tone_sid) {
+                        let _ = tx.send(tone);
+                    } else {
+                        drop(senders);
+                        let (tx, rx2) = mpsc::unbounded_channel::<Value>();
+                        let _ = tx.send(tone);
+                        h.sid_senders.lock().insert(tone_sid.clone(), tx);
+                        h.sid_mailboxes.lock().insert(tone_sid, rx2);
+                    }
                 }
             }
         }
-        }
 
         let mut rx_opt = h.sid_mailboxes.lock().remove(sid)?;
-        let result = tokio::time::timeout(timeout, rx_opt.recv()).await.ok().flatten();
+        let result = tokio::time::timeout(timeout, rx_opt.recv())
+            .await
+            .ok()
+            .flatten();
         h.sid_mailboxes.lock().insert(sid.to_string(), rx_opt);
         result
     }
@@ -706,16 +731,23 @@ impl Sim {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
         for _ in 0..200 {
-            if h.thrum.has_sink() { break; }
+            if h.thrum.has_sink() {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        let tools: Vec<Value> = tool_names.iter().map(|name| serde_json::json!({
-            "name": name,
-            "description": format!("mock {name}"),
-            "inputSchema": { "type": "object", "properties": {}, "required": [] }
-        })).collect();
+        let tools: Vec<Value> = tool_names
+            .iter()
+            .map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "description": format!("mock {name}"),
+                    "inputSchema": { "type": "object", "properties": {}, "required": [] }
+                })
+            })
+            .collect();
         let hello = serde_json::json!({
             "chi": "hello",
             "bee": ["forager"],
@@ -731,13 +763,30 @@ impl Sim {
         let responder = std::sync::Arc::new(responder);
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
-                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if chi != "tool-call" { continue; }
-                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let call_id = tone.get("callId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let tool_name = tone.get("toolName").and_then(|v| v.as_str())
+                let chi = tone
+                    .get("chi")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if chi != "tool-call" {
+                    continue;
+                }
+                let sid = tone
+                    .get("sid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let call_id = tone
+                    .get("callId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_name = tone
+                    .get("toolName")
+                    .and_then(|v| v.as_str())
                     .or_else(|| tone.get("name").and_then(|v| v.as_str()))
-                    .unwrap_or("").to_string();
+                    .unwrap_or("")
+                    .to_string();
                 let args = tone.get("args").cloned().unwrap_or(Value::Null);
                 let result = responder(&tool_name, args);
                 let reply = serde_json::json!({
@@ -753,12 +802,7 @@ impl Sim {
         Ok(client_id)
     }
 
-    pub fn attach_observer(
-        &self,
-        observer_humd: Hid,
-        host_humd: Hid,
-        sid: &str,
-    ) -> Result<String> {
+    pub fn attach_observer(&self, observer_humd: Hid, host_humd: Hid, sid: &str) -> Result<String> {
         self.nestler_send(
             observer_humd,
             serde_json::json!({
@@ -846,12 +890,7 @@ impl Sim {
         Ok(cid)
     }
 
-    pub async fn publish(
-        &self,
-        from: Hid,
-        topic: &str,
-        payload: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn publish(&self, from: Hid, topic: &str, payload: serde_json::Value) -> Result<()> {
         let ens = self
             .humds
             .read()
@@ -875,7 +914,9 @@ impl Sim {
             .get(&from)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
-        ens.ensemble.publish_with_dusk(topic, payload, Some(dusk_ms)).await;
+        ens.ensemble
+            .publish_with_dusk(topic, payload, Some(dusk_ms))
+            .await;
         Ok(())
     }
 
@@ -894,7 +935,10 @@ impl Sim {
     }
 
     pub fn expired_dusk(&self, humd: Hid) -> u64 {
-        self.humds.read().get(&humd).map_or(0, |h| h.ensemble.expired_dusk())
+        self.humds
+            .read()
+            .get(&humd)
+            .map_or(0, |h| h.ensemble.expired_dusk())
     }
 
     pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
@@ -912,11 +956,18 @@ impl Sim {
     }
 
     pub fn rids(tones: &[Value]) -> Vec<String> {
-        tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+        tones
+            .iter()
+            .filter_map(|t| t["rid"].as_str().map(String::from))
+            .collect()
     }
 
     pub fn ensemble_dropped(&self, humd: Hid) -> u64 {
-        self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
+        self.humds
+            .read()
+            .get(&humd)
+            .map(|h| h.ensemble.inbox_dropped())
+            .unwrap_or(0)
     }
 
     pub async fn shutdown(self) {

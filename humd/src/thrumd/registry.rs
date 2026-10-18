@@ -82,7 +82,9 @@ pub(crate) struct Registry {
 
 impl Registry {
     pub(crate) fn new() -> Self {
-        Self { by_id: HashMap::new() }
+        Self {
+            by_id: HashMap::new(),
+        }
     }
 
     pub(crate) fn insert(&mut self, reach: std::sync::Arc<Reach>) {
@@ -113,7 +115,10 @@ mod tests {
     #[test]
     fn a_client_that_declared_nothing_receives_everything() {
         let (reach, _rx) = Reach::new("unspecified".into());
-        assert!(reach.declares_chi("prompt"), "no declared set = no filtering");
+        assert!(
+            reach.declares_chi("prompt"),
+            "no declared set = no filtering"
+        );
         assert!(reach.declares_chi("tool-call"));
     }
 
@@ -131,8 +136,6 @@ mod tests {
 
     #[test]
     fn declaring_an_empty_list_is_not_scoped() {
-        // A hello with `chis: []` means "unspecified", not "wants nothing".
-        // Every bee that sends the field but knows none is in that boat.
         let (reach, _rx) = Reach::new("empty".into());
         reach.set_chis(Vec::new());
         assert!(reach.declares_chi("prompt"));
@@ -140,9 +143,6 @@ mod tests {
 
     #[test]
     fn re_declaring_replaces_the_previous_scope() {
-        // A re-hello that narrows scope must actually narrow, or a bee
-        // could widen its subscription by saying it once and never
-        // revoking.
         let (reach, _rx) = Reach::new("rehello".into());
         reach.set_chis(vec!["prompt".into(), "chunk".into()]);
         reach.set_chis(vec!["prompt".into()]);

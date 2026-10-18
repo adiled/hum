@@ -7,9 +7,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{
-    CAPS_HANDSHAKE_DOMAIN, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms,
-};
+use super::{CAPS_HANDSHAKE_DOMAIN, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms};
 
 pub use hum_identity::{Hid, HidParseError, HidPrefix};
 
@@ -131,8 +129,6 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
     let signed_at = now_ms();
     let msg = handshake_message(me, signed_at);
     let sig: Signature = key.0.sign(&msg);
-    // Second signature, over the claims. Identity stays covered by the
-    // first so an old peer verifying `signature` sees an unchanged message.
     let caps_msg = caps_message(me, caps, signed_at);
     let caps_sig: Signature = key.0.sign(&caps_msg);
     serde_json::json!({
@@ -267,11 +263,6 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         .get("headroom")
         .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
         .unwrap_or_default();
-
-    // The claims signature is optional — a peer that predates it sends none
-    // and is admitted as unsigned. A peer that sends one and gets it wrong is
-    // either broken or lying, and either way the claims cannot be trusted, so
-    // the whole hello fails rather than degrading to unsigned.
     let mut caps_signed = false;
     match tone.get("capsSignature").and_then(|v| v.as_str()) {
         None => {
@@ -350,7 +341,7 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let Ok(claimed_id) = Hid::from_hex(humd_hex) else {
             return HelloParse::Invalid;
         };
-    let nests: Vec<String> = tone
+        let nests: Vec<String> = tone
             .get("nests")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -359,7 +350,7 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
                     .collect()
             })
             .unwrap_or_default();
-    let hosts: Vec<String> = tone
+        let hosts: Vec<String> = tone
             .get("hosts")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -420,8 +411,6 @@ pub enum SocketIdentity {
 /// peer hello and renaming would churn every hive for no gain.
 pub fn parse_socket_identity(tone: &Tone) -> SocketIdentity {
     let Some(pubkey_hex) = tone.get("pubkey").and_then(|v| v.as_str()) else {
-        // No signature fields at all. Same as before this check existed —
-        // a bee that predates signing keeps working.
         let hid = tone
             .get("hid")
             .and_then(|v| v.as_str())
@@ -435,9 +424,6 @@ pub fn parse_socket_identity(tone: &Tone) -> SocketIdentity {
     let Ok(claimed) = Hid::from_hex(hid_hex) else {
         return SocketIdentity::Invalid("hid unparseable");
     };
-
-    // A socket bee's hid must carry a bee prefix. A humd_ hid here would
-    // mean a daemon key claiming to be a bee, which is not a thing.
     if !matches!(claimed.prefix, HidPrefix::Wbee | HidPrefix::Fbee) {
         return SocketIdentity::Invalid("hid prefix is not a bee role");
     }
@@ -450,9 +436,6 @@ pub fn parse_socket_identity(tone: &Tone) -> SocketIdentity {
     }
     let mut pubkey = [0u8; 32];
     pubkey.copy_from_slice(&pubkey_bytes);
-
-    // The hid must be the hash of the key that signed it. Without this a
-    // bee signs with any key it likes and claims someone else's hid.
     if Hid::from_pubkey(claimed.prefix, &pubkey) != claimed {
         tracing::warn!(
             target: "ensemble",
@@ -541,7 +524,6 @@ mod tests {
     #[test]
     fn tampering_with_a_claim_after_signing_fails_verification() {
         let (_id, _key, mut tone) = signed_hello(&caps());
-        // The peer signed can_relay: false, then ships can_relay: true.
         tone["can_relay"] = serde_json::json!(true);
         assert!(
             parse_hello_caps(&tone).is_none(),
@@ -576,9 +558,10 @@ mod tests {
 
     #[test]
     fn a_hello_without_a_claims_signature_still_admits_as_unsigned() {
-        // Backward compatibility: a peer predating this field sends none.
         let (_id, _key, mut tone) = signed_hello(&caps());
-        tone.as_object_mut().expect("tone object").remove("capsSignature");
+        tone.as_object_mut()
+            .expect("tone object")
+            .remove("capsSignature");
         let parsed = parse_hello_caps(&tone).expect("still parses");
         assert!(
             !parsed.1.caps_signed,
@@ -590,15 +573,10 @@ mod tests {
     fn a_replayed_claims_signature_from_another_peer_is_rejected() {
         let (_id_a, _key_a, tone_a) = signed_hello(&caps());
         let (id_b, _key_b, mut tone_b) = signed_hello(&caps());
-        // B claims A's signature while presenting its own pubkey and Hid.
         tone_b["capsSignature"] = tone_a["capsSignature"].clone();
         assert!(parse_hello_caps(&tone_b).is_none(), "B={}", id_b.short());
     }
 
-    // ── socket identity ────────────────────────────────────────────────
-
-    /// Build a socket hello the way a bee would: sign the hid with the
-    /// key that produced it, then attach the three identity fields.
     fn signed_socket_hello() -> (Hid, SigningKey, Tone) {
         let signing = SigningKey::generate(&mut rand::thread_rng());
         let hid = Hid::from_pubkey(HidPrefix::Wbee, &signing.verifying_key().to_bytes());
@@ -628,11 +606,14 @@ mod tests {
 
     #[test]
     fn a_socket_hello_without_a_signature_is_admitted_as_unsigned() {
-        // Backward compatible: every existing hive sends no pubkey today.
         let (hid, _signing, mut tone) = signed_socket_hello();
         tone.as_object_mut().expect("tone object").remove("pubkey");
-        tone.as_object_mut().expect("tone object").remove("signedAt");
-        tone.as_object_mut().expect("tone object").remove("signature");
+        tone.as_object_mut()
+            .expect("tone object")
+            .remove("signedAt");
+        tone.as_object_mut()
+            .expect("tone object")
+            .remove("signature");
         match parse_socket_identity(&tone) {
             SocketIdentity::Unsigned(Some(id)) => assert_eq!(id, hid),
             other => panic!("expected Unsigned(Some), got {:?}", socket_dbg(&other)),
@@ -641,9 +622,6 @@ mod tests {
 
     #[test]
     fn claiming_another_bees_hid_fails_verification() {
-        // The signature is valid, but it was made for a different hid. If
-        // this passed, a bee could replay any recorded hello to adopt a
-        // more trusted identity.
         let (_hid, _signing, mut tone) = signed_socket_hello();
         let impostor = Hid::random(HidPrefix::Wbee);
         tone["hid"] = serde_json::json!(impostor.to_hex());
@@ -655,9 +633,6 @@ mod tests {
 
     #[test]
     fn a_tampered_hid_with_a_rehashed_pubkey_is_rejected() {
-        // Mallory regenerates the hid to match a key she controls, so the
-        // hid/pubkey pair is internally consistent — but the signature was
-        // made for the original hid.
         let (_hid, _signing, mut tone) = signed_socket_hello();
         let mallory = SigningKey::generate(&mut rand::thread_rng());
         let mallory_hid = Hid::from_pubkey(HidPrefix::Wbee, &mallory.verifying_key().to_bytes());
@@ -700,9 +675,6 @@ mod tests {
 
     #[test]
     fn a_signature_over_a_different_domain_is_rejected() {
-        // The ensemble peer handshake signs `domain:humd_id:ts`. If the
-        // socket path accepted that message, a peer hello could be replayed
-        // onto a socket hello. The domains must not cross.
         let signing = SigningKey::generate(&mut rand::thread_rng());
         let hid = Hid::from_pubkey(HidPrefix::Wbee, &signing.verifying_key().to_bytes());
         let signed_at = now_ms();
@@ -722,11 +694,6 @@ mod tests {
 
     #[test]
     fn a_signature_over_someone_elses_hid_is_rejected() {
-        // The case the hid/pubkey check exists for. Mallory signs with her
-        // own key, but over a hid that is not the hash of that key — a
-        // victim's hid, say. Her signature genuinely verifies, because she
-        // signed exactly what she put in the message. Only the rule that a
-        // hid must be sha256(pubkey) of the key that signed it stops her.
         let mallory = SigningKey::generate(&mut rand::thread_rng());
         let victim = SigningKey::generate(&mut rand::thread_rng());
         let victim_hid = Hid::from_pubkey(HidPrefix::Wbee, &victim.verifying_key().to_bytes());

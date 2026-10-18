@@ -16,17 +16,19 @@ use serde::{Deserialize, Serialize};
 /// Panics if `HOME` is unset, which is always a configuration error.
 pub fn init() {
     let home = home();
-    xdg_default("XDG_STATE_HOME",  home.join(".local/state"));
+    xdg_default("XDG_STATE_HOME", home.join(".local/state"));
     xdg_default("XDG_CONFIG_HOME", home.join(".config"));
-    xdg_default("XDG_DATA_HOME",   home.join(".local/share"));
-    xdg_default("XDG_CACHE_HOME",  home.join(".cache"));
+    xdg_default("XDG_DATA_HOME", home.join(".local/share"));
+    xdg_default("XDG_CACHE_HOME", home.join(".cache"));
     xdg_default("XDG_RUNTIME_DIR", home.join(".local/state/run"));
 }
 
 fn xdg_default(var: &str, default: PathBuf) {
     if std::env::var_os(var).is_none() {
         // Safety: single-threaded startup; no other threads reading env yet.
-        unsafe { std::env::set_var(var, default); }
+        unsafe {
+            std::env::set_var(var, default);
+        }
     }
 }
 
@@ -94,22 +96,34 @@ pub fn claude_session_dir(cwd_hash: &str) -> PathBuf {
 /// [`thrum_sock_resolved`] instead so they honor whatever path humd
 /// actually published in `runtime.json`.
 pub fn thrum_sock() -> PathBuf {
-    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") { return PathBuf::from(p); }
-    if let Some(p) = std::env::var_os("HUM_SOCKET")     { return PathBuf::from(p); }
+    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
+        return PathBuf::from(p);
+    }
+    if let Some(p) = std::env::var_os("HUM_SOCKET") {
+        return PathBuf::from(p);
+    }
     state_dir().join(THRUM_SOCK_BASENAME)
 }
 
 /// What clients (bees, CLI) should connect to. Honors humd's
 /// rendezvous file first, then env overrides, then the default.
 pub fn thrum_sock_resolved() -> PathBuf {
-    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") { return PathBuf::from(p); }
-    if let Some(p) = std::env::var_os("HUM_SOCKET")     { return PathBuf::from(p); }
-    if let Some(rt) = RuntimeInfo::read() { return rt.socket; }
+    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
+        return PathBuf::from(p);
+    }
+    if let Some(p) = std::env::var_os("HUM_SOCKET") {
+        return PathBuf::from(p);
+    }
+    if let Some(rt) = RuntimeInfo::read() {
+        return rt.socket;
+    }
     state_dir().join(THRUM_SOCK_BASENAME)
 }
 
 /// humd HTTP control socket.
-pub fn http_sock() -> PathBuf { runtime_dir().join(HTTP_SOCK_BASENAME) }
+pub fn http_sock() -> PathBuf {
+    runtime_dir().join(HTTP_SOCK_BASENAME)
+}
 
 /// Kademlia routing table, restored on boot.
 pub fn routing_json() -> PathBuf {
@@ -117,13 +131,19 @@ pub fn routing_json() -> PathBuf {
 }
 
 /// Penny lifetime counters.
-pub fn penny() -> PathBuf { runtime_dir().join(PENNY_BASENAME) }
+pub fn penny() -> PathBuf {
+    runtime_dir().join(PENNY_BASENAME)
+}
 
 /// humd ed25519 identity seed.
-pub fn humd_key() -> PathBuf { state_dir().join(HUMD_KEY_BASENAME) }
+pub fn humd_key() -> PathBuf {
+    state_dir().join(HUMD_KEY_BASENAME)
+}
 
 /// Directory holding per-bee ed25519 identity seeds.
-pub fn bees_dir() -> PathBuf { state_dir().join("bees") }
+pub fn bees_dir() -> PathBuf {
+    state_dir().join("bees")
+}
 
 /// Per-bee ed25519 identity seed; one file per hive kind.
 pub fn bee_key(kind: &str) -> PathBuf {
@@ -131,16 +151,22 @@ pub fn bee_key(kind: &str) -> PathBuf {
 }
 
 /// Live bee manifest snapshot (written by daemon on every register/disconnect).
-pub fn bees_snapshot() -> PathBuf { state_dir().join(BEES_SNAPSHOT_BASENAME) }
+pub fn bees_snapshot() -> PathBuf {
+    state_dir().join(BEES_SNAPSHOT_BASENAME)
+}
 
 /// Rendezvous file: running daemon publishes its socket path, pid, and version here.
-pub fn runtime_info() -> PathBuf { state_dir().join(RUNTIME_INFO_BASENAME) }
+pub fn runtime_info() -> PathBuf {
+    state_dir().join(RUNTIME_INFO_BASENAME)
+}
 
 /// Bee identities the operator has withdrawn. Checked at hello time, so a
 /// revoked bee is refused the socket rather than merely hidden from
 /// discovery. Lives here rather than in humd so `humctl` can edit the list
 /// without the daemon's dependency tree.
-pub fn revoked_bees() -> PathBuf { state_dir().join(REVOKED_BEES_BASENAME) }
+pub fn revoked_bees() -> PathBuf {
+    state_dir().join(REVOKED_BEES_BASENAME)
+}
 
 /// Withdrawn bee identities, as stored on disk.
 ///
@@ -187,14 +213,9 @@ impl Revocations {
 
     pub fn write_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+            std::fs::create_dir_all(parent)?;
         }
         let tmp = path.with_extension("json.tmp");
-        // Stamp on write rather than trusting the caller to carry a
-        // version, so a hand-edited or CLI-built list is never written
-        // claiming to be a format it predates.
         let mut body = self.clone();
         body.version = 1;
         let body = serde_json::to_string_pretty(&body)
@@ -263,16 +284,24 @@ impl RuntimeInfo {
 }
 
 /// `hum.json` (daemon policy).
-pub fn hum_json() -> PathBuf { config_dir().join(HUM_JSON_BASENAME) }
+pub fn hum_json() -> PathBuf {
+    config_dir().join(HUM_JSON_BASENAME)
+}
 
 /// `peers.json` (ensemble peer list).
-pub fn peers_json() -> PathBuf { config_dir().join(PEERS_JSON_BASENAME) }
+pub fn peers_json() -> PathBuf {
+    config_dir().join(PEERS_JSON_BASENAME)
+}
 
 /// Drift rings directory (`drift/YYYY-MM-DD.ndjson`).
-pub fn drift_dir() -> PathBuf { state_dir().join("drift") }
+pub fn drift_dir() -> PathBuf {
+    state_dir().join("drift")
+}
 
 /// thehum chi-log directory (`thehum/YYYY-MM-DD.ndjson` + seq.bin + snapshots/).
-pub fn thehum_dir() -> PathBuf { state_dir().join("thehum") }
+pub fn thehum_dir() -> PathBuf {
+    state_dir().join("thehum")
+}
 
 pub const THEHUM_SEQ_BASENAME: &str = "seq.bin";
 pub const THEHUM_SNAPSHOTS_SUBDIR: &str = "snapshots";
@@ -280,46 +309,72 @@ pub const THEHUM_ROOT_BASENAME: &str = "root.txt";
 pub const THEHUM_NDJSON_EXT: &str = "ndjson";
 
 /// `<dir>/seq.bin` — last-persisted seq counter for a thehum at `dir`.
-pub fn thehum_seq_file(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_SEQ_BASENAME) }
+pub fn thehum_seq_file(dir: &std::path::Path) -> PathBuf {
+    dir.join(THEHUM_SEQ_BASENAME)
+}
 /// `<dir>/snapshots` — snapshot store inside a thehum at `dir`.
-pub fn thehum_snapshots_dir(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_SNAPSHOTS_SUBDIR) }
+pub fn thehum_snapshots_dir(dir: &std::path::Path) -> PathBuf {
+    dir.join(THEHUM_SNAPSHOTS_SUBDIR)
+}
 /// `<dir>/root.txt` — most recent state-root hex.
-pub fn thehum_root_file(dir: &std::path::Path) -> PathBuf { dir.join(THEHUM_ROOT_BASENAME) }
+pub fn thehum_root_file(dir: &std::path::Path) -> PathBuf {
+    dir.join(THEHUM_ROOT_BASENAME)
+}
 
 /// Cloned hum source tree (recipes + hive installers).
-pub fn src_dir() -> PathBuf { data_dir().join("src") }
+pub fn src_dir() -> PathBuf {
+    data_dir().join("src")
+}
 
 /// `$HOME/.local` — the base for HOME-anchored installs that aren't
 /// resolved through XDG (cargo install --root, .local/bin, etc).
-pub fn local_dir() -> PathBuf { home().join(".local") }
+pub fn local_dir() -> PathBuf {
+    home().join(".local")
+}
 
 /// `$HOME/.local/bin` — where installed hum binaries live.
-pub fn local_bin_dir() -> PathBuf { local_dir().join("bin") }
+pub fn local_bin_dir() -> PathBuf {
+    local_dir().join("bin")
+}
 
 /// Installed humd binary location.
-pub fn humd_bin() -> PathBuf { local_bin_dir().join("humd") }
+pub fn humd_bin() -> PathBuf {
+    local_bin_dir().join("humd")
+}
 
 /// fnm-managed node binary (when fnm is the user's node manager).
 /// Probed as a fallback after PATH + /usr/local/bin/node.
-pub fn fnm_node_bin() -> PathBuf { local_dir().join("share/fnm/aliases/default/bin/node") }
+pub fn fnm_node_bin() -> PathBuf {
+    local_dir().join("share/fnm/aliases/default/bin/node")
+}
 
 /// `~/.claude` — Claude CLI's data dir. Read by the claude-cli graft for
 /// transcript replay; we don't write here.
-pub fn claude_data_dir() -> PathBuf { home().join(".claude") }
+pub fn claude_data_dir() -> PathBuf {
+    home().join(".claude")
+}
 
 /// Installed-binary location for a given hum binary name.
-pub fn hum_bin(name: &str) -> PathBuf { local_bin_dir().join(name) }
+pub fn hum_bin(name: &str) -> PathBuf {
+    local_bin_dir().join(name)
+}
 
 /// Cache dir for a foreign hive clone (org/repo/branch).
 pub fn foreign_hive_cache(org: &str, repo: &str, branch: &str) -> PathBuf {
-    cache_dir().join("hives").join(format!("{org}-{repo}-{branch}"))
+    cache_dir()
+        .join("hives")
+        .join(format!("{org}-{repo}-{branch}"))
 }
 
 /// orch.d directory — one .orch file per registered hive.
-pub fn orch_d_dir() -> PathBuf { config_dir().join("orch.d") }
+pub fn orch_d_dir() -> PathBuf {
+    config_dir().join("orch.d")
+}
 
 /// Aggregate Orchfile — orchd reads this; we rebuild it from orch.d.
-pub fn orchfile() -> PathBuf { config_dir().join(ORCHFILE_BASENAME) }
+pub fn orchfile() -> PathBuf {
+    config_dir().join(ORCHFILE_BASENAME)
+}
 
 /// Per-bee config file for a given hive kind (e.g. `ollama-server.json`).
 pub fn bee_config(kind: &str) -> PathBuf {
@@ -342,7 +397,9 @@ pub fn daemon_logs(name: &str) -> DaemonLogs {
         }
     }
     #[cfg(not(target_os = "macos"))]
-    DaemonLogs::Journald { unit: name.to_string() }
+    DaemonLogs::Journald {
+        unit: name.to_string(),
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -366,8 +423,12 @@ pub fn home() -> PathBuf {
 /// expansion across the workspace.
 pub fn expand_tilde(p: &std::path::Path) -> PathBuf {
     let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix("~/") { return home().join(rest); }
-    if s == "~" { return home(); }
+    if let Some(rest) = s.strip_prefix("~/") {
+        return home().join(rest);
+    }
+    if s == "~" {
+        return home();
+    }
     p.to_path_buf()
 }
 

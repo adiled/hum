@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use parking_lot::RwLock;
-use serde_json::{json, Value};
-use thrum_core::THRUM_VERSION;
 use governor::{Quota, RateLimiter};
+use parking_lot::RwLock;
+use serde_json::{Value, json};
+use thrum_core::THRUM_VERSION;
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
@@ -189,7 +189,10 @@ impl Thrum {
     /// drains outbound tones bound for this client; `client_id` becomes
     /// addressable via [`thrum_to`] and [`thrum_broadcast`]. Used by
     /// sim to fake a connected nestler without a socket.
-    pub fn register_synthetic(&self, client_id: impl Into<String>) -> tokio::sync::mpsc::Receiver<Value> {
+    pub fn register_synthetic(
+        &self,
+        client_id: impl Into<String>,
+    ) -> tokio::sync::mpsc::Receiver<Value> {
         let cid: String = client_id.into();
         let (reach, rx) = registry::Reach::new(cid);
         let mut reg = self.inner.clients.write();
@@ -201,7 +204,6 @@ impl Thrum {
     pub fn drop_synthetic(&self, client_id: &str) {
         self.inner.clients.write().remove(client_id);
     }
-
 
     /// Drop a client from the registry. Any tones already queued for it
     /// still drain; once the queue empties the socket handler sees the
@@ -239,7 +241,9 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
 /// before the accept loop starts. humd uses this to publish its
 /// `runtime.json` rendezvous file.
 pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
-where F: FnOnce(&Path) + Send + 'static {
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -248,8 +252,8 @@ where F: FnOnce(&Path) + Send + 'static {
     if path.exists() {
         std::fs::remove_file(path).with_context(|| format!("remove stale socket {:?}", path))?;
     }
-    let listener = UnixListener::bind(path)
-        .with_context(|| format!("bind unix socket {:?}", path))?;
+    let listener =
+        UnixListener::bind(path).with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
     on_bound(path);
 
@@ -339,7 +343,6 @@ pub fn echo_tone(rid: &str, ok: bool, error: Option<&str>) -> Tone {
     }
     v
 }
-
 
 /// How a bee's declared `protoVersion` compares to the one humd speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
