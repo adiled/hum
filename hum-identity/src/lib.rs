@@ -20,8 +20,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
-use ed25519_dalek::SigningKey;
+use anyhow::{Context, Result, anyhow};
+use ed25519_dalek::{Signer, SigningKey};
 mod ids;
 pub use ids::*;
 use rand::RngCore;
@@ -40,6 +40,34 @@ impl BeeKey {
     pub fn pubkey_bytes(&self) -> [u8; 32] {
         self.signing.verifying_key().to_bytes()
     }
+
+    /// Sign a socket hello so the local humd can bind the declared `hid`
+    /// to a key instead of trusting the string. Returns
+    /// `(pubkey_hex, signed_at_ms, signature_hex)` for the three
+    /// `pubkey`/`signedAt`/`signature` fields.
+    ///
+    /// Covers the hid and the timestamp only — nothing else on the
+    /// socket hello. Timestamp binds freshness, so a recorded hello
+    /// cannot be replayed after the skew window.
+    pub fn sign_socket_hello(&self, signed_at_ms: i64) -> (String, i64, String) {
+        let msg = socket_hello_message(&self.hid, signed_at_ms);
+        let sig = self.signing.sign(&msg);
+        (
+            hex::encode(self.pubkey_bytes()),
+            signed_at_ms,
+            hex::encode(sig.to_bytes()),
+        )
+    }
+}
+
+/// Domain-separate socket-hello identity from the ensemble peer
+/// handshake. Different wire (a bee talking to its own humd over a unix
+/// socket, not two humds over iroh) and a different signing key, so
+/// sharing a domain would only let one be confused for the other.
+pub const BEE_SOCKET_DOMAIN: &str = "hum-bee-socket-v1";
+
+pub fn socket_hello_message(hid: &Hid, signed_at_ms: i64) -> Vec<u8> {
+    format!("{}:{}:{}", BEE_SOCKET_DOMAIN, hid.to_hex(), signed_at_ms).into_bytes()
 }
 
 /// Path to a bee kind's identity seed: `$XDG_STATE_HOME/hum/bees/<kind>.key`.
@@ -121,12 +149,9 @@ fn persist(path: &Path, seed: &[u8; 32]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::Verifier;
     use std::sync::Mutex;
     use tempfile::TempDir;
-
-    // Serialize tests because they share the XDG_STATE_HOME env var.
-    // Without this lock, parallel cargo-test threads race the env and
-    // the second test sees the first's tempdir (or an empty value).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -157,6 +182,79 @@ mod tests {
         let path = bee_key_path("foo");
         assert!(path.starts_with(tmp.path()), "path {:?}", path);
         assert!(path.ends_with("hum/bees/foo.key"));
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn a_signature_binds_the_hid_it_was_signed_for() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+
+        let key = load_or_mint_bee_key("sig-bind", HidPrefix::Wbee).expect("mint");
+        let (pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        assert_eq!(pubkey_hex, hex::encode(key.pubkey_bytes()));
+
+        let msg = socket_hello_message(&key.hid, signed_at);
+        let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
+        assert_eq!(sig_bytes.len(), 64, "ed25519 signature is 64 bytes");
+
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+        let verifying = key.signing.verifying_key();
+        verifying
+            .verify(&msg, &ed25519_dalek::Signature::from_bytes(&sig_arr))
+            .expect("signature must verify against the signing key");
+
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn a_signature_does_not_verify_for_a_different_hid() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+
+        let key = load_or_mint_bee_key("sig-rebind", HidPrefix::Wbee).expect("mint");
+        let other = Hid::random(HidPrefix::Wbee);
+
+        let (_pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        let msg = socket_hello_message(&other, signed_at);
+        let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+        let verifying = key.signing.verifying_key();
+        assert!(
+            verifying
+                .verify(&msg, &ed25519_dalek::Signature::from_bytes(&sig_arr))
+                .is_err(),
+            "signature bound to one hid must not verify for another"
+        );
+
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn the_timestamp_is_part_of_what_is_signed() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+
+        let key = load_or_mint_bee_key("sig-replay", HidPrefix::Wbee).expect("mint");
+        let (_pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        let verifying = key.signing.verifying_key();
+        for other in [1_700_000_000_001, 1_600_000_000_000, 0] {
+            let msg = socket_hello_message(&key.hid, other);
+            assert!(
+                verifying.verify(&msg, &signature).is_err(),
+                "a signature at {signed_at} must not verify at {other}"
+            );
+        }
+
         unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 }

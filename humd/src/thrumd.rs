@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use parking_lot::RwLock;
-use serde_json::{json, Value};
-use thrum_core::THRUM_VERSION;
 use governor::{Quota, RateLimiter};
+use parking_lot::RwLock;
+use serde_json::{Value, json};
+use thrum_core::THRUM_VERSION;
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
@@ -110,6 +110,10 @@ impl Thrum {
     /// every unregistered client (no sigils claimed) if nobody owns it.
     /// `nest` selects which nest-kind namespace to compute the sigil
     /// under (e.g. "claude-cli", "claude-repl").
+    ///
+    /// A client that declared its `chis` in a hello only receives tones
+    /// whose chi it declared. One that declared nothing receives
+    /// everything — see [`registry::Reach::declares_chi`].
     pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
         let sigil = thrum_core::sigil(sid, nest);
         if let Some(obj) = tone.as_object_mut() {
@@ -117,17 +121,18 @@ impl Thrum {
             obj.entry("sigil").or_insert(json!(sigil));
             obj.insert("from".into(), json!("daemon"));
         }
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         let mut sent = false;
         for reach in reg.iter() {
-            if reach.has_sigil(&sigil) {
+            if reach.has_sigil(&sigil) && reach.declares_chi(&chi) {
                 let _ = reach.send(tone.clone());
                 sent = true;
             }
         }
         if !sent {
             for reach in reg.iter() {
-                if reach.sigil_count() == 0 {
+                if reach.sigil_count() == 0 && reach.declares_chi(&chi) {
                     let _ = reach.send(tone.clone());
                 }
             }
@@ -140,11 +145,16 @@ impl Thrum {
         );
     }
 
-    /// Send to every connected client, regardless of sigils.
+    /// Send to every connected client, regardless of sigils. Still respects
+    /// declared chi scope — a client that declared its chis does not
+    /// receive everything merely because sigils were bypassed.
     pub fn thrum_all(&self, tone: Tone) {
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         for reach in reg.iter() {
-            let _ = reach.send(tone.clone());
+            if reach.declares_chi(&chi) {
+                let _ = reach.send(tone.clone());
+            }
         }
     }
 
@@ -154,6 +164,16 @@ impl Thrum {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
             reach.add_sigil(sigil.into());
+        }
+    }
+
+    /// Record the chi values a client declared in its hello. Broadcasts
+    /// then reach only the clients whose declared set covers the tone's
+    /// chi. A client that declared none still receives everything.
+    pub fn claim_chis(&self, client_id: &str, chis: Vec<String>) {
+        let reg = self.inner.clients.read();
+        if let Some(reach) = reg.get(client_id) {
+            reach.set_chis(chis);
         }
     }
 
@@ -169,7 +189,10 @@ impl Thrum {
     /// drains outbound tones bound for this client; `client_id` becomes
     /// addressable via [`thrum_to`] and [`thrum_broadcast`]. Used by
     /// sim to fake a connected nestler without a socket.
-    pub fn register_synthetic(&self, client_id: impl Into<String>) -> tokio::sync::mpsc::Receiver<Value> {
+    pub fn register_synthetic(
+        &self,
+        client_id: impl Into<String>,
+    ) -> tokio::sync::mpsc::Receiver<Value> {
         let cid: String = client_id.into();
         let (reach, rx) = registry::Reach::new(cid);
         let mut reg = self.inner.clients.write();
@@ -181,7 +204,6 @@ impl Thrum {
     pub fn drop_synthetic(&self, client_id: &str) {
         self.inner.clients.write().remove(client_id);
     }
-
 
     /// Drop a client from the registry. Any tones already queued for it
     /// still drain; once the queue empties the socket handler sees the
@@ -219,7 +241,9 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
 /// before the accept loop starts. humd uses this to publish its
 /// `runtime.json` rendezvous file.
 pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
-where F: FnOnce(&Path) + Send + 'static {
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -228,8 +252,8 @@ where F: FnOnce(&Path) + Send + 'static {
     if path.exists() {
         std::fs::remove_file(path).with_context(|| format!("remove stale socket {:?}", path))?;
     }
-    let listener = UnixListener::bind(path)
-        .with_context(|| format!("bind unix socket {:?}", path))?;
+    let listener =
+        UnixListener::bind(path).with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
     on_bound(path);
 
@@ -319,7 +343,6 @@ pub fn echo_tone(rid: &str, ok: bool, error: Option<&str>) -> Tone {
     }
     v
 }
-
 
 /// How a bee's declared `protoVersion` compares to the one humd speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

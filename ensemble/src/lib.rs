@@ -12,7 +12,8 @@ use tokio::task::JoinSet;
 pub mod handshake;
 pub use handshake::{
     EnsembleHello, HelloParse, Hid, HidParseError, HidPrefix, HumdAddr, HumdKey, PeerCapabilities,
-    PeerConnection, Transport, hello_tone, hello_tone_unsigned, parse_hello, parse_hello_caps,
+    PeerConnection, SocketIdentity, Transport, hello_tone, hello_tone_unsigned, parse_hello,
+    parse_hello_caps, parse_socket_identity,
 };
 
 pub mod link;
@@ -69,6 +70,11 @@ pub mod headroom;
 pub mod onchain;
 
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
+/// Separate domain for the claims signature. Kept apart from the identity
+/// signature so an old peer verifying `signature` sees an unchanged message
+/// and a new peer can tell the two apart. Adding fields here is a minor
+/// bump; changing `HANDSHAKE_DOMAIN` is a hard break.
+const CAPS_HANDSHAKE_DOMAIN: &str = "hum-ensemble-caps-v1";
 
 const HANDSHAKE_SKEW_MS: i64 = 60_000;
 
@@ -1354,16 +1360,14 @@ mod tests {
             nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: true,
-            free_slots: None,
-            headroom: headroom::CellHeadroom::default(),
+            ..Default::default()
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
             nests: vec!["claude-repl".into()],
             hosts: vec!["bob".into()],
             can_relay: false,
-            free_slots: None,
-            headroom: headroom::CellHeadroom::default(),
+            ..Default::default()
         };
         let (a_side, b_side) = InMemoryEndpoint::pair(a_id, b_caps.clone(), b_id, a_caps.clone());
 

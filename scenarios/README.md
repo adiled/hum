@@ -31,11 +31,11 @@ Pairing is the rule, not yet the state of the directory:
 | `eggs-on-the-hum.md` | `sim/tests/eggs_on_the_hum.rs` |
 | `find-the-worker.md` | `sim/tests/remote_discovery.rs` |
 
-Tests with no scenario prose yet: `delivery.rs`, `liveness.rs`,
-`lossy_link.rs`, `mock_prompt.rs`, `overflow_inference.rs`,
-`phone_laptop_roam.rs`, `smoke.rs`, `stalled_peer.rs`,
-`tool_catalogue.rs`, `two_humds_ping_pong.rs`. `wifi-p2p-meetup.md`
-has prose with no test.
+Tests with no scenario prose yet: `admission_gate.rs`, `chi_scoping.rs`,
+`delivery.rs`, `liveness.rs`, `lossy_link.rs`, `mock_prompt.rs`,
+`remote_routing_trust.rs`, `revocation.rs`, `smoke.rs`,
+`socket_identity.rs`, `stalled_peer.rs`, `tool_catalogue.rs`,
+`two_humds_ping_pong.rs`. `wifi-p2p-meetup.md` has prose with no test.
 
 Each MD covers five sections in the same order: **setup**, **happy
 path**, **failure modes**, **success criteria**, **what this validates**.

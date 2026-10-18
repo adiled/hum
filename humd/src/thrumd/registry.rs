@@ -19,6 +19,11 @@ pub struct Reach {
     pub client_id: ClientId,
     tx: mpsc::Sender<Value>,
     sigils: Mutex<HashSet<String>>,
+    /// Chi values this client declared in its hello. Empty means it
+    /// declared none, which is the same as "unspecified" — such a client
+    /// receives everything, because every bee predating this field has
+    /// an empty set and refusing it traffic would be a wire break.
+    chis: Mutex<HashSet<String>>,
 }
 
 impl Reach {
@@ -29,6 +34,7 @@ impl Reach {
                 client_id,
                 tx,
                 sigils: Mutex::new(HashSet::new()),
+                chis: Mutex::new(HashSet::new()),
             },
             rx,
         )
@@ -51,6 +57,23 @@ impl Reach {
     pub fn sigil_count(&self) -> usize {
         self.sigils.lock().len()
     }
+
+    /// Record the chi values a client declared in its hello. Replaces any
+    /// previous set so a re-hello that narrows scope actually narrows it.
+    pub fn set_chis(&self, chis: Vec<String>) {
+        *self.chis.lock() = chis.into_iter().collect();
+    }
+
+    /// Whether this client should be handed a tone for `chi`.
+    ///
+    /// A client that declared nothing receives everything — that is the
+    /// backward-compatible answer, and it is the only one available to
+    /// every bee written before this field existed. A client that declared
+    /// a list receives only those.
+    pub fn declares_chi(&self, chi: &str) -> bool {
+        let chis = self.chis.lock();
+        chis.is_empty() || chis.contains(chi)
+    }
 }
 
 pub(crate) struct Registry {
@@ -59,7 +82,9 @@ pub(crate) struct Registry {
 
 impl Registry {
     pub(crate) fn new() -> Self {
-        Self { by_id: HashMap::new() }
+        Self {
+            by_id: HashMap::new(),
+        }
     }
 
     pub(crate) fn insert(&mut self, reach: std::sync::Arc<Reach>) {
@@ -80,5 +105,51 @@ impl Registry {
 
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_client_that_declared_nothing_receives_everything() {
+        let (reach, _rx) = Reach::new("unspecified".into());
+        assert!(
+            reach.declares_chi("prompt"),
+            "no declared set = no filtering"
+        );
+        assert!(reach.declares_chi("tool-call"));
+    }
+
+    #[test]
+    fn a_client_that_declared_a_list_receives_only_those() {
+        let (reach, _rx) = Reach::new("scoped".into());
+        reach.set_chis(vec!["prompt".into(), "chunk".into()]);
+        assert!(reach.declares_chi("prompt"));
+        assert!(reach.declares_chi("chunk"));
+        assert!(
+            !reach.declares_chi("tool-call"),
+            "an undeclared chi must not reach a scoped client"
+        );
+    }
+
+    #[test]
+    fn declaring_an_empty_list_is_not_scoped() {
+        let (reach, _rx) = Reach::new("empty".into());
+        reach.set_chis(Vec::new());
+        assert!(reach.declares_chi("prompt"));
+    }
+
+    #[test]
+    fn re_declaring_replaces_the_previous_scope() {
+        let (reach, _rx) = Reach::new("rehello".into());
+        reach.set_chis(vec!["prompt".into(), "chunk".into()]);
+        reach.set_chis(vec!["prompt".into()]);
+        assert!(reach.declares_chi("prompt"));
+        assert!(
+            !reach.declares_chi("chunk"),
+            "the earlier, wider scope must not survive a re-hello"
+        );
     }
 }
