@@ -909,6 +909,10 @@ impl ToneSink for HumdSink {
                         .and_then(|v| v.as_array())
                         .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                         .unwrap_or_default();
+                    // A bee that declared its chis gets only those from
+                    // broadcasts; one that declared none still gets
+                    // everything, so bees predating this are unaffected.
+                    self.thrum.claim_chis(client_id, chis.clone());
                     let source = tone.get("source").and_then(Value::as_str).map(str::to_string);
                     let bind: Option<ensemble::BindAddr> = tone.get("bind")
                         .and_then(|v| serde_json::from_value(v.clone()).ok());

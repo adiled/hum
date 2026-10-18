@@ -110,6 +110,10 @@ impl Thrum {
     /// every unregistered client (no sigils claimed) if nobody owns it.
     /// `nest` selects which nest-kind namespace to compute the sigil
     /// under (e.g. "claude-cli", "claude-repl").
+    ///
+    /// A client that declared its `chis` in a hello only receives tones
+    /// whose chi it declared. One that declared nothing receives
+    /// everything — see [`registry::Reach::declares_chi`].
     pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
         let sigil = thrum_core::sigil(sid, nest);
         if let Some(obj) = tone.as_object_mut() {
@@ -117,17 +121,18 @@ impl Thrum {
             obj.entry("sigil").or_insert(json!(sigil));
             obj.insert("from".into(), json!("daemon"));
         }
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         let mut sent = false;
         for reach in reg.iter() {
-            if reach.has_sigil(&sigil) {
+            if reach.has_sigil(&sigil) && reach.declares_chi(&chi) {
                 let _ = reach.send(tone.clone());
                 sent = true;
             }
         }
         if !sent {
             for reach in reg.iter() {
-                if reach.sigil_count() == 0 {
+                if reach.sigil_count() == 0 && reach.declares_chi(&chi) {
                     let _ = reach.send(tone.clone());
                 }
             }
@@ -140,11 +145,16 @@ impl Thrum {
         );
     }
 
-    /// Send to every connected client, regardless of sigils.
+    /// Send to every connected client, regardless of sigils. Still respects
+    /// declared chi scope — a client that declared its chis does not
+    /// receive everything merely because sigils were bypassed.
     pub fn thrum_all(&self, tone: Tone) {
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         for reach in reg.iter() {
-            let _ = reach.send(tone.clone());
+            if reach.declares_chi(&chi) {
+                let _ = reach.send(tone.clone());
+            }
         }
     }
 
@@ -154,6 +164,16 @@ impl Thrum {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
             reach.add_sigil(sigil.into());
+        }
+    }
+
+    /// Record the chi values a client declared in its hello. Broadcasts
+    /// then reach only the clients whose declared set covers the tone's
+    /// chi. A client that declared none still receives everything.
+    pub fn claim_chis(&self, client_id: &str, chis: Vec<String>) {
+        let reg = self.inner.clients.read();
+        if let Some(reach) = reg.get(client_id) {
+            reach.set_chis(chis);
         }
     }
 
