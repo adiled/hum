@@ -103,7 +103,24 @@ impl Sim {
         self.spawn_humd_inner(id, false).await
     }
 
+    /// A humd whose revocation list already contains these hids. The list
+    /// is written before the daemon reads it, matching how an operator
+    /// would have populated it on a previous run.
+    pub async fn spawn_humd_revoking(&self, id: Hid, revoked: &[&str]) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, true, revoked).await
+    }
+
     async fn spawn_humd_inner(&self, id: Hid, trust_remote_workers: bool) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, trust_remote_workers, &[])
+            .await
+    }
+
+    async fn spawn_humd_inner_with_revocations(
+        &self,
+        id: Hid,
+        trust_remote_workers: bool,
+        revoked: &[&str],
+    ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -111,6 +128,16 @@ impl Sim {
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
         let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
+
+        // Preload before the daemon constructs its sink, which reads once
+        // at boot. A stale file from a previous run would otherwise leak
+        // revocations into an unrelated test.
+        let revoked_path = tmp.join(hum_paths::REVOKED_BEES_BASENAME);
+        let _ = std::fs::remove_file(&revoked_path);
+        if !revoked.is_empty() {
+            let list: Vec<String> = revoked.iter().map(|s| s.to_string()).collect();
+            humd::revoked::save(&revoked_path, &list).expect("write revocation list");
+        }
 
         let initial_capacity = self
             .pending_capacities
@@ -132,6 +159,7 @@ impl Sim {
             penny_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
+            revoked_path: revoked_path.clone(),
             bind_mcp: false,
             capacity,
             waneman: Some(waneman.clone()),
@@ -254,6 +282,7 @@ impl Sim {
             penny_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
+            revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
             bind_mcp: false,
             capacity,
             waneman: Some(waneman.clone()),

@@ -69,6 +69,7 @@ pub const PENNY_BASENAME: &str = "penny.json";
 pub const HUMD_KEY_BASENAME: &str = "humd.key";
 pub const BEES_SNAPSHOT_BASENAME: &str = "bees.json";
 pub const RUNTIME_INFO_BASENAME: &str = "runtime.json";
+pub const REVOKED_BEES_BASENAME: &str = "revoked.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
@@ -134,6 +135,11 @@ pub fn bees_snapshot() -> PathBuf { state_dir().join(BEES_SNAPSHOT_BASENAME) }
 
 /// Rendezvous file: running daemon publishes its socket path, pid, and version here.
 pub fn runtime_info() -> PathBuf { state_dir().join(RUNTIME_INFO_BASENAME) }
+
+/// Bee identities the operator has withdrawn. Checked at hello time, so a
+/// revoked bee is refused the socket rather than merely hidden from
+/// discovery.
+pub fn revoked_bees() -> PathBuf { state_dir().join(REVOKED_BEES_BASENAME) }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeInfo {

@@ -20,6 +20,7 @@ pub mod peers;
 mod penny;
 pub mod redial;
 mod routing_store;
+pub mod revoked;
 pub mod supervisor;
 pub mod thrumd;
 pub use identity::{key_path, load_or_mint_key, read_key};
@@ -47,6 +48,7 @@ pub struct DaemonConfig {
     pub routing_persist_interval: Duration,
     pub thrum_override: Option<Thrum>,
     pub ensemble: Option<Arc<Ensemble>>,
+    pub revoked_path: PathBuf,
     pub bind_mcp: bool,
     pub capacity: LocalCapacity,
     pub waneman: Option<Arc<WaneTracker>>,
@@ -84,6 +86,7 @@ impl DaemonConfig {
             routing_persist_interval: Duration::from_secs(30),
             thrum_override: None,
             ensemble: None,
+            revoked_path: hum_paths::revoked_bees(),
             bind_mcp: true,
             capacity: LocalCapacity::default(),
             waneman: None,
@@ -299,6 +302,7 @@ where
         incoming_tool_calls: incoming_tool_calls.clone(),
         thehum: thehum_handle.clone(),
         trust_remote_workers: cfg.trust_remote_workers,
+        revoked: revoked::Revocations::load(&cfg.revoked_path),
     });
     thrum.set_sink(sink);
     if let Some(ens) = &ensemble_for_sink {
@@ -486,6 +490,7 @@ struct HumdSink {
     incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     thehum: Option<Arc<thehum::TheHum>>,
     trust_remote_workers: bool,
+    revoked: revoked::Revocations,
 }
 
 pub struct PeersAliasResolver {
@@ -965,6 +970,23 @@ impl ToneSink for HumdSink {
                             self.thrum.thrum_to(
                                 client_id,
                                 thrumd::echo_tone(&rid, false, Some("hid signature invalid")),
+                            );
+                            self.thrum.thrum_close(client_id);
+                            return;
+                        }
+                    }
+                    // A revoked hid is refused the socket, not merely hidden
+                    // from discovery. Checked whether or not the bee proved
+                    // the hid: one that dropped its signature to slip past
+                    // this would be claiming the same revoked string.
+                    if let Some(hid) = manifest.hid {
+                        if self.revoked.is_revoked(&hid.to_hex()) {
+                            error!(client_id, hid = %hid.short(),
+                                "bee.revoked — hid is on the operator's revocation list. \
+                                 Not registered, not announced.");
+                            self.thrum.thrum_to(
+                                client_id,
+                                thrumd::echo_tone(&rid, false, Some("bee identity revoked")),
                             );
                             self.thrum.thrum_close(client_id);
                             return;
