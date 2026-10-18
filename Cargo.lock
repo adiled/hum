@@ -4137,12 +4137,15 @@ name = "sim"
 version = "0.32.0"
 dependencies = [
  "anyhow",
+ "ed25519-dalek 2.2.0",
  "ensemble",
+ "hex",
  "hum-identity",
  "hum-mcp",
  "hum-paths",
  "humd",
  "parking_lot",
+ "rand 0.8.6",
  "serde_json",
  "thrum-core",
  "tokio",
