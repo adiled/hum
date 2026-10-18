@@ -20,6 +20,12 @@ Usage:
   humctl logs   [-n LINES]
   humctl health
   humctl thehum
+  humctl revoke    <hid>...
+  humctl unrevoke  <hid>...
+  humctl revocations
+
+A revoked hid is refused the socket at hello. The list is read when humd
+starts, so restart after revoking.
 ";
 
 fn main() -> ExitCode {
@@ -50,6 +56,9 @@ fn run() -> Result<()> {
         "logs" => logs(parse_lines(args.collect::<Vec<_>>())),
         "health" => health(),
         "thehum" => thehum(),
+        "revoke" => revoke(args.collect::<Vec<_>>()),
+        "unrevoke" => unrevoke(args.collect::<Vec<_>>()),
+        "revocations" => revocations(),
         other => bail!("unknown verb '{other}'\n{USAGE}"),
     }
 }
@@ -253,4 +262,59 @@ fn thehum() -> Result<()> {
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn geteuid() -> u32;
+}
+
+fn revoke(hids: Vec<String>) -> Result<()> {
+    if hids.is_empty() {
+        bail!("revoke needs at least one hid\n{USAGE}");
+    }
+    let mut list = hum_paths::Revocations::read();
+    let mut added = 0usize;
+    for hid in &hids {
+        if list.revoke(hid) {
+            println!("revoked {hid}");
+            added += 1;
+        } else {
+            println!("already revoked {hid}");
+        }
+    }
+    list.write().context("write revocation list")?;
+    if added > 0 {
+        println!("restart humd for this to take effect");
+    }
+    Ok(())
+}
+
+fn unrevoke(hids: Vec<String>) -> Result<()> {
+    if hids.is_empty() {
+        bail!("unrevoke needs at least one hid\n{USAGE}");
+    }
+    let mut list = hum_paths::Revocations::read();
+    let mut removed = 0usize;
+    for hid in &hids {
+        if list.unrevoke(hid) {
+            println!("unrevoked {hid}");
+            removed += 1;
+        } else {
+            println!("not revoked {hid}");
+        }
+    }
+    list.write().context("write revocation list")?;
+    if removed > 0 {
+        println!("restart humd for this to take effect");
+    }
+    Ok(())
+}
+
+fn revocations() -> Result<()> {
+    let list = hum_paths::Revocations::read();
+    if list.revoked.is_empty() {
+        println!("no revoked bees");
+        return Ok(());
+    }
+    println!("{} revoked:", list.revoked.len());
+    for hid in &list.revoked {
+        println!("  {hid}");
+    }
+    Ok(())
 }

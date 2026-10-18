@@ -136,7 +136,9 @@ impl Sim {
         let _ = std::fs::remove_file(&revoked_path);
         if !revoked.is_empty() {
             let list: Vec<String> = revoked.iter().map(|s| s.to_string()).collect();
-            humd::revoked::save(&revoked_path, &list).expect("write revocation list");
+            hum_paths::Revocations { version: 1, revoked: list }
+                .write_to(&revoked_path)
+                .expect("write revocation list");
         }
 
         let initial_capacity = self

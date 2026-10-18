@@ -138,8 +138,95 @@ pub fn runtime_info() -> PathBuf { state_dir().join(RUNTIME_INFO_BASENAME) }
 
 /// Bee identities the operator has withdrawn. Checked at hello time, so a
 /// revoked bee is refused the socket rather than merely hidden from
-/// discovery.
+/// discovery. Lives here rather than in humd so `humctl` can edit the list
+/// without the daemon's dependency tree.
 pub fn revoked_bees() -> PathBuf { state_dir().join(REVOKED_BEES_BASENAME) }
+
+/// Withdrawn bee identities, as stored on disk.
+///
+/// Shared between humd (which refuses a revoked hid at hello) and humctl
+/// (which edits the list). humd reads it once at boot, so a change here
+/// takes effect on the next start — see [`Revocations`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Revocations {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub revoked: Vec<String>,
+}
+
+impl Revocations {
+    /// Read the list at `path`.
+    ///
+    /// An absent or unparseable file yields an empty list rather than an
+    /// error. Failing closed would lock every bee out of the socket, and a
+    /// daemon that admits nobody is a worse failure than one that admits a
+    /// revoked bee — the operator can act on the parse warning.
+    pub fn read_from(path: &std::path::Path) -> Self {
+        match std::fs::read(path) {
+            Ok(bytes) if bytes.is_empty() => Self::default(),
+            Ok(bytes) => match serde_json::from_slice::<Self>(&bytes) {
+                Ok(list) => list,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "revoke",
+                        path = %path.display(),
+                        err = %e,
+                        "revoke.load.parse_failed — treating as empty"
+                    );
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn read() -> Self {
+        Self::read_from(&revoked_bees())
+    }
+
+    pub fn write_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let tmp = path.with_extension("json.tmp");
+        // Stamp on write rather than trusting the caller to carry a
+        // version, so a hand-edited or CLI-built list is never written
+        // claiming to be a format it predates.
+        let mut body = self.clone();
+        body.version = 1;
+        let body = serde_json::to_string_pretty(&body)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, path)
+    }
+
+    pub fn write(&self) -> std::io::Result<()> {
+        self.write_to(&revoked_bees())
+    }
+
+    pub fn contains(&self, hid_hex: &str) -> bool {
+        self.revoked.iter().any(|h| h == hid_hex)
+    }
+
+    /// Add `hid`, returning false if it was already listed.
+    pub fn revoke(&mut self, hid: &str) -> bool {
+        if self.contains(hid) {
+            return false;
+        }
+        self.revoked.push(hid.to_string());
+        true
+    }
+
+    /// Remove `hid`, returning false if it was not listed.
+    pub fn unrevoke(&mut self, hid: &str) -> bool {
+        let before = self.revoked.len();
+        self.revoked.retain(|h| h != hid);
+        self.revoked.len() != before
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeInfo {
@@ -285,3 +372,60 @@ pub fn expand_tilde(p: &std::path::Path) -> PathBuf {
 }
 
 pub mod config;
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_file_revokes_nothing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let list = Revocations::read_from(&tmp.path().join("nope.json"));
+        assert!(!list.contains("wbee_abc"));
+    }
+
+    #[test]
+    fn a_listed_hid_is_contained() {
+        let mut list = Revocations::default();
+        assert!(list.revoke("wbee_dead"));
+        assert!(list.contains("wbee_dead"));
+        assert!(!list.contains("wbee_other"));
+    }
+
+    #[test]
+    fn revoking_twice_is_not_a_duplicate() {
+        let mut list = Revocations::default();
+        assert!(list.revoke("wbee_dead"));
+        assert!(!list.revoke("wbee_dead"), "already listed");
+        assert_eq!(list.revoked.len(), 1);
+    }
+
+    #[test]
+    fn unrevoking_removes_only_that_hid() {
+        let mut list = Revocations::default();
+        list.revoke("wbee_dead");
+        list.revoke("wbee_gone");
+        assert!(list.unrevoke("wbee_dead"));
+        assert!(!list.contains("wbee_dead"));
+        assert!(list.contains("wbee_gone"));
+        assert!(!list.unrevoke("wbee_dead"), "nothing left to remove");
+    }
+
+    #[test]
+    fn a_list_survives_a_round_trip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("revoked.json");
+        let mut list = Revocations::default();
+        list.revoke("wbee_dead");
+        list.write_to(&path).unwrap();
+        assert!(Revocations::read_from(&path).contains("wbee_dead"));
+    }
+
+    #[test]
+    fn a_corrupt_file_revokes_nothing_rather_than_everything() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("revoked.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(!Revocations::read_from(&path).contains("wbee_abc"));
+    }
+}
