@@ -35,13 +35,8 @@ use tracing::{info, trace};
 
 use hum_identity::load_or_mint_bee_key;
 
-/// Forager-side tool dispatcher. The forager binary owns its own
-/// state (cwd, fs.roots snapshot, permission cache); this trait is
-/// the seam humd's tool-call router calls into.
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync + 'static {
-    /// What this forager advertises. Sent on hello + on `tools/list`
-    /// queries from humd.
     fn tool_defs(&self) -> Vec<ToolDef>;
     /// Execute one tool. `tone` carries the full chi:"tool-call"
     /// envelope (sid, callId, toolName, args). Implementations should
@@ -49,23 +44,14 @@ pub trait ToolDispatcher: Send + Sync + 'static {
     async fn dispatch(&self, tone: Value) -> ToolResult;
 }
 
-/// What the forager advertises on hello.
 #[derive(Debug, Clone)]
 pub struct ForagerAdvert {
-    /// Hive name — `humfs`, future `humfs-sandbox`, etc. Used as the
-    /// kind tag on hello.
     pub hive: String,
-    /// Crate version. Free-form semver.
     pub version: String,
-    /// Optional source URL; humd carries it into the gossiped
-    /// manifest verbatim.
     pub source: Option<String>,
     /// Capability categories this forager owns. humd uses these
     /// hive-level claims to deauthorize the same surface from other
-    /// sources (native MCP tools, nestler-declared tools that fall
-    /// in the named capability's well-known set). Today the only
-    /// well-known capability is `"fs"`; future categories include
-    /// `"net"`, `"shell"`, `"todo"`, etc.
+    /// sources.
     pub provides: Vec<String>,
 }
 
@@ -79,8 +65,6 @@ fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock_resolved()
 }
 
-/// Run the forager service loop. Blocks until shutdown; reconnects
-/// on socket drop.
 pub async fn serve_forager<D: ToolDispatcher + 'static>(
     dispatcher: Arc<D>,
     advert: ForagerAdvert,
@@ -97,8 +81,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    // Load (or mint) the persistent forager-bee identity. fbee_ hid
-    // survives reconnect / restart; humd indexes by it.
+    // The fbee_ hid survives reconnect + restart, so humd indexes by it.
     let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Fbee)
         .with_context(|| format!("load/mint fbee key for hive {}", advert.hive))?;
 

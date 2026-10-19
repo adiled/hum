@@ -12,6 +12,9 @@
 //! axum server that puts it to use. Standalone crate so a remote
 //! worker hive can spawn an MCP bridge without pulling the daemon
 //! tree.
+//!
+//! The worker updates the catalogue on each chi:"prompt" arrival and
+//! resolves pending tool-calls when a chi:"tool-result" lands.
 
 pub mod capability;
 pub mod catalogue;
@@ -37,17 +40,11 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{trace, warn};
 
-/// Shared state between the MCP HTTP handlers and the worker's
-/// thrum loop. The worker updates the catalogue on each
-/// chi:"prompt" arrival and resolves pending tool-calls when
-/// chi:"tool-result" lands.
 pub struct McpBridge {
     catalogue: RwLock<CatalogueSlot>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
-    /// Callback the bridge invokes to ship a `chi:"tool-call"` tone
-    /// out via the worker's thrum write half. Keeps the bridge
-    /// transport-agnostic — caller decides how the tone reaches
-    /// humd.
+    /// Ships a `chi:"tool-call"` tone out via the worker's thrum write
+    /// half. Keeps the bridge transport-agnostic.
     ship_tool_call: Arc<dyn Fn(Value) + Send + Sync>,
 }
 
@@ -68,8 +65,7 @@ impl McpBridge {
     /// Set the catalogue for an incoming session. The worker calls
     /// this when it receives a chi:"prompt" — both the forager
     /// catalogue (humd-merged) and the asker's nestler tools are
-    /// composed here. `provided` is the capability list (so the
-    /// merge can filter capability-overlapping nestler tools).
+    /// composed here.
     pub fn set_catalogue(
         &self,
         forager_tools: Vec<ToolDef>,
@@ -81,8 +77,8 @@ impl McpBridge {
     }
 
     /// Resolve a pending `tools/call` with the result from a
-    /// `chi:"tool-result"` tone the worker received over thrum.
-    /// Returns `true` if the callId matched a waiting handler.
+    /// `chi:"tool-result"` tone. Returns `true` if the callId matched
+    /// a waiting handler.
     pub fn resolve(&self, call_id: &str, tone: Value) -> bool {
         if let Some(tx) = self.pending.lock().remove(call_id) {
             let _ = tx.send(tone);
@@ -96,9 +92,6 @@ impl McpBridge {
 /// Spawn the MCP HTTP listener on an ephemeral local port. Returns
 /// the bound socket address so the worker can pass it to its
 /// compute (e.g. `claude --mcp-config <...url>`).
-///
-/// The server runs until the process exits. Spawning blocks only
-/// long enough to bind; the listener task is detached.
 pub async fn spawn_local_mcp(bridge: Arc<McpBridge>) -> Result<SocketAddr> {
     let router = Router::new()
         .route("/s/:sid", post(handle))
@@ -148,15 +141,12 @@ mod tests {
         bridge.set_catalogue(vec![def("humfs_read")], vec![], &["fs".into()]);
         let addr = spawn_local_mcp(bridge.clone()).await.expect("bind");
         let client = reqwest_get_post();
-        // Fire-and-park: post tools/call in a task; after a moment,
-        // resolve via the bridge with a fake tool-result tone.
         let url = format!("http://{}/s/hum-test", addr);
         let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
             "params":{"name":"humfs_read","arguments":{"file_path":"/x"}}});
         let call_task = tokio::spawn(async move {
             client.post(url).json(&body).send().await.unwrap().json().await.unwrap()
         });
-        // Wait for the bridge to ship the tool-call so we know its callId.
         let call_id = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some(tone) = shipped.lock().first().cloned() {
@@ -174,8 +164,8 @@ mod tests {
         assert_eq!(resp["result"]["content"][0]["text"], "file body");
     }
 
-    // Minimal reqwest client built from std + hyper would bloat the
-    // crate; just use a tiny inline TcpStream-based POST helper.
+    // A reqwest client would bloat the crate; this is a tiny inline
+    // TcpStream-based POST helper.
     fn reqwest_get_post() -> reqwest_lite::Client { reqwest_lite::Client::new() }
 
     mod reqwest_lite {
@@ -273,13 +263,9 @@ async fn handle(
                 Ok(Ok(tone)) => {
                     let body = translate::tone_to_mcp_result(&tone);
                     // Mirror the resolution to humd as a sid-tagged
-                    // chi:"chunk" so bee shims (openai-server's
-                    // /v1/responses, anthropic-server's server_tool_use
-                    // path) can surface this tool call as
-                    // provider-executed to the asker. Without this
-                    // mirror, openai-server only sees text + finish
-                    // and OC's openai-responses parser has no way to
-                    // emit a `mcp_call` item with providerExecuted.
+                    // chi:"chunk" so bee shims can surface the tool call
+                    // as provider-executed to the asker. Without the
+                    // mirror the asker only sees text + finish.
                     let output_text = body.get("content")
                         .and_then(Value::as_array)
                         .and_then(|a| a.first())

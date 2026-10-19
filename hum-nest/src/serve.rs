@@ -17,6 +17,23 @@
 //!
 //! Reconnect is built in — humd restarts don't strand workers; they
 //! re-handshake.
+//!
+//! Connection cycling is normal: launchd and systemd start the worker
+//! and humd in parallel, so the first dials lose the race until humd
+//! binds the socket. That is not a warning. The log only escalates to
+//! WARN once a bee that has *never* connected keeps failing past a
+//! grace window, so a clean boot stays quiet.
+//!
+//! A prompt's model comes from its `modelId`, else the first model the
+//! worker advertises (`CLAUDE_MODELS` leads with the install default),
+//! else opus 4.7. Without a fallback an asker that omits `modelId`
+//! would spawn `claude --model ""`.
+//!
+//! `claude -p --input-format stream-json` reads newline-delimited user
+//! messages until stdin EOF, emitting a `result` event per turn, and
+//! exits after each turn. The warm cell is gone by the next prompt, so
+//! continuity comes from the sid-derived session UUID that claude-cli
+//! computes from the sid.
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -42,33 +59,16 @@ fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock_resolved()
 }
 
-/// What the host advertises on hello. Drives both routing (humd maps
-/// `model_id → client_id`) and observability (downstream foragers can
-/// reason about propensity without inferring).
 #[derive(Debug, Clone)]
 pub struct HiveAdvert {
-    /// Hive name, e.g. "claude-cli", "ollama". The bee carries this in
-    /// hello as the kind it's commissioned by. Used as the broadcast
-    /// tag for sigil routing.
     pub hive: String,
-    /// Crate version string (cargo or otherwise). Free-form.
     pub version: String,
-    /// Model ids this worker can serve. humd's prompt arm looks here
-    /// for `modelId → worker` routing.
     pub models: Vec<String>,
-    /// Optional source URL the mesh can use to discover the worker's
-    /// repo. Carried verbatim into the gossiped manifest.
     pub source: Option<String>,
 }
 
-/// Run the worker service loop. Blocks until shutdown.
 pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAdvert) -> Result<()> {
     let path = default_socket_path();
-    // Connection cycling is normal: launchd/systemd start the worker and
-    // humd in parallel, so the first dials lose the race until humd binds
-    // the socket. That is not a warning. Only escalate to WARN once a bee
-    // that has *never* connected keeps failing past a grace window (humd
-    // genuinely down / wrong socket path), so a clean boot stays quiet.
     let mut ever_connected = false;
     let mut consecutive_fails = 0u32;
     loop {
@@ -83,8 +83,6 @@ pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAd
                 if ever_connected {
                     info!(err = %e, "serve_worker: thrum dropped, reconnecting");
                 } else if consecutive_fails >= 8 {
-                    // ~16s of never connecting — humd likely down or the
-                    // socket path is wrong. Now it is worth a warning.
                     warn!(err = %e, attempts = consecutive_fails,
                         "serve_worker: still cannot reach humd — check it is running and HUM_THRUM_SOCK matches");
                 } else {
@@ -105,15 +103,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    // Load (or mint) the persistent worker-bee identity. The wbee_
-    // hid survives reconnect + restart; humd indexes manifests by it
-    // so the worker stays the "same" bee across thrum connections.
     let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Wbee)
         .with_context(|| format!("load/mint wbee key for hive {}", advert.hive))?;
 
-    // Hello — register as `bee:["worker"]`. humd reads:
-    //   hid, bee, hive (kind), models, propensity, version,
-    //   protoVersion, source, chis.
     let propensity_str = match worker.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
         crate::Propensity::StatelessPerCall => "stateless_per_call",
@@ -135,10 +127,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     hum_thrum::send_json(&write_half, &hello).await?;
     info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 
-    // Worker-local MCP bridge. The compute (e.g. claude) dials it
-    // for tools/list + tools/call; the bridge ships chi:"tool-call"
-    // over thrum and resolves the pending HTTP response when the
-    // matching chi:"tool-result" arrives.
     let write_for_bridge = write_half.clone();
     let bridge = McpBridge::new(Arc::new(move |tone: Value| {
         let write_half = write_for_bridge.clone();
@@ -153,13 +141,9 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     let mcp_url = format!("http://{}", mcp_addr);
     info!(%mcp_url, "worker.mcp.bridge.up");
 
-    // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
-    // reach the right child.
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
-    // sid → cwd, learned from prompts. A curate names a sid but no cwd,
-    // and the transcript it trims lives under one.
     let sid_cwd: Arc<Mutex<LruCache<String, String>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
 
@@ -169,8 +153,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
 
         match chi {
             "prompt" => {
-                // Update the MCP bridge's catalogue from the forager
-                // tools humd merged + any tools the asker shipped.
                 let provided: Vec<String> = tone.get("provided")
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
@@ -186,8 +168,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 if !forager_tools.is_empty() || !nestler_tools.is_empty() {
                     bridge.set_catalogue(forager_tools, nestler_tools, &provided);
                 }
-                // Learn sid → cwd so a later chi:"curate" (which names a
-                // sid but no cwd) can find the transcript under it.
                 let cwd = if !sid.is_empty() {
                     tone.get("cwd").and_then(Value::as_str).map(str::to_string)
                 } else { None };
@@ -242,8 +222,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                                     Err(e) => warn!(sid = %sid, err = %e, "worker.curate.failed"),
                                 }
                             }
-                            // No prompt has named a cwd for this sid yet, so
-                            // there is no transcript of ours to curate.
                             None => trace!(sid = %sid, "worker.curate.unknown-sid"),
                         }
                     });
@@ -254,7 +232,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 // First try the worker MCP bridge — humfs_* tools
                 // route there. If callId isn't pending in the bridge,
                 // it's a nestler-native tool-result for a call the
-                // model made outside our MCP catalogue; forward via
+                // model made outside our MCP catalogue; forward it via
                 // stdin so claude consumes it.
                 let resolved_by_bridge = call_id.as_deref()
                     .map(|cid| bridge.resolve(cid, tone.clone()))
@@ -276,8 +254,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                 }
             }
             "breath" | "echo" | "" => {
-                // Wire keepalive / ack — nothing to do.
-            }
+                        }
             other => {
                 trace!(chi = other, "worker.unknown.chi");
             }
@@ -300,9 +277,9 @@ impl Drop for CellBundle {
 /// Build a `ToolDef` from a wire tone entry. MCP standard field is
 /// `inputSchema`; tolerate legacy `parameters` (some hum-side
 /// shims still emit it). Drop entries with no name OR no usable
-/// schema — claude's mcp client rejects the entire tools/list if
-/// any entry has `inputSchema: null`, so one bad apple kills all
-/// tools for the session.
+/// schema — claude's mcp client rejects the entire tools/list if any
+/// entry has `inputSchema: null`, so one bad apple kills all tools
+/// for the session.
 fn parse_tool_def(v: &Value) -> Option<ToolDef> {
     let name = v.get("name").and_then(Value::as_str)?.to_string();
     let description = v.get("description").and_then(Value::as_str).unwrap_or("").to_string();
@@ -316,10 +293,7 @@ fn parse_tool_def(v: &Value) -> Option<ToolDef> {
     Some(ToolDef { name, description, input_schema: schema })
 }
 
-/// Max quiet window before a warm cell gets reaped.
 const IDLE_TIMEOUT_MS: u64 = 300_000;
-/// Per-worker cap on concurrent claude processes. LRU eviction
-/// when full.
 const MAX_CELLS: usize = 8;
 
 /// True if `v` is claude's terminal `result` event flagged `is_error`.
@@ -372,10 +346,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
     if sid.is_empty() { anyhow::bail!("prompt.no-sid"); }
-    // Model: the prompt's modelId, else fall back to the first model
-    // this worker advertises (CLAUDE_MODELS leads with the install
-    // default), else opus 4.7. Without this an asker that omits modelId
-    // would spawn `claude --model ""`.
     let model = tone.get("modelId").and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -390,9 +360,7 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
     let explicit_resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
 
-    // claude `-p --input-format stream-json` reads newline-delimited
-    // user messages until stdin EOF, emitting a `result` event per
-    // turn. Reuse the warm cell for the sid; per-turn state lives in
+    // Reuse the warm cell for the sid. Per-turn state lives in
     // finish_sent + tool_use_blocks and must reset before re-entry.
     {
         let mut g = cells.lock().await;
@@ -431,11 +399,9 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    // Resume-first: claude `-p` exits after each turn, so the warm cell
-    // is gone before the next prompt. The sid-derived session UUID
-    // (computed inside claude-cli from base.sid) keeps continuity. On
-    // first turn `--resume` fails fast (a `result` is_error with no
-    // output) and we retry with `fresh: true` → --session-id.
+    // Resume-first. On the first turn `--resume` fails fast (a
+    // `result` is_error with no output) and we retry with
+    // `fresh: true` → --session-id.
     let (cell, first_event) = {
         let mut s1 = base.clone();
         s1.resume_id = explicit_resume.clone();
@@ -466,12 +432,8 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         last_touched: last_touched.clone(),
     });
 
-    // The probe in attempt_spawn already consumed (and proved live) the
-    // first event; forward it before the loop picks up the rest.
     listener.forward_raw(first_event).await;
 
-    // Cell-lifetime dispatch: each remaining stream-json event flows
-    // through the listener until the child exits.
     let listener_clone = listener.clone();
     let sid_for_loop = sid.clone();
     let events_for_loop = events.clone();
@@ -511,7 +473,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         last_touched: last_touched.clone(),
     });
 
-    // Prompt was already sent inside attempt_spawn; nothing to send here.
     trace!(sid = %sid, "worker.cell.spawned");
 
     // On child exit: drain dispatch, emit a finish if the listener
@@ -574,9 +535,9 @@ impl WireListener {
     async fn forward_raw(&self, value: Value) {
         self.last_touched.store(now_ms(), Ordering::SeqCst);
 
-        // If the event is already a thrum chi event (has a "chi" field),
-        // pass it through directly. This lets workers like ollama-worker
-        // emit thrum events without going through claude's stream-json.
+        // An event that is already a thrum chi event (has a "chi"
+        // field) passes through directly, so a worker can emit thrum
+        // events without going through claude's stream-json.
         if value.get("chi").and_then(Value::as_str).is_some() {
             let mut v = value.clone();
             if let Some(obj) = v.as_object_mut() {
@@ -586,10 +547,9 @@ impl WireListener {
             return;
         }
 
-        // claude emits stream-json events. The relevant chunk events
-        // arrive wrapped as `{"type":"stream_event","event":{...inner...}}`;
-        // unwrap to inspect the inner type. Mirrors the dispatch
-        // humd used to do in-process (nest::pool::dispatch_loop).
+        // The relevant chunk events arrive wrapped as
+        // `{"type":"stream_event","event":{...inner...}}`; unwrap to
+        // inspect the inner type.
         let mut msg = value;
         if msg.get("type").and_then(Value::as_str) == Some("stream_event") {
             if let Some(inner) = msg.get("event").cloned() {
@@ -600,8 +560,6 @@ impl WireListener {
 
         match typ.as_str() {
             "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
-                // Session readiness signal. Carries claude's session_id
-                // and model so consumers can attach.
                 let mut body = json!({
                     "chi": "session-ready",
                     "sid": self.sid,
@@ -621,9 +579,6 @@ impl WireListener {
                     "text" => self.chunk("text_start", json!({"blockIdx": idx})).await,
                     "thinking" => self.chunk("reasoning_start", json!({"blockIdx": idx})).await,
                     "tool_use" => {
-                        // Track for downstream suppression — bridge
-                        // emits the canonical chi:"chunk" tool_executed
-                        // once resolved.
                         if let Some(i) = idx.as_i64() {
                             self.tool_use_blocks.lock().await.insert(i);
                         }
@@ -659,7 +614,6 @@ impl WireListener {
                 }
             }
             "result" => {
-                // Claude's wilt event — terminal of one prompt cycle.
                 let subtype = msg.get("subtype").and_then(Value::as_str).unwrap_or("success");
                 let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
                 // claude signals failure inside the result event, not on
@@ -667,8 +621,7 @@ impl WireListener {
                 // the human-readable reason in `result`. Surfacing it is
                 // the difference between a visible auth/model/credit
                 // error and a silent zero-token finish that looks like
-                // the worker is dead. (This was the macOS "claude exits 1
-                // with no output" wall.)
+                // the worker is dead.
                 let is_error = msg.get("is_error").and_then(Value::as_bool).unwrap_or(false)
                     || subtype.starts_with("error");
                 if is_error {
@@ -702,9 +655,8 @@ impl WireListener {
                 self.finish_sent.store(true, Ordering::SeqCst);
             }
             _ => {
-                // Structural / unrecognized — drop. Mirrors humd's
-                // historical filter; richer chi values can plug in here
-                // (perf-mark, drone, etc.) when workers grow them.
+                // Structural / unrecognized — drop. Richer chi values
+                // can plug in here when workers grow them.
                 let _ = &self.hive;
             }
         }

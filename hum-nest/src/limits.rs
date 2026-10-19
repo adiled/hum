@@ -14,27 +14,17 @@
 
 use serde::{Deserialize, Serialize};
 
-/// OS-level caps for a cell subprocess. All fields optional — `None`
-/// means "no extra cap" (inherits from parent / system default).
-///
-/// Applied via rlimit (setrlimit) before exec on Linux. On non-Linux
-/// platforms `apply_pre_exec` is a no-op — caps degrade gracefully.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bounds {
     /// Hard cap on resident set size in bytes. Maps to RLIMIT_AS on Linux.
-    /// Going past this gets the child OOM-killed by the kernel.
     pub rss_bytes: Option<u64>,
-    /// Hard cap on number of open file descriptors. RLIMIT_NOFILE.
     pub fd_count: Option<u32>,
-    /// Hard cap on CPU seconds. RLIMIT_CPU.
-    /// SIGXCPU at soft limit (= hard here), SIGKILL on overrun.
     pub cpu_secs: Option<u32>,
     /// Hard cap on wall-clock execution time in milliseconds. NOT an
-    /// rlimit — caller (the WorkerBee) should arm a timer that kills the
-    /// cell when this expires. Stored here so the spec travels together.
+    /// rlimit — the caller arms a timer that kills the cell when this
+    /// expires. Stored here so the spec travels together.
     pub wall_clock_ms: Option<u64>,
-    /// Nice value adjustment (-20..=19). Skipped if None.
-    /// Applied via setpriority(2).
+    /// Nice value adjustment (-20..=19). Applied via setpriority(2).
     pub nice: Option<i32>,
 }
 
@@ -43,12 +33,9 @@ impl Bounds {
     /// inherits them at exec time. Linux-only enforcement; on other
     /// platforms returns Ok(()) without doing anything.
     ///
-    /// Implementation: uses `Command::pre_exec` (CommandExt) to call
-    /// setrlimit() in the forked child before exec(). Failures inside
-    /// pre_exec return an io::Error which the spawn surfaces.
-    ///
-    /// Safety: pre_exec runs in a post-fork, pre-exec child. Must only
-    /// call async-signal-safe APIs. setrlimit and setpriority are both
+    /// Uses `Command::pre_exec` to call setrlimit() in the forked child
+    /// before exec(). pre_exec runs post-fork and pre-exec, so it must
+    /// only call async-signal-safe APIs. setrlimit and setpriority are
     /// listed in `signal-safety(7)`.
     #[cfg(target_os = "linux")]
     pub fn apply_pre_exec(&self, cmd: &mut std::process::Command) -> std::io::Result<()> {

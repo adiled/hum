@@ -47,9 +47,6 @@ impl JsonRpcResponse {
     }
 }
 
-/// Advertised tool. `name` + `description` + JSON Schema
-/// `inputSchema`. Schemas are opaque to consumers; the agent
-/// (Claude CLI etc.) is the only thing that interprets them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolDef {
     pub name: String,
@@ -59,10 +56,6 @@ pub struct ToolDef {
     pub input_schema: Value,
 }
 
-/// Native tool execution output. The wire layer wraps `output` in MCP's
-/// `content: [{type:"text", text}]` envelope. `title` and `metadata`
-/// travel out-of-band over thrum in TS — kept here for parity but not
-/// embedded in the JSON-RPC reply.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ToolResult {
     pub output: String,
@@ -83,7 +76,6 @@ impl ToolResult {
     }
 }
 
-/// Wrap a [`ToolResult`] into MCP `tools/call` `result` shape.
 pub fn wrap_tool_result(r: ToolResult) -> Value {
     let mut obj = serde_json::json!({
         "content": [{ "type": "text", "text": if r.output.is_empty() { "(no output)".to_string() } else { r.output } }],

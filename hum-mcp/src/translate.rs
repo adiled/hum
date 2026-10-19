@@ -16,12 +16,8 @@ use serde_json::{json, Value};
 use crate::protocol::{ToolResult, wrap_tool_result};
 
 /// Build a `chi:"tool-call"` tone from an MCP `tools/call` request
-/// payload. The caller mints the `call_id` (and is responsible for
-/// correlating with the eventual tool-result). `sid` is the session
-/// id the worker has been told to use for this conversation.
-///
-/// `params` is the JSON-RPC `params` object — the function pulls
-/// `name` + `arguments` from it.
+/// payload. The caller mints the `call_id` and is responsible for
+/// correlating with the eventual tool-result.
 pub fn mcp_call_to_tone(sid: &str, call_id: &str, params: &Value) -> Value {
     let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -35,9 +31,6 @@ pub fn mcp_call_to_tone(sid: &str, call_id: &str, params: &Value) -> Value {
     })
 }
 
-/// Extract a `ToolResult` from a `chi:"tool-result"` tone. The
-/// worker uses this on the receive side of a dispatch round-trip
-/// before wrapping for MCP output.
 pub fn tone_to_tool_result(tone: &Value) -> ToolResult {
     let output = tone.get("output")
         .or_else(|| tone.get("result"))
@@ -51,8 +44,6 @@ pub fn tone_to_tool_result(tone: &Value) -> ToolResult {
     ToolResult { output, title, metadata, is_error }
 }
 
-/// One-shot helper: `chi:"tool-result"` tone → MCP `tools/call`
-/// `result` JSON ready to embed in a `JsonRpcResponse::ok`.
 pub fn tone_to_mcp_result(tone: &Value) -> Value {
     wrap_tool_result(tone_to_tool_result(tone))
 }
