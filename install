@@ -110,6 +110,30 @@ ensure_orch_overlay_dir() {
   log "orch overlay dir: $HUM_CONFIG/orch.d/"
 }
 
+# Install man/hum.1 where `man hum` will find it.
+#
+# Prefers the first writable directory on the standard search path:
+# /usr/local/share/man (system-wide, needs no PATH tweak) then
+# $HOME/.local/share/man (per-user). The file goes in the man1
+# subsection, which is where `man hum` looks for a page named hum.
+# Best-effort: a man page is a nicety, and a read-only prefix must not
+# fail the install.
+install_man_page() {
+  local PAGE
+  for PAGE in "$(dirname "$0")/man/hum.1" "$HUM_SRC/man/hum.1"; do
+    [ -f "$PAGE" ] || continue
+    local DIR
+    for DIR in /usr/local/share/man "$XDG_DATA_HOME/man"; do
+      if mkdir -p "$DIR/man1" 2>/dev/null && cp "$PAGE" "$DIR/man1/hum.1" 2>/dev/null; then
+        log "man page: $DIR/man1/hum.1"
+        return 0
+      fi
+    done
+    warn "could not install the man page — copy $PAGE into a man1 directory on your man path"
+    return 0
+  done
+}
+
 build_binaries() {
   local SRC
   if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
@@ -260,6 +284,7 @@ uninstall() {
       ;;
   esac
   rm -f "$HUMD_BIN" "$HUMCTL_BIN" "$HUM_CLI_BIN"
+  rm -f /usr/local/share/man/man1/hum.1 "$XDG_DATA_HOME/man/man1/hum.1"
   log "uninstalled humd. orchd left in place. State preserved in $HUM_STATE + $HUM_CONFIG."
   log "  run \`./install purge\` to remove state too."
 }
@@ -274,6 +299,7 @@ do_install() {
   log "hum installer"
   ensure_prereqs
   if [ "${SKIP_BUILD:-0}" != "1" ]; then build_binaries; fi
+  install_man_page
   ensure_identity
   ensure_peers_config
   ensure_hum_config
