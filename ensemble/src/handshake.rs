@@ -39,8 +39,6 @@ fn handshake_message(humd_id: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", HANDSHAKE_DOMAIN, humd_id.to_hex(), signed_at_ms).into_bytes()
 }
 
-/// What the claims signature covers: identity, timestamp, and the claims
-/// themselves. Fixed field order so verification is deterministic.
 fn caps_message(humd_id: &Hid, caps: &PeerCapabilities, signed_at_ms: i64) -> Vec<u8> {
     let nests = caps.nests.join(",");
     let hosts = caps.hosts.join(",");
@@ -91,11 +89,8 @@ pub struct PeerCapabilities {
     pub free_slots: Option<usize>,
     #[serde(default)]
     pub headroom: headroom::CellHeadroom,
-    /// Whether the claims in this hello were covered by a signature the
-    /// receiver verified. False for unsigned hellos and for hellos from a
-    /// peer too old to send one.
     #[serde(skip)]
-    pub caps_signed: bool,
+    pub caps_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,7 +258,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         .get("headroom")
         .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
         .unwrap_or_default();
-    let mut caps_signed = false;
+    let mut caps_verified = false;
     match tone.get("capsSignature").and_then(|v| v.as_str()) {
         None => {
             tracing::warn!(
@@ -291,7 +286,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
                 can_relay,
                 free_slots,
                 headroom: headroom.clone(),
-                caps_signed: false,
+                caps_verified: false,
             };
             let caps_msg = caps_message(&claimed_id, &claims, signed_at);
             if verifying_key.verify(&caps_msg, &caps_signature).is_err() {
@@ -302,7 +297,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
                 );
                 return None;
             }
-            caps_signed = true;
+            caps_verified = true;
         }
     }
 
@@ -315,7 +310,7 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
             can_relay,
             free_slots,
             headroom,
-            caps_signed,
+            caps_verified,
         },
     ))
 }
@@ -383,32 +378,18 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
                 can_relay,
                 free_slots,
                 headroom,
-                caps_signed: false,
+                caps_verified: false,
             },
         )
     }
 }
 
-/// Outcome of checking a socket hello's identity claim. A bee declares
-/// `hid` as a bare string; this decides whether humd can trust it.
-///
-/// - `Verified` — the bee sent `pubkey`/`signedAt`/`signature` and they
-///   check out. The declared `hid` is provably sha256 of that pubkey.
-/// - `Unsigned` — no `pubkey` field. Admitted as before, but downstream
-///   code now knows the hid is self-declared rather than proven.
-/// - `Invalid` — a signature was sent and is wrong. Refuse the bee; it
-///   is either broken or lying, and neither is worth a second hello.
 pub enum SocketIdentity {
     Verified(Hid),
     Unsigned(Option<Hid>),
     Invalid(&'static str),
 }
 
-/// Verify a socket hello's identity claim against the peer path's rules.
-///
-/// Wire naming stays socket-flavoured — `hid`, `pubkey`, `signedAt`,
-/// `signature` — because this is a different transport from the iroh
-/// peer hello and renaming would churn every hive for no gain.
 pub fn parse_socket_identity(tone: &Tone) -> SocketIdentity {
     let Some(pubkey_hex) = tone.get("pubkey").and_then(|v| v.as_str()) else {
         let hid = tone
@@ -516,7 +497,7 @@ mod tests {
         let parsed = parse_hello_caps(&tone).expect("hello parses");
         assert_eq!(parsed.0, id);
         assert!(
-            parsed.1.caps_signed,
+            parsed.1.caps_verified,
             "a hello from a current peer must be marked as having signed claims"
         );
     }
@@ -564,7 +545,7 @@ mod tests {
             .remove("capsSignature");
         let parsed = parse_hello_caps(&tone).expect("still parses");
         assert!(
-            !parsed.1.caps_signed,
+            !parsed.1.caps_verified,
             "an unsigned hello must not be marked as signed"
         );
     }
@@ -714,8 +695,6 @@ mod tests {
         );
     }
 
-    /// `SocketIdentity` has no Debug; this lets a failing test say which
-    /// variant it got without derive-noise on the public type.
     fn socket_dbg(id: &SocketIdentity) -> &'static str {
         match id {
             SocketIdentity::Verified(_) => "Verified",
