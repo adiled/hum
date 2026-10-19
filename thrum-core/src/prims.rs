@@ -1,4 +1,13 @@
 //! Primitives — sigil, rid, dusk, echo.
+//!
+//! A sigil is the deterministic identity for a (nest, session) pair. The
+//! `nest` slot is the nest-kind namespace — "claude-cli", "claude-repl",
+//! or any other future nest implementation. It survives restarts,
+//! reconnects and forks. It is derived, not assigned: the lowercase hex
+//! of the first 6 sha256 bytes.
+//!
+//! The echo frame is `{ chi, rid, ok, error? }` — the rest of the
+//! envelope is intentionally absent.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,12 +17,6 @@ use sha2::{Digest, Sha256};
 use crate::chi::Chi;
 use crate::envelope::{Envelope, Tone};
 
-/// Deterministic identity for a (nest, session) pair.
-///
-/// The `nest` slot is the nest-kind namespace — "claude-cli",
-/// "claude-repl", or any other future nest implementation. Survives
-/// restarts, reconnects, forks. Derived, not assigned. Returns the
-/// lowercase hex of the first 6 sha256 bytes (12 chars).
 pub fn sigil(sid: &str, nest: &str) -> String {
     let mut h = Sha256::new();
     h.update(nest.as_bytes());
@@ -23,7 +26,6 @@ pub fn sigil(sid: &str, nest: &str) -> String {
     hex::encode(&digest[..6])
 }
 
-/// Wall-clock milliseconds since the Unix epoch. Clamped to non-negative.
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -31,24 +33,16 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Correlation id — canonical HumId. Ts-prefixed inside, so freshly
-/// minted rids are lex-sortable by mint time.
 pub fn rid() -> String { hum_identity::HumId::mint().to_string() }
 
-/// Absolute ms timestamp at which a tone with `dusk = dusk_in(ms)` expires.
 pub fn dusk_in(ms: i64) -> i64 {
     now_ms() + ms
 }
 
-/// True if the envelope's `dusk` is in the past.
 pub fn is_dusk(env: &Envelope) -> bool {
     env.dusk.is_some_and(|d| now_ms() > d)
 }
 
-/// Build an Echo tone referring to `tone`'s rid.
-///
-/// Per chi.ts the echo frame is `{ chi, rid, ok, error? }` — the rest of
-/// the envelope is intentionally absent.
 pub fn echo_for(tone: &Tone, ok: bool, error: Option<String>) -> Tone {
     let envelope = Envelope::new(Chi::Echo, tone.envelope.rid.clone());
     let mut body = Map::new();
@@ -65,7 +59,6 @@ mod tests {
 
     #[test]
     fn sigil_is_stable() {
-        // sha256("claude:abc")[..12] hex — pinned so peers can't desync.
         let s = sigil("abc", "claude");
         assert_eq!(s.len(), 12);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));

@@ -19,12 +19,10 @@ impl WaneTracker {
         Self::default()
     }
 
-    /// Current wane for `sigil`, or 0 if untracked.
     pub fn get(&self, sigil: &str) -> u64 {
         *self.counters.lock().get(sigil).unwrap_or(&0)
     }
 
-    /// Increment and return the new wane. Call on every state mutation.
     pub fn tick(&self, sigil: &str) -> u64 {
         let mut g = self.counters.lock();
         let entry = g.entry(sigil.to_string()).or_insert(0);
@@ -32,19 +30,14 @@ impl WaneTracker {
         *entry
     }
 
-    /// Pin wane to a known value (e.g. restored from breath).
     pub fn set(&self, sigil: &str, value: u64) {
         self.counters.lock().insert(sigil.to_string(), value);
     }
 
-    /// True when the remote wane is ahead of local — local is stale.
     pub fn behind(&self, sigil: &str, remote: u64) -> bool {
         remote > self.get(sigil)
     }
 
-    /// Full snapshot of every tracked sigil → wane. Used by the partition
-    /// reconciliation handshake — both sides exchange snapshots on heal
-    /// and merge by max.
     pub fn snapshot(&self) -> HashMap<String, u64> {
         self.counters.lock().clone()
     }

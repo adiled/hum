@@ -7,13 +7,16 @@
 //!
 //! Optional fields are also `skip_serializing_if` so absent fields are
 //! absent from the wire, mirroring how builders construct tones.
+//!
+//! Each `*Body` struct is the body of exactly one chi, named after it.
+//! `DroneLoad` is the nested payload of a `drone` tone rather than a
+//! chi of its own.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// `hello` — nest → daemon bootstrap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloBody {
     #[serde(rename = "protoVersion")]
@@ -30,7 +33,6 @@ pub struct HelloBody {
     pub source: Option<String>,
 }
 
-/// `prompt` — start a turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,7 +59,6 @@ pub struct PromptBody {
     pub disallowed_tools: Option<Vec<String>>,
 }
 
-/// `breath` — full state sync on connect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BreathBody {
     pub sessions: Value,
@@ -66,7 +67,6 @@ pub struct BreathBody {
     pub proto_version: Option<String>,
 }
 
-/// `chunk` — model output partwise.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkBody {
     #[serde(rename = "chunkType")]
@@ -81,7 +81,6 @@ pub struct ChunkBody {
     pub partial_json: Option<String>,
 }
 
-/// `finish` — turn complete.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinishBody {
     #[serde(rename = "finishReason")]
@@ -95,7 +94,6 @@ pub struct FinishBody {
     pub subtype: Option<String>,
 }
 
-/// `error` — turn aborted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorBody {
     pub message: String,
@@ -107,7 +105,6 @@ pub struct ErrorBody {
     pub usage: Option<Value>,
 }
 
-/// `session-ready` — nest spawned, claude session id known.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadyBody {
     #[serde(rename = "nestId")]
@@ -117,7 +114,6 @@ pub struct SessionReadyBody {
     pub tools: Option<Vec<Value>>,
 }
 
-/// `tool-call` — nestler-declared tool dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallBody {
     #[serde(rename = "callId")]
@@ -130,7 +126,6 @@ pub struct ToolCallBody {
     pub args: Option<Value>,
 }
 
-/// `tool-result` — nestler-declared tool answered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultBody {
     #[serde(rename = "callId")]
@@ -148,7 +143,6 @@ pub struct ToolResultBody {
     pub metadata: Option<Value>,
 }
 
-/// `tool-info` — completed-in-server tool run, informational.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfoBody {
     #[serde(rename = "callId")]
@@ -161,7 +155,6 @@ pub struct ToolInfoBody {
     pub result: Option<Value>,
 }
 
-/// `tool-meta` — out-of-band metadata for a tool result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolMetaBody {
     #[serde(rename = "callId")]
@@ -173,7 +166,6 @@ pub struct ToolMetaBody {
     pub metadata: Option<Value>,
 }
 
-/// `pulse` — process lifecycle event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PulseBody {
     pub kind: String,
@@ -181,7 +173,6 @@ pub struct PulseBody {
     pub pid: Option<i64>,
 }
 
-/// `permission-ask` — mid-stream permission needed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionAskBody {
     #[serde(rename = "callId")]
@@ -195,7 +186,6 @@ pub struct PermissionAskBody {
     pub arg: Option<Value>,
 }
 
-/// `release-permit` — resolve an earlier permission-ask.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleasePermitBody {
     #[serde(rename = "callId")]
@@ -206,7 +196,6 @@ pub struct ReleasePermitBody {
     pub error: Option<String>,
 }
 
-/// `echo` — delivery ack for a rid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EchoBody {
     pub ok: bool,
@@ -214,7 +203,6 @@ pub struct EchoBody {
     pub error: Option<String>,
 }
 
-/// `log` — structured log forwarding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,7 +213,6 @@ pub struct LogBody {
     pub fields: Option<Value>,
 }
 
-/// `drone` — drone heartbeat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneBody {
     pub health: String,
@@ -237,7 +224,6 @@ pub struct DroneBody {
     pub load: Option<DroneLoad>,
 }
 
-/// `drone.load`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneLoad {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,7 +236,6 @@ pub struct DroneLoad {
     pub tokens_burned: Option<u64>,
 }
 
-/// `drone-retrofit` — swallow + retry signal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneRetrofitBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,7 +244,6 @@ pub struct DroneRetrofitBody {
     pub reason: Option<String>,
 }
 
-/// `peer-add` — register a peer humd.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerAddBody {
     pub humd_id: String,
@@ -267,30 +251,25 @@ pub struct PeerAddBody {
     pub hints: Option<Vec<Value>>,
 }
 
-/// `peer-remove` — drop a peer humd.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerRemoveBody {
     pub humd_id: String,
 }
 
-/// `attach` — peer humd observes a sid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachBody {
     #[serde(rename = "hearOnly")]
     pub hear_only: Option<bool>,
 }
 
-/// `detach` — peer humd stops observing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetachBody {}
 
-/// `wane-sync` — reconcile WaneTracker after partition heal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaneSyncBody {
     pub snapshot: BTreeMap<String, u64>,
 }
 
-/// `gossip-publish` — ensemble-wide mesh message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GossipPublishBody {
     pub topic: String,
@@ -301,7 +280,6 @@ pub struct GossipPublishBody {
     pub msg_id: String,
 }
 
-/// `kad-find-node` — DHT FIND_NODE query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KadFindNodeBody {
     #[serde(rename = "query_id")]
@@ -309,7 +287,6 @@ pub struct KadFindNodeBody {
     pub target: String,
 }
 
-/// `kad-find-node-resp` — DHT FIND_NODE response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KadFindNodeRespBody {
     #[serde(rename = "query_id")]
@@ -317,7 +294,6 @@ pub struct KadFindNodeRespBody {
     pub closest: Vec<Value>,
 }
 
-/// `backfill` — thehum chi-log replay request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackfillBody {
     pub author: String,
@@ -325,7 +301,6 @@ pub struct BackfillBody {
     pub from: Option<i64>,
 }
 
-/// `perf-mark` — drift timing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerfMarkBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,19 +309,15 @@ pub struct PerfMarkBody {
     pub note: Option<String>,
 }
 
-/// `cancel` — interrupt mid-turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelBody {}
 
-/// `cleanup` — session deleted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupBody {}
 
-/// `curate` — manual compaction request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurateBody {}
 
-/// `tendril-result` — task subagent answered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TendrilResultBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -356,7 +327,6 @@ pub struct TendrilResultBody {
     pub output: Option<Value>,
 }
 
-/// `tendril-reach` — task subagent dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TendrilReachBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -365,7 +335,6 @@ pub struct TendrilReachBody {
     pub tools: Option<Vec<Value>>,
 }
 
-/// `petal-cell` — OC message-graph update.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PetalCellBody {
     #[serde(skip_serializing_if = "Option::is_none")]
