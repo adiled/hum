@@ -4,6 +4,14 @@
 //! Trust model: pinned fingerprints, no CA, no chain, no SNI, no expiry.
 //! The dialer accepts exactly one cert — the SHA-256 of its DER bytes
 //! written down out of band in `peers.json`. See [`PinnedFingerprintVerifier`].
+//!
+//! Two consequences of pinning rather than chaining. SNI is never
+//! checked, so the connector is given a syntactically valid
+//! `ServerName` it does not look at — the fingerprint match is the only
+//! check that matters. And the handshake signature is not verified
+//! against a chain, because the pin already binds the connection to the
+//! exact cert holder; rustls still checks the transcript against the
+//! cert's own public key.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,7 +46,6 @@ pub fn cert_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
     out
 }
 
-// ── Endpoint ───────────────────────────────────────────────────────────────
 
 pub struct TlsTcpEndpoint {
     peer: HumdAddr,
@@ -79,9 +86,6 @@ impl TlsTcpEndpoint {
         framing::write_frame(w, &tone).await
     }
 
-    /// Dial a remote `host:port` with a fingerprint-pinned TLS config.
-    /// `expected_fingerprint` is the SHA-256 of the peer's cert DER —
-    /// the verifier rejects anything else with an `OtherError`.
     pub async fn connect(
         addr: &str,
         peer: HumdAddr,
@@ -91,9 +95,6 @@ impl TlsTcpEndpoint {
         let tcp = TcpStream::connect(addr).await?;
         let _ = tcp.set_nodelay(true);
         let connector = TlsConnector::from(Arc::new(client_config_pinned(expected_fingerprint)));
-        // SNI isn't validated by our pinned verifier — we still need a
-        // syntactically valid ServerName for the API. "localhost" is
-        // fine; the only check that matters is the fingerprint match.
         let server_name = ServerName::try_from("localhost")
             .map_err(|e| anyhow!("tls connect: invalid server name: {e}"))?;
         let tls = connector
@@ -145,20 +146,13 @@ impl PeerConnection for TlsTcpEndpoint {
     }
 }
 
-// ── Listener ───────────────────────────────────────────────────────────────
 
-/// Inbound TLS-over-TCP acceptor. Each `accept()` runs the TLS
-/// handshake before yielding a [`TlsTcpEndpoint`] with a placeholder
-/// peer id — same handoff shape as the plaintext listener.
 pub struct TlsTcpListener {
     inner: tokio::net::TcpListener,
     acceptor: TlsAcceptor,
 }
 
 impl TlsTcpListener {
-    /// Bind a TCP listener and prepare a TLS acceptor that serves the
-    /// supplied self-signed cert + key. Dialers verify against the
-    /// SHA-256 of `cert` — see [`cert_fingerprint`].
     pub async fn bind(
         addr: &str,
         cert: CertificateDer<'static>,
@@ -173,10 +167,6 @@ impl TlsTcpListener {
         Ok(Self { inner, acceptor })
     }
 
-    /// Accept one inbound connection and complete the TLS handshake
-    /// before wrapping it. Returns an endpoint with a placeholder peer
-    /// id — overwritten by the ensemble drainer when it parses the
-    /// peer's signed `chi:"hello"`.
     pub async fn accept(&self) -> Result<Arc<TlsTcpEndpoint>> {
         let (tcp, _remote) = self.inner.accept().await?;
         let _ = tcp.set_nodelay(true);
@@ -198,16 +188,7 @@ impl TlsTcpListener {
     }
 }
 
-// ── Pinned-fingerprint verifier ────────────────────────────────────────────
 
-/// Custom [`ServerCertVerifier`] that accepts exactly ONE cert,
-/// identified by its SHA-256 DER fingerprint. No CA, no chain, no SNI.
-///
-/// This is the T2 trust model: we trust the cert because the operator
-/// configured its fingerprint in `peers.json`, not because anyone
-/// signed it. Any cert with a non-matching SHA-256 is rejected with
-/// `CertificateError::ApplicationVerificationFailure`. Intermediate
-/// certs in the chain are ignored (we only pin the leaf).
 #[derive(Debug)]
 pub struct PinnedFingerprintVerifier {
     expected: [u8; 32],
@@ -244,11 +225,6 @@ impl ServerCertVerifier for PinnedFingerprintVerifier {
         _cert: &CertificateDer<'_>,
         _dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        // We don't validate the signature ourselves — the fingerprint
-        // pin already binds the connection to the exact cert holder.
-        // rustls still verifies the handshake's transcript signature
-        // against the cert's public key; this just tells it not to
-        // also try to chain-verify or scheme-check.
         Ok(HandshakeSignatureValid::assertion())
     }
 
@@ -262,9 +238,6 @@ impl ServerCertVerifier for PinnedFingerprintVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        // Match what ring-backed rustls supports for self-signed certs.
-        // ECDSA P-256 / Ed25519 are the rcgen defaults; RSA-PSS covers
-        // RSA self-signed certs from openssl-generated keys.
         vec![
             SignatureScheme::ECDSA_NISTP256_SHA256,
             SignatureScheme::ECDSA_NISTP384_SHA384,
@@ -279,9 +252,6 @@ impl ServerCertVerifier for PinnedFingerprintVerifier {
     }
 }
 
-/// Build a [`ClientConfig`] that pins exactly one server cert by its
-/// SHA-256 fingerprint. Used by both [`TlsTcpEndpoint::connect`] and
-/// the [`TlsTcpTransport`] dialer path.
 pub fn client_config_pinned(expected_fingerprint: [u8; 32]) -> ClientConfig {
     ClientConfig::builder()
         .dangerous()
@@ -291,12 +261,7 @@ pub fn client_config_pinned(expected_fingerprint: [u8; 32]) -> ClientConfig {
         .with_no_client_auth()
 }
 
-// ── Transport impl ─────────────────────────────────────────────────────────
 
-/// [`Transport`] over TLS-pinned TCP. Stateless dialer — the pinned
-/// fingerprint is read from the [`HumdAddr`] hint (`tls:host:port`
-/// pairs with `tls-fp:<hex>`). For server-side accept, use
-/// [`TlsTcpListener`] directly.
 pub struct TlsTcpTransport;
 
 impl TlsTcpTransport {
@@ -304,10 +269,6 @@ impl TlsTcpTransport {
         Self
     }
 
-    /// Bind a [`TlsTcpListener`] with a precomputed self-signed cert +
-    /// key. Convenience around [`TlsTcpListener::bind`] that mirrors
-    /// the plaintext `TcpListener::bind` shape so call sites that
-    /// already have a cert can drop in the TLS version.
     pub async fn bind_with_cert(
         addr: &str,
         cert: CertificateDer<'static>,
@@ -316,9 +277,6 @@ impl TlsTcpTransport {
         TlsTcpListener::bind(addr, cert, key).await
     }
 
-    /// Dial a `host:port` and verify the server cert against
-    /// `expected_fingerprint`. Convenience around
-    /// [`TlsTcpEndpoint::connect`].
     pub async fn connect_to(
         addr: &str,
         peer: HumdAddr,
@@ -335,10 +293,6 @@ impl Default for TlsTcpTransport {
     }
 }
 
-/// Hint prefix carrying the pinned-fingerprint hex on a [`HumdAddr`].
-/// The dialer needs both `tls:host:port` and `tls-fp:<64-hex>` to
-/// build a `TlsConnector` — sibling-hint pairing mirrors how iroh
-/// carries both `iroh:<id>` and `iroh-ip:<sockaddr>`.
 pub const TLS_FP_HINT: &str = "tls-fp:";
 
 #[async_trait]

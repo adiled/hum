@@ -1,11 +1,18 @@
+//! A one-way gate that parks traffic until the opening frame has landed.
+//!
+//! `arm` is synchronous so it can be called from a non-async `install`.
+//! Every later `send` parks until the opening frame has landed, and a
+//! shut gate never reopens.
+//!
+//! `wait` registers with the notifier before it reads the open flag.
+//! `notify_waiters` reaches only waiters already enrolled, so checking
+//! the flag first can drop a wakeup and park forever.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-/// `arm` is synchronous so it can be called from a non-async `install`.
-/// Every later `send` parks until the opening frame has landed, and a
-/// shut gate never reopens.
 #[derive(Debug)]
 pub struct Gate {
     open: Mutex<bool>,
@@ -32,9 +39,6 @@ impl Gate {
 
     pub async fn wait(&self) {
         loop {
-            // Register before reading the flag: `notify_waiters` reaches
-            // only waiters already enrolled, so checking first can drop a
-            // wakeup and park forever.
             if self.is_open() || self.closed.load(Ordering::SeqCst) {
                 return;
             }

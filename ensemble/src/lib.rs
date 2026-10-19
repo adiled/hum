@@ -964,8 +964,6 @@ mod tests {
 
     #[test]
     fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
-        // A advertises, B relays, C receives. C sees B as the connection but
-        // the tone's origin is still A — the claim must survive the hop.
         let a = Hid::random_humd();
         let b = Hid::random_humd();
         let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));

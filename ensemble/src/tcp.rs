@@ -1,5 +1,9 @@
 //! NDJSON over TCP. Framing and the frame ceiling live in [`crate::framing`].
 //! Identity is settled one layer up by the signed `chi:"hello"` exchange.
+//!
+//! An inbound `accept()` yields an endpoint whose peer id is a
+//! placeholder. The ensemble drainer overwrites it once it has parsed
+//! the peer's signed hello.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -101,11 +105,7 @@ impl PeerConnection for TcpEndpoint {
     }
 }
 
-// ── Listener ───────────────────────────────────────────────────────────────
 
-/// Inbound TCP acceptor. Each `accept()` yields one new [`TcpEndpoint`]
-/// with a placeholder peer id — the real id arrives in the first hello
-/// and is owned by the ensemble drainer.
 pub struct TcpListener {
     inner: tokio::net::TcpListener,
 }
@@ -116,9 +116,6 @@ impl TcpListener {
         Ok(Self { inner })
     }
 
-    /// Block on the next inbound connection. Returns a wrapped endpoint
-    /// whose `HumdAddr` is a placeholder until the ensemble learns the
-    /// peer's real id via its `chi:"hello"`.
     pub async fn accept(&self) -> Result<Arc<TcpEndpoint>> {
         let (stream, _remote) = self.inner.accept().await?;
         let placeholder = HumdAddr::new(Hid::random_humd());
@@ -134,10 +131,7 @@ impl TcpListener {
     }
 }
 
-// ── Transport impl ─────────────────────────────────────────────────────────
 
-/// [`Transport`] over TCP. `connect` reads the first `tcp:host:port`
-/// hint off the addr and dials it.
 pub struct TcpTransport;
 
 impl TcpTransport {
