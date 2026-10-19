@@ -23,8 +23,6 @@ use tracing::warn;
 pub struct HumdSection {
     #[serde(default = "defaults::permission_dusk_ms", rename = "permissionDuskMs")]
     pub permission_dusk_ms: u64,
-    #[serde(default = "defaults::drift_retention_days", rename = "driftRetentionDays")]
-    pub drift_retention_days: u32,
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
     #[serde(default, rename = "tcpListen")]
@@ -35,7 +33,6 @@ impl Default for HumdSection {
     fn default() -> Self {
         Self {
             permission_dusk_ms: defaults::permission_dusk_ms(),
-            drift_retention_days: defaults::drift_retention_days(),
             metrics_addr: defaults::metrics_addr(),
             tcp_listen: None,
         }
@@ -234,9 +231,6 @@ mod defaults {
     pub(crate) fn permission_dusk_ms() -> u64 {
         60_000
     }
-    pub(crate) fn drift_retention_days() -> u32 {
-        30
-    }
     pub(crate) fn metrics_addr() -> String {
         "127.0.0.1:9909".into()
     }
@@ -286,7 +280,7 @@ mod tests {
     fn schema_accepts_canonical_config() {
         let ok = r#"{
             "$schema": "https://adiled.github.io/hum/hum.schema.json",
-            "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 },
+            "humd": { "permissionDuskMs": 60000 },
             "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] },
             "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
         }"#;

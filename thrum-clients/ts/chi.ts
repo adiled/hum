@@ -51,7 +51,7 @@ export const Chi = {
   toolInfo: "tool-info",
   /** delivery ack for a rid */
   echo: "echo",
-  /** drift timing — measured both ways */
+  /** a timing measurement — measured both ways */
   perfMark: "perf-mark",
   /** structured log forwarding */
   log: "log",

@@ -12,7 +12,6 @@ use thrumd::{Thrum, Tone, ToneSink, serve_with_hook as thrum_serve_with_hook};
 use tracing::{error, info, trace, warn};
 
 mod comb;
-mod drift;
 mod drone;
 mod identity;
 mod peer_transport;
@@ -141,7 +140,6 @@ where
         .waneman
         .clone()
         .unwrap_or_else(|| Arc::new(WaneTracker::new()));
-    let _drift = drift::Drift::with_store_dir(hum_paths::drift_dir());
     let _drone = drone::Drone::new();
 
     let thehum_handle: Option<Arc<thehum::TheHum>> = cfg.humd_key.as_ref().and_then(|k| {

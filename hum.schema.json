@@ -17,12 +17,6 @@
           "default": 60000,
           "description": "Ms a pending permission-ask waits before auto-denying."
         },
-        "driftRetentionDays": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 30,
-          "description": "Days of drift-ring samples kept on disk."
-        },
         "metricsAddr": {
           "type": "string",
           "default": "127.0.0.1:9909",

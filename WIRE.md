@@ -220,7 +220,7 @@ with no description here has none in the clients either.
 | chi | body fields | meaning | description |
 |---|---|---|
 | `echo` | `ok`, optional `error` | delivery ack for `rid` | delivery ack for a rid |
-| `perf-mark` | `label`, `phase`, `t` | drift timing, measured both ways | drift timing — measured both ways |
+| `perf-mark` | `label`, `phase`, `t` | a timing measurement, measured both ways | a timing measurement — measured both ways |
 | `log` | `level`, `message`, optional fields | structured log forwarding | structured log forwarding |
 | `drone` | (drone-shaped payload) | drone heartbeat | drone heartbeat |
 | `drone-retrofit` | (retrofit instruction) | drone swallow + retry signal | drone swallow + retry signal |
