@@ -20,7 +20,7 @@ async fn partition_then_heal_converges_wane() {
 
     sim.await_ready(a_id).await.expect("a ready");
     sim.await_ready(b_id).await.expect("b ready");
-    sim.wire(a_id, b_id).expect("wire a-b");
+    sim.wire_unauthenticated(a_id, b_id).expect("wire a-b");
 
     for _ in 0..3 {
         a.waneman.tick(SIGIL);
@@ -92,7 +92,7 @@ async fn an_unhealed_partition_never_reconverges() {
 
     sim.await_ready(a_id).await.expect("a ready");
     sim.await_ready(b_id).await.expect("b ready");
-    sim.wire(a_id, b_id).expect("wire a-b");
+    sim.wire_unauthenticated(a_id, b_id).expect("wire a-b");
     sim.partition(a_id, b_id).expect("partition");
 
     a.waneman.tick(SIGIL);
@@ -127,7 +127,7 @@ async fn heal_takes_the_higher_tip_and_never_rewinds() {
 
     sim.await_ready(a_id).await.expect("a ready");
     sim.await_ready(b_id).await.expect("b ready");
-    sim.wire(a_id, b_id).expect("wire a-b");
+    sim.wire_unauthenticated(a_id, b_id).expect("wire a-b");
 
     for _ in 0..9 {
         b.waneman.tick(SIGIL);

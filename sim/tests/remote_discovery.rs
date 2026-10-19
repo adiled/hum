@@ -8,7 +8,7 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
     let sim = sim::Sim::new();
     let laptop = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     let server = sim.spawn_humd(ensemble::Hid::random_humd()).await;
-    sim.wire(laptop.id, server.id).expect("L↔S");
+    sim.wire_unauthenticated(laptop.id, server.id).expect("L↔S");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 

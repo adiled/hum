@@ -25,14 +25,11 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     let sim = sim::Sim::new();
     let humd = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
-    // Wait for humd to install its ToneSink before injecting hellos.
     for _ in 0..200 {
         if humd.thrum.has_sink() { break; }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    // Forager advertises two fs tools + provides=["fs"]. Build the
-    // hello inline (attach_mock_forager doesn't take `provides`).
     let forager_cid = hum_identity::HumId::mint().to_string();
     let _frx = humd.thrum.register_synthetic(forager_cid.clone());
     let forager_hello = json!({
@@ -49,7 +46,6 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     });
     humd.thrum.inject_tone(&forager_cid, forager_hello).await;
 
-    // Worker captures the chi:"prompt" tone humd sends.
     let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
     let hello = json!({
@@ -65,7 +61,6 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         "chi":"prompt","rid":"r1","sid":"hum-catalog-1",
         "modelId":"claude-opus-4-7","cwd":"/work",
         "content":"hi",
-        // Caller (e.g. OC over openai-server) ships its own tools.
         "tools":[
             { "name":"read", "description":"file read",
               "inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},
@@ -107,9 +102,6 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     assert!(nestler_tools[0].get("inputSchema").map(Value::is_object).unwrap_or(false));
 }
 
-/// Direct unit test for nest_common's parse_tool_def — defends the
-/// catalogue against any future shim that ships `parameters`
-/// instead of `inputSchema` (claude rejects on null schemas).
 #[test]
 fn parse_tool_def_normalizes_schema_field() {
     use serde_json::json;

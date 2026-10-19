@@ -1,8 +1,5 @@
 use std::time::Duration;
 
-/// A peer advertises a model it does not have. Forwarding a prompt on the
-/// strength of that claim hands the prompt to whoever made the claim, so
-/// humd refuses unless the operator opts in.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
     let _ = tracing_subscriber::fmt::try_init();
@@ -12,7 +9,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
         .spawn_humd_not_trusting_remote_workers(ensemble::Hid::random_humd())
         .await;
     let server = sim.spawn_humd(ensemble::Hid::random_humd()).await;
-    sim.wire(laptop.id, server.id).expect("L↔S");
+    sim.wire_unauthenticated(laptop.id, server.id).expect("L↔S");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -74,8 +71,6 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
     assert!(refused, "laptop never got a refusal, so the prompt went nowhere");
 }
 
-/// The same mesh, with the operator opting in, still routes. Proves the
-/// interlock is the only thing standing in the way.
 #[tokio::test(flavor = "multi_thread")]
 async fn opting_in_restores_discovery_routing() {
     let _ = tracing_subscriber::fmt::try_init();
@@ -83,7 +78,7 @@ async fn opting_in_restores_discovery_routing() {
     let sim = sim::Sim::new();
     let laptop = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     let server = sim.spawn_humd(ensemble::Hid::random_humd()).await;
-    sim.wire(laptop.id, server.id).expect("L↔S");
+    sim.wire_unauthenticated(laptop.id, server.id).expect("L↔S");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 

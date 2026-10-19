@@ -100,15 +100,10 @@ impl Sim {
         self.spawn_humd_inner(id, true).await
     }
 
-    /// A humd that refuses to route prompts on a peer's advertised model
-    /// claim — the production default.
     pub async fn spawn_humd_not_trusting_remote_workers(&self, id: Hid) -> Arc<SimHumd> {
         self.spawn_humd_inner(id, false).await
     }
 
-    /// A humd whose revocation list already contains these hids. The list
-    /// is written before the daemon reads it, matching how an operator
-    /// would have populated it on a previous run.
     pub async fn spawn_humd_revoking(&self, id: Hid, revoked: &[&str]) -> Arc<SimHumd> {
         self.spawn_humd_inner_with_revocations(id, true, revoked)
             .await
@@ -215,12 +210,10 @@ impl Sim {
     }
 
     pub fn rewire(&self, a: Hid, b: Hid) -> Result<()> {
-        self.wire(a, b)
+        self.wire_unauthenticated(a, b)
     }
 
-    /// Unauthenticated mesh link. Use [`Sim::wire_signed`] when the test is
-    /// about identity.
-    pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
+    pub fn wire_unauthenticated(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
             .get(&a)

@@ -235,7 +235,6 @@ fn thehum() -> Result<()> {
         }
         Err(_) => 0,
     };
-    // snapshots/ bytes count toward total too.
     if let Ok(it) = std::fs::read_dir(&snap_dir) {
         for e in it.flatten() {
             if e.file_type().map(|f| f.is_file()).unwrap_or(false) {

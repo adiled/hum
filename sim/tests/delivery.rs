@@ -16,8 +16,8 @@ async fn trio() -> (Sim, ensemble::Hid, ensemble::Hid, ensemble::Hid) {
         sim.spawn_humd(id).await;
         sim.await_ready(id).await.expect("ready");
     }
-    sim.wire(a, b).expect("wire a-b");
-    sim.wire(b, c).expect("wire b-c");
+    sim.wire_unauthenticated(a, b).expect("wire a-b");
+    sim.wire_unauthenticated(b, c).expect("wire b-c");
     sim.await_handshake(a, b).await.expect("a-b");
     sim.await_handshake(b, c).await.expect("b-c");
     (sim, a, b, c)
@@ -31,7 +31,7 @@ async fn pair() -> (Sim, ensemble::Hid, ensemble::Hid) {
         sim.spawn_humd(id).await;
         sim.await_ready(id).await.expect("ready");
     }
-    sim.wire(a, b).expect("wire");
+    sim.wire_unauthenticated(a, b).expect("wire");
     sim.await_handshake(a, b).await.expect("a-b");
     (sim, a, b)
 }
