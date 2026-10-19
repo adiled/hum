@@ -6,20 +6,17 @@ use sha2::{Digest, Sha256};
 
 use crate::Hash32;
 
-/// Sign canonical bytes; return hex-encoded 64-byte signature.
 pub fn sign_canonical(key: &SigningKey, canonical: &[u8]) -> String {
     let sig: Signature = key.sign(canonical);
     hex::encode(sig.to_bytes())
 }
 
-/// Verify a signature over canonical bytes against a pubkey.
 pub fn verify_canonical(pubkey: &VerifyingKey, canonical: &[u8], sig_hex: &str) -> Result<()> {
     let sig_bytes = hex::decode(sig_hex).context("decode sig hex")?;
     let sig = Signature::from_slice(&sig_bytes).map_err(|e| anyhow!("sig parse: {e}"))?;
     pubkey.verify(canonical, &sig).map_err(|e| anyhow!("verify: {e}"))
 }
 
-/// sha256 of any bytes → 32-byte hash. Used for prev_hash chaining.
 pub fn hash256(bytes: &[u8]) -> Hash32 {
     let mut h = Sha256::new();
     h.update(bytes);

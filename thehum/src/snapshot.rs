@@ -11,17 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{sign, Hash32, StateRoot, TheHum};
 
-/// One leaf of the state Merkle tree. Materialized views package
-/// themselves as (key → bytes) maps before commitment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateLeaf {
     pub key: String,
     pub value: serde_json::Value,
 }
 
-/// Build a deterministic Merkle root over a BTreeMap of state leaves.
-/// Sorted by key. Tree is binary; odd levels duplicate the last node.
-/// Empty tree → all-zero root.
 pub fn merkle_root(leaves: &BTreeMap<String, serde_json::Value>) -> StateRoot {
     if leaves.is_empty() {
         return [0u8; 32];
@@ -56,9 +51,6 @@ pub fn merkle_root(leaves: &BTreeMap<String, serde_json::Value>) -> StateRoot {
 
 impl TheHum {
     /// Emit a snapshot event for the current materialized state.
-    /// `state_leaves` is the projection that THIS humd is committing to.
-    /// Call after applying recent events; the committed root is
-    /// independent of the chi log itself.
     pub async fn snapshot(&self, state_leaves: BTreeMap<String, serde_json::Value>) -> Result<StateRoot> {
         let root = merkle_root(&state_leaves);
         let height = {
@@ -80,7 +72,6 @@ impl TheHum {
     }
 
     /// True when the snapshot cadence policy says we should snapshot.
-    /// Cheap; meant to be called per-append or periodically.
     pub fn should_snapshot(&self, now_ms: i64) -> bool {
         let s = self.state.lock();
         let events_since = s.seq.saturating_sub(s.last_snapshot_seq);

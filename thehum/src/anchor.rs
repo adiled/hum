@@ -5,13 +5,23 @@
 //! attestation. Provides discoverability, timestamping, dispute
 //! settlement, and reputation when a network chooses to adopt the
 //! contract entry per humd.
+//!
+//! The EVM backend is a scaffold: it wires up a JSON-RPC endpoint via
+//! reqwest and prepares the calldata for a HumdRegistry contract call
+//!
+//! ```solidity
+//! function anchor(bytes32 hid, bytes32 root, uint256 height, bytes calldata sig) external;
+//! ```
+//!
+//! Real submission needs a funded signer (the chain-side address) and is
+//! intentionally deferred — production users wire their own wallet
+//! (Foundry script, metamask-snap, etc) and call `prepare_calldata`.
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::{StateRoot, TheHum};
 
-/// One on-chain anchor receipt. Returned by backends.
 #[derive(Debug, Clone)]
 pub struct AnchorReceipt {
     pub network: String,
@@ -20,8 +30,7 @@ pub struct AnchorReceipt {
 }
 
 /// Per-network backend. `submit` posts the (hid, root, height) tuple
-/// signed by the humd's signing key. Backends translate to whatever the
-/// chain expects (EVM call, transaction, etc).
+/// signed by the humd's signing key.
 #[async_trait]
 pub trait AnchorBackend: Send + Sync {
     fn name(&self) -> &str;
@@ -35,9 +44,7 @@ pub trait AnchorBackend: Send + Sync {
 }
 
 impl TheHum {
-    /// Anchor the most recent snapshot to the configured network. The
-    /// caller passes the same `root` that `snapshot()` returned plus
-    /// the height it was taken at. Signature uses thehum's signing key.
+    /// Anchor the most recent snapshot to the configured network.
     pub async fn anchor(
         &self,
         backend: &dyn AnchorBackend,
@@ -65,7 +72,6 @@ impl TheHum {
     }
 }
 
-/// Stub backend used by tests; submits to memory.
 pub struct InMemoryAnchor {
     pub name: String,
     pub log: parking_lot::Mutex<Vec<(String, StateRoot, u64, String)>>,
@@ -98,17 +104,6 @@ impl AnchorBackend for InMemoryAnchor {
     }
 }
 
-/// Ethereum/EVM backend scaffold. Wires up to a JSON-RPC endpoint via
-/// reqwest and submits a typed call to a HumdRegistry contract:
-///
-/// ```solidity
-/// function anchor(bytes32 hid, bytes32 root, uint256 height, bytes calldata sig) external;
-/// ```
-///
-/// v0 is a scaffold that prepares the calldata; real submission needs
-/// a funded signer (the chain-side address) and is intentionally
-/// deferred — production users wire their own wallet (Foundry script,
-/// metamask-snap, etc) and call `prepare_calldata`.
 pub struct EvmAnchor {
     pub network: String,
     pub registry_address: String,

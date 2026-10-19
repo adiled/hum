@@ -1,4 +1,8 @@
 //! Read paths: tail (live), range (file scan), replay (boot reconstruct).
+//!
+//! A replay handler must be pure — no clocks, no rng, no env reads. Use
+//! `event.ts_ms` for any time-shaped value, so a rebuild lands on the
+//! same state as the original run.
 
 use std::path::Path;
 
@@ -15,10 +19,7 @@ impl TheHum {
         self.live_tx.subscribe()
     }
 
-    /// Stream the historical range [from_seq, ..) for `author`. Includes
-    /// events authored by this humd from the local log. (Other authors'
-    /// events arrive via gossip; range over the local log is the canonical
-    /// answer for THIS humd's history.)
+    /// Stream the historical range [from_seq, ..) for `author`.
     pub fn range(&self, author: &str, from_seq: Seq) -> Result<Vec<Event>> {
         let mut events = scan_all(&self.dir).context("scan log files")?;
         events.retain(|e| e.author == author && e.seq >= from_seq);
@@ -28,8 +29,6 @@ impl TheHum {
 
     /// Replay every event in this humd's log (in seq order) through
     /// `handler`. Use to rebuild materialized views on cold-boot.
-    /// Handler must be PURE: no clocks, no rng, no env reads — use
-    /// `event.ts_ms` for any time-shaped value.
     pub fn replay<F: FnMut(&Event)>(&self, mut handler: F) -> Result<()> {
         let mut events = scan_all(&self.dir).context("scan log files")?;
         events.sort_by_key(|e| (e.author.clone(), e.seq));

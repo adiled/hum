@@ -13,8 +13,6 @@ use syn::{Field, Fields, Item, ItemStruct, Meta, Type};
 
 use crate::paths;
 
-/// Simplified wire type — everything `views.rs` / `envelope.rs` can
-/// express that the client languages need to render.
 #[derive(Debug, Clone)]
 pub enum Repr {
     Str,
@@ -22,21 +20,15 @@ pub enum Repr {
         unsigned: bool,
     },
     Bool,
-    /// `serde_json::Value` — opaque JSON.
     Json,
-    /// `BTreeMap<String, V>`.
     Map(Box<Repr>),
-    /// `Vec<T>`.
     Arr(Box<Repr>),
-    /// Reference to another generated type (`DroneLoad`, …).
     Ref(String),
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldSpec {
-    /// Rust (snake_case) name, also the Python field name.
     pub rust: String,
-    /// Wire key — from `#[serde(rename = "...")]` else the rust name.
     pub json: String,
     pub repr: Repr,
     pub optional: bool,
@@ -44,7 +36,6 @@ pub struct FieldSpec {
 
 #[derive(Debug, Clone)]
 pub struct TypeSpec {
-    /// `HelloBody`, `Envelope`, …
     pub name: String,
     pub fields: Vec<FieldSpec>,
 }
@@ -55,7 +46,6 @@ pub struct ProtocolSpec {
     pub types: Vec<TypeSpec>,
 }
 
-/// Parse a views.rs + envelope.rs pair (plus lib.rs for the version).
 pub fn protocol_spec(views_rs: &Path, envelope_rs: &Path, lib_rs: &Path) -> Result<ProtocolSpec> {
     let lib_src =
         fs::read_to_string(lib_rs).with_context(|| format!("read {}", lib_rs.display()))?;
@@ -78,9 +68,6 @@ fn structs_in(src: &str) -> Result<Vec<TypeSpec>> {
     for item in file.items {
         let Item::Struct(s) = item else { continue };
         let name = s.ident.to_string();
-        // Only wire-facing types: the envelope, per-chi bodies, and the
-        // nested body-support structs (DroneLoad). Test-only types never
-        // appear here — unit-test structs are filtered by these names.
         if name != "Envelope" && name != "DroneLoad" && !name.ends_with("Body") {
             continue;
         }
@@ -115,11 +102,8 @@ fn field_spec(f: &Field) -> Option<FieldSpec> {
     })
 }
 
-/// `Option<T>` → (true, T); anything else → (false, itself).
 fn simplify(ty: &Type) -> (bool, Repr) {
     if let Type::Path(p) = ty {
-        // Check the leading segment name directly: syn's `is_ident` rejects
-        // paths with generic arguments, so `Option<String>` would slip by.
         if let Some(seg) = p.path.segments.first()
             && seg.ident == "Option"
                 && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
@@ -132,7 +116,7 @@ fn simplify(ty: &Type) -> (bool, Repr) {
 
 fn repr_of(ty: &Type) -> Repr {
     let Type::Path(p) = ty else {
-        return Repr::Json; // opaque fallback (bare trait object, etc.)
+        return Repr::Json;
     };
     let seg = &p.path.segments[0];
     match seg.ident.to_string().as_str() {
@@ -142,17 +126,14 @@ fn repr_of(ty: &Type) -> Repr {
         "bool" => Repr::Bool,
         "Value" => Repr::Json,
         "Vec" => {
-            let inner = angle_ty(&seg.arguments, 0).unwrap_or(Repr::Json);
+            let inner = angle_ty(&seg.arguments, VEC_VALUE_ARG).unwrap_or(Repr::Json);
             Repr::Arr(Box::new(inner))
         }
         "BTreeMap" => {
-            // The value type is the SECOND generic arg (first is the key).
-            let inner = angle_ty(&seg.arguments, 1).unwrap_or(Repr::Json);
+            let inner = angle_ty(&seg.arguments, MAP_VALUE_ARG).unwrap_or(Repr::Json);
             Repr::Map(Box::new(inner))
         }
         other => {
-            // Multi-segment paths (serde_json::Value) land on the last
-            // segment; otherwise treat as a reference to another type.
             if p.path.segments.len() > 1 {
                 let last = &p.path.segments[p.path.segments.len() - 1];
                 return repr_of(&Type::Path(syn::TypePath {
@@ -165,6 +146,12 @@ fn repr_of(ty: &Type) -> Repr {
     }
 }
 
+/// `Vec<T>` — the element type is the first generic argument.
+const VEC_VALUE_ARG: usize = 0;
+
+/// `BTreeMap<K, V>` — the value type is the second generic argument.
+const MAP_VALUE_ARG: usize = 1;
+
 fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
     if let syn::PathArguments::AngleBracketed(a) = args
         && let Some(syn::GenericArgument::Type(t)) = a.args.iter().nth(nth) {
@@ -174,9 +161,7 @@ fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
 }
 
 /// Verify every Chi variant has a matching `{Pascal}Body` view, and every
-/// body view maps back to a real chi. Called on every thrum-core build so
-/// a new chi without a view (or an orphan view) fails fast instead of
-/// silently generating a partial client.
+/// body view maps back to a real chi.
 pub fn check_coverage(chis: &[crate::Variant], proto: &ProtocolSpec) -> Result<()> {
     for v in chis {
         let expect = format!("{}Body", v.pascal);
@@ -211,8 +196,7 @@ pub fn check_coverage(chis: &[crate::Variant], proto: &ProtocolSpec) -> Result<(
 ///
 /// Parsed by regex over the raw attribute tokens rather than
 /// `parse_nested_meta`: that API's handling of unconsumed `key = value`
-/// pairs changed across syn 2.x patch releases, and the token text of
-/// `rename = "…"` is verbatim in both, so regex is version-proof.
+/// pairs changed across syn 2.x patch releases.
 fn serde_rename(f: &Field) -> Option<String> {
     let re = regex::Regex::new(r#"rename\s*=\s*"([^"]*)""#).expect("static regex");
     for attr in &f.attrs {
@@ -229,13 +213,11 @@ fn serde_rename(f: &Field) -> Option<String> {
     None
 }
 
-/// THRUM_VERSION from lib.rs (same regex as the chi registry parser).
 fn extract_version(lib: &str) -> Result<Option<String>> {
     let re = regex::Regex::new(r#"pub\s+const\s+THRUM_VERSION\s*:\s*&\s*str\s*=\s*"([^"]+)""#)?;
     Ok(re.captures(lib).map(|c| c[1].to_string()))
 }
 
-// ── emitters ───────────────────────────────────────────────────────────
 
 fn regen_header(comment: &str, refs: &[&str]) -> String {
     let refs = refs.join(", ");
@@ -250,7 +232,6 @@ fn regen_header(comment: &str, refs: &[&str]) -> String {
     )
 }
 
-/// Emit `protocol.ts` to `output`.
 pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
     s.push_str(&regen_header(
@@ -269,7 +250,6 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         s.push_str("}\n\n");
     }
 
-    // chi → view type map for discriminated tones.
     s.push_str("// Body view per chi wire value.\n");
     s.push_str("export interface ToneViews {\n");
     for t in &spec.types {
@@ -284,13 +264,10 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     write_out(output, &s)
 }
 
-/// True for structs that are per-chi bodies (skips Envelope and the
-/// nested support structs in chi → view maps).
 fn names_body_view(name: &str) -> bool {
     name.ends_with("Body")
 }
 
-/// `HelloBody` → `hello`; `KadFindNodeRespBody` → `kad-find-node-resp`.
 fn body_chi(name: &str) -> String {
     let pascal = name.strip_suffix("Body").unwrap_or(name);
     let mut out = String::with_capacity(pascal.len() + 4);
@@ -319,7 +296,6 @@ fn ts_repr(r: &Repr) -> String {
     }
 }
 
-/// Emit `protocol.py` to `output`.
 pub fn emit_protocol_py(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
     s.push_str(&regen_header(
@@ -420,7 +396,7 @@ fn py_repr(r: &Repr, optional: bool) -> String {
 }
 
 /// Rust snake field name → valid Python identifier. `from` collides with
-/// the `from` keyword (gossip-publish body).
+/// the `from` keyword.
 fn py_field_name(rust: &str) -> String {
     match rust {
         "from" => "from_".to_string(),
@@ -429,7 +405,7 @@ fn py_field_name(rust: &str) -> String {
 }
 
 /// Optional-list/map annotations still need `Optional` even though `None`
-/// is a legal value: `list[str] = None` fails type checkers.
+/// is a legal value.
 fn map_opt(optional: bool, inner: &str) -> String {
     if optional {
         format!("Optional[{inner}]")
@@ -438,7 +414,6 @@ fn map_opt(optional: bool, inner: &str) -> String {
     }
 }
 
-/// Emit `protocol.go` to `output`.
 pub fn emit_protocol_go(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
     s.push_str(&regen_header(
@@ -483,7 +458,6 @@ pub fn emit_protocol_go(spec: &ProtocolSpec, output: &Path) -> Result<()> {
 }
 
 fn pascal_of(name: &str) -> String {
-    // HelloBody → HelloBody (already Pascal); strip impossible suffix.
     name.strip_suffix("Body")
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string())
@@ -552,8 +526,6 @@ mod tests {
 
     #[test]
     fn parses_views_slice() {
-        // A tiny slice of the wire spec enough to exercise Option / Vec /
-        // BTreeMap / serde rename.
         let src = r#"
             #[derive(Serialize, Deserialize)]
             pub struct ChunkBody {

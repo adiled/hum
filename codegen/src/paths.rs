@@ -21,12 +21,8 @@ use std::path::PathBuf;
 
 pub const CHI_RS_REL: &str = "thrum-core/src/chi.rs";
 pub const LIB_RS_REL: &str = "thrum-core/src/lib.rs";
-/// Wire-view sources — parsed into typed protocol mirrors for each client.
 pub const VIEWS_RS_REL: &str = "thrum-core/src/views.rs";
 pub const ENVELOPE_RS_REL: &str = "thrum-core/src/envelope.rs";
-/// Compact ref for the two runtime-helper sources, used in the
-/// "Runtime helpers that mirror …" header emitted into every helpers
-/// file. They live next to chi.rs / lib.rs in `thrum-core/src/`.
 pub const HELPERS_SOURCE_REF: &str = "thrum-core/src/{prims,wane}.rs";
 
 pub const TS_CHI_REL: &str = "thrum-clients/ts/chi.ts";

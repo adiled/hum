@@ -14,8 +14,8 @@ use serde_json::Value;
 use crate::{canon, sign, Event, Hash32, Seq, TheHum};
 
 impl TheHum {
-    /// Append a wire envelope as a new authored event. Signs, chains,
-    /// fsyncs, broadcasts. Returns the assigned seq.
+    /// Append a wire envelope as a new authored event. Returns the
+    /// assigned seq.
     pub async fn append(&self, chi: &str, sid: Option<crate::HumId>, rid: crate::HumId, body: Value) -> Result<Seq> {
         let ts_ms = chrono::Utc::now().timestamp_millis();
         let (seq, prev_hash_hex) = {
@@ -57,7 +57,6 @@ impl TheHum {
     }
 }
 
-/// Path of the daily ring for the given ts.
 pub(crate) fn daily_path(dir: &Path, ts_ms: i64) -> PathBuf {
     let dt = DateTime::<Utc>::from_timestamp_millis(ts_ms)
         .unwrap_or_else(|| DateTime::<Utc>::from_timestamp_millis(0).unwrap());
@@ -79,7 +78,6 @@ fn write_line(path: &Path, line: &str, fsync: bool) -> Result<()> {
     Ok(())
 }
 
-/// Atomic seq persistence: tmp + rename.
 fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
     let final_path = hum_paths::thehum_seq_file(dir);
     let tmp = final_path.with_extension("bin.tmp");
@@ -88,7 +86,6 @@ fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
     Ok(())
 }
 
-/// Cold-boot recovery: read seq.bin and the last line's pre-sig hash.
 pub fn recover_state(dir: &Path) -> Result<(Seq, Hash32)> {
     let seq = std::fs::read(hum_paths::thehum_seq_file(dir))
         .ok()
