@@ -1,23 +1,31 @@
-//! Comb — the kernel's measure of what has flowed through it.
+//! Comb — the kernel's measure of what crossed it.
 //!
 //! A comb is a ledger of quantities: a flat map of named counters that
 //! accumulates for the life of the install. Two families live in it.
 //!
-//! **Activity** — what crossed the kernel, by chi:
-//! `chi:finish`, `chi:tool-call`, and `bee:claude-cli:chi:finish` for the
-//! same count scoped to one hive kind.
+//! **Activity** — what crossed the kernel, by chi: `chi:finish`,
+//! `chi:tool-call`, and `bee:claude-cli:chi:finish` for the same count
+//! scoped to one hive kind. The scoped counts cover the work chis — a
+//! turn finished, a tool was called, a tool answered, something went
+//! wrong — because those are the ones that name what was done.
 //!
 //! **Nectar** — what was consumed, by metric: `nectar:in`, `nectar:out`,
 //! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a bee
 //! as `bee:claude-cli:nectar:in`. Nectar is the kernel's raw intake —
-//! tokens in, tokens out, cache reads and writes. What the kernel
-//! produces is honey, and that side belongs to whoever earns it.
+//! tokens in, tokens out, cache reads and writes. A hive may name its
+//! tokens any of the ways the wilds do: `input_tokens` and `prompt_tokens`
+//! are the same measure, and so are their output counterparts. What the
+//! kernel produces is honey, and that side belongs to whoever earns it.
 //!
 //! Only the kernel writes the comb. The daemon sees every tone that
 //! crosses it, so the measure is observed rather than self-reported: a bee
-//! metering itself would be reporting on itself. Each humd keeps its own
-//! comb, so a session that crosses two humds is accounted by each of them
-//! rather than counted once globally.
+//! metering itself would be reporting on itself. A tone that crossed the
+//! mesh has no bee here to answer for it, so it lands in the global family
+//! alone. Each humd keeps its own comb, so a session that touches two
+//! humds is accounted by each of them rather than counted once.
+//!
+//! Nothing is measured that was not measured: a hive that reports no
+//! usage is measured as having used nothing.
 //!
 //! Persisted at `${XDG_RUNTIME_DIR}/hum/comb.json`, write-through every
 //! `comb_persist_interval`.
@@ -32,14 +40,8 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use tracing::{trace, warn};
 
-/// The chis whose counts are also attributed to the hive that sent them.
-/// These are the ones that name work done: a turn finished, a tool was
-/// called, a tool answered, something went wrong.
 pub const WORK_CHIS: [&str; 4] = ["finish", "tool-call", "tool-result", "error"];
 
-/// Token metrics, each with the field names hives use for it. Anthropic
-/// calls them `input_tokens`; OpenAI calls them `prompt_tokens`. Both are
-/// nectar, and the comb measures them the same way.
 pub const TOKEN_METRICS: [(&str, &[&str]); 4] = [
     (
         "in",
@@ -89,8 +91,6 @@ pub fn bee_nectar_key(bee: &str, metric: &str) -> String {
     format!("bee:{bee}:nectar:{metric}")
 }
 
-/// Pull the token counts out of a `chi:"finish"` usage object. A hive that
-/// reports no usage measures nothing — the comb does not guess.
 pub fn usage_of(usage: Option<&Value>) -> Vec<(&'static str, u64)> {
     let Some(obj) = usage.and_then(Value::as_object) else {
         return Vec::new();
@@ -119,14 +119,6 @@ impl Comb {
         })
     }
 
-    /// Record one tone that crossed the kernel.
-    ///
-    /// `bee` is the hive kind that sent it, when the kernel can attribute
-    /// it to a bee registered here. A tone that arrived over the mesh has
-    /// no such attribution: it lands in the global family only.
-    ///
-    /// `usage` is the token report on a `chi:"finish"`, and is only read
-    /// for that chi.
     pub fn record(&self, chi: &str, bee: Option<&str>, usage: Option<&Value>) {
         self.incr(&chi_key(chi));
         let tokens = if chi == "finish" {

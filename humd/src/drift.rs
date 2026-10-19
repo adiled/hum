@@ -348,7 +348,7 @@ mod tests {
         let d = Drift::new();
         d.mark("s1", "first_petal");
         std::thread::sleep(std::time::Duration::from_millis(2));
-        d.mark("s1", "first_petal"); // ignored
+        d.mark("s1", "first_petal");
         d.mark("s2", "first_petal");
         let agg = d.aggregates();
         assert_eq!(agg.blooms, 2);

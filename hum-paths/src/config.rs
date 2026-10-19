@@ -273,12 +273,13 @@ mod tests {
     }
 
     #[test]
-    fn nest_section_partial() {
+    fn nest_section_partial_takes_defaults() {
         let cfg: HumConfig =
             serde_json::from_str(r#"{"nest": {"maxActiveCells": 8, "default": "claude-cli"}}"#).unwrap();
         assert_eq!(cfg.nest.max_active_cells, 8);
         assert_eq!(cfg.nest.default, "claude-cli");
-        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, 300_000); // default fills
+        let default_threshold = HumConfig::default().nest.cell_idle_prune_threshold_ms;
+        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, default_threshold);
     }
 
     #[test]

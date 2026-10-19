@@ -53,9 +53,16 @@ fmt:
 fmt-file file:
     rustfmt --edition 2024 {{file}}
 
+# The kernel speaks in code: no `//` and no `///` in the kernel's own
+# Rust. `//!` is the module header and is the only comment allowed.
+# The hives are exempt — each is a separate workspace, and a kind any
+# third party may write in any language.
+speech:
+    python3 tools/speech.py
+
 # Clippy over the crates CI gates on. Same scope, same flags as
 # .github/workflows/wire.yml — if this passes, CI passes.
-lint:
+lint: speech
     cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
 
 # Clippy over everything. The daemon and the drone still carry dead

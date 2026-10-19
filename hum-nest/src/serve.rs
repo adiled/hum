@@ -566,7 +566,7 @@ impl WireListener {
             "content_block_delta" => {
                 let delta = msg.get("delta").cloned().unwrap_or(json!({}));
                 let idx = msg.get("index").and_then(Value::as_i64);
-                let is_tool_block = match idx {
+                let bridge_reports_tool_whole = match idx {
                     Some(i) => self.tool_use_blocks.lock().await.contains(&i),
                     None => false,
                 };
@@ -574,19 +574,19 @@ impl WireListener {
                 match delta.get("type").and_then(Value::as_str).unwrap_or("") {
                     "thinking_delta" => self.chunk("reasoning_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("thinking")})).await,
                     "text_delta" => self.chunk("text_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("text")})).await,
-                    "input_json_delta" if !is_tool_block => {
+                    "input_json_delta" if !bridge_reports_tool_whole => {
                         self.chunk("tool_input_delta", json!({"blockIdx": block_idx_v, "partialJson": delta.get("partial_json")})).await
                     }
-                    _ => {} // tool-block input_json_delta: suppressed (bridge ships chunk:tool_executed instead)
+                    _ => {}
                 }
             }
             "content_block_stop" => {
                 let idx = msg.get("index").and_then(Value::as_i64);
-                let is_tool_block = match idx {
+                let bridge_reports_tool_whole = match idx {
                     Some(i) => self.tool_use_blocks.lock().await.remove(&i),
                     None => false,
                 };
-                if !is_tool_block {
+                if !bridge_reports_tool_whole {
                     self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
                 }
             }
