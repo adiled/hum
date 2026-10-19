@@ -4,7 +4,7 @@
 //! humd is the daemon AND the daemon-inspection CLI. Default invocation
 //! (no args) is daemon mode. `--version` / `--help` are the minimum
 //! handshake any CLI should support; richer inspection subcommands
-//! (peers, drift, drone) will plug in once humd exposes an RPC control
+//! (peers, drone) will plug in once humd exposes an RPC control
 //! socket on `cfg.http_path`.
 
 use anyhow::Result;
@@ -24,7 +24,7 @@ fn print_help() {
     println!("  humd --help        this surface");
     println!();
     println!("User-facing CLI is `hum`. humd's own subcommands will grow as");
-    println!("the daemon RPC surface lands (peers, drift, drone, sessions).");
+    println!("the daemon RPC surface lands (peers, drone, sessions).");
 }
 
 #[tokio::main]

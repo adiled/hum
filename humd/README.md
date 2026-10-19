@@ -11,7 +11,7 @@ A **humd** is the single process every other piece of hum talks to: bees
 hello in over the thrum socket, peer humds dial in over the ensemble
 transports, the OS hands it a state directory and a runtime directory,
 and it owns one **nest** for the lifetime of the process. Everything
-mesh-shaped (routing, gossip, drift, capacity advertise) happens here.
+mesh-shaped (routing, gossip, capacity advertise) happens here.
 Everything LLM-shaped (worker bees, cells, prompts) happens in the
 nest this daemon hosts.
 
@@ -40,7 +40,7 @@ they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
 3. **identity load**. `identity::load_or_mint_key()` reads
    `$XDG_STATE_HOME/hum/humd.key` (32 raw bytes, mode `0o600`) or mints
    and persists a fresh Ed25519 keypair on first boot.
-4. **trackers**. `comb::Comb`, `drift::Drift`, the metrics exporter
+4. **trackers**. `comb::Comb`, the metrics exporter
    (Prometheus on `humd.metricsAddr`).
 5. **thehum**. The signed append-only chi log at
    `$XDG_STATE_HOME/hum/thehum/`. Every tone that crosses the daemon
@@ -67,7 +67,7 @@ humd --version  # print "humd <ver> (thrum <wire ver>)"
 humd --help     # print the surface above
 ```
 
-Richer inspection (`humd peers`, `humd drift`, `humd drone`,
+Richer inspection (`humd peers`, `humd drone`,
 `humd sessions`) plugs in once the daemon exposes an RPC control
 socket on `cfg.http_path`. The user-facing CLI is
 [`hum`](../hum). It talks to a running humd through the same artifacts

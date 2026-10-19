@@ -53,7 +53,7 @@ class Chi:
     TOOL_INFO: str = "tool-info"
     # delivery ack for a rid
     ECHO: str = "echo"
-    # drift timing — measured both ways
+    # a timing measurement — measured both ways
     PERF_MARK: str = "perf-mark"
     # structured log forwarding
     LOG: str = "log"

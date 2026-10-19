@@ -96,7 +96,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 ```jsonc
 {
   "$schema": "https://adiled.github.io/hum/hum.schema.json",
-  "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 },
+  "humd": { "permissionDuskMs": 60000 },
   "fs": {
     "roots": [{ "path": "~/code", "mode": "rw" }, { "path": "/tmp", "mode": "rw" }],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
@@ -115,7 +115,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 | `idleTimeout` | `nest.cellIdlePruneThresholdMs` (same unit, renamed) |
 | `permissionDusk` | `humd.permissionDuskMs` |
 | `nest` (enum `"claude-cli"` / `"claude-repl"`) | `nest.default` (free-form string; must appear in `hives`) |
-| `driftRetentionDays` | `humd.driftRetentionDays` |
+| `driftRetentionDays` | **dropped** — drift is a hive now; the kernel keeps no rings |
 | `projects` | **dropped** — filesystem is now `fs.roots`; project IDs are a bee-side concern |
 | `droned` | **dropped** — drone is always on; the swallow path is internal |
 | `droneModel` | **dropped** — the LLM-judge seam is in code (`drone::Evaluator` trait); no default judge ships |

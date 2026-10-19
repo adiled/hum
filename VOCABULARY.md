@@ -71,7 +71,6 @@ A nestled bee shares the nest with the cells that live there.
 ## Observation
 
 - **drone** — the sentinel watching every tone. Self-governance + drift detection.
-- **drift** — timing rings per bloom. p50/p95 across humds.
 
 ## Measure
 

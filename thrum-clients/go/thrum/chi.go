@@ -56,7 +56,7 @@ const (
     ChiToolInfo Chi = "tool-info"
     // delivery ack for a rid
     ChiEcho Chi = "echo"
-    // drift timing — measured both ways
+    // a timing measurement — measured both ways
     ChiPerfMark Chi = "perf-mark"
     // structured log forwarding
     ChiLog Chi = "log"

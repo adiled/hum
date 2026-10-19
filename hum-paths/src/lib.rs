@@ -8,7 +8,7 @@
 //!
 //! | root | holds |
 //! |---|---|
-//! | `$XDG_STATE_HOME/hum` | keys, snapshots, drift rings, the thrum socket, the rendezvous file |
+//! | `$XDG_STATE_HOME/hum` | keys, snapshots, the thrum socket, the rendezvous file |
 //! | `$XDG_CONFIG_HOME/hum` | user-editable config: `hum.json`, `peers.json` |
 //! | `$XDG_DATA_HOME/hum` | installed source clone, recipes |
 //! | `$XDG_CACHE_HOME/hum` | derived caches, e.g. foreign hive clones |
@@ -256,10 +256,6 @@ pub fn hum_json() -> PathBuf {
 
 pub fn peers_json() -> PathBuf {
     config_dir().join(PEERS_JSON_BASENAME)
-}
-
-pub fn drift_dir() -> PathBuf {
-    state_dir().join("drift")
 }
 
 pub fn thehum_dir() -> PathBuf {

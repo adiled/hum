@@ -518,34 +518,6 @@ describe("e2e-serve: session basics", () => {
   // because lastUser.id > lastAssistant.id. hum does not need to inject
   // mid-stream; the queued user message is delivered to a fresh assistant
   // turn at the boundary, exactly like Claude REPL's <queued_commands>.
-  test("drift coverage: turn records the canonical phase marks", async () => {
-    skipIfDead();
-    const sid = await createSession();
-
-    await sendMessage(sid, "What is 5+5? Just the number.");
-
-    // Wait briefly for drift to flush turn end
-    await new Promise(r => setTimeout(r, 250));
-
-    const driftResp = await unixFetch(DAEMON_SOCK, `/drift?sid=${sid}&limit=5`);
-    const recent = (driftResp.recent ?? []) as Array<any>;
-    expect(recent.length).toBeGreaterThan(0);
-    const bloom = recent[0];
-
-    // Marks every successful bloom must record (independent of model + drone).
-    const marks = bloom.marks ?? {};
-    for (const required of ["first_petal", "first_bloom", "wilt"]) {
-      expect(marks[required], `mark ${required} missing on bloom ${bloom.bloomId}`).toBeDefined();
-    }
-
-    // Spans should include at least one of: graft, nest_spawn (cold), or
-    // warm flag should be true. This is the "spawn cost" coverage proof.
-    const spans = bloom.spans ?? {};
-    const flags = bloom.flags ?? {};
-    const spawnAccounted = spans.graft !== undefined || spans.nest_spawn !== undefined || flags.warm === true;
-    expect(spawnAccounted, `bloom neither warm nor recorded a spawn/graft span: ${JSON.stringify({spans, flags})}`).toBe(true);
-  }, TIMEOUT);
-
   test("mid-turn user message queues and is processed after current turn", async () => {
     skipIfDead();
     const sid = await createSession();

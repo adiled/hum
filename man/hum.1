@@ -177,9 +177,6 @@ refused the socket. Edited with \fBhumctl revoke\fR, a separate binary.
 .B ~/.local/state/hum/routing.json
 Kademlia routing table, restored on boot.
 .TP
-.B ~/.local/state/hum/drift/
-Drift rings, one NDJSON file per day.
-.TP
 .B ~/.local/state/hum/thehum/
 The persistent chi log, one NDJSON file per day plus seq.bin and
 snapshots/.
@@ -270,7 +267,6 @@ dusk	absolute ms expiry on a tone; past dusk, drop
 cell	one live LLM subprocess in the nest; fungible
 brood	the state machine that walks a cell from cold to ready (PTY-only)
 drone	the sentinel watching every tone (self-governance + drift detection)
-drift	timing rings per bloom (p50/p95 across humds)
 worker	a bee that produces compute (accepts prompt, emits chunk/finish/tool-call)
 forager	a bee that translates outside wire <-> thrum (HTTP/gRPC/stdio)
 .TE
