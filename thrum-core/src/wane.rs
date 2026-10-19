@@ -42,9 +42,6 @@ impl WaneTracker {
         self.counters.lock().clone()
     }
 
-    /// Merge a remote snapshot into local state, taking the max per
-    /// sigil. Wane is a Lamport clock, so max is the convergent join.
-    /// Returns the count of sigils whose local value advanced.
     pub fn merge(&self, remote: &HashMap<String, u64>) -> usize {
         let mut g = self.counters.lock();
         let mut advanced = 0;

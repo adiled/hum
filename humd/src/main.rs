@@ -70,7 +70,6 @@ async fn main() -> Result<()> {
     humd::run(cfg, wait_for_shutdown()).await
 }
 
-/// Resolves the first time SIGTERM, SIGINT, or ctrl-c arrives.
 async fn wait_for_shutdown() {
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
     let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");

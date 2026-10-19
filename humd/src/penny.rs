@@ -26,7 +26,6 @@ impl Penny {
         })
     }
 
-    /// Read counters from `path`. Missing/corrupt files yield an empty Penny.
     pub fn load(path: &Path) -> Arc<Self> {
         let counters = match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<HashMap<String, serde_json::Value>>(&bytes)

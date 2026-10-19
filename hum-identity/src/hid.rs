@@ -67,7 +67,6 @@ impl Hid {
         Self { prefix, bytes }
     }
 
-    /// Mint a random hid for the given role. Tests / pre-crypto only.
     pub fn random(prefix: HidPrefix) -> Self {
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
@@ -90,9 +89,6 @@ impl Hid {
         format!("{}_{}", self.prefix.as_str(), hex::encode(&self.bytes[..6]))
     }
 
-    /// Parse `<prefix>_<hex>`. Accepts the 12-char short or 64-char
-    /// full form, and a bare 64-hex string as a legacy humd-prefixed
-    /// value.
     pub fn from_hex(s: &str) -> Result<Self, HidParseError> {
         if let Some((p, h)) = s.split_once('_') {
             let prefix = HidPrefix::parse(p).ok_or(HidParseError::UnknownPrefix)?;

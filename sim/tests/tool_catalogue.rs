@@ -105,17 +105,12 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
 #[test]
 fn parse_tool_def_normalizes_schema_field() {
     use serde_json::json;
-    // that survives the merge must serialize back with a non-null
-    // inputSchema. We round-trip via hum_mcp::catalogue::merge so any
-    // ToolDef path is exercised.
     let with_schema = serde_json::from_value::<hum_mcp::protocol::ToolDef>(json!({
         "name":"read","description":"r",
         "inputSchema":{"type":"object","properties":{}},
     })).expect("ToolDef parses inputSchema");
     assert!(with_schema.input_schema.is_object());
 
-    // Missing inputSchema entirely deserializes to Value::Null —
-    // wire if we didn't normalize.
     let bare = serde_json::from_value::<hum_mcp::protocol::ToolDef>(json!({
         "name":"read",
     })).expect("ToolDef parses without inputSchema");

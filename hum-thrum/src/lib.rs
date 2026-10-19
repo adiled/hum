@@ -31,8 +31,6 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{trace, warn};
 
-/// Dial the thrum Unix socket and split it. Returns the read half as
-/// a line reader and the write half wrapped in a shared mutex.
 pub async fn connect(
     path: &Path,
 ) -> Result<(Lines<BufReader<tokio::net::unix::OwnedReadHalf>>, Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>)> {
@@ -94,8 +92,6 @@ mod tests {
     use tokio::net::UnixListener;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    // Confirms connect/send_json/read_tones line up with the NDJSON
-    // contract humd speaks.
     #[tokio::test]
     async fn wire_round_trip() {
         let dir = std::env::temp_dir().join(format!("hum-thrum-test-{}", std::process::id()));

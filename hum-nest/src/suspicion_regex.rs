@@ -46,8 +46,6 @@ const IDENTITY_RESET: &[&str] = &[
 ];
 
 const GREETING_RESET: &[&str] = &[
-    // The TS regex is the same, with the emoji written literally. Rust's
-    // `regex` has no look-around, but unicode literals are fine.
     r"(?i)^.{0,20}(\x{1F44B}|Hey!|Hello!|Hi there).{0,30}(help|assist|can I)",
     r"(?i)\bhow can I (help|assist) you( today| with)?\??",
     r"(?i)\bwhat (would you like|do you want|can I do|shall I) (me to |to )?(help|do|work)",

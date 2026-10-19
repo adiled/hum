@@ -20,6 +20,7 @@ use std::path::PathBuf;
 
 pub const CHI_RS_REL: &str = "thrum-core/src/chi.rs";
 pub const LIB_RS_REL: &str = "thrum-core/src/lib.rs";
+pub const WIRE_MD_REL: &str = "WIRE.md";
 pub const VIEWS_RS_REL: &str = "thrum-core/src/views.rs";
 pub const ENVELOPE_RS_REL: &str = "thrum-core/src/envelope.rs";
 pub const HELPERS_SOURCE_REF: &str = "thrum-core/src/{prims,wane}.rs";
@@ -44,6 +45,9 @@ pub fn chi_rs() -> PathBuf {
 }
 pub fn lib_rs() -> PathBuf {
     repo_root().join(LIB_RS_REL)
+}
+pub fn wire_md() -> PathBuf {
+    repo_root().join(WIRE_MD_REL)
 }
 pub fn views_rs() -> PathBuf {
     repo_root().join(VIEWS_RS_REL)

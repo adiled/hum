@@ -43,8 +43,6 @@ use tracing::{trace, warn};
 pub struct McpBridge {
     catalogue: RwLock<CatalogueSlot>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
-    /// Ships a `chi:"tool-call"` tone out via the worker's thrum write
-    /// half. Keeps the bridge transport-agnostic.
     ship_tool_call: Arc<dyn Fn(Value) + Send + Sync>,
 }
 
@@ -62,10 +60,6 @@ impl McpBridge {
         })
     }
 
-    /// Set the catalogue for an incoming session. The worker calls
-    /// this when it receives a chi:"prompt" — both the forager
-    /// catalogue (humd-merged) and the asker's nestler tools are
-    /// composed here.
     pub fn set_catalogue(
         &self,
         forager_tools: Vec<ToolDef>,
@@ -76,9 +70,6 @@ impl McpBridge {
         *self.catalogue.write() = CatalogueSlot { tools: merged };
     }
 
-    /// Resolve a pending `tools/call` with the result from a
-    /// `chi:"tool-result"` tone. Returns `true` if the callId matched
-    /// a waiting handler.
     pub fn resolve(&self, call_id: &str, tone: Value) -> bool {
         if let Some(tx) = self.pending.lock().remove(call_id) {
             let _ = tx.send(tone);
@@ -89,9 +80,6 @@ impl McpBridge {
     }
 }
 
-/// Spawn the MCP HTTP listener on an ephemeral local port. Returns
-/// the bound socket address so the worker can pass it to its
-/// compute (e.g. `claude --mcp-config <...url>`).
 pub async fn spawn_local_mcp(bridge: Arc<McpBridge>) -> Result<SocketAddr> {
     let router = Router::new()
         .route("/s/:sid", post(handle))
@@ -164,8 +152,6 @@ mod tests {
         assert_eq!(resp["result"]["content"][0]["text"], "file body");
     }
 
-    // A reqwest client would bloat the crate; this is a tiny inline
-    // TcpStream-based POST helper.
     fn reqwest_get_post() -> reqwest_lite::Client { reqwest_lite::Client::new() }
 
     mod reqwest_lite {
@@ -262,10 +248,6 @@ async fn handle(
             match tokio::time::timeout(Duration::from_secs(300), rx).await {
                 Ok(Ok(tone)) => {
                     let body = translate::tone_to_mcp_result(&tone);
-                    // Mirror the resolution to humd as a sid-tagged
-                    // chi:"chunk" so bee shims can surface the tool call
-                    // as provider-executed to the asker. Without the
-                    // mirror the asker only sees text + finish.
                     let output_text = body.get("content")
                         .and_then(Value::as_array)
                         .and_then(|a| a.first())

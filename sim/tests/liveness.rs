@@ -26,8 +26,6 @@ fn liveness(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) -> Option<L
         .map(|(_, l)| l)
 }
 
-/// Transport death propagates asynchronously, so poll for the lease to
-/// flip rather than assuming a fixed sleep is long enough.
 async fn await_dead(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while liveness(sim, observer, peer) != Some(Liveness::Dead) {

@@ -24,8 +24,6 @@ impl TheHum {
         Ok(events)
     }
 
-    /// Replay every event in this humd's log (in seq order) through
-    /// `handler`, to rebuild materialized views on cold-boot.
     pub fn replay<F: FnMut(&Event)>(&self, mut handler: F) -> Result<()> {
         let mut events = scan_all(&self.dir).context("scan log files")?;
         events.sort_by_key(|e| (e.author.clone(), e.seq));

@@ -14,8 +14,6 @@ use serde_json::Value;
 use crate::{canon, sign, Event, Hash32, Seq, TheHum};
 
 impl TheHum {
-    /// Append a wire envelope as a new authored event. Returns the
-    /// assigned seq.
     pub async fn append(&self, chi: &str, sid: Option<crate::HumId>, rid: crate::HumId, body: Value) -> Result<Seq> {
         let ts_ms = chrono::Utc::now().timestamp_millis();
         let (seq, prev_hash_hex) = {

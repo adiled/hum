@@ -40,7 +40,6 @@ impl Revocations {
         }
     }
 
-    /// Whether `hid_hex` has been withdrawn.
     pub fn is_revoked(&self, hid_hex: &str) -> bool {
         self.inner.read().contains(hid_hex)
     }

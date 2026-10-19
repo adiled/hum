@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use ensemble::HumdKey;
 
-/// Poll up to ~500ms for `cond` to hold. Avoids racy fixed waits.
 async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
     for _ in 0..100 {
         if cond() {
@@ -39,8 +38,6 @@ async fn good_signature_admits_peer() {
     .await;
     assert!(admitted, "both ensembles must learn each other's caps from verified hellos");
 
-    // The caps came from the hello, not the transport stub, so they
-    // carry the hive_tag in nests.
     let b_caps_on_a = a.ensemble.peer_caps(&b.id).expect("b in A's registry");
     assert!(
         b_caps_on_a.nests.iter().any(|n| n == "claude-repl"),
@@ -60,8 +57,6 @@ async fn tampered_signature_rejects_peer() {
     let a = sim.spawn_humd_with_identity(HumdKey::generate()).await;
     let c = sim.spawn_humd_with_identity(HumdKey::generate()).await;
 
-    // C announces a tampered hello — pubkey doesn't hash to c.id. A is
-    // strict-auth and must eject C from its registry.
     sim.wire_signed_tampered(a.id, c.id).expect("tampered wire A↔C");
 
     let a_ens = a.ensemble.clone();

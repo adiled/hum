@@ -76,8 +76,6 @@ pub fn bee_key_path(kind: &str) -> PathBuf {
     hum_paths::bee_key(kind)
 }
 
-/// Load the bee's persisted key, minting + persisting a fresh one on
-/// first boot. The returned [`Hid`] carries the given role `prefix`.
 pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
     let path = bee_key_path(kind);
     if path.exists() {

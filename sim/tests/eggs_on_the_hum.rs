@@ -22,8 +22,6 @@ async fn eggs_on_the_hum() {
     sim.wire_unauthenticated(server.id, phone.id).expect("S↔P");
     sim.wire_unauthenticated(workstation.id, phone.id).expect("W↔P");
 
-    // The forager is on the workstation, not the server, so tool-calls
-    // reach it only via cross-humd routing.
     sim.attach_mock_forager(
         workstation.id,
         "humfs",

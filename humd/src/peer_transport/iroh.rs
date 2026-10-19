@@ -143,7 +143,6 @@ mod tests {
     use ensemble::{Ensemble, HumdKey};
     use std::time::Duration;
 
-    /// Bind two iroh transports and verify both sides see each other.
     #[tokio::test]
     async fn dial_then_accept_meet_via_signed_hello() {
         let _ = tracing_subscriber::fmt()

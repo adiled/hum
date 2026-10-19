@@ -13,8 +13,6 @@ async fn overflow_inference() {
     let humd_a = ensemble::Hid::random_humd();
     let humd_b = ensemble::Hid::random_humd();
 
-    // Cap humd-A at zero BEFORE it spawns so its capacity is
-    // OverflowAlways from boot. humd-B stays unlimited.
     sim.set_capacity(humd_a, 0);
 
     let a = sim.spawn_humd(humd_a).await;
@@ -22,7 +20,6 @@ async fn overflow_inference() {
 
     sim.wire_unauthenticated(a.id, b.id).expect("wire humd-A ↔ humd-B");
 
-    // B advertises a worker so A can overflow to it.
     sim.attach_mock_worker(b.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock worker attaches to humd-B");

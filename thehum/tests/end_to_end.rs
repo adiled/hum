@@ -185,9 +185,6 @@ async fn snapshot_root_is_stable_across_runs() {
     let t1 = TheHum::open(tmp1.path(), fresh_key(), Config::default()).unwrap();
     let t2 = TheHum::open(tmp2.path(), fresh_key(), Config::default()).unwrap();
 
-    // Append the same logical sequence into both — they'll have different
-    // signers/timestamps/prev_hashes, but the state Merkle root depends
-    // only on the leaves we pass to snapshot().
     let rid = HumId::mint();
     for chi in ["hello", "prompt", "chunk", "finish"] {
         t1.append(chi, None, rid.clone(), json!({"chi": chi})).await.unwrap();
@@ -260,12 +257,10 @@ async fn tail_broadcast_skips_to_lagging_receiver() {
     let mut rx = t.tail();
     let rid = HumId::mint();
 
-    // Channel cap is 1024 — append more than that without draining.
     for i in 0..1500u32 {
         t.append("e", None, rid.clone(), json!({"i": i})).await.unwrap();
     }
 
-    // First recv should surface a Lagged error; we just need to confirm
     let mut saw_lagged = false;
     let mut received = 0usize;
     loop {

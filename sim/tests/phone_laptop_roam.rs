@@ -15,7 +15,6 @@ async fn phone_laptop_roam() {
 
     sim.wire_unauthenticated(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
-    // The laptop hosts the worker; the phone routes via `to:`.
     sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
         .expect("mock worker attaches to laptop");
@@ -36,8 +35,6 @@ async fn phone_laptop_roam() {
     )
     .expect("phone nestler accepts outbound roam prompt");
 
-    // The bridge emits chunks before the finish, all stamped with
-    // `to: <phone.id>` so they route back across the wire.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let mut saw_text_delta = false;
     let mut finish: Option<serde_json::Value> = None;

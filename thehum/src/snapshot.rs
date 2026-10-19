@@ -50,7 +50,6 @@ pub fn merkle_root(leaves: &BTreeMap<String, serde_json::Value>) -> StateRoot {
 }
 
 impl TheHum {
-    /// Emit a snapshot event for the current materialized state.
     pub async fn snapshot(&self, state_leaves: BTreeMap<String, serde_json::Value>) -> Result<StateRoot> {
         let root = merkle_root(&state_leaves);
         let height = {
@@ -71,7 +70,6 @@ impl TheHum {
         Ok(root)
     }
 
-    /// True when the snapshot cadence policy says we should snapshot.
     pub fn should_snapshot(&self, now_ms: i64) -> bool {
         let s = self.state.lock();
         let events_since = s.seq.saturating_sub(s.last_snapshot_seq);

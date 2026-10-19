@@ -78,7 +78,6 @@ pub struct Config {
     pub snapshot_every_events: u64,
     #[serde(default = "default_snapshot_seconds")]
     pub snapshot_every_seconds: u64,
-    /// Encrypt-at-rest (v0: not wired; field reserved).
     #[serde(default)]
     pub encrypt_at_rest: bool,
     #[serde(default = "default_fsync")]

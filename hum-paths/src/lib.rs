@@ -33,10 +33,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// Set unset XDG env vars to HOME-relative defaults.
-///
-/// Must be called once at startup in humd, hum CLI, and every hive worker.
-/// Panics if `HOME` is unset, which is always a configuration error.
 pub fn init() {
     let home = home();
     xdg_default("XDG_STATE_HOME", home.join(".local/state"));
@@ -48,7 +44,6 @@ pub fn init() {
 
 fn xdg_default(var: &str, default: PathBuf) {
     if std::env::var_os(var).is_none() {
-        // Safety: single-threaded startup; no other threads reading env yet.
         unsafe {
             std::env::set_var(var, default);
         }
@@ -94,8 +89,6 @@ pub fn claude_session_dir(cwd_hash: &str) -> PathBuf {
     claude_data_dir().join("projects").join(cwd_hash)
 }
 
-/// The path humd binds if nothing overrides it. Use this from the
-/// daemon; clients should call [`thrum_sock_resolved`].
 pub fn thrum_sock() -> PathBuf {
     if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
         return PathBuf::from(p);
@@ -106,8 +99,6 @@ pub fn thrum_sock() -> PathBuf {
     state_dir().join(THRUM_SOCK_BASENAME)
 }
 
-/// What clients (bees, CLI) should connect to. Honors humd's
-/// rendezvous file first, then env overrides, then the default.
 pub fn thrum_sock_resolved() -> PathBuf {
     if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
         return PathBuf::from(p);
@@ -166,8 +157,6 @@ pub struct Revocations {
 }
 
 impl Revocations {
-    /// Read the list at `path`. An absent or unparseable file yields an
-    /// empty list rather than an error.
     pub fn read_from(path: &std::path::Path) -> Self {
         match std::fs::read(path) {
             Ok(bytes) if bytes.is_empty() => Self::default(),
@@ -212,7 +201,6 @@ impl Revocations {
         self.revoked.iter().any(|h| h == hid_hex)
     }
 
-    /// Add `hid`, returning false if it was already listed.
     pub fn revoke(&mut self, hid: &str) -> bool {
         if self.contains(hid) {
             return false;
@@ -221,7 +209,6 @@ impl Revocations {
         true
     }
 
-    /// Remove `hid`, returning false if it was not listed.
     pub fn unrevoke(&mut self, hid: &str) -> bool {
         let before = self.revoked.len();
         self.revoked.retain(|h| h != hid);
@@ -298,7 +285,6 @@ pub fn src_dir() -> PathBuf {
     data_dir().join("src")
 }
 
-/// The base for HOME-anchored installs that aren't resolved through XDG.
 pub fn local_dir() -> PathBuf {
     home().join(".local")
 }
@@ -311,12 +297,10 @@ pub fn humd_bin() -> PathBuf {
     local_bin_dir().join("humd")
 }
 
-/// fnm-managed node binary, probed after PATH + /usr/local/bin/node.
 pub fn fnm_node_bin() -> PathBuf {
     local_dir().join("share/fnm/aliases/default/bin/node")
 }
 
-/// Claude CLI's data dir. Read for transcript replay; we don't write here.
 pub fn claude_data_dir() -> PathBuf {
     home().join(".claude")
 }
@@ -377,9 +361,6 @@ pub fn home() -> PathBuf {
         .expect("HOME must be set")
 }
 
-/// Expand a leading `~/` or bare `~` against `$HOME`. Leaves absolute or
-/// non-tilde paths alone. Single source of truth for user-config path
-/// expansion across the workspace.
 pub fn expand_tilde(p: &std::path::Path) -> PathBuf {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/") {

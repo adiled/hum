@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use ensemble::{Ensemble, HumdAddr, Hid, HumdKey, InMemoryEndpoint, PeerCapabilities};
 
-/// Install an `InMemoryEndpoint` pair into both ensembles.
 fn wire(ens_a: &Ensemble, a_key: &HumdKey, ens_b: &Ensemble, b_key: &HumdKey) {
     let caps = PeerCapabilities {
         proto_version: "0.7.0".into(),
@@ -58,8 +57,6 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
     wire(&ens_c, &c_key, &ens_d, &d_key);
     wire(&ens_d, &d_key, &ens_e, &e_key);
 
-    // The drainers need a beat to clear the handshake hellos, so the kad
-    // FIND_NODE traffic isn't interleaved with first-hello absorption.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let a_peers = ens_a.peers();
@@ -69,10 +66,6 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
     assert!(e_peers.contains(&d_id), "E should know D");
     assert!(!e_peers.contains(&a_id), "E should NOT directly know A");
 
-    // A asks B for E. B's routing table holds {A, C}, so B returns its K
-    // closest to E — at most those two. A's shortlist grows, but A has no
-    // PeerConnection to C yet, so the round yields no new information
-    // and the lookup stalls until the expansion below installs a link.
     let ensembles_by_id = [
         (b_id, &ens_b, &b_key),
         (c_id, &ens_c, &c_key),
@@ -86,9 +79,6 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
             .map(|(_, e, k)| (*e, *k))
     };
 
-    // Drive up to 6 expand-and-query rounds: run kad_find, and if it did
-    // not converge, install a link to the closest known peer toward E that
-    // A has not already wired.
     let mut found: Option<HumdAddr> = None;
     for _round in 0..6 {
         let outcome = tokio::time::timeout(

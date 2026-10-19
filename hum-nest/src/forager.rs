@@ -38,8 +38,6 @@ use hum_identity::load_or_mint_bee_key;
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync + 'static {
     fn tool_defs(&self) -> Vec<ToolDef>;
-    /// Execute one tool. `tone` carries the full chi:"tool-call"
-    /// envelope (sid, callId, toolName, args).
     async fn dispatch(&self, tone: Value) -> ToolResult;
 }
 
@@ -48,8 +46,6 @@ pub struct ForagerAdvert {
     pub hive: String,
     pub version: String,
     pub source: Option<String>,
-    /// Capability categories this forager owns. humd uses these to
-    /// deauthorize the same surface from other sources.
     pub provides: Vec<String>,
 }
 
@@ -79,7 +75,6 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    // The fbee_ hid survives reconnect + restart, so humd indexes by it.
     let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Fbee)
         .with_context(|| format!("load/mint fbee key for hive {}", advert.hive))?;
 

@@ -18,6 +18,13 @@
 //!   hum uninstall          remove service + binary (state preserved)
 //!   hum version            print version
 //!   hum help               print this surface
+//!
+//! A hive ref is the same dialect a bee advertises as its `source`: a
+//! bundled name, a local path, or a github tree URL. Our own repo maps
+//! to the local checkout; a foreign repo is shallow-cloned to a cache.
+//!
+//! Live peer state lives in the running daemon, which has no
+//! admin-tone RPC yet — `hum ensemble` reads the on-disk files.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,93 +41,99 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Daemon + config + service-manager state
+    #[command(about = "Daemon + config + service-manager state")]
     Status,
-    /// Tail recent daemon logs (cross-platform)
+    #[command(about = "Tail recent daemon logs (cross-platform)")]
     Logs {
-        /// Number of lines to show (default: 200)
+        #[arg(help = "Number of lines to show (default: 200)")]
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
-    /// One-shot full diagnostic dump: versions, config, env sanity, the
-    /// claude binary, every bee + service state, and recent daemon +
-    /// worker logs with warnings highlighted. Run this first when
-    /// something is wrong; paste the output into a bug report.
+    #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + worker logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
+    #[command(long_about = "One-shot full diagnostic dump: versions, config, env sanity, the
+claude binary, every bee + service state, and recent daemon +
+worker logs with warnings highlighted. Run this first when
+something is wrong; paste the output into a bug report.")]
     Doctor,
-    /// Hive kinds — the source a bee is commissioned from.
-    ///
-    ///   hum hive --list           catalogue + configured + running
-    ///   hum hive <ref> install    build the hive + register its bee
-    ///
-    /// <ref> is a bundled name, a local path, or the source URL a bee
-    /// advertises (github tree URL of a hives/<kind> dir).
+    #[command(about = "Hive kinds — the source a bee is commissioned from.")]
+    #[command(long_about = "Hive kinds — the source a bee is commissioned from.
+
+  hum hive --list           catalogue + configured + running
+  hum hive <ref> install    build the hive + register its bee
+
+<ref> is a bundled name, a local path, or the source URL a bee
+advertises (github tree URL of a hives/<kind> dir).")]
     #[command(verbatim_doc_comment)]
     Hive {
-        /// Hive ref (name | path | source URL). Omit with --list.
+        #[arg(help = "Hive ref (name | path | source URL). Omit with --list")]
         target: Option<String>,
-        /// Action on the hive: `install`.
+        #[arg(help = "Action on the hive: `install`")]
         action: Option<String>,
-        /// List the hive catalogue.
+        #[arg(help = "List the hive catalogue")]
         #[arg(long)]
         list: bool,
     },
-    /// Bees — the running instances of a hive.
-    ///
-    ///   hum bee --list                  list bees + state
-    ///   hum bee <name|id> enter         start a stopped bee
-    ///   hum bee <name|id> exit          stop (state preserved)
-    ///   hum bee <name|id> reenter       restart (graceful, same id)
+    #[command(about = "Bees — the running instances of a hive.")]
+    #[command(long_about = "Bees — the running instances of a hive.
+
+  hum bee --list                  list bees + state
+  hum bee <name|id> enter         start a stopped bee
+  hum bee <name|id> exit          stop (state preserved)
+  hum bee <name|id> reenter       restart (graceful, same id)")]
     #[command(verbatim_doc_comment)]
     Bee {
-        /// Bee name or id (hive name accepted, e.g. "claude-cli").
+        #[arg(help = "Bee name or id (hive name accepted, e.g. \"claude-cli\")")]
         target: Option<String>,
-        /// Lifecycle verb: enter | exit | reenter.
+        #[arg(help = "Lifecycle verb: enter | exit | reenter")]
         verb: Option<String>,
-        /// List bees.
+        #[arg(help = "List bees")]
         #[arg(long)]
         list: bool,
     },
-    /// List orchd-managed bees (delegates to `orchd status`).
+    #[command(about = "List orchd-managed bees (delegates to `orchd status`)")]
     Nest,
-    /// Show lifetime counters from penny.json
+    #[command(about = "Show lifetime counters from penny.json")]
     Penny,
-    /// List available recipes (recipes/*) or run one
+    #[command(about = "List available recipes (recipes/*) or run one")]
     Recipes {
-        /// Recipe name (e.g. "opencode"). Omit to list.
+        #[arg(help = "Recipe name (e.g. \"opencode\"). Omit to list")]
         name: Option<String>,
     },
-    /// Inspect the persistent chi log (thehum).
-    ///
-    ///   hum thehum status               dir, file count, seq, snapshot
-    ///   hum thehum tail [-n N]          most recent daily file (default 20)
-    ///   hum thehum range --author <hid> filter by author + seq range
-    ///                    --from <seq> [--to <seq>]
-    ///   hum thehum verify               check hash chain + signatures
-    ///   hum thehum replay               count events by chi kind
+    #[command(about = "Inspect the persistent chi log (thehum).")]
+    #[command(long_about = "Inspect the persistent chi log (thehum).
+
+  hum thehum status               dir, file count, seq, snapshot
+  hum thehum tail [-n N]          most recent daily file (default 20)
+  hum thehum range --author <hid> filter by author + seq range
+                   --from <seq> [--to <seq>]
+  hum thehum verify               check hash chain + signatures
+  hum thehum replay               count events by chi kind")]
     #[command(verbatim_doc_comment)]
     Thehum {
         #[command(subcommand)]
         verb: ThehumVerb,
     },
-    /// Inspect or edit the peer-mesh state.
-    ///
-    ///   hum ensemble                         show our identity + reach + peers
-    ///   hum ensemble peer add <humd_id>      append an entry to peers.json
-    ///       --hint <tcp:host:port|iroh:hex>  (repeatable)
-    ///       --alias <name>                   optional human-friendly name
-    ///   hum ensemble peer rm <humd_id|alias> drop matching entries
+    #[command(about = "Inspect or edit the peer-mesh state.")]
+    #[command(long_about = "Inspect or edit the peer-mesh state.
+
+  hum ensemble                         show our identity + reach + peers
+  hum ensemble peer add <humd_id>      append an entry to peers.json
+      --hint <tcp:host:port|iroh:hex>  (repeatable)
+      --alias <name>                   optional human-friendly name
+  hum ensemble peer rm <humd_id|alias> drop matching entries")]
     #[command(verbatim_doc_comment)]
     Ensemble {
         #[command(subcommand)]
         verb: Option<EnsembleVerb>,
     },
-    /// Stop the service and remove the humd binary. State preserved.
+    #[command(about = "Stop the service and remove the humd binary. State preserved")]
     Uninstall,
-    /// Check for a newer release and self-update. Compares the local
-    /// version against GitHub's latest release; if newer, re-runs the
-    /// canonical install (which bounces the service atomically).
+    #[command(about = "Check for a newer release and self-update. Compares the local version against GitHub's latest release; if newer, re-runs the canonical install (which bounces the service atomically)")]
+    #[command(long_about = "Check for a newer release and self-update. Compares the local
+version against GitHub's latest release; if newer, re-runs the
+canonical install (which bounces the service atomically).")]
     Update {
-        /// Update even when versions match (force reinstall).
+        #[arg(help = "Update even when versions match (force reinstall)")]
         #[arg(long)]
         force: bool,
     },
@@ -128,7 +141,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum EnsembleVerb {
-    /// Manage entries in peers.json — bootstrap peers humd dials on boot.
+    #[command(about = "Manage entries in peers.json — bootstrap peers humd dials on boot")]
     Peer {
         #[command(subcommand)]
         action: PeerAction,
@@ -137,50 +150,51 @@ enum EnsembleVerb {
 
 #[derive(Subcommand)]
 enum PeerAction {
-    /// Append a peer to peers.json. Repeated `--hint` flags accumulate.
-    /// Existing entries with the same humd_id are replaced (idempotent).
+    #[command(about = "Append a peer to peers.json. Repeated `--hint` flags accumulate. Existing entries with the same humd_id are replaced (idempotent)")]
+    #[command(long_about = "Append a peer to peers.json. Repeated `--hint` flags accumulate.
+Existing entries with the same humd_id are replaced (idempotent).")]
     Add {
-        /// Peer humd_id (hex, with or without `humd_` prefix).
+        #[arg(help = "Peer humd_id (hex, with or without `humd_` prefix)")]
         humd_id: String,
-        /// Dial hint, e.g. `tcp:host:port` or `iroh:<64-hex>`. Repeat for multiple.
+        #[arg(help = "Dial hint, e.g. `tcp:host:port` or `iroh:<64-hex>`. Repeat for multiple")]
         #[arg(long)]
         hint: Vec<String>,
-        /// Optional alias for `hum://<alias>/path` URI resolution.
+        #[arg(help = "Optional alias for `hum://<alias>/path` URI resolution")]
         #[arg(long)]
         alias: Option<String>,
     },
-    /// Remove all entries matching `target` (by humd_id or alias).
+    #[command(about = "Remove all entries matching `target` (by humd_id or alias)")]
     Rm {
-        /// humd_id (full hex, with/without prefix) or alias.
+        #[arg(help = "humd_id (full hex, with/without prefix) or alias")]
         target: String,
     },
 }
 
 #[derive(Subcommand)]
 enum ThehumVerb {
-    /// Print dir, file count, total seq, latest snapshot height + ts.
+    #[command(about = "Print dir, file count, total seq, latest snapshot height + ts")]
     Status,
-    /// Tail the most recent daily file as compact JSON, one event per line.
+    #[command(about = "Tail the most recent daily file as compact JSON, one event per line")]
     Tail {
-        /// Number of trailing events to show.
+        #[arg(help = "Number of trailing events to show")]
         #[arg(short = 'n', long, default_value_t = 20)]
         n: usize,
     },
-    /// Filter events by author hid and seq range.
+    #[command(about = "Filter events by author hid and seq range")]
     Range {
-        /// Author humd hid (hex).
+        #[arg(help = "Author humd hid (hex)")]
         #[arg(long)]
         author: String,
-        /// Inclusive lower bound on seq.
+        #[arg(help = "Inclusive lower bound on seq")]
         #[arg(long)]
         from: u64,
-        /// Inclusive upper bound on seq.
+        #[arg(help = "Inclusive upper bound on seq")]
         #[arg(long)]
         to: Option<u64>,
     },
-    /// Verify hash chain + signatures across the whole log.
+    #[command(about = "Verify hash chain + signatures across the whole log")]
     Verify,
-    /// Replay the log, counting events by chi kind.
+    #[command(about = "Replay the log, counting events by chi kind")]
     Replay,
 }
 
@@ -232,8 +246,6 @@ fn update(force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort latest-release fetch. Returns None on any network or
-/// parse failure so callers can degrade gracefully.
 fn latest_release_tag() -> Option<String> {
     let out = Command::new("curl")
         .args([
@@ -245,8 +257,6 @@ fn latest_release_tag() -> Option<String> {
         .ok()?;
     if !out.status.success() { return None; }
     let body = String::from_utf8(out.stdout).ok()?;
-    // Tiny grep for one field, to avoid pulling a JSON parser into the
-    // CLI.
     let needle = "\"tag_name\":";
     let start = body.find(needle)? + needle.len();
     let rest = &body[start..];
@@ -337,8 +347,6 @@ fn ensemble(verb: Option<EnsembleVerb>) -> Result<()> {
     }
 }
 
-/// Our identity + reach hints + configured peers. Live peer state lives
-/// in the running daemon, which has no admin-tone RPC yet.
 fn ensemble_show() -> Result<()> {
     match humd::read_key()? {
         Some(key) => println!("me:      {}", key.hid()),
@@ -388,8 +396,6 @@ fn ensemble_show() -> Result<()> {
     Ok(())
 }
 
-/// Read peers.json into `(file, peers_array)`. Returns an empty file
-/// shape if peers.json is missing.
 fn peers_load() -> Result<(serde_json::Map<String, serde_json::Value>, Vec<serde_json::Value>)> {
     let path = hum_paths::peers_json();
     if !path.exists() {
@@ -406,8 +412,6 @@ fn peers_load() -> Result<(serde_json::Map<String, serde_json::Value>, Vec<serde
     Ok((obj, peers))
 }
 
-/// Atomic write — tmp + rename, mkdir -p, preserves unknown top-level
-/// keys the caller carried over.
 fn peers_save(
     mut other_fields: serde_json::Map<String, serde_json::Value>,
     peers: Vec<serde_json::Value>,
@@ -425,8 +429,6 @@ fn peers_save(
 }
 
 fn normalize_humd_id(s: &str) -> String {
-    // humd's loader accepts both shapes, but storing one canonical form
-    // keeps the file readable.
     s.strip_prefix("humd_").unwrap_or(s).to_string()
 }
 
@@ -532,9 +534,6 @@ fn doctor() -> Result<()> {
     println!("  peers.json: {} {}", peers_json.display(), yn(peers_json.exists()));
     println!("  identity:   {} {}", humd_key.display(), yn(humd_key.exists()));
 
-    // The hum.json lint catches config drift that silently breaks
-    // routing — the keys humd ignores, stale section names, a default
-    // pointing nowhere. These parse fine but do nothing.
     println!("\n[hum.json schema validation]");
     match std::fs::read_to_string(&hum_json) {
         Err(_) => println!("  (no hum.json — humd runs on defaults)"),
@@ -547,9 +546,6 @@ fn doctor() -> Result<()> {
         },
     }
 
-    // Bee identities — the persisted keys that back hid dedup. A
-    // missing or wrong-size key means a bee can't keep a stable hid
-    // across reconnects, and manifests accumulate.
     let bees_dir = hum_paths::bees_dir();
     println!("\n[bee identities]  ({})", bees_dir.display());
     match std::fs::read_dir(&bees_dir) {
@@ -603,8 +599,6 @@ fn doctor() -> Result<()> {
     println!("\n[bees]");
     let _ = bee_list_full(&orch_catalog());
 
-    // Recent logs with warnings/errors surfaced. This is where the real
-    // failures show.
     println!("\n[recent humd + worker logs — warnings/errors]");
     print_recent_logs("hum", 60);
     print_recent_logs("hum-claude-cli-worker", 60);
@@ -700,10 +694,6 @@ fn hive_list() -> Result<()> {
     Ok(())
 }
 
-/// Resolve a hive ref to its `install` script, then run it. The ref is
-/// the same dialect a bee advertises as its `source`: a bundled name, a
-/// local path, or a github tree URL. Our own repo maps to the local
-/// checkout; a foreign repo is shallow-cloned to a cache.
 fn hive_install(reference: &str) -> Result<()> {
     let dir = resolve_hive_dir(reference)?;
     let orchfile = dir.join(hum_paths::ORCHFILE_BASENAME);
@@ -984,8 +974,6 @@ fn recipes(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Find the repo root (running from a clone) or the rsynced source dir.
-/// Returns whatever exists.
 fn repo_root_or_install_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         let mut p = exe.clone();
@@ -1006,10 +994,6 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 
 fn orchd_cmd() -> Command {
-    // Prefer the absolute path the installer wrote, so a missing
-    // ~/.local/bin on $PATH doesn't break the orchd shell-outs. Fall
-    // back to bare "orchd" so users who installed it elsewhere still
-    // work.
     let abs = hum_paths::hum_bin("orchd");
     let mut c = if abs.exists() { Command::new(&abs) } else { Command::new("orchd") };
     c.arg("--orchfile").arg(hum_paths::orchfile())
@@ -1035,8 +1019,6 @@ fn nest() -> Result<()> {
     Ok(())
 }
 
-/// Route enter/exit/reenter through orchd. Returns Ok(true) if orchd
-/// handled the verb, Ok(false) if the kind is not in its catalog.
 fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
     if !orch_catalog().iter().any(|k| k == kind) {
         return Ok(false);
@@ -1078,7 +1060,6 @@ fn thehum_cmd(verb: ThehumVerb) -> Result<()> {
     }
 }
 
-/// Ndjson files in the thehum dir, sorted lexicographically.
 fn thehum_ndjson_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("readdir {}", dir.display()))?

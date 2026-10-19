@@ -19,9 +19,6 @@ use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde_json::json;
 
-/// Build a fresh self-signed cert with rcgen. Returns the cert + key as
-/// the rustls types the listener wants, plus the SHA-256 fingerprint
-/// the dialer pins.
 fn fresh_self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>, [u8; 32]) {
     let subject_alt_names = vec!["localhost".to_string()];
     let ck = generate_simple_self_signed(subject_alt_names).expect("rcgen self-signed");
@@ -32,11 +29,7 @@ fn fresh_self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>, [u8;
     (cert_der, key_der, fp)
 }
 
-/// Install the default ring-based crypto provider once per test process.
-/// rustls 0.23 refuses to build a `ClientConfig` / `ServerConfig` until
-/// a provider is selected.
 fn install_crypto_provider() {
-    // slot is filled, which we swallow.
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
@@ -99,10 +92,6 @@ async fn tls_connect_rejects_wrong_fingerprint() {
         .expect("bind tls listener");
     let local = listener.local_addr().expect("local_addr");
 
-    // The handshake may fail server-side when the client aborts, or the
-    // client-side connect may fail first. The assertion is that the
-    // client sees a handshake error, since the pinned verifier rejects
-    // the cert.
     let _accept_task = tokio::spawn(async move {
         let _ = listener.accept().await;
     });

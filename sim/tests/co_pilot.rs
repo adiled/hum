@@ -10,7 +10,6 @@ struct TapTranscript {
     finish: Option<serde_json::Value>,
 }
 
-/// Drain `nestler_recv` until a finish lands or the deadline elapses.
 async fn drain_until_finish(
     sim: &sim::Sim,
     humd: ensemble::Hid,
@@ -53,10 +52,6 @@ async fn co_pilot_fanout() {
     sim.attach_observer(phone.id, laptop.id, "hum-X")
         .expect("phone attaches as hearOnly observer");
 
-    // The attach tone needs a beat to traverse the ensemble pump.
-    // Without it the prompt can finish faster than the observer
-    // registration lands, and the fan-out roster is empty when
-    // MockWorkerBee emits its delta.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     sim.nestler_send(

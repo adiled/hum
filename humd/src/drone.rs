@@ -162,7 +162,6 @@ pub struct BeatLoad {
 }
 
 pub trait Evaluator: Send + Sync {
-    /// Probability (0.0..=1.0) that `text` represents real context loss.
     fn evaluate(&self, text: &str, state: &DroneState) -> f32;
 }
 
@@ -334,7 +333,6 @@ impl Drone {
         state.rhythm_ms = state.health.rhythm_ms();
     }
 
-    /// Snapshot-and-judge. Returns the unified verdict the host steers on.
     pub fn assess(&self, sigil: &str) -> Assessment {
         let mut states = self.inner.states.write();
         let state = states

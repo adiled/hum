@@ -57,7 +57,6 @@ impl HumId {
         Self(encode(&bytes))
     }
 
-    /// Deterministic projection of a foreign string into HumId space.
     pub fn from_foreign(s: &str) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(b"hum-foreign-id:");
@@ -78,8 +77,6 @@ impl HumId {
         timestamp_of(&self.0)
     }
 
-    /// Deterministic UUIDv5 projection, for boundaries that require
-    /// UUID shape.
     pub fn to_uuid_v5(&self, namespace: Uuid) -> Uuid {
         Uuid::new_v5(&namespace, self.0.as_bytes())
     }
@@ -133,19 +130,10 @@ impl<'de> Deserialize<'de> for HumId {
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ID_LEN: usize = 52;
 
-/// The 48-bit timestamp occupies the top 48 bits of the 260-bit value,
-/// so it fills the first ⌈48 / 5⌉ = 10 characters. The tenth character
-/// carries two bits of byte 6, which is random.
 const TIMESTAMP_CHARS: usize = 10;
 
-/// The tenth character's bottom two bits belong to the random portion,
-/// so they are shifted back off.
 const TRAILING_PAD_BITS: u32 = 2;
 
-/// 256 input bits become 260 output bits: the buffer is treated as a
-/// big-endian integer shifted left by 4, and 5-bit characters are
-/// peeled from the top of that. The payload therefore starts
-/// [`PAYLOAD_OFFSET_BITS`] into the shifted buffer.
 const PAYLOAD_OFFSET_BITS: usize = 4;
 
 pub fn mint_id() -> String {

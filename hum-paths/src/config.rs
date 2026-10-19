@@ -27,8 +27,6 @@ pub struct HumdSection {
     pub drift_retention_days: u32,
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
-    /// host:port the ensemble TCP transport binds on. None / empty
-    /// means dial-only. iroh is unaffected.
     #[serde(default, rename = "tcpListen")]
     pub tcp_listen: Option<String>,
 }
@@ -78,8 +76,6 @@ impl Default for FsSection {
 }
 
 impl FsSection {
-    /// Resolve a candidate path against the fs policy. Returns the
-    /// effective mode of its enclosing root, or why it is denied.
     pub fn check(&self, candidate: &Path) -> Result<FsMode, FsDenial> {
         let abs = canonical_or_self(candidate);
         for d in &self.denied {
@@ -195,8 +191,6 @@ pub fn load() -> HumConfig {
 
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
-/// Validate raw hum.json text against [`SCHEMA`]. Returns every
-/// violation verbatim (the schema's own messages), or `Ok` if valid.
 pub fn validate(raw: &str) -> Result<(), Vec<String>> {
     let instance: serde_json::Value = serde_json::from_str(raw)
         .map_err(|e| vec![format!("invalid JSON: {e}")])?;
@@ -214,9 +208,6 @@ pub fn validate(raw: &str) -> Result<(), Vec<String>> {
     if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
 
-/// Gate daemon startup on a schema-valid config. A daemon must not boot
-/// on an invalid config; we surface the violations verbatim and exit
-/// non-zero. A missing file is fine (defaults apply).
 pub fn validate_or_exit() {
     let path = config_path();
     let raw = match std::fs::read_to_string(&path) {

@@ -99,9 +99,6 @@ impl Thrum {
         }
     }
 
-    /// Send to every client claiming the given sid's sigil. Falls back to
-    /// every unregistered client (no sigils claimed) if nobody owns it.
-    /// `nest` selects the nest-kind namespace to compute the sigil under.
     pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
         let sigil = thrum_core::sigil(sid, nest);
         if let Some(obj) = tone.as_object_mut() {
@@ -184,8 +181,6 @@ impl Thrum {
         self.inner.clients.write().remove(client_id);
     }
 
-    /// Inject a tone as if it arrived from `client_id`. Bypasses the
-    /// NDJSON socket and goes straight to the installed sink.
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
         let sink = self.inner.sink.read().clone();
         if let Some(sink) = sink {
@@ -206,7 +201,6 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
     serve_with_hook(thrum, path, |_| {}).await
 }
 
-/// Like [`serve`], but `on_bound` fires after `bind()` succeeds.
 pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
 where
     F: FnOnce(&Path) + Send + 'static,

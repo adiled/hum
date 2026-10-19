@@ -37,8 +37,6 @@ impl Reach {
         )
     }
 
-    /// Non-blocking send. Errors if the queue is full or the receiver is
-    /// gone — caller decides whether to drop or log.
     pub fn send(&self, tone: Value) -> Result<(), mpsc::error::TrySendError<Value>> {
         self.tx.try_send(tone)
     }

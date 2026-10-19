@@ -34,6 +34,28 @@
 //! exits after each turn. The warm cell is gone by the next prompt, so
 //! continuity comes from the sid-derived session UUID that claude-cli
 //! computes from the sid.
+//!
+//! A `result` event flagged `is_error` as the *first* event means a
+//! pre-flight failure — a bad or absent session on `--resume`, an id
+//! clash on `--session-id` — rather than a mid-turn error, which arrives
+//! only after content. On the first turn `--resume` fails fast that
+//! way, so the worker retries with `fresh: true`.
+//!
+//! claude reports failure inside that result event, not on stderr:
+//! `is_error:true` (or an `error_*` subtype) with the human-readable
+//! reason in `result`. Surfacing it is the difference between a visible
+//! auth, model, or credit error and a silent zero-token finish that
+//! looks like the worker is dead.
+//!
+//! The tool catalogue is MCP: the standard field is `inputSchema`, and
+//! the legacy `parameters` spelling is tolerated on the wire. An entry
+//! with no name or no usable schema is dropped, because claude's mcp
+//! client rejects the entire tools/list if any entry has
+//! `inputSchema: null` — one bad apple kills all tools for the session.
+//!
+//! A tool-result whose callId is not pending in the worker MCP bridge
+//! came from a call the model made outside our catalogue, so it is
+//! forwarded to claude over stdin rather than dropped.
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -229,11 +251,6 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "tool-result" => {
                 let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
-                // First try the worker MCP bridge — humfs_* tools
-                // route there. If callId isn't pending in the bridge,
-                // it's a nestler-native tool-result for a call the
-                // model made outside our MCP catalogue; forward it via
-                // stdin so claude consumes it.
                 let resolved_by_bridge = call_id.as_deref()
                     .map(|cid| bridge.resolve(cid, tone.clone()))
                     .unwrap_or(false);
@@ -274,12 +291,6 @@ impl Drop for CellBundle {
     fn drop(&mut self) { self.cancel.cancel(); }
 }
 
-/// Build a `ToolDef` from a wire tone entry. MCP standard field is
-/// `inputSchema`; tolerate legacy `parameters` (some hum-side
-/// shims still emit it). Drop entries with no name OR no usable
-/// schema — claude's mcp client rejects the entire tools/list if any
-/// entry has `inputSchema: null`, so one bad apple kills all tools
-/// for the session.
 fn parse_tool_def(v: &Value) -> Option<ToolDef> {
     let name = v.get("name").and_then(Value::as_str)?.to_string();
     let description = v.get("description").and_then(Value::as_str).unwrap_or("").to_string();
@@ -296,10 +307,6 @@ fn parse_tool_def(v: &Value) -> Option<ToolDef> {
 const IDLE_TIMEOUT_MS: u64 = 300_000;
 const MAX_CELLS: usize = 8;
 
-/// True if `v` is claude's terminal `result` event flagged `is_error`.
-/// As the *first* event it means a pre-flight failure (bad/absent
-/// session on `--resume`, id clash on `--session-id`) rather than a
-/// mid-turn error, which arrives only after content.
 fn is_preflight_error(v: &Value) -> bool {
     let m = if v.get("type").and_then(Value::as_str) == Some("stream_event") {
         v.get("event").unwrap_or(v)
@@ -308,10 +315,6 @@ fn is_preflight_error(v: &Value) -> bool {
         && m.get("is_error").and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// Spawn one attempt: launch the cell, send the prompt, and wait for the
-/// first stream-json event. Returns the cell + that event if it's live;
-/// returns None (after killing the cell) if claude fails pre-flight
-/// (first event is an `is_error` result) or produces nothing.
 async fn attempt_spawn<W: WorkerBee + 'static>(
     worker: &Arc<W>,
     spec: Egg,
@@ -360,8 +363,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
     let explicit_resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
 
-    // Reuse the warm cell for the sid. Per-turn state lives in
-    // finish_sent + tool_use_blocks and must reset before re-entry.
     {
         let mut g = cells.lock().await;
         if let Some(bundle) = g.get(&sid) {
@@ -399,9 +400,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
 
-    // Resume-first. On the first turn `--resume` fails fast (a
-    // `result` is_error with no output) and we retry with
-    // `fresh: true` → --session-id.
     let (cell, first_event) = {
         let mut s1 = base.clone();
         s1.resume_id = explicit_resume.clone();
@@ -445,8 +443,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
         trace!(sid = %sid_for_loop, "worker.dispatch.exit");
     });
 
-    // Idle reaper — kills the cell if last_touched stays below the
-    // IDLE_TIMEOUT_MS threshold.
     let cells_for_idle = cells.clone();
     let sid_for_idle = sid.clone();
     let last_for_idle = last_touched.clone();
@@ -475,8 +471,6 @@ async fn handle_prompt<W: WorkerBee + 'static>(
 
     trace!(sid = %sid, "worker.cell.spawned");
 
-    // On child exit: drain dispatch, emit a finish if the listener
-    // never saw `result`, and drop the cells entry.
     let cells_for_cleanup = cells.clone();
     let write_for_cleanup = write_half.clone();
     let sid_for_cleanup = sid.clone();
@@ -507,23 +501,12 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// Translates raw claude-stream-json events into chi:"chunk" tones.
-/// Lives in the helper so each worker crate doesn't reinvent it.
 struct WireListener {
     sid: String,
     hive: String,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    /// True once `result` was forwarded as chi:"finish" for the
-    /// current turn. handle_prompt resets it per-turn; the cell's
-    /// cleanup checks it to avoid a redundant crash-path finish.
     finish_sent: Arc<AtomicBool>,
-    /// Block indices the model emitted as `tool_use`. tool_input_* /
-    /// content_block_stop for these indices are suppressed since
-    /// the worker MCP bridge resolves the call inline and the
-    /// canonical surface is chi:"chunk" chunkType="tool_executed".
     tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
-    /// Updated on every stream-json event. The idle reaper compares
-    /// against this to distinguish a quiet cell from a stalled one.
     last_touched: Arc<AtomicU64>,
 }
 
@@ -535,9 +518,6 @@ impl WireListener {
     async fn forward_raw(&self, value: Value) {
         self.last_touched.store(now_ms(), Ordering::SeqCst);
 
-        // An event that is already a thrum chi event (has a "chi"
-        // field) passes through directly, so a worker can emit thrum
-        // events without going through claude's stream-json.
         if value.get("chi").and_then(Value::as_str).is_some() {
             let mut v = value.clone();
             if let Some(obj) = v.as_object_mut() {
@@ -547,9 +527,6 @@ impl WireListener {
             return;
         }
 
-        // The relevant chunk events arrive wrapped as
-        // `{"type":"stream_event","event":{...inner...}}`; unwrap to
-        // inspect the inner type.
         let mut msg = value;
         if msg.get("type").and_then(Value::as_str) == Some("stream_event") {
             if let Some(inner) = msg.get("event").cloned() {
@@ -616,12 +593,6 @@ impl WireListener {
             "result" => {
                 let subtype = msg.get("subtype").and_then(Value::as_str).unwrap_or("success");
                 let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
-                // claude signals failure inside the result event, not on
-                // stderr: `is_error:true` (or an `error_*` subtype) with
-                // the human-readable reason in `result`. Surfacing it is
-                // the difference between a visible auth/model/credit
-                // error and a silent zero-token finish that looks like
-                // the worker is dead.
                 let is_error = msg.get("is_error").and_then(Value::as_bool).unwrap_or(false)
                     || subtype.starts_with("error");
                 if is_error {
@@ -655,8 +626,6 @@ impl WireListener {
                 self.finish_sent.store(true, Ordering::SeqCst);
             }
             _ => {
-                // Structural / unrecognized — drop. Richer chi values
-                // can plug in here when workers grow them.
                 let _ = &self.hive;
             }
         }

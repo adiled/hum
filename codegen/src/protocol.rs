@@ -146,10 +146,8 @@ fn repr_of(ty: &Type) -> Repr {
     }
 }
 
-/// `Vec<T>` — the element type is the first generic argument.
 const VEC_VALUE_ARG: usize = 0;
 
-/// `BTreeMap<K, V>` — the value type is the second generic argument.
 const MAP_VALUE_ARG: usize = 1;
 
 fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
@@ -160,8 +158,6 @@ fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
     None
 }
 
-/// Verify every Chi variant has a matching `{Pascal}Body` view, and every
-/// body view maps back to a real chi.
 pub fn check_coverage(chis: &[crate::Variant], proto: &ProtocolSpec) -> Result<()> {
     for v in chis {
         let expect = format!("{}Body", v.pascal);
@@ -192,11 +188,6 @@ pub fn check_coverage(chis: &[crate::Variant], proto: &ProtocolSpec) -> Result<(
     Ok(())
 }
 
-/// First `#[serde(rename = "...")]` value on the field, if any.
-///
-/// Parsed by regex over the raw attribute tokens rather than
-/// `parse_nested_meta`: that API's handling of unconsumed `key = value`
-/// pairs changed across syn 2.x patch releases.
 fn serde_rename(f: &Field) -> Option<String> {
     let re = regex::Regex::new(r#"rename\s*=\s*"([^"]*)""#).expect("static regex");
     for attr in &f.attrs {
@@ -312,8 +303,6 @@ pub fn emit_protocol_py(spec: &ProtocolSpec, output: &Path) -> Result<()> {
             s.push_str("    pass\n\n");
             continue;
         }
-        // Dataclasses require defaulted (optional) fields after required
-        // ones — Rust order is wire order and mixes them freely.
         let ordered: Vec<&FieldSpec> = t
             .fields
             .iter()
@@ -395,8 +384,6 @@ fn py_repr(r: &Repr, optional: bool) -> String {
     }
 }
 
-/// Rust snake field name → valid Python identifier. `from` collides with
-/// the `from` keyword.
 fn py_field_name(rust: &str) -> String {
     match rust {
         "from" => "from_".to_string(),
@@ -404,8 +391,6 @@ fn py_field_name(rust: &str) -> String {
     }
 }
 
-/// Optional-list/map annotations still need `Optional` even though `None`
-/// is a legal value.
 fn map_opt(optional: bool, inner: &str) -> String {
     if optional {
         format!("Optional[{inner}]")

@@ -194,8 +194,7 @@ fn golden_wire_locked() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden.ndjson");
     let want = golden();
     if !fixture.exists() {
-        // First run: materialize the fixture, then pass.
-        std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
         let mut s = String::new();
         for t in &want {
             s.push_str(&serde_json::to_string(t).unwrap());
@@ -220,9 +219,6 @@ fn golden_wire_locked() {
     }
 }
 
-/// Every tone passes through the wire serde round-trip: serialize to a
-/// flat frame, parse back, decode into its typed view, and confirm the
-/// envelope fields survived.
 #[test]
 fn golden_round_trips_through_views() {
     for (i, wire) in golden().iter().enumerate() {
@@ -234,9 +230,7 @@ fn golden_round_trips_through_views() {
 
 fn check_round_trip(tone: &Tone) {
     use thrum_core::*;
-    // Re-serialize body map from the parsed tone and decode into the view.
     let body = &tone.body;
-    // spot-check a representative set of shapes with the envelope merged
     match tone.chi() {
         Chi::Chunk => {
             let v: ChunkBody =
@@ -271,6 +265,5 @@ fn check_round_trip(tone: &Tone) {
         }
         _ => {}
     }
-    // Envelope fields came back intact.
     assert!(tone.envelope.sent_at.is_some());
 }

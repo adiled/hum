@@ -8,7 +8,6 @@ use chrono::{Duration, NaiveDate, Utc};
 use crate::{RetentionMode, TheHum};
 
 impl TheHum {
-    /// Apply retention policy. Idempotent. Safe to call repeatedly.
     pub fn enforce_retention(&self) -> Result<RetentionReport> {
         match self.cfg.mode {
             RetentionMode::Archive => Ok(RetentionReport::default()),

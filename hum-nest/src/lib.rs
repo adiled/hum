@@ -171,10 +171,6 @@ pub trait WorkerBee: Send + Sync {
     }
     async fn raise(&self, egg: Egg) -> Result<Cell>;
 
-    /// Curate the stored transcript for a sid — trim what can go without
-    /// losing the thread. Answers `chi:"curate"`.
-    ///
-    /// Operates on what the bee has persisted, not on a live cell.
     async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {
         Ok(CurateReport::default())
     }
@@ -192,11 +188,6 @@ pub fn encode_prompt(text: &str) -> String {
     encode_prompt_with_pollen(text, &[])
 }
 
-/// Encode a user prompt with non-text attachments alongside. Image
-/// attachments translate to a base64 / url image block; other kinds
-/// pass the media_type through so receiving workers can opt-in as their
-/// model surface grows. Unknown kinds without a known encoding fall
-/// back to a text annotation.
 pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
     let mut content: Vec<Value> = vec![serde_json::json!({"type": "text", "text": text})];
     for grain in pollen {
@@ -215,8 +206,6 @@ pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
                 }
             }
             other => {
-                // Unknown attachment kind — surface its presence in
-                // text rather than silently dropping it.
                 let where_clause = grain.url.as_deref()
                     .map(|u| format!(" ({u})"))
                     .unwrap_or_default();

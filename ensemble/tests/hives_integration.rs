@@ -43,7 +43,6 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     let mut discover = ens_c.hive_discover("market-maker");
     let mut raw = ens_c.hive_announcements();
 
-    // Wait for handshakes + topic subscription before A advertises.
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     ens_a
@@ -70,8 +69,6 @@ async fn advertise_percolates_and_discover_filters_by_name() {
 
     ens_a.hive_retract("market-maker").await;
     let env = timeout(Duration::from_millis(300), async {
-        // The two advertises may arrive before the retract; drain until
-        // we hit Retract.
         loop {
             let v = raw.recv().await.expect("raw channel closed");
             if matches!(v, HiveAnnounce::Retract { .. }) {

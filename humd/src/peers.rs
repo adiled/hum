@@ -24,8 +24,6 @@ use tracing::{trace, warn};
 pub struct PeerConfig {
     pub humd_id: Hid,
     pub hints: Vec<String>,
-    /// Human-friendly alias for the peer, used by `hum://<alias>/<path>`
-    /// URI resolution.
     pub alias: Option<String>,
 }
 
@@ -49,11 +47,6 @@ pub fn peers_path() -> PathBuf {
     hum_paths::peers_json()
 }
 
-/// Best-effort load of the peers file.
-///
-/// Missing file → empty vec. Parse errors on the outer object → empty vec
-/// (warn). Malformed rows inside `peers[]` → skipped (warn), good rows
-/// kept.
 pub(crate) fn load() -> Vec<PeerConfig> {
     load_from(&peers_path())
 }

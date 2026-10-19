@@ -36,17 +36,11 @@ async fn tcp_endpoint_routes_tone_across_wire() {
     let ensemble_a = Ensemble::with_strict_auth(a_id, false);
     let ensemble_b = Ensemble::with_strict_auth(b_id, false);
 
-    // A's outbound endpoint already knows it is talking to B, so
-    // `route()` finds it. The inbound endpoint carries a placeholder id
-    // until the drainer parses A's hello; B never routes outbound in
-    // this test, only subscribes, so the placeholder is fine there.
     ensemble_a.install(a_endpoint.clone(), PeerCapabilities::default(), &a_key);
     ensemble_b.install(b_endpoint.clone(), PeerCapabilities::default(), &b_key);
 
     let mut sub_b = ensemble_b.subscribe();
 
-    // The first tone over the wire is A's hello (absorbed by B's
-    // drainer), the second is this ping (fans out to subscribers).
     let ping = json!({"chi": "ping", "rid": "tcp-1", "to": b_id.to_hex(), "from": a_id.to_hex()});
     ensemble_a.route(ping).await.expect("route ping");
 
