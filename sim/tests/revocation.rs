@@ -23,7 +23,8 @@ fn now_ms() -> i64 {
 }
 
 fn hello_with_identity(bee: &BeeKey) -> serde_json::Value {
-    let (pubkey, signed_at, signature) = bee.sign_socket_hello(now_ms());
+    let sig = bee.sign_socket_hello(now_ms());
+    let (pubkey, signed_at, signature) = (sig.pubkey, sig.signed_at, sig.signature);
     serde_json::json!({
         "chi": "hello",
         "bee": ["worker"],

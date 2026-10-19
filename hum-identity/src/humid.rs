@@ -17,23 +17,19 @@
 //! - 208 bits of cryptographically secure randomness
 //! - alphabet omits I, L, O, U (Crockford); uppercase only
 
-use rand::RngCore;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fmt;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// UUID namespaces for deterministic foreign-format projections.
-/// Constants — don't change them, ever; existing IDs depend on these bytes.
-/// `NS_CLAUDE_SESSION` preserves the historical `HUM_SESSION_NS` value so
-/// existing claude transcripts stay reachable after the canonical rewrite.
 pub const NS_CLAUDE_SESSION: Uuid = Uuid::from_bytes([
     0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
 ]);
 
-/// Canonical hum identifier. Newtype around a validated 52-char string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HumId(String);
 
@@ -53,18 +49,15 @@ impl fmt::Display for IdError {
 impl std::error::Error for IdError {}
 
 impl HumId {
-    /// Fresh id, ts-prefixed. Use for sessions, requests, calls.
     pub fn mint() -> Self {
         Self(mint_id())
     }
 
-    /// Encode a 32-byte hash. Use for identity-derived ids.
     pub fn from_hash(bytes: [u8; 32]) -> Self {
         Self(encode(&bytes))
     }
 
     /// Deterministic projection of a foreign string into HumId space.
-    /// Same input → same output, forever. No bridge map needed.
     pub fn from_foreign(s: &str) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(b"hum-foreign-id:");
@@ -85,8 +78,8 @@ impl HumId {
         timestamp_of(&self.0)
     }
 
-    /// Deterministic UUIDv5 projection — used at boundaries that require
-    /// UUID shape (claude `--session-id`, etc).
+    /// Deterministic UUIDv5 projection, for boundaries that require
+    /// UUID shape.
     pub fn to_uuid_v5(&self, namespace: Uuid) -> Uuid {
         Uuid::new_v5(&namespace, self.0.as_bytes())
     }
@@ -140,7 +133,21 @@ impl<'de> Deserialize<'de> for HumId {
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ID_LEN: usize = 52;
 
-/// Mint a fresh ID: 48-bit BE ms timestamp + 208 random bits, Crockford-base32 encoded.
+/// The 48-bit timestamp occupies the top 48 bits of the 260-bit value,
+/// so it fills the first ⌈48 / 5⌉ = 10 characters. The tenth character
+/// carries two bits of byte 6, which is random.
+const TIMESTAMP_CHARS: usize = 10;
+
+/// The tenth character's bottom two bits belong to the random portion,
+/// so they are shifted back off.
+const TRAILING_PAD_BITS: u32 = 2;
+
+/// 256 input bits become 260 output bits: the buffer is treated as a
+/// big-endian integer shifted left by 4, and 5-bit characters are
+/// peeled from the top of that. The payload therefore starts
+/// [`PAYLOAD_OFFSET_BITS`] into the shifted buffer.
+const PAYLOAD_OFFSET_BITS: usize = 4;
+
 pub fn mint_id() -> String {
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -148,7 +155,6 @@ pub fn mint_id() -> String {
         .as_millis() as u64;
 
     let mut buf = [0u8; 32];
-    // 48-bit BE timestamp at offset 0..6
     buf[0] = ((ts_ms >> 40) & 0xff) as u8;
     buf[1] = ((ts_ms >> 32) & 0xff) as u8;
     buf[2] = ((ts_ms >> 24) & 0xff) as u8;
@@ -160,25 +166,18 @@ pub fn mint_id() -> String {
     encode(&buf)
 }
 
-/// Decode the 48-bit timestamp prefix back to ms since epoch.
 pub fn timestamp_of(id: &str) -> Option<u64> {
     if !is_valid_id(id) {
         return None;
     }
-    // The first 48 bits live in the top 48 bits of a 260-bit number, which
-    // means they occupy the first ⌈48 / 5⌉ = 10 chars, with the 10th char's
-    // bottom 2 bits belonging to byte 6 (random). Pull the top 50 bits and
-    // shift off the trailing 2.
     let mut v: u64 = 0;
-    for &c in id.as_bytes()[..10].iter() {
+    for &c in id.as_bytes()[..TIMESTAMP_CHARS].iter() {
         let d = decode_char(c)?;
         v = (v << 5) | (d as u64);
     }
-    // v now holds the top 50 bits of the 260-bit value. Strip the bottom 2.
-    Some(v >> 2)
+    Some(v >> TRAILING_PAD_BITS)
 }
 
-/// 52 chars in the Crockford alphabet (0-9, A-Z minus I, L, O, U).
 pub fn is_valid_id(s: &str) -> bool {
     if s.len() != ID_LEN {
         return false;
@@ -199,26 +198,19 @@ fn decode_char(c: u8) -> Option<u8> {
 }
 
 fn encode(buf: &[u8; 32]) -> String {
-    // 256 input bits → 260 output bits; we treat the buffer as a big-endian
-    // integer shifted left 4, then peel 5-bit chunks from the top.
-    // Use a small big-int rep: 33 bytes after the 4-bit left shift.
     let mut shifted = [0u8; 33];
     for i in 0..32 {
         shifted[i] |= buf[i] >> 4;
         shifted[i + 1] = (buf[i] & 0x0f) << 4;
     }
-    // `shifted` is a 264-bit big-endian buffer holding our 260-bit payload
-    // right-aligned (top 4 bits are zero pad). Char 0 takes the top 5 bits
-    // of the payload, which begin 4 bits into `shifted` (skipping the pad).
     let mut out = String::with_capacity(ID_LEN);
     for i in 0..ID_LEN {
-        let bit = 4 + i * 5;
+        let bit = PAYLOAD_OFFSET_BITS + i * 5;
         let byte = bit / 8;
         let off = bit % 8;
-        // grab 5 bits starting at (byte, off), MSB-first
         let hi = shifted[byte] as u16;
         let lo = *shifted.get(byte + 1).unwrap_or(&0) as u16;
-        let window = (hi << 8) | lo; // 16 bits, big-endian
+        let window = (hi << 8) | lo;
         let idx = ((window >> (11 - off)) & 0x1f) as usize;
         out.push(ALPHABET[idx] as char);
     }
@@ -231,8 +223,6 @@ mod tests {
 
     #[test]
     fn round_trip_known_timestamp() {
-        // Pick a fixed ms value and verify timestamp_of recovers it from a
-        // freshly built ID with that prefix.
         let ts_ms: u64 = 1_700_000_000_000;
         let mut buf = [0u8; 32];
         buf[0] = ((ts_ms >> 40) & 0xff) as u8;
@@ -241,8 +231,6 @@ mod tests {
         buf[3] = ((ts_ms >> 16) & 0xff) as u8;
         buf[4] = ((ts_ms >> 8) & 0xff) as u8;
         buf[5] = (ts_ms & 0xff) as u8;
-        // fill random portion with something non-zero to ensure prefix decode
-        // doesn't accidentally rely on zeros
         for (i, b) in buf[6..].iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(37).wrapping_add(13);
         }
@@ -273,7 +261,6 @@ mod tests {
 
     #[test]
     fn ts_parity_vectors() {
-        // Fixed reference vectors so encoder output stays bit-stable.
         let zero = [0u8; 32];
         assert_eq!(encode(&zero), "0".repeat(52));
 
@@ -337,197 +324,9 @@ mod tests {
     fn rejects_bad_chars_and_lengths() {
         assert!(!is_valid_id(""));
         assert!(!is_valid_id("ABC"));
-        // 52 chars but contains 'I' (excluded from Crockford alphabet)
         let bad: String = std::iter::repeat('I').take(52).collect();
         assert!(!is_valid_id(&bad));
-        // 51 chars, all valid alphabet
         let short: String = std::iter::repeat('0').take(51).collect();
         assert!(!is_valid_id(&short));
-    }
-}
-
-// ── Hid ────────────────────────────────────────────────────────────────────
-
-/// Universal identity primitive for everything addressable on the
-/// hum wire: humds, worker bees, forager bees, future kinds. 32-byte
-/// SHA-256 of a public key (Ed25519); wire form is `<prefix>_<hex>`
-/// where prefix discriminates the role.
-///
-/// Short form keeps the prefix: `humd_a4f2b8c19d3e` (12 hex chars
-/// after the underscore). Long form is the full 64-hex tail. Both
-/// parse via [`Hid::from_hex`].
-///
-/// Prefixes locked in v0:
-/// - `humd_` — daemon
-/// - `wbee_` — worker bee
-/// - `fbee_` — forager bee
-///
-/// Stable per install (each binary persists its own key). The hex is
-/// content-addressable — no registry, no central naming.
-///
-/// Originally defined in `ensemble`; moved here so light bee/identity
-/// crates can mint [`Hid`]s without dragging the whole mesh. `ensemble`
-/// re-exports it for back-compat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Hid {
-    pub prefix: HidPrefix,
-    pub bytes: [u8; 32],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HidPrefix {
-    Humd,
-    Wbee,
-    Fbee,
-}
-
-impl HidPrefix {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            HidPrefix::Humd => "humd",
-            HidPrefix::Wbee => "wbee",
-            HidPrefix::Fbee => "fbee",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "humd" => Some(HidPrefix::Humd),
-            "wbee" => Some(HidPrefix::Wbee),
-            "fbee" => Some(HidPrefix::Fbee),
-            _ => None,
-        }
-    }
-}
-
-impl Hid {
-    /// Hash a pubkey to its content-addressable bytes; tag with the
-    /// role prefix.
-    pub fn from_pubkey(prefix: HidPrefix, pubkey: &[u8]) -> Self {
-        let mut h = Sha256::new();
-        h.update(pubkey);
-        let digest = h.finalize();
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&digest[..32]);
-        Self { prefix, bytes }
-    }
-
-    /// Mint a random hid for the given role. Tests / pre-crypto only.
-    pub fn random(prefix: HidPrefix) -> Self {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        Self { prefix, bytes }
-    }
-
-    /// Convenience: random hid tagged as a humd. Matches the legacy
-    /// `Hid::random_humd()` shape; preferred call sites use
-    /// [`Hid::random`] directly.
-    pub fn random_humd() -> Self {
-        Self::random(HidPrefix::Humd)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.bytes
-    }
-
-    /// Full wire form: `<prefix>_<64 hex>`.
-    pub fn to_hex(&self) -> String {
-        format!("{}_{}", self.prefix.as_str(), hex::encode(self.bytes))
-    }
-
-    /// Log-friendly short form: `<prefix>_<12 hex>`.
-    pub fn short(&self) -> String {
-        format!("{}_{}", self.prefix.as_str(), hex::encode(&self.bytes[..6]))
-    }
-
-    /// Parse `<prefix>_<hex>`. Accepts either the 12-char short or
-    /// 64-char full form. Also accepts a bare 64-hex string as a
-    /// humd-prefixed legacy value so old peers.json keeps loading.
-    pub fn from_hex(s: &str) -> Result<Self, HidParseError> {
-        if let Some((p, h)) = s.split_once('_') {
-            let prefix = HidPrefix::parse(p).ok_or(HidParseError::UnknownPrefix)?;
-            let tail = hex::decode(h).map_err(|_| HidParseError::BadHex)?;
-            if tail.len() == 32 {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(&tail);
-                return Ok(Hid { prefix, bytes });
-            }
-            // 12-char short form: 6 bytes; widen with zeros so the
-            // short can still round-trip through serializers (used in
-            // logs + sigils, not for security-bearing addresses).
-            if tail.len() == 6 {
-                let mut bytes = [0u8; 32];
-                bytes[..6].copy_from_slice(&tail);
-                return Ok(Hid { prefix, bytes });
-            }
-            return Err(HidParseError::WrongLength(tail.len()));
-        }
-        // Legacy fallback: bare 64-hex was the daemon's old wire form.
-        // Auto-prefix as `humd_` so older peers.json keeps parsing.
-        let bytes_vec = hex::decode(s).map_err(|_| HidParseError::BadHex)?;
-        if bytes_vec.len() != 32 {
-            return Err(HidParseError::WrongLength(bytes_vec.len()));
-        }
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&bytes_vec);
-        Ok(Hid {
-            prefix: HidPrefix::Humd,
-            bytes,
-        })
-    }
-}
-
-#[derive(Debug)]
-pub enum HidParseError {
-    UnknownPrefix,
-    BadHex,
-    WrongLength(usize),
-}
-
-impl fmt::Display for HidParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HidParseError::UnknownPrefix => write!(f, "unknown hid prefix"),
-            HidParseError::BadHex => write!(f, "bad hex"),
-            HidParseError::WrongLength(n) => write!(f, "wrong hid length ({n} bytes)"),
-        }
-    }
-}
-
-impl std::error::Error for HidParseError {}
-
-impl fmt::Display for Hid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_hex())
-    }
-}
-
-impl Serialize for Hid {
-    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        ser.serialize_str(&self.to_hex())
-    }
-}
-
-impl<'de> Deserialize<'de> for Hid {
-    fn deserialize<D>(de: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(de)?;
-        Hid::from_hex(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-impl From<[u8; 32]> for Hid {
-    /// Legacy: bare 32-byte construction defaults to `humd_` prefix.
-    /// Migrate to `Hid { prefix, bytes }` directly when the role is
-    /// known.
-    fn from(bytes: [u8; 32]) -> Self {
-        Self {
-            prefix: HidPrefix::Humd,
-            bytes,
-        }
     }
 }
