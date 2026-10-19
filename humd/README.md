@@ -40,7 +40,7 @@ they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
 3. **identity load**. `identity::load_or_mint_key()` reads
    `$XDG_STATE_HOME/hum/humd.key` (32 raw bytes, mode `0o600`) or mints
    and persists a fresh Ed25519 keypair on first boot.
-4. **trackers**. `drift::Drift`, `penny::Penny`, the metrics exporter
+4. **trackers**. `comb::Comb`, `drift::Drift`, the metrics exporter
    (Prometheus on `humd.metricsAddr`).
 5. **thehum**. The signed append-only chi log at
    `$XDG_STATE_HOME/hum/thehum/`. Every tone that crosses the daemon

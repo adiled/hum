@@ -26,7 +26,7 @@ hum hive <ref> install       # build + register + orchd up
 hum bee --list               # bees and their state
 hum bee <name> enter|exit|reenter
 hum nest                     # orchd-managed bees (delegates to orchd status)
-hum penny                    # lifetime counters
+hum comb [bee]              # the comb — lifetime measures
 hum thehum status|tail|range|verify|replay
 hum recipes [name]           # list / run recipes
 hum uninstall                # stop + remove binary (state preserved)
@@ -117,9 +117,12 @@ The chi log is the only authoritative record of what crossed the
 daemon. Verifying it after a crash or after a migration is the first
 move before trusting derived state.
 
-### `penny`
-Lifetime counters from `penny.json`: token swaps, tool executions,
-session counts. The wallet, in metaphor.
+### `comb`
+The kernel's ledger of what crossed it, from `comb.json`: how many
+tones of each chi, and nectar — tokens in, tokens out, cache reads —
+per bee. `hum comb` shows the whole comb; `hum comb claude-cli` shows
+one bee. The measure is written by the daemon, so it is observed
+rather than self-reported.
 
 ### `recipes`
 Recipes live under `recipes/`. `hum recipes` lists; `hum recipes <name>`

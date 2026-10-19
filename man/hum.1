@@ -78,9 +78,10 @@ The hive name (e.g. \fBclaude-cli\fR) is accepted in place of a bee id.
 .B nest
 List orchd-managed bees (delegates to \fBorchd status\fR).
 .TP
-.B penny
-Show the lifetime counters in penny.json. The file is currently empty:
-nothing in the daemon increments it yet, so this reports an empty set.
+.B comb [\fIbee\fR]
+Show the comb, the kernel's ledger of what crossed it: how many tones
+of each chi, and nectar (tokens in, tokens out, cache reads) per bee.
+With a bee name, show only that bee's measures.
 .TP
 .B recipes [\fIname\fR]
 List available recipes (\fBrecipes/*\fR) or run one by name (e.g. \fBopencode\fR).
@@ -183,8 +184,9 @@ Drift rings, one NDJSON file per day.
 The persistent chi log, one NDJSON file per day plus seq.bin and
 snapshots/.
 .TP
-.B ~/.local/state/run/hum/penny.json
-Lifetime counters. Under the runtime root, so a reboot clears them.
+.B ~/.local/state/run/hum/comb.json
+The comb. Lifetime measures. Under the runtime root, so a reboot clears
+them.
 .TP
 .B ~/.local/share/hum/src/
 Source checkout the installer builds from.
@@ -217,7 +219,7 @@ Path to the claude binary the worker cells spawn. Default \fBclaude\fR on
 .TP
 .B XDG_RUNTIME_DIR
 Where the per-boot runtime files live: the thrum socket, the http
-control socket, and penny.json. A reboot clears them.
+control socket, and comb.json. A reboot clears them.
 .SH INSTALLATION
 .PP
 Install with the canonical installer:

@@ -72,7 +72,7 @@ pub fn runtime_dir() -> PathBuf {
 
 pub const THRUM_SOCK_BASENAME: &str = "thrum.sock";
 pub const HTTP_SOCK_BASENAME: &str = "hum.sock.http";
-pub const PENNY_BASENAME: &str = "penny.json";
+pub const COMB_BASENAME: &str = "comb.json";
 pub const HUMD_KEY_BASENAME: &str = "humd.key";
 pub const BEES_SNAPSHOT_BASENAME: &str = "bees.json";
 pub const RUNTIME_INFO_BASENAME: &str = "runtime.json";
@@ -120,8 +120,8 @@ pub fn routing_json() -> PathBuf {
     state_dir().join(ROUTING_JSON_BASENAME)
 }
 
-pub fn penny() -> PathBuf {
-    runtime_dir().join(PENNY_BASENAME)
+pub fn comb() -> PathBuf {
+    runtime_dir().join(COMB_BASENAME)
 }
 
 pub fn humd_key() -> PathBuf {
