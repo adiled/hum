@@ -103,13 +103,13 @@ fn field_spec(f: &Field) -> Option<FieldSpec> {
 }
 
 fn simplify(ty: &Type) -> (bool, Repr) {
-    if let Type::Path(p) = ty {
-        if let Some(seg) = p.path.segments.first()
-            && seg.ident == "Option"
-                && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
-                    && let Some(syn::GenericArgument::Type(inner)) = a.args.first() {
-                        return (true, simplify(inner).1);
-                    }
+    if let Type::Path(p) = ty
+        && let Some(seg) = p.path.segments.first()
+        && seg.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
+        && let Some(syn::GenericArgument::Type(inner)) = a.args.first()
+    {
+        return (true, simplify(inner).1);
     }
     (false, repr_of(ty))
 }
