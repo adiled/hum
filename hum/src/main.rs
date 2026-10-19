@@ -10,7 +10,7 @@
 //!   hum bee --list         list bees + state
 //!   hum bee <id> VERB      enter | exit | reenter a bee (start/stop/restart)
 //!   hum nest               list orchd-managed bees (delegates to `orchd status`)
-//!   hum penny              show lifetime counters
+//!   hum comb [bee]         show the comb — lifetime measures
 //!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
 //!                          (status | tail | range | verify | replay)
@@ -92,8 +92,11 @@ advertises (github tree URL of a hives/<kind> dir).")]
     },
     #[command(about = "List orchd-managed bees (delegates to `orchd status`)")]
     Nest,
-    #[command(about = "Show lifetime counters from penny.json")]
-    Penny,
+    #[command(about = "Show the comb — lifetime measures of what crossed the kernel")]
+    Comb {
+        #[arg(help = "Hive kind to report on (default: every bee)")]
+        bee: Option<String>,
+    },
     #[command(about = "List available recipes (recipes/*) or run one")]
     Recipes {
         #[arg(help = "Recipe name (e.g. \"opencode\"). Omit to list")]
@@ -206,7 +209,7 @@ fn main() -> Result<()> {
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
         Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
         Some(Cmd::Nest) => nest(),
-        Some(Cmd::Penny) => penny(),
+        Some(Cmd::Comb { bee }) => comb(bee),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Ensemble { verb }) => ensemble(verb),
@@ -566,7 +569,7 @@ fn doctor() -> Result<()> {
     println!("\n[env sanity]");
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
     let runtime_exists = std::path::Path::new(&runtime).is_dir();
-    println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (penny writes will fail — common macOS trap when set to a Linux /run/user path)" });
+    println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (comb writes will fail — common macOS trap when set to a Linux /run/user path)" });
 
     match hum_paths::RuntimeInfo::read() {
         Some(rt) => {
@@ -930,15 +933,96 @@ fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
     Ok(())
 }
 
-fn penny() -> Result<()> {
-    let path = hum_paths::penny();
+fn comb(bee: Option<String>) -> Result<()> {
+    let path = hum_paths::comb();
     if !path.exists() {
-        println!("no penny.json yet ({})", path.display());
+        println!("no comb.json yet ({})", path.display());
         return Ok(());
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("read {}", path.display()))?;
-    println!("{raw}");
+    let counters: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+
+    if let Some(kind) = bee {
+        let prefix = format!("bee:{kind}:");
+        let mut rows: Vec<(String, u64)> = counters
+            .iter()
+            .filter_map(|(k, v)| {
+                let rest = k.strip_prefix(prefix.as_str())?;
+                Some((rest.to_string(), v.as_u64()?))
+            })
+            .collect();
+        if rows.is_empty() {
+            println!("no measures for {kind}");
+            return Ok(());
+        }
+        rows.sort();
+        println!("comb — {kind}");
+        let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (metric, n) in &rows {
+            println!("  {metric:<width$}  {n:>12}", width = width);
+        }
+        return Ok(());
+    }
+
+    let mut activity: Vec<(&str, u64)> = Vec::new();
+    let mut nectar: Vec<(&str, u64)> = Vec::new();
+    let mut by_bee: std::collections::BTreeMap<String, Vec<(String, u64)>> = Default::default();
+
+    for (key, value) in &counters {
+        let Some(n) = value.as_u64() else { continue };
+        if let Some(rest) = key.strip_prefix("bee:") {
+            let Some((kind, rest)) = rest.split_once(':') else {
+                continue;
+            };
+            by_bee
+                .entry(kind.to_string())
+                .or_default()
+                .push((rest.to_string(), n));
+            continue;
+        }
+        if let Some(rest) = key.strip_prefix("chi:") {
+            activity.push((rest, n));
+        } else if let Some(rest) = key.strip_prefix("nectar:") {
+            nectar.push((rest, n));
+        }
+    }
+
+    if activity.is_empty() && nectar.is_empty() && by_bee.is_empty() {
+        println!("the comb is empty — nothing has crossed the kernel yet");
+        return Ok(());
+    }
+
+    activity.sort_unstable();
+    nectar.sort_unstable();
+
+    println!("comb — lifetime measures");
+    if !activity.is_empty() {
+        println!("\n  activity");
+        let width = activity.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (chi, n) in &activity {
+            println!("    {chi:<width$}  {n:>12}", width = width);
+        }
+    }
+    if !nectar.is_empty() {
+        println!("\n  nectar");
+        let width = nectar.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (metric, n) in &nectar {
+            println!("    {metric:<width$}  {n:>12}", width = width);
+        }
+    }
+    if !by_bee.is_empty() {
+        println!("\n  by bee");
+        for (kind, rows) in &mut by_bee {
+            println!("    {kind}");
+            rows.sort();
+            let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+            for (metric, n) in rows.iter() {
+                println!("      {metric:<width$}  {n:>12}", width = width);
+            }
+        }
+    }
     Ok(())
 }
 

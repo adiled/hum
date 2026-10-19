@@ -72,4 +72,13 @@ A nestled bee shares the nest with the cells that live there.
 
 - **drone** — the sentinel watching every tone. Self-governance + drift detection.
 - **drift** — timing rings per bloom. p50/p95 across humds.
-- **penny** — lifetime counters. Token swaps, tool executions, etc.
+
+## Measure
+
+- **comb** — the kernel's ledger of what crossed it. Lifetime counters: tone
+  counts per chi (`chi:finish`), and **nectar** — the raw intake, tokens in
+  and out, cache reads and writes — per bee (`bee:claude-cli:nectar:in`).
+  Only the kernel writes the comb, so the measure is observed rather than
+  self-reported. What the kernel *produces* is honey, and that side belongs
+  to whoever earns it.
+

@@ -11,12 +11,12 @@ use thrum_core::{Chi, WaneTracker};
 use thrumd::{Thrum, Tone, ToneSink, serve_with_hook as thrum_serve_with_hook};
 use tracing::{error, info, trace, warn};
 
+mod comb;
 mod drift;
 mod drone;
 mod identity;
 mod peer_transport;
 pub mod peers;
-mod penny;
 pub mod redial;
 pub mod revoked;
 mod routing_store;
@@ -39,11 +39,11 @@ pub struct DaemonConfig {
     pub thrum_path: PathBuf,
     pub http_path: PathBuf,
     pub mcp_addr: std::net::SocketAddr,
-    pub penny_path: PathBuf,
+    pub comb_path: PathBuf,
     pub routing_path: PathBuf,
     pub hum_cfg: hum_paths::config::HumConfig,
     pub cli_path: String,
-    pub penny_persist_interval: Duration,
+    pub comb_persist_interval: Duration,
     pub routing_persist_interval: Duration,
     pub thrum_override: Option<Thrum>,
     pub ensemble: Option<Arc<Ensemble>>,
@@ -77,11 +77,11 @@ impl DaemonConfig {
             thrum_path,
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
-            penny_path: hum_paths::penny(),
+            comb_path: hum_paths::comb(),
             routing_path: hum_paths::routing_json(),
             hum_cfg: hum_paths::config::load(),
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
-            penny_persist_interval: Duration::from_secs(10),
+            comb_persist_interval: Duration::from_secs(10),
             routing_persist_interval: Duration::from_secs(30),
             thrum_override: None,
             ensemble: None,
@@ -133,10 +133,9 @@ where
         warn!(addr = %cfg.hum_cfg.humd.metrics_addr, "humd.metrics.addr_parse_failed");
     }
 
-    let penny = penny::Penny::load(&cfg.penny_path);
-    penny
-        .clone()
-        .spawn_persister(cfg.penny_path.clone(), cfg.penny_persist_interval);
+    let comb = comb::Comb::load(&cfg.comb_path);
+    comb.clone()
+        .spawn_persister(cfg.comb_path.clone(), cfg.comb_persist_interval);
 
     let waneman = cfg
         .waneman
@@ -362,6 +361,7 @@ where
         tool_routes_peer: tool_routes_peer.clone(),
         incoming_tool_calls: incoming_tool_calls.clone(),
         thehum: thehum_handle.clone(),
+        comb: comb.clone(),
         trust_remote_workers: cfg.trust_remote_workers,
         revoked: revoked::Revocations::load(&cfg.revoked_path),
     });
@@ -477,8 +477,8 @@ where
     info!("humd.ready");
     shutdown.await;
     info!("humd.shutting-down");
-    if let Err(e) = penny.save(&cfg.penny_path) {
-        warn!(err = %e, "penny.save.failed");
+    if let Err(e) = comb.save(&cfg.comb_path) {
+        warn!(err = %e, "comb.save.failed");
     }
     info!("humd.exit");
     Ok(())
@@ -561,6 +561,7 @@ struct HumdSink {
     tool_routes_peer: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     incoming_tool_calls: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     thehum: Option<Arc<thehum::TheHum>>,
+    comb: Arc<comb::Comb>,
     trust_remote_workers: bool,
     revoked: revoked::Revocations,
 }
@@ -671,6 +672,17 @@ impl ToneSink for HumdSink {
             .get("chi")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
+
+        let bee = if comb::WORK_CHIS.contains(&chi_str) {
+            self.manifests
+                .read()
+                .get(client_id)
+                .map(|m| m.name.clone())
+        } else {
+            None
+        };
+        self.comb
+            .record(&chi_str, bee.as_deref(), tone.get("usage"));
 
         if let Some(thehum) = self.thehum.as_ref()
             && client_id != "ensemble"

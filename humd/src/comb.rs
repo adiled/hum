@@ -1,0 +1,367 @@
+//! Comb — the kernel's measure of what has flowed through it.
+//!
+//! A comb is a ledger of quantities: a flat map of named counters that
+//! accumulates for the life of the install. Two families live in it.
+//!
+//! **Activity** — what crossed the kernel, by chi:
+//! `chi:finish`, `chi:tool-call`, and `bee:claude-cli:chi:finish` for the
+//! same count scoped to one hive kind.
+//!
+//! **Nectar** — what was consumed, by metric: `nectar:in`, `nectar:out`,
+//! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a bee
+//! as `bee:claude-cli:nectar:in`. Nectar is the kernel's raw intake —
+//! tokens in, tokens out, cache reads and writes. What the kernel
+//! produces is honey, and that side belongs to whoever earns it.
+//!
+//! Only the kernel writes the comb. The daemon sees every tone that
+//! crosses it, so the measure is observed rather than self-reported: a bee
+//! metering itself would be reporting on itself. Each humd keeps its own
+//! comb, so a session that crosses two humds is accounted by each of them
+//! rather than counted once globally.
+//!
+//! Persisted at `${XDG_RUNTIME_DIR}/hum/comb.json`, write-through every
+//! `comb_persist_interval`.
+
+use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use parking_lot::RwLock;
+use serde_json::Value;
+use tracing::{trace, warn};
+
+/// The chis whose counts are also attributed to the hive that sent them.
+/// These are the ones that name work done: a turn finished, a tool was
+/// called, a tool answered, something went wrong.
+pub const WORK_CHIS: [&str; 4] = ["finish", "tool-call", "tool-result", "error"];
+
+/// Token metrics, each with the field names hives use for it. Anthropic
+/// calls them `input_tokens`; OpenAI calls them `prompt_tokens`. Both are
+/// nectar, and the comb measures them the same way.
+pub const TOKEN_METRICS: [(&str, &[&str]); 4] = [
+    (
+        "in",
+        &[
+            "input_tokens",
+            "inputTokens",
+            "prompt_tokens",
+            "promptTokens",
+        ],
+    ),
+    (
+        "out",
+        &[
+            "output_tokens",
+            "outputTokens",
+            "completion_tokens",
+            "completionTokens",
+        ],
+    ),
+    (
+        "cacheRead",
+        &[
+            "cache_read_input_tokens",
+            "cacheReadInputTokens",
+            "cached_tokens",
+        ],
+    ),
+    (
+        "cacheCreate",
+        &["cache_creation_input_tokens", "cacheCreationInputTokens"],
+    ),
+];
+
+pub fn chi_key(chi: &str) -> String {
+    format!("chi:{chi}")
+}
+
+pub fn bee_chi_key(bee: &str, chi: &str) -> String {
+    format!("bee:{bee}:chi:{chi}")
+}
+
+pub fn nectar_key(metric: &str) -> String {
+    format!("nectar:{metric}")
+}
+
+pub fn bee_nectar_key(bee: &str, metric: &str) -> String {
+    format!("bee:{bee}:nectar:{metric}")
+}
+
+/// Pull the token counts out of a `chi:"finish"` usage object. A hive that
+/// reports no usage measures nothing — the comb does not guess.
+pub fn usage_of(usage: Option<&Value>) -> Vec<(&'static str, u64)> {
+    let Some(obj) = usage.and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (metric, names) in TOKEN_METRICS {
+        for name in names {
+            if let Some(n) = obj.get(*name).and_then(Value::as_u64) {
+                out.push((metric, n));
+                break;
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug)]
+pub struct Comb {
+    counters: RwLock<HashMap<String, u64>>,
+}
+
+impl Comb {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            counters: RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Record one tone that crossed the kernel.
+    ///
+    /// `bee` is the hive kind that sent it, when the kernel can attribute
+    /// it to a bee registered here. A tone that arrived over the mesh has
+    /// no such attribution: it lands in the global family only.
+    ///
+    /// `usage` is the token report on a `chi:"finish"`, and is only read
+    /// for that chi.
+    pub fn record(&self, chi: &str, bee: Option<&str>, usage: Option<&Value>) {
+        self.incr(&chi_key(chi));
+        let tokens = if chi == "finish" {
+            usage_of(usage)
+        } else {
+            Vec::new()
+        };
+        for (metric, n) in &tokens {
+            self.incr_by(&nectar_key(metric), *n);
+        }
+        let Some(bee) = bee else {
+            return;
+        };
+        if WORK_CHIS.contains(&chi) {
+            self.incr(&bee_chi_key(bee, chi));
+        }
+        for (metric, n) in &tokens {
+            self.incr_by(&bee_nectar_key(bee, metric), *n);
+        }
+    }
+
+    pub fn load(path: &Path) -> Arc<Self> {
+        let counters = match std::fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice::<HashMap<String, serde_json::Value>>(&bytes)
+            {
+                Ok(raw) => {
+                    let mut out = HashMap::with_capacity(raw.len());
+                    for (k, v) in raw {
+                        if let Some(n) = v.as_u64() {
+                            out.insert(k, n);
+                        } else if let Some(f) = v.as_f64()
+                            && f.is_finite()
+                            && f >= 0.0
+                        {
+                            out.insert(k, f as u64);
+                        }
+                    }
+                    trace!(target: "comb", "comb.loaded keys={}", out.len());
+                    out
+                }
+                Err(e) => {
+                    warn!(target: "comb", "comb.load.parse_failed err={e}");
+                    HashMap::new()
+                }
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                trace!(target: "comb", "comb.load.absent");
+                HashMap::new()
+            }
+            Err(e) => {
+                warn!(target: "comb", "comb.load.read_failed err={e}");
+                HashMap::new()
+            }
+        };
+        let comb = Self::new();
+        *comb.counters.write() = counters;
+        comb
+    }
+
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent()
+            && !dir.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(dir)?;
+        }
+        let snap = self.snapshot();
+        let tmp = path.with_extension("json.tmp");
+        let bytes =
+            serde_json::to_vec(&snap).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, path)?;
+        trace!(target: "comb", "comb.saved keys={} bytes={}", snap.len(), bytes.len());
+        Ok(())
+    }
+
+    pub fn incr(&self, key: &str) {
+        self.incr_by(key, 1);
+    }
+
+    pub fn incr_by(&self, key: &str, delta: u64) {
+        if delta == 0 {
+            return;
+        }
+        let mut g = self.counters.write();
+        let slot = g.entry(key.to_string()).or_insert(0);
+        *slot = slot.saturating_add(delta);
+    }
+
+    pub fn snapshot(&self) -> HashMap<String, u64> {
+        self.counters.read().clone()
+    }
+
+    pub fn spawn_persister(self: Arc<Self>, path: PathBuf, interval: Duration) {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if let Err(e) = self.save(&path) {
+                    warn!(target: "comb", "comb.persist.failed err={e}");
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn record_counts_chi_globally() {
+        let c = Comb::new();
+        c.record("finish", None, None);
+        c.record("finish", None, None);
+        c.record("prompt", None, None);
+        let snap = c.snapshot();
+        assert_eq!(snap.get("chi:finish"), Some(&2));
+        assert_eq!(snap.get("chi:prompt"), Some(&1));
+    }
+
+    #[test]
+    fn record_attributes_work_to_the_bee() {
+        let c = Comb::new();
+        c.record("finish", Some("claude-cli"), None);
+        c.record("tool-call", Some("claude-cli"), None);
+        c.record("chunk", Some("claude-cli"), None);
+        let snap = c.snapshot();
+        assert_eq!(snap.get("bee:claude-cli:chi:finish"), Some(&1));
+        assert_eq!(snap.get("bee:claude-cli:chi:tool-call"), Some(&1));
+        assert_eq!(snap.get("bee:claude-cli:chi:chunk"), None);
+    }
+
+    #[test]
+    fn record_measures_nectar_from_usage() {
+        let c = Comb::new();
+        let usage = json!({
+            "input_tokens": 1200,
+            "output_tokens": 34,
+            "cache_read_input_tokens": 900,
+        });
+        c.record("finish", Some("claude-cli"), Some(&usage));
+        let snap = c.snapshot();
+        assert_eq!(snap.get("nectar:in"), Some(&1200));
+        assert_eq!(snap.get("nectar:out"), Some(&34));
+        assert_eq!(snap.get("nectar:cacheRead"), Some(&900));
+        assert_eq!(snap.get("bee:claude-cli:nectar:in"), Some(&1200));
+        assert_eq!(snap.get("bee:claude-cli:nectar:out"), Some(&34));
+    }
+
+    #[test]
+    fn openai_usage_names_measure_the_same_way() {
+        let c = Comb::new();
+        let usage = json!({ "prompt_tokens": 10, "completion_tokens": 2 });
+        c.record("finish", None, Some(&usage));
+        let snap = c.snapshot();
+        assert_eq!(snap.get("nectar:in"), Some(&10));
+        assert_eq!(snap.get("nectar:out"), Some(&2));
+    }
+
+    #[test]
+    fn usage_is_only_read_on_finish() {
+        let c = Comb::new();
+        let usage = json!({ "input_tokens": 5 });
+        c.record("chunk", Some("claude-cli"), Some(&usage));
+        let snap = c.snapshot();
+        assert_eq!(snap.get("nectar:in"), None);
+    }
+
+    #[test]
+    fn mesh_tones_count_globally_but_are_not_attributed() {
+        let c = Comb::new();
+        let usage = json!({ "input_tokens": 7 });
+        c.record("finish", None, Some(&usage));
+        let snap = c.snapshot();
+        assert_eq!(snap.get("chi:finish"), Some(&1));
+        assert_eq!(snap.get("nectar:in"), Some(&7));
+        assert_eq!(
+            snap.keys().filter(|k| k.starts_with("bee:")).count(),
+            0,
+            "a tone with no bee must not be attributed to one"
+        );
+    }
+
+    #[test]
+    fn incr_and_snapshot() {
+        let c = Comb::new();
+        c.incr("blooms");
+        c.incr("blooms");
+        c.incr_by("totalInputTokens", 1234);
+        c.incr_by("noop", 0);
+        let snap = c.snapshot();
+        assert_eq!(snap.get("blooms"), Some(&2));
+        assert_eq!(snap.get("totalInputTokens"), Some(&1234));
+        assert!(!snap.contains_key("noop"));
+    }
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(hum_paths::COMB_BASENAME);
+        let c = Comb::new();
+        c.incr_by("curateBytesSaved", 99_999);
+        c.incr("taskExecutions");
+        c.save(&path).unwrap();
+
+        let c2 = Comb::load(&path);
+        let snap = c2.snapshot();
+        assert_eq!(snap.get("curateBytesSaved"), Some(&99_999));
+        assert_eq!(snap.get("taskExecutions"), Some(&1));
+    }
+
+    #[test]
+    fn load_missing_file_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Comb::load(&dir.path().join("does-not-exist.json"));
+        assert!(c.snapshot().is_empty());
+    }
+
+    #[test]
+    fn load_skips_non_numeric_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(hum_paths::COMB_BASENAME);
+        std::fs::write(
+            &path,
+            br#"{"started":1700000000000,"blooms":7,"label":"ignored","fractional":3.7}"#,
+        )
+        .unwrap();
+        let c = Comb::load(&path);
+        let snap = c.snapshot();
+        assert_eq!(snap.get("blooms"), Some(&7));
+        assert_eq!(snap.get("started"), Some(&1_700_000_000_000));
+        assert_eq!(snap.get("fractional"), Some(&3));
+        assert!(!snap.contains_key("label"));
+    }
+}

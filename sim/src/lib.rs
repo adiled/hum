@@ -126,7 +126,7 @@ impl Sim {
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
+        let comb_path = tmp.join(hum_paths::COMB_BASENAME);
         let revoked_path = tmp.join(hum_paths::REVOKED_BEES_BASENAME);
         let _ = std::fs::remove_file(&revoked_path);
         if !revoked.is_empty() {
@@ -151,12 +151,12 @@ impl Sim {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
-            penny_path,
+            comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
-            penny_persist_interval: Duration::from_secs(3600),
+            comb_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             revoked_path: revoked_path.clone(),
@@ -254,7 +254,7 @@ impl Sim {
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
+        let comb_path = tmp.join(hum_paths::COMB_BASENAME);
 
         let initial_capacity = self
             .pending_capacities
@@ -268,12 +268,12 @@ impl Sim {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
             mcp_addr: ([127, 0, 0, 1], 0).into(),
-            penny_path,
+            comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
             cli_path: "noop".into(),
-            penny_persist_interval: Duration::from_secs(3600),
+            comb_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
