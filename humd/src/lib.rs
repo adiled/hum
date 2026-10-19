@@ -384,7 +384,7 @@ where
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
-        let humd_version = env!("CARGO_PKG_VERSION").to_string();
+        let humd_version = env!("HUM_VERSION").to_string();
         let peer_reach = peer_reach.clone();
         tokio::spawn(async move {
             let res = thrum_serve_with_hook(thrum, &path, move |bound| {
@@ -503,6 +503,7 @@ async fn autoupdate_loop() {
 
 async fn autoupdate_check_once() -> Result<bool> {
     let local = env!("CARGO_PKG_VERSION").to_string();
+    let stamped = env!("HUM_VERSION");
     let body = tokio::process::Command::new("curl")
         .args([
             "-fsSL",
@@ -522,7 +523,7 @@ async fn autoupdate_check_once() -> Result<bool> {
     if upstream_trim == local {
         return Ok(false);
     }
-    info!(local = %local, upstream = %upstream_trim, "autoupdate.newer.found");
+    info!(local = %stamped, upstream = %upstream_trim, "autoupdate.newer.found");
     let status = tokio::process::Command::new("bash")
         .arg("-c")
         .arg("curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash")

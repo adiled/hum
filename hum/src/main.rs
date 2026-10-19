@@ -33,7 +33,11 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "hum", version, about = "hum — the AI stack on a biodiverse agentic kernel")]
+#[command(
+    name = "hum",
+    version = env!("HUM_VERSION"),
+    about = "hum — the AI stack on a biodiverse agentic kernel"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -213,6 +217,7 @@ fn main() -> Result<()> {
 
 fn update(force: bool) -> Result<()> {
     let local = env!("CARGO_PKG_VERSION").to_string();
+    let stamped = env!("HUM_VERSION");
     let upstream = match latest_release_tag() {
         Some(t) => t,
         None => {
@@ -221,7 +226,7 @@ fn update(force: bool) -> Result<()> {
         }
     };
     let upstream_trim = upstream.trim_start_matches('v').to_string();
-    println!("local: {local}  upstream: {upstream_trim}");
+    println!("local: {stamped}  upstream: {upstream_trim}");
     if !force && upstream_trim == local {
         println!("up to date.");
         return Ok(());
@@ -297,7 +302,7 @@ fn humd_bin() -> Result<PathBuf> {
 
 
 fn summary() -> Result<()> {
-    println!("hum {} — `hum help` for the surface", env!("CARGO_PKG_VERSION"));
+    println!("hum {} — `hum help` for the surface", env!("HUM_VERSION"));
     status()
 }
 
@@ -508,7 +513,7 @@ fn doctor() -> Result<()> {
     println!("{bar}\nhum doctor\n{bar}");
 
     println!("\n[versions]");
-    println!("  hum CLI:    {}", env!("CARGO_PKG_VERSION"));
+    println!("  hum CLI:    {}", env!("HUM_VERSION"));
     if let Ok(b) = humd_bin() {
         let v = Command::new(&b).arg("--version").output().ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())

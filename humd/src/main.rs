@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     if !args.is_empty() {
         match args[0].as_str() {
             "--version" | "-V" => {
-                println!("humd {} (thrum {})", env!("CARGO_PKG_VERSION"), THRUM_VERSION);
+                println!("humd {} (thrum {})", env!("HUM_VERSION"), THRUM_VERSION);
                 return Ok(());
             }
             "--help" | "-h" | "help" => {
