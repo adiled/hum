@@ -29,8 +29,6 @@ fn print_help() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Minimum CLI handshake — anything beyond `humd` invokes inspection
-    // surface (TODO: clap subcommands once humd RPC exists).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         match args[0].as_str() {
@@ -59,9 +57,6 @@ async fn main() -> Result<()> {
         .init();
     info!(version = %THRUM_VERSION, "humd.booting");
 
-    // A daemon must not boot on an invalid config. Validate hum.json
-    // against the schema and exit non-zero (violations verbatim) before
-    // any state is built.
     hum_paths::config::validate_or_exit();
 
     let cfg = DaemonConfig::from_env();

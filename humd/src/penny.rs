@@ -20,15 +20,13 @@ pub struct Penny {
 }
 
 impl Penny {
-    /// Empty Penny. Use `load` to restore from disk.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             counters: RwLock::new(HashMap::new()),
         })
     }
 
-    /// Read counters from `path`. Missing/corrupt files yield an empty Penny —
-    /// counters are increment-only, so losing them is a loss but never a crash.
+    /// Read counters from `path`. Missing/corrupt files yield an empty Penny.
     pub fn load(path: &Path) -> Arc<Self> {
         let counters = match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<HashMap<String, serde_json::Value>>(&bytes)
@@ -36,7 +34,6 @@ impl Penny {
                 Ok(raw) => {
                     let mut out = HashMap::with_capacity(raw.len());
                     for (k, v) in raw {
-                        // Skip non-numeric fields like string labels. Floats truncate to u64.
                         if let Some(n) = v.as_u64() {
                             out.insert(k, n);
                         } else if let Some(f) = v.as_f64() {
@@ -67,7 +64,6 @@ impl Penny {
         })
     }
 
-    /// Atomically write the current snapshot to `path`. Creates parent dirs.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
@@ -75,8 +71,6 @@ impl Penny {
             }
         }
         let snap = self.snapshot();
-        // Write to a sibling temp file then rename — protects against torn writes
-        // when the daemon is killed mid-flush.
         let tmp = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec(&snap)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -99,7 +93,6 @@ impl Penny {
         *slot = slot.saturating_add(delta);
     }
 
-    /// Bulk merge — typical nestler `pennyDelta` payload.
     pub fn merge(&self, deltas: HashMap<String, u64>) {
         if deltas.is_empty() {
             return;
@@ -118,12 +111,10 @@ impl Penny {
         self.counters.read().clone()
     }
 
-    /// Background flusher. Owns the Arc; runs until the process exits.
     pub fn spawn_persister(self: Arc<Self>, path: PathBuf, interval: Duration) {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // First tick fires immediately — skip it so we don't double-write on boot.
             tick.tick().await;
             loop {
                 tick.tick().await;
@@ -189,7 +180,6 @@ mod tests {
 
     #[test]
     fn load_skips_non_numeric_fields() {
-        // Loader must skip non-numeric fields (e.g. legacy `started`, `label`).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(hum_paths::PENNY_BASENAME);
         std::fs::write(

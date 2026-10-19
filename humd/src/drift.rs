@@ -26,17 +26,13 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// One thrum transit sample.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThrumSample {
-    /// Destination endpoint — `"oc"` (plugin) or `"nest"` (daemon).
     pub to: String,
     pub ms: u64,
-    /// ms since the bloom opened.
     pub at: u64,
 }
 
-/// In-memory record for one active sid. Persisted verbatim as NDJSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bloom {
     pub sid: String,
@@ -62,7 +58,6 @@ impl Bloom {
     }
 }
 
-/// One named statistic across the active ring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stat {
     pub n: usize,
@@ -70,7 +65,6 @@ pub struct Stat {
     pub p95: u64,
 }
 
-/// Snapshot returned by [`Drift::aggregates`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AggregateReport {
     pub blooms: usize,
@@ -81,13 +75,10 @@ pub struct AggregateReport {
 
 #[derive(Debug)]
 struct DriftInner {
-    /// Active blooms keyed by sid. wilt() moves them out and persists.
     active: HashMap<String, Bloom>,
-    /// Resolved persistence root. None = ephemeral.
     store_dir: Option<PathBuf>,
 }
 
-/// Global per-hum timing rings. Clone-cheap (Arc inside).
 #[derive(Debug, Clone)]
 pub struct Drift {
     inner: Arc<RwLock<DriftInner>>,
@@ -100,8 +91,7 @@ impl Default for Drift {
 }
 
 impl Drift {
-    /// New instance with no persistence root. Use [`Drift::with_store_dir`] or
-    /// [`Drift::set_store_dir`] to enable NDJSON appends.
+    /// New instance with no persistence root.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(DriftInner {
@@ -112,7 +102,6 @@ impl Drift {
     }
 
     /// New instance rooted at `dir` (e.g. `${XDG_STATE_HOME}/hum/drift`).
-    /// Creates the directory if missing; failure is logged, not fatal.
     pub fn with_store_dir(dir: impl Into<PathBuf>) -> Self {
         let d = Self::new();
         d.set_store_dir(dir);
@@ -127,18 +116,15 @@ impl Drift {
         self.inner.write().store_dir = Some(dir);
     }
 
-    /// Drop a bloom without persisting. Used on hard cancel.
     pub fn discard(&self, sid: &str) {
         self.inner.write().active.remove(sid);
     }
 
-    /// Number of currently-active blooms.
     pub fn active_count(&self) -> usize {
         self.inner.read().active.len()
     }
 
-    /// Record a named instant. First observation wins per bloom — repeat calls
-    /// are silently ignored so the first true moment locks in.
+    /// Record a named instant. First observation wins per bloom.
     pub fn mark(&self, sid: &str, event: &str) {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -152,7 +138,6 @@ impl Drift {
         tracing::trace!(sid, event, "drift.mark");
     }
 
-    /// Add to a named cumulative span.
     pub fn span(&self, sid: &str, name: &str, ms: u64) {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -164,7 +149,6 @@ impl Drift {
         tracing::trace!(sid, name, ms, "drift.span");
     }
 
-    /// Set an arbitrary tag on the bloom. Overwrites any prior value.
     pub fn flag(&self, sid: &str, key: &str, value: Value) {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -175,10 +159,7 @@ impl Drift {
         b.flags.insert(key.to_string(), value);
     }
 
-    /// Record one thrum transit sample. `direction` is `"oc"` or `"nest"` (the
-    /// destination endpoint, anchored on the receiver). Samples beyond a soft
-    /// cap are dropped to keep memory bounded on chatty turns — p95 stays
-    /// representative.
+    /// Record one thrum transit sample. `direction` is `"oc"` or `"nest"`.
     pub fn thrum_sample(&self, sid: &str, direction: &str, ms: u64) {
         const SOFT_CAP: usize = 200;
         let now = now_ms();
@@ -198,9 +179,8 @@ impl Drift {
         });
     }
 
-    /// Close a bloom: stamp `ended_at`, write the `wilt` mark, evict from the
-    /// active set, and append one NDJSON line (best-effort; disk failures are
-    /// traced but not propagated — drift is not critical-path).
+    /// Close a bloom: stamp `ended_at`, write the `wilt` mark, evict from
+    /// the active set, and append one NDJSON line.
     pub fn wilt(&self, sid: &str) -> Option<Bloom> {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -219,7 +199,6 @@ impl Drift {
         Some(b)
     }
 
-    /// p50/p95 across every currently-active bloom, grouped by event name.
     pub fn aggregates(&self) -> AggregateReport {
         let g = self.inner.read();
         let mut by_mark: HashMap<String, Vec<u64>> = HashMap::new();
@@ -247,8 +226,7 @@ impl Drift {
         }
     }
 
-    /// Append every currently-active bloom to today's NDJSON file. Useful for
-    /// checkpointing long-lived blooms without waiting for wilt.
+    /// Append every currently-active bloom to today's NDJSON file.
     pub fn persist_today(&self) -> Result<()> {
         let (dir, blooms) = {
             let g = self.inner.read();
@@ -265,7 +243,6 @@ impl Drift {
         Ok(())
     }
 
-    /// Delete NDJSON files older than `days`. Returns the number removed.
     pub fn prune_older_than(&self, days: u32) -> Result<usize> {
         let dir = match self.inner.read().store_dir.clone() {
             Some(d) => d,
@@ -341,7 +318,6 @@ fn stats(buckets: HashMap<String, Vec<u64>>) -> HashMap<String, Stat> {
         }
         v.sort_unstable();
         let n = v.len();
-        // floor(n * pct) — clamp to last index so n=1 still yields valid stats.
         let p50_idx = (n.saturating_mul(50) / 100).min(n - 1);
         let p95_idx = (n.saturating_mul(95) / 100).min(n - 1);
         out.insert(
@@ -417,7 +393,6 @@ mod tests {
         let b = d.wilt("s1").expect("bloom");
         assert_eq!(b.flags["warm"], json!(true));
         assert!(b.marks.contains_key("wilt"));
-        // exactly one NDJSON file should exist
         let entries: Vec<_> = fs::read_dir(&dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         fs::remove_dir_all(&dir).ok();
@@ -429,7 +404,6 @@ mod tests {
         let d = Drift::with_store_dir(&dir);
         d.mark("s1", "x");
         d.wilt("s1");
-        // brand-new file — nothing should be pruned at any positive age
         let removed = d.prune_older_than(1).unwrap();
         assert_eq!(removed, 0);
         fs::remove_dir_all(&dir).ok();

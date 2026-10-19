@@ -27,15 +27,12 @@ pub struct PeerConfig {
     pub humd_id: Hid,
     pub hints: Vec<String>,
     /// Human-friendly alias for the peer (e.g. `"workstation"`).
-    /// Used by `hum://<alias>/<path>` URI resolution. Optional —
-    /// peers without an alias still bootstrap fine, they just
-    /// can't be addressed by name.
+    /// Used by `hum://<alias>/<path>` URI resolution.
     pub alias: Option<String>,
 }
 
 /// Wire shape — fields stay loose strings so we can tolerate malformed
-/// rows and still parse the rest. The typed [`PeerConfig`] is what the
-/// daemon consumes.
+/// rows and still parse the rest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RawFile {
     #[serde(default)]

@@ -31,8 +31,6 @@ pub fn key_path() -> PathBuf {
 }
 
 /// Load the persisted key, minting + persisting a fresh one on first boot.
-///
-/// Bytes on disk are the raw 32-byte Ed25519 secret seed.
 pub fn load_or_mint_key() -> Result<HumdKey> {
     load_or_mint_key_at(&key_path())
 }
@@ -56,7 +54,6 @@ pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
         return Ok(key);
     }
 
-    // Mint fresh seed and persist.
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
     let signing = SigningKey::from_bytes(&seed);
@@ -67,8 +64,7 @@ pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
 }
 
 /// Load the persisted key without minting. Returns `Ok(None)` when no
-/// key file exists yet — for inspect-only callers (`hum` CLI) that
-/// shouldn't mutate state.
+/// key file exists yet.
 pub fn read_key() -> Result<Option<HumdKey>> {
     let path = key_path();
     if !path.exists() {
@@ -119,8 +115,6 @@ fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
         f.sync_all().ok();
     }
 
-    // Belt-and-braces: also chmod after open in case the umask masked our
-    // requested mode bits. No-op on non-unix.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -139,7 +133,6 @@ mod tests {
     use tempfile::TempDir;
 
     /// Mint a key, drop it, reload from the same path — same Hid.
-    /// Also checks file perms are 0o600.
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();
@@ -149,7 +142,6 @@ mod tests {
         let id1 = first.hid();
         assert!(path.exists(), "key file persisted");
 
-        // Permissions check.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -157,7 +149,6 @@ mod tests {
             assert_eq!(mode, 0o600, "key file must be 0o600");
         }
 
-        // Reload — same identity.
         let second = load_or_mint_key_at(path).expect("reload");
         assert_eq!(id1, second.hid(), "humd_id stable across reloads");
     }

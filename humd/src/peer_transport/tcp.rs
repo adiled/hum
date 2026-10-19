@@ -15,7 +15,10 @@
 //! 2. [`spawn_listener`] — bind `addr` and detach an accept loop.
 //!    Returns the bound socket address (so callers running with `:0`
 //!    recover the OS-assigned port) and the `peers.json` hint string a
-//!    remote peer would paste in to dial back.
+//!    remote peer would paste in to dial back. The hint uses the
+//!    supplied `addr` verbatim when the caller passed a fixed host:port;
+//!    for `:0` callers the OS-assigned port lands in `bound_addr` and
+//!    the caller rewrites the hint.
 //!
 //! Unlike iroh, TCP has no implicit endpoint — each connect is a free
 //! [`ensemble::TcpEndpoint::connect`] call. The listener side wraps
@@ -29,9 +32,6 @@ use tracing::{info, trace, warn};
 
 use crate::peers::PeerConfig;
 
-/// Open one TCP connection per bootstrap peer entry, install signed.
-/// Entries without a `tcp:` hint are skipped — those are for other
-/// transports.
 pub(crate) async fn dial_and_install_peer(
     ens: &Arc<Ensemble>,
     key: &HumdKey,
@@ -70,16 +70,6 @@ pub(crate) async fn dial_all(
     }
 }
 
-/// Bind `addr` and detach an accept loop. Each accepted connection is
-/// installed via [`Ensemble::install`] (signed hello). Per-accept
-/// failures are logged + brief backoff so one bad client can't take the
-/// listener down.
-///
-/// Returns `(bound_addr, hints)` where `hints` is the single
-/// `tcp:<host:port>` string a remote peer would paste into its
-/// `peers.json`. Uses the supplied `addr` verbatim for that hint when
-/// caller passed a fixed host:port; for `:0` callers, the OS-assigned
-/// port lands in `bound_addr` and the caller should rewrite the hint.
 pub(crate) async fn spawn_listener(
     addr: &str,
     ens: Arc<Ensemble>,

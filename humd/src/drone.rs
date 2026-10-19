@@ -11,6 +11,13 @@
 //! the [`Classifier`] trait. The default [`NoopClassifier`] never
 //! flags anything; concrete classifiers live in nest-side crates
 //! (e.g. `hum-nest::RegexClassifier`).
+//!
+//! The verdict is what the dispatch loop branches on. `Ok` is nominal.
+//! `Resync` means wane drifted and the host should resync state.
+//! `TearDown` means missed beats passed the threshold and the channel
+//! should come down. `Suspect` means a suspicious response was detected
+//! and the host should retry the last turn. `EchoTimeout` means the echo
+//! never came back and the tracked tone should be re-sent.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,33 +29,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thrum_core::{Chi, Tone};
 
-/// What the drone thinks the host should do.
-///
-/// `unified` is the one-word verdict the host actually steers on;
-/// `raw` carries the full diagnostic — populated even when unified is `Ok`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assessment {
     pub unified: Verdict,
     pub raw: RawAssessment,
 }
 
-/// Coarse verdict — the only thing the dispatch loop should branch on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
-    /// nominal
     Ok,
-    /// wane drift / desync — host should resync state
     Drift,
-    /// missed beats past threshold — host should tear the channel down
     Dead,
-    /// suspicious response detected — host should retry the last turn
     Swallow,
-    /// echo timed out — host should re-send the tracked tone
     Retry,
 }
 
-/// Detailed read of the state at the moment of [`Drone::assess`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawAssessment {
     pub sigil: String,
@@ -60,12 +56,9 @@ pub struct RawAssessment {
     pub pending_echoes: u32,
     pub local_wane: u64,
     pub remote_wane: u64,
-    /// Why the unified verdict came out the way it did, free-form.
     pub reason: String,
 }
 
-/// Pre-verdict mood — kebab-case strings on the `raw` channel, kept
-/// separate from [`Verdict`] so they can't compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Health {
@@ -76,8 +69,6 @@ pub enum Health {
 }
 
 impl Health {
-    /// Beat interval (ms) that pairs with this mood. The host uses it
-    /// to schedule the next [`DroneBeat`].
     pub fn rhythm_ms(self) -> u64 {
         match self {
             Health::Serene => 30_000,
@@ -88,9 +79,6 @@ impl Health {
     }
 }
 
-/// Per-sigil ledger. Mutated by [`Drone::heard`] / [`Drone::observed`],
-/// read by [`Drone::assess`]. Public for inspection; construct via
-/// [`create_drone_state`] or let the [`Drone`] manage it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneState {
     pub sigil: String,
@@ -136,7 +124,6 @@ pub fn create_drone_state(sigil: impl Into<String>) -> DroneState {
     }
 }
 
-/// What the nestler tells us about the LLM stream.
 #[derive(Debug, Clone)]
 pub enum Observed {
     ToolStart {
@@ -153,12 +140,9 @@ pub enum Observed {
     TextDelta {
         text: String,
     },
-    /// Turn boundary — triggers suspicion classification on response_text.
     TurnEnd,
 }
 
-/// Periodic heartbeat payload. Hosts serialize this into a `chi:"drone"`
-/// tone body and emit on the rhythm tick.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneBeat {
     pub sigil: String,
@@ -177,16 +161,12 @@ pub struct BeatLoad {
     pub tokens_burned: u64,
 }
 
-/// Plug-in seat for an LLM-driven judge. v0 ships only the heuristic;
-/// a future crate can implement this trait to refine `swallow`.
 pub trait Evaluator: Send + Sync {
     /// Probability (0.0..=1.0) that `text` represents real context loss
-    /// given `state`. The host calls this only when the heuristic
-    /// flagged a suspicion — it is not on the hot path.
+    /// given `state`.
     fn evaluate(&self, text: &str, state: &DroneState) -> f32;
 }
 
-/// chis we track for echo correlation. Mirrors `Drone.TRACKED_CHI` in TS.
 fn tracked(chi: Chi) -> bool {
     matches!(chi, Chi::Prompt | Chi::Cancel | Chi::ReleasePermit)
 }
@@ -198,7 +178,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// The sentinel. Cheap to clone — internal state lives behind an `Arc`.
 #[derive(Clone)]
 pub struct Drone {
     inner: Arc<Inner>,
@@ -218,10 +197,7 @@ impl Default for Drone {
 }
 
 impl Drone {
-    /// Pure channel-health drone. No context-loss detection — the
-    /// classifier is a no-op. Use this when the host has no opinion
-    /// about LLM output patterns and only wants the wane/echo/beat
-    /// machinery.
+    /// Pure channel-health drone. No context-loss detection.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -233,9 +209,7 @@ impl Drone {
         }
     }
 
-    /// Drone with a pluggable classifier. Pass a regex-bank impl
-    /// (e.g. `nest_common::RegexClassifier`) to enable the swallow
-    /// path on context-loss patterns.
+    /// Drone with a pluggable classifier.
     pub fn with_classifier(classifier: Arc<dyn Classifier>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -247,10 +221,7 @@ impl Drone {
         }
     }
 
-    /// Drone with both a classifier and an LLM judge. The classifier
-    /// is the cheap regex first-gate; the evaluator is the optional
-    /// adjudicator the drone consults when the classifier flags
-    /// `Soft` or `Heavy`.
+    /// Drone with both a classifier and an LLM judge.
     pub fn with_classifier_and_evaluator(
         classifier: Arc<dyn Classifier>,
         evaluator: Arc<dyn Evaluator>,
@@ -267,10 +238,7 @@ impl Drone {
     }
 
     /// Back-compat: drone with only an LLM judge, classifier = noop.
-    /// Equivalent to `with_classifier_and_evaluator(NoopClassifier, …)`
-    /// but `NoopClassifier::classify` always returns `None`, so the
-    /// evaluator is unreachable in practice. Prefer
-    /// `with_classifier_and_evaluator`.
+    /// Equivalent to `with_classifier_and_evaluator(NoopClassifier, …)`.
     pub fn with_evaluator(evaluator: Arc<dyn Evaluator>, swallow_threshold: f32) -> Self {
         Self::with_classifier_and_evaluator(Arc::new(NoopClassifier), evaluator, swallow_threshold)
     }
@@ -334,8 +302,6 @@ impl Drone {
                 let state = states
                     .entry(sigil.clone())
                     .or_insert_with(|| create_drone_state(sigil));
-                // Process-death pulses reset per-process counters but leave the
-                // cross-process channel state (wane, echoes, missed beats) alone.
                 if tone.chi() == Chi::Pulse {
                     let kind = tone.body.get("kind").and_then(Value::as_str);
                     if matches!(kind, Some("cell-died" | "cell-evicted" | "cell-idle")) {
@@ -371,8 +337,6 @@ impl Drone {
                 if state.response_text.len() > 20 {
                     state.suspicious = self.inner.classifier.classify(&state.response_text);
                 }
-                // response_text stays until assess() consumes it — the optional
-                // LLM judge wants to see it.
             }
         }
         state.health = derive_health(state);
@@ -417,8 +381,6 @@ impl Drone {
             }
         }
 
-        // Suspicion is independent of channel health: a stream may be
-        // "serene" by metrics while spewing a context-loss greeting.
         let suspicion_now = if state.response_text.len() > 20 {
             self.inner.classifier.classify(&state.response_text)
         } else {
@@ -654,9 +616,6 @@ mod tests {
         assert!(st.pending_echoes.is_empty());
     }
 
-    // Canned classifiers exercise the drone's branching logic without
-    // depending on a particular pattern bank — pattern banks live in
-    // nest-side crates (see `hum-nest`).
     struct AlwaysCritical;
     impl Classifier for AlwaysCritical {
         fn classify(&self, _: &str) -> Suspicion {
