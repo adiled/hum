@@ -50,10 +50,6 @@ enum Cmd {
         lines: u32,
     },
     #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + worker logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
-    #[command(long_about = "One-shot full diagnostic dump: versions, config, env sanity, the
-claude binary, every bee + service state, and recent daemon +
-worker logs with warnings highlighted. Run this first when
-something is wrong; paste the output into a bug report.")]
     Doctor,
     #[command(about = "Hive kinds — the source a bee is commissioned from.")]
     #[command(long_about = "Hive kinds — the source a bee is commissioned from.
@@ -129,9 +125,6 @@ advertises (github tree URL of a hives/<kind> dir).")]
     #[command(about = "Stop the service and remove the humd binary. State preserved")]
     Uninstall,
     #[command(about = "Check for a newer release and self-update. Compares the local version against GitHub's latest release; if newer, re-runs the canonical install (which bounces the service atomically)")]
-    #[command(long_about = "Check for a newer release and self-update. Compares the local
-version against GitHub's latest release; if newer, re-runs the
-canonical install (which bounces the service atomically).")]
     Update {
         #[arg(help = "Update even when versions match (force reinstall)")]
         #[arg(long)]
