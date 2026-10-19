@@ -4,13 +4,20 @@
 //! fill with defaults. Validity is defined by `hum.schema.json`
 //! ([`SCHEMA`]); [`validate_or_exit`] gates daemon startup on it, so an
 //! invalid config is fatal rather than silently coerced.
+//!
+//! A hive's own runtime — binary, models, flags — is owned by the hive
+//! process through its service env, not by humd. A `hives` block in
+//! hum.json is the wrong place, and is a lint finding rather than a
+//! silent no-op.
+//!
+//! serde tolerates unknown keys, so validity is enforced by the schema
+//! rather than by the deserializer.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-// ── humd ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumdSection {
@@ -21,8 +28,7 @@ pub struct HumdSection {
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
     /// host:port the ensemble TCP transport binds on. None / empty
-    /// means dial-only — humd can reach `tcp:` peers but no peer can
-    /// reach it over TCP. iroh is unaffected (independent transport).
+    /// means dial-only. iroh is unaffected (independent transport).
     #[serde(default, rename = "tcpListen")]
     pub tcp_listen: Option<String>,
 }
@@ -38,7 +44,6 @@ impl Default for HumdSection {
     }
 }
 
-// ── fs ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,11 +79,8 @@ impl Default for FsSection {
 }
 
 impl FsSection {
-    /// Resolve a candidate path against the fs policy.
-    ///
-    /// Returns `Ok(FsMode)` when the path is permitted (with the
-    /// effective mode of its enclosing root). Returns `Err(reason)`
-    /// when the path is denied or sits outside every root.
+    /// Resolve a candidate path against the fs policy. Returns the
+    /// effective mode of its enclosing root, or the reason it is denied.
     pub fn check(&self, candidate: &Path) -> Result<FsMode, FsDenial> {
         let abs = canonical_or_self(candidate);
         for d in &self.denied {
@@ -97,9 +99,7 @@ impl FsSection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsDenial {
-    /// Path matched an entry in `fs.denied`.
     Blacklisted(PathBuf),
-    /// Path doesn't sit inside any configured root.
     OutsideRoots,
 }
 
@@ -112,7 +112,6 @@ impl std::fmt::Display for FsDenial {
     }
 }
 
-// ── nest ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NestSection {
@@ -134,11 +133,9 @@ impl Default for NestSection {
     }
 }
 
-// ── top-level ─────────────────────────────────────────────────────────────
 
 /// Daemon-scoped policy: `humd` knobs, `fs` grounding, and `nest`
-/// routing/capacity. A hive's own runtime (binary, models, flags) is
-/// owned by the hive process via its service env, not by humd.
+/// routing/capacity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HumConfig {
     #[serde(default)]
@@ -149,7 +146,6 @@ pub struct HumConfig {
     pub nest: NestSection,
 }
 
-// ── path resolution ───────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
     crate::hum_json()
@@ -169,8 +165,6 @@ fn starts_with(candidate: &Path, prefix: &Path) -> bool {
     c.starts_with(&p)
 }
 
-/// After deserialize, walk fs paths and expand tildes. Done at load time
-/// so every downstream check_against_fs sees absolute paths.
 fn expand_fs(fs: &mut FsSection) {
     for r in fs.roots.iter_mut() {
         r.path = expand_tilde(&r.path);
@@ -180,7 +174,6 @@ fn expand_fs(fs: &mut FsSection) {
     }
 }
 
-// ── load ──────────────────────────────────────────────────────────────────
 
 pub fn load() -> HumConfig {
     let path = config_path();
@@ -209,8 +202,6 @@ pub fn load() -> HumConfig {
 /// the wrong place: a hive configures itself through its service env.
 /// Returns one human-readable line per finding. Called at boot (logged
 /// as `config.lint`) and by `hum doctor`.
-/// The canonical schema, embedded at build time. The single source of
-/// truth for what a valid hum.json is.
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
 /// Validate raw hum.json text against [`SCHEMA`]. Returns every
@@ -321,9 +312,6 @@ mod tests {
 
     #[test]
     fn schema_rejects_legacy_hives_block() {
-        // The exact drift that silently broke setups before: a hives
-        // block (or perches/nestlings, or junk hive keys) must now fail
-        // validation, not parse-and-ignore.
         let bad = r#"{
             "nest": { "default": "claude-cli" },
             "hives": { "claude-cli": { "bin": "claude", "flags": [], "model": "opus" } }
@@ -348,9 +336,7 @@ mod tests {
             denied: vec![],
         };
         expand_fs(&mut fs);
-        // Inside root
         assert!(matches!(fs.check(Path::new("/tmp")), Ok(FsMode::Rw)));
-        // Outside any root
         assert!(matches!(fs.check(Path::new("/etc/passwd")), Err(FsDenial::OutsideRoots)));
     }
 
@@ -367,9 +353,6 @@ mod tests {
 
     #[test]
     fn serde_is_lenient_but_schema_is_strict() {
-        // serde with #[serde(default)] tolerates unknown keys (parses to
-        // a default config, no error) — that's why validity is enforced
-        // by the schema, not serde. The schema rejects the same input.
         let raw = r#"{"droned": true, "smallModel": "x"}"#;
         assert!(serde_json::from_str::<HumConfig>(raw).is_ok());
         assert!(validate(raw).is_err());
