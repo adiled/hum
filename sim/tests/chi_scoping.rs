@@ -25,8 +25,6 @@ fn base_hello(chis: Option<&[&str]>) -> Value {
     hello
 }
 
-/// A reply arriving from a peer humd, which humd fans out to the nestlers
-/// attached to that sid.
 fn peer_reply(chi: &str, sid: &str) -> Value {
     serde_json::json!({
         "chi": chi,
@@ -36,7 +34,6 @@ fn peer_reply(chi: &str, sid: &str) -> Value {
     })
 }
 
-/// Drain everything currently queued on a synthetic client's channel.
 fn drain(rx: &mut tokio::sync::mpsc::Receiver<Value>) -> Vec<Value> {
     let mut out = Vec::new();
     while let Ok(tone) = rx.try_recv() {

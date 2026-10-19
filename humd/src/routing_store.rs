@@ -34,10 +34,10 @@ pub fn load(path: &Path) -> Vec<HumdAddr> {
 }
 
 pub fn save(ensemble: &Ensemble, path: &Path) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir)?;
-        }
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)?;
     }
     let disk = OnDisk {
         version: 1,

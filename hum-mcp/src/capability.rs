@@ -13,9 +13,6 @@
 //! wire negotiation — the asking nestler doesn't ship a category
 //! → name table; humd holds it.
 
-/// Tool names mapped to the well-known capability tag they sit
-/// inside. Returns the canonical name set for the category, or
-/// `None` for an unknown capability.
 pub fn capability_tools(cap: &str) -> Option<&'static [&'static str]> {
     match cap {
         "fs" => Some(&[

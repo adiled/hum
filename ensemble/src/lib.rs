@@ -70,10 +70,6 @@ pub mod headroom;
 pub mod onchain;
 
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
-/// Separate domain for the claims signature. Kept apart from the identity
-/// signature so an old peer verifying `signature` sees an unchanged message
-/// and a new peer can tell the two apart. Adding fields here is a minor
-/// bump; changing `HANDSHAKE_DOMAIN` is a hard break.
 const CAPS_HANDSHAKE_DOMAIN: &str = "hum-ensemble-caps-v1";
 
 const HANDSHAKE_SKEW_MS: i64 = 60_000;
@@ -851,10 +847,6 @@ async fn handle_liveness(
     true
 }
 
-/// Whether an announce is internally consistent: the `humd_id` it claims must
-/// match the `from` of the tone carrying it. Binds to the tone's own origin
-/// field, not the connection it arrived on, so a legitimate multi-hop
-/// advertise still percolates while a peer cannot stamp someone else's Hid.
 fn announce_origin_matches_payload(tone: &Tone) -> bool {
     let Some(from) = tone.get("from").and_then(|v| v.as_str()) else {
         return true;
@@ -972,8 +964,6 @@ mod tests {
 
     #[test]
     fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
-        // A advertises, B relays, C receives. C sees B as the connection but
-        // the tone's origin is still A — the claim must survive the hop.
         let a = Hid::random_humd();
         let b = Hid::random_humd();
         let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));

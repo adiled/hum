@@ -25,7 +25,8 @@ fn fresh_bee() -> BeeKey {
 }
 
 fn hello_with_identity(tone: &mut serde_json::Value, bee: &BeeKey) {
-    let (pubkey, signed_at, signature) = bee.sign_socket_hello(now_ms());
+    let sig = bee.sign_socket_hello(now_ms());
+    let (pubkey, signed_at, signature) = (sig.pubkey, sig.signed_at, sig.signature);
     let obj = tone.as_object_mut().expect("object");
     obj.insert("hid".into(), serde_json::json!(bee.hid.to_hex()));
     obj.insert("pubkey".into(), serde_json::json!(pubkey));
@@ -155,7 +156,8 @@ async fn a_replayed_hello_outside_the_skew_window_is_disconnected() {
 
     let bee = fresh_bee();
     let stale = now_ms() - 3_600_000;
-    let (pubkey, _signed_at, signature) = bee.sign_socket_hello(stale);
+    let sig = bee.sign_socket_hello(stale);
+    let (pubkey, signature) = (sig.pubkey, sig.signature);
     let mut hello = base_hello();
     hello["hid"] = serde_json::json!(bee.hid.to_hex());
     hello["pubkey"] = serde_json::json!(pubkey);

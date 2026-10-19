@@ -384,7 +384,7 @@ where
     if bind_thrum {
         let thrum = thrum.clone();
         let path = cfg.thrum_path.clone();
-        let humd_version = env!("CARGO_PKG_VERSION").to_string();
+        let humd_version = env!("HUM_VERSION").to_string();
         let peer_reach = peer_reach.clone();
         tokio::spawn(async move {
             let res = thrum_serve_with_hook(thrum, &path, move |bound| {
@@ -503,6 +503,7 @@ async fn autoupdate_loop() {
 
 async fn autoupdate_check_once() -> Result<bool> {
     let local = env!("CARGO_PKG_VERSION").to_string();
+    let stamped = env!("HUM_VERSION");
     let body = tokio::process::Command::new("curl")
         .args([
             "-fsSL",
@@ -522,7 +523,7 @@ async fn autoupdate_check_once() -> Result<bool> {
     if upstream_trim == local {
         return Ok(false);
     }
-    info!(local = %local, upstream = %upstream_trim, "autoupdate.newer.found");
+    info!(local = %stamped, upstream = %upstream_trim, "autoupdate.newer.found");
     let status = tokio::process::Command::new("bash")
         .arg("-c")
         .arg("curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash")
@@ -671,25 +672,25 @@ impl ToneSink for HumdSink {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
 
-        if let Some(thehum) = self.thehum.as_ref() {
-            if client_id != "ensemble" {
-                let sid = tone.get("sid").and_then(Value::as_str).and_then(|s| {
+        if let Some(thehum) = self.thehum.as_ref()
+            && client_id != "ensemble"
+        {
+            let sid = tone.get("sid").and_then(Value::as_str).and_then(|s| {
+                hum_identity::HumId::parse(s)
+                    .ok()
+                    .or_else(|| Some(hum_identity::HumId::from_foreign(s)))
+            });
+            let rid = tone
+                .get("rid")
+                .and_then(Value::as_str)
+                .map(|s| {
                     hum_identity::HumId::parse(s)
-                        .ok()
-                        .or_else(|| Some(hum_identity::HumId::from_foreign(s)))
-                });
-                let rid = tone
-                    .get("rid")
-                    .and_then(Value::as_str)
-                    .map(|s| {
-                        hum_identity::HumId::parse(s)
-                            .unwrap_or_else(|_| hum_identity::HumId::from_foreign(s))
-                    })
-                    .unwrap_or_else(hum_identity::HumId::mint);
-                let body = serde_json::to_value(&tone).unwrap_or_default();
-                if let Err(e) = thehum.append(chi_str, sid, rid, body).await {
-                    warn!(client_id, %chi_str, err = %e, "thehum.append.failed");
-                }
+                        .unwrap_or_else(|_| hum_identity::HumId::from_foreign(s))
+                })
+                .unwrap_or_else(hum_identity::HumId::mint);
+            let body = serde_json::to_value(&tone).unwrap_or_default();
+            if let Err(e) = thehum.append(chi_str, sid, rid, body).await {
+                warn!(client_id, %chi_str, err = %e, "thehum.append.failed");
             }
         }
 
@@ -759,7 +760,7 @@ impl ToneSink for HumdSink {
                     .map(str::to_string);
                 if !sid.is_empty() {
                     self.thrum
-                        .claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
+                        .claim_sigil(client_id, thrum_core::sigil(&sid, &self.hive_tag));
                     self.thrum.claim_sigil(client_id, &sid);
                 }
                 if let Some(tn) = tool_name.as_ref() {
@@ -799,7 +800,7 @@ impl ToneSink for HumdSink {
                     if !sid_for_lookup.is_empty() {
                         self.thrum.claim_sigil(
                             client_id,
-                            &thrum_core::sigil(&sid_for_lookup, &self.hive_tag),
+                            thrum_core::sigil(&sid_for_lookup, &self.hive_tag),
                         );
                         self.thrum.claim_sigil(client_id, &sid_for_lookup);
                     }
@@ -812,36 +813,35 @@ impl ToneSink for HumdSink {
 
                     if let (Some(fs_hid), Some(ens), Some(tn)) =
                         (pinned_fs, &self.ensemble, tool_name.as_ref())
+                        && fs_hid != ens.me()
                     {
-                        if fs_hid != ens.me() {
-                            let call_id = tone
-                                .get("callId")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            if !call_id.is_empty() {
-                                self.tool_routes
-                                    .write()
-                                    .insert(call_id.clone(), client_id.to_string());
-                                self.tool_routes_peer
-                                    .write()
-                                    .insert(call_id.clone(), fs_hid);
-                            }
-                            let mut routed = tone.clone();
-                            if let Some(obj) = routed.as_object_mut() {
-                                obj.insert("to".into(), Value::String(fs_hid.to_hex()));
-                                obj.insert("from".into(), Value::String(ens.me().to_hex()));
-                            }
-                            trace!(
-                                from = client_id, to = %fs_hid.short(),
-                                tool_name = %tn, %call_id,
-                                "tool-call.route.to-peer-forager"
-                            );
-                            if let Err(e) = ens.route(routed).await {
-                                warn!(err = %e, "tool-call.peer.route.failed");
-                            }
-                            return;
+                        let call_id = tone
+                            .get("callId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if !call_id.is_empty() {
+                            self.tool_routes
+                                .write()
+                                .insert(call_id.clone(), client_id.to_string());
+                            self.tool_routes_peer
+                                .write()
+                                .insert(call_id.clone(), fs_hid);
                         }
+                        let mut routed = tone.clone();
+                        if let Some(obj) = routed.as_object_mut() {
+                            obj.insert("to".into(), Value::String(fs_hid.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                        }
+                        trace!(
+                            from = client_id, to = %fs_hid.short(),
+                            tool_name = %tn, %call_id,
+                            "tool-call.route.to-peer-forager"
+                        );
+                        if let Err(e) = ens.route(routed).await {
+                            warn!(err = %e, "tool-call.peer.route.failed");
+                        }
+                        return;
                     }
 
                     if let Some(tool_name) = tool_name {
@@ -874,8 +874,8 @@ impl ToneSink for HumdSink {
                         }
                     }
                 }
-                if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
-                    if matches!(
+                if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string)
+                    && matches!(
                         chi,
                         Some(Chi::Chunk)
                             | Some(Chi::Finish)
@@ -885,64 +885,64 @@ impl ToneSink for HumdSink {
                             | Some(Chi::SessionReady)
                             | Some(Chi::Pulse)
                             | Some(Chi::Breath)
-                    ) {
-                        if let Some(ens) = &self.ensemble {
-                            let obs = self.observers.read().get(&sid).cloned().unwrap_or_default();
-                            for peer in obs {
-                                let mut copy = tone.clone();
-                                if let Some(obj) = copy.as_object_mut() {
-                                    obj.insert("to".into(), Value::String(peer.to_hex()));
-                                    obj.insert("from".into(), Value::String(ens.me().to_hex()));
-                                }
-                                if let Err(e) = ens.route(copy).await {
-                                    warn!(err = %e, "worker.reply.observer.failed");
-                                }
-                            }
-                        }
-                        let origin = self.sid_origins.read().get(&sid).cloned();
-                        if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
+                    )
+                {
+                    if let Some(ens) = &self.ensemble {
+                        let obs = self.observers.read().get(&sid).cloned().unwrap_or_default();
+                        for peer in obs {
                             let mut copy = tone.clone();
                             if let Some(obj) = copy.as_object_mut() {
-                                obj.insert("to".into(), Value::String(origin.to_hex()));
+                                obj.insert("to".into(), Value::String(peer.to_hex()));
                                 obj.insert("from".into(), Value::String(ens.me().to_hex()));
                             }
                             if let Err(e) = ens.route(copy).await {
-                                warn!(err = %e, "worker.reply.ensemble.failed");
+                                warn!(err = %e, "worker.reply.observer.failed");
                             }
                         }
-                        self.thrum
-                            .thrum_broadcast(&sid, &self.hive_tag, tone.clone());
-                        return;
                     }
-                }
-            }
-        }
-
-        if matches!(chi, Some(Chi::Attach)) && client_id != "ensemble" {
-            if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
-                if !sid.is_empty() {
+                    let origin = self.sid_origins.read().get(&sid).cloned();
+                    if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
+                        let mut copy = tone.clone();
+                        if let Some(obj) = copy.as_object_mut() {
+                            obj.insert("to".into(), Value::String(origin.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+                        }
+                        if let Err(e) = ens.route(copy).await {
+                            warn!(err = %e, "worker.reply.ensemble.failed");
+                        }
+                    }
                     self.thrum
-                        .claim_sigil(client_id, thrum_core::sigil(sid, &self.hive_tag));
-                    self.thrum.claim_sigil(client_id, sid.to_string());
-                    let hear_only = tone
-                        .get("hearOnly")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    trace!(client_id, sid, hear_only, "attach.local.claimed");
-                }
-            }
-        }
-
-        if let Some(ensemble) = &self.ensemble {
-            if let Some(to) = tone.get("to").and_then(Value::as_str) {
-                if !to.is_empty() && to != ensemble.me().to_hex() {
-                    trace!(client_id, %chi_str, to, "ensemble.route");
-                    if let Err(e) = ensemble.route(tone).await {
-                        warn!(client_id, err = %e, "ensemble.route.failed");
-                    }
+                        .thrum_broadcast(&sid, &self.hive_tag, tone.clone());
                     return;
                 }
             }
+        }
+
+        if matches!(chi, Some(Chi::Attach))
+            && client_id != "ensemble"
+            && let Some(sid) = tone.get("sid").and_then(Value::as_str)
+            && !sid.is_empty()
+        {
+            self.thrum
+                .claim_sigil(client_id, thrum_core::sigil(sid, &self.hive_tag));
+            self.thrum.claim_sigil(client_id, sid.to_string());
+            let hear_only = tone
+                .get("hearOnly")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            trace!(client_id, sid, hear_only, "attach.local.claimed");
+        }
+
+        if let Some(ensemble) = &self.ensemble
+            && let Some(to) = tone.get("to").and_then(Value::as_str)
+            && !to.is_empty()
+            && to != ensemble.me().to_hex()
+        {
+            trace!(client_id, %chi_str, to, "ensemble.route");
+            if let Err(e) = ensemble.route(tone).await {
+                warn!(client_id, err = %e, "ensemble.route.failed");
+            }
+            return;
         }
 
         if client_id == "ensemble" {
@@ -1141,18 +1141,18 @@ impl ToneSink for HumdSink {
                             return;
                         }
                     }
-                    if let Some(hid) = manifest.hid {
-                        if self.revoked.is_revoked(&hid.to_hex()) {
-                            error!(client_id, hid = %hid.short(),
+                    if let Some(hid) = manifest.hid
+                        && self.revoked.is_revoked(&hid.to_hex())
+                    {
+                        error!(client_id, hid = %hid.short(),
                                 "bee.revoked — hid is on the operator's revocation list. \
                                  Not registered, not announced.");
-                            self.thrum.thrum_to(
-                                client_id,
-                                thrumd::echo_tone(&rid, false, Some("bee identity revoked")),
-                            );
-                            self.thrum.thrum_close(client_id);
-                            return;
-                        }
+                        self.thrum.thrum_to(
+                            client_id,
+                            thrumd::echo_tone(&rid, false, Some("bee identity revoked")),
+                        );
+                        self.thrum.thrum_close(client_id);
+                        return;
                     }
                     if let Some(arr) = tone.get("tools").and_then(Value::as_array) {
                         manifest.tools = arr
@@ -1222,13 +1222,13 @@ impl ToneSink for HumdSink {
                         }
                     }
 
-                    if client_id != "ensemble" {
-                        if let Some(ensemble) = &self.ensemble {
-                            let ens = ensemble.clone();
-                            tokio::spawn(async move {
-                                ens.hive_advertise(manifest).await;
-                            });
-                        }
+                    if client_id != "ensemble"
+                        && let Some(ensemble) = &self.ensemble
+                    {
+                        let ens = ensemble.clone();
+                        tokio::spawn(async move {
+                            ens.hive_advertise(manifest).await;
+                        });
                     }
                 }
             }
@@ -1242,30 +1242,31 @@ impl ToneSink for HumdSink {
                     warn!(client_id, "prompt.no-sid");
                     return;
                 }
-                if client_id != "ensemble" && self.capacity == LocalCapacity::OverflowAlways {
-                    if let Some(ensemble) = &self.ensemble {
-                        let target = pick_overflow_peer(ensemble, &self.hive_tag);
-                        if let Some(peer) = target {
+                if client_id != "ensemble"
+                    && self.capacity == LocalCapacity::OverflowAlways
+                    && let Some(ensemble) = &self.ensemble
+                {
+                    let target = pick_overflow_peer(ensemble, &self.hive_tag);
+                    if let Some(peer) = target {
+                        self.thrum
+                            .claim_sigil(client_id, thrum_core::sigil(&sid, &self.hive_tag));
+                        self.thrum.claim_sigil(client_id, &sid);
+                        if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
                             self.thrum
-                                .claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
-                            self.thrum.claim_sigil(client_id, &sid);
-                            if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
-                                self.thrum
-                                    .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
-                            }
-                            let mut forward = tone.clone();
-                            if let Some(obj) = forward.as_object_mut() {
-                                obj.insert("to".into(), Value::String(peer.to_hex()));
-                                obj.insert("from".into(), Value::String(ensemble.me().to_hex()));
-                            }
-                            trace!(sid, peer = %peer.short(), "overflow.route");
-                            if let Err(e) = ensemble.route(forward).await {
-                                warn!(sid, err = %e, "overflow.route.failed");
-                            }
-                            return;
-                        } else {
-                            warn!(sid, "overflow.no-route");
+                                .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                         }
+                        let mut forward = tone.clone();
+                        if let Some(obj) = forward.as_object_mut() {
+                            obj.insert("to".into(), Value::String(peer.to_hex()));
+                            obj.insert("from".into(), Value::String(ensemble.me().to_hex()));
+                        }
+                        trace!(sid, peer = %peer.short(), "overflow.route");
+                        if let Err(e) = ensemble.route(forward).await {
+                            warn!(sid, err = %e, "overflow.route.failed");
+                        }
+                        return;
+                    } else {
+                        warn!(sid, "overflow.no-route");
                     }
                 }
                 let model = tone
@@ -1323,7 +1324,7 @@ impl ToneSink for HumdSink {
                         .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                 }
                 self.thrum
-                    .claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
+                    .claim_sigil(client_id, thrum_core::sigil(&sid, &self.hive_tag));
                 self.thrum.claim_sigil(client_id, &sid);
                 let origin = if client_id == "ensemble" {
                     tone.get("from")
@@ -1414,10 +1415,10 @@ impl ToneSink for HumdSink {
                     if obj.get("content").is_none() && !text.is_empty() {
                         obj.insert("content".into(), Value::String(text.clone()));
                     }
-                    if obj.get("systemPrompt").is_none() {
-                        if let Some(sp) = system_prompt.as_ref() {
-                            obj.insert("systemPrompt".into(), Value::String(sp.clone()));
-                        }
+                    if obj.get("systemPrompt").is_none()
+                        && let Some(sp) = system_prompt.as_ref()
+                    {
+                        obj.insert("systemPrompt".into(), Value::String(sp.clone()));
                     }
                     let (forager_tools_json, provided_caps): (Vec<Value>, Vec<String>) = {
                         let m = self.manifests.read();
@@ -1544,21 +1545,21 @@ impl ToneSink for HumdSink {
                     }
                 } else {
                     self.thrum
-                        .claim_sigil(client_id, &thrum_core::sigil(&sid, &self.hive_tag));
+                        .claim_sigil(client_id, thrum_core::sigil(&sid, &self.hive_tag));
                     self.thrum.claim_sigil(client_id, &sid);
-                    if let Some(ensemble) = &self.ensemble {
-                        if let Some(to) = tone.get("to").and_then(Value::as_str) {
-                            if !to.is_empty() && to != ensemble.me().to_hex() {
-                                trace!(client_id, sid, to, hear_only, "attach.forward");
-                                let mut forward = tone.clone();
-                                if let Some(obj) = forward.as_object_mut() {
-                                    obj.entry("from".to_string())
-                                        .or_insert_with(|| Value::String(ensemble.me().to_hex()));
-                                }
-                                if let Err(e) = ensemble.route(forward).await {
-                                    warn!(client_id, sid, err = %e, "attach.forward.failed");
-                                }
-                            }
+                    if let Some(ensemble) = &self.ensemble
+                        && let Some(to) = tone.get("to").and_then(Value::as_str)
+                        && !to.is_empty()
+                        && to != ensemble.me().to_hex()
+                    {
+                        trace!(client_id, sid, to, hear_only, "attach.forward");
+                        let mut forward = tone.clone();
+                        if let Some(obj) = forward.as_object_mut() {
+                            obj.entry("from".to_string())
+                                .or_insert_with(|| Value::String(ensemble.me().to_hex()));
+                        }
+                        if let Err(e) = ensemble.route(forward).await {
+                            warn!(client_id, sid, err = %e, "attach.forward.failed");
                         }
                     }
                 }
@@ -1588,18 +1589,18 @@ impl ToneSink for HumdSink {
                         }
                         trace!(client_id, sid, peer = %peer.short(), "observer.removed");
                     }
-                } else if let Some(ensemble) = &self.ensemble {
-                    if let Some(to) = tone.get("to").and_then(Value::as_str) {
-                        if !to.is_empty() && to != ensemble.me().to_hex() {
-                            let mut forward = tone.clone();
-                            if let Some(obj) = forward.as_object_mut() {
-                                obj.entry("from".to_string())
-                                    .or_insert_with(|| Value::String(ensemble.me().to_hex()));
-                            }
-                            if let Err(e) = ensemble.route(forward).await {
-                                warn!(client_id, sid, err = %e, "detach.forward.failed");
-                            }
-                        }
+                } else if let Some(ensemble) = &self.ensemble
+                    && let Some(to) = tone.get("to").and_then(Value::as_str)
+                    && !to.is_empty()
+                    && to != ensemble.me().to_hex()
+                {
+                    let mut forward = tone.clone();
+                    if let Some(obj) = forward.as_object_mut() {
+                        obj.entry("from".to_string())
+                            .or_insert_with(|| Value::String(ensemble.me().to_hex()));
+                    }
+                    if let Err(e) = ensemble.route(forward).await {
+                        warn!(client_id, sid, err = %e, "detach.forward.failed");
                     }
                 }
             }
@@ -1618,17 +1619,16 @@ impl ToneSink for HumdSink {
             Some(Chi::PeerRemove) => {
                 let humd_id = tone.get("humd_id").and_then(Value::as_str).unwrap_or("");
                 trace!(client_id, humd_id, "ensemble.peer.remove");
-                if let Some(ensemble) = &self.ensemble {
-                    if let Ok(bytes) = hex::decode(humd_id) {
-                        if bytes.len() == 32 {
-                            let mut id = [0u8; 32];
-                            id.copy_from_slice(&bytes);
-                            let gone = ensemble::Hid::from(id);
-                            ensemble.remove_peer(&gone);
-                            if self.remote_hives.write().remove(&gone).is_some() {
-                                trace!(peer = %gone.short(), "discovery.evicted");
-                            }
-                        }
+                if let Some(ensemble) = &self.ensemble
+                    && let Ok(bytes) = hex::decode(humd_id)
+                    && bytes.len() == 32
+                {
+                    let mut id = [0u8; 32];
+                    id.copy_from_slice(&bytes);
+                    let gone = ensemble::Hid::from(id);
+                    ensemble.remove_peer(&gone);
+                    if self.remote_hives.write().remove(&gone).is_some() {
+                        trace!(peer = %gone.short(), "discovery.evicted");
                     }
                 }
             }
@@ -1687,20 +1687,20 @@ impl ToneSink for HumdSink {
 
                 if let Some(call_id) = call_id {
                     let origin_peer = self.incoming_tool_calls.write().remove(call_id);
-                    if let Some(origin_peer) = origin_peer {
-                        if let Some(ens) = &self.ensemble {
-                            let mut routed = tone.clone();
-                            if let Some(obj) = routed.as_object_mut() {
-                                obj.insert("to".into(), Value::String(origin_peer.to_hex()));
-                                obj.insert("from".into(), Value::String(ens.me().to_hex()));
-                            }
-                            trace!(call_id, to = %origin_peer.short(),
-                                "tool_result.route.to-origin-peer");
-                            if let Err(e) = ens.route(routed).await {
-                                warn!(err = %e, "tool_result.peer.route.failed");
-                            }
-                            return;
+                    if let Some(origin_peer) = origin_peer
+                        && let Some(ens) = &self.ensemble
+                    {
+                        let mut routed = tone.clone();
+                        if let Some(obj) = routed.as_object_mut() {
+                            obj.insert("to".into(), Value::String(origin_peer.to_hex()));
+                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
                         }
+                        trace!(call_id, to = %origin_peer.short(),
+                                "tool_result.route.to-origin-peer");
+                        if let Err(e) = ens.route(routed).await {
+                            warn!(err = %e, "tool_result.peer.route.failed");
+                        }
+                        return;
                     }
                     self.tool_routes_peer.write().remove(call_id);
                     if let Some(worker_cid) = self.tool_routes.write().remove(call_id) {
@@ -1807,11 +1807,8 @@ fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
         match caps.free_slots {
             Some(n) if n > 0 => return Some(id),
             None => return Some(id),
-            Some(0) => {
-                /* peer is full, skip but remember as fallback */
-                if fallback.is_none() {
-                    fallback = Some(id);
-                }
+            Some(0) if fallback.is_none() => {
+                fallback = Some(id);
             }
             _ => {}
         }

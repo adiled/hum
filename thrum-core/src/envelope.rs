@@ -3,6 +3,19 @@
 //! The envelope holds the fields every tone may carry. The Tone wraps an
 //! envelope with the chi-specific body as a raw JSON map — typed views
 //! per chi belong in a follow-up crate so this one stays small.
+//!
+//! `chi` and `rid` are required; everything else is situational. `ext`
+//! is the bee-private extension bag — thrum core ignores it, each bee
+//! owns its own key (e.g. `ext.opencode.serverUrl`).
+//!
+//! The body lives in a raw `serde_json::Map` because tone shapes vary
+//! per chi. Code that needs strongly typed access decodes the body into
+//! the appropriate per-chi struct. Serializing a `Tone` flattens body
+//! fields up next to the envelope ones into one flat wire object.
+//!
+//! Envelope fields win that merge — a body can never shadow `chi`,
+//! `rid` or any other envelope key. Deserializing splits them the other
+//! way: the envelope keys are pulled out and everything left is body.
 
 use std::collections::BTreeMap;
 
@@ -11,15 +24,9 @@ use serde_json::{Map, Value};
 
 use crate::chi::Chi;
 
-/// Envelope fields shared by every tone.
-///
-/// `chi` and `rid` are required; everything else is situational.
-/// `ext` is the bee-private extension bag — thrum core ignores it,
-/// each bee owns its own key (e.g. `ext.opencode.serverUrl`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
     pub chi: Chi,
-    /// correlation id — unique per send
     pub rid: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -32,10 +39,8 @@ pub struct Envelope {
     pub sid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wane: Option<u64>,
-    /// ms timestamp at send — for drift attribution
     #[serde(rename = "sentAt", skip_serializing_if = "Option::is_none")]
     pub sent_at: Option<i64>,
-    /// absolute ms expiry — past this, drop tone
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dusk: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,7 +51,6 @@ pub struct Envelope {
 }
 
 impl Envelope {
-    /// Minimal envelope: chi + rid, everything else default.
     pub fn new(chi: Chi, rid: impl Into<String>) -> Self {
         Self {
             chi,
@@ -64,12 +68,6 @@ impl Envelope {
     }
 }
 
-/// A complete thrum frame: envelope plus the chi-specific body.
-///
-/// The body lives in a raw `serde_json::Map` because tone shapes vary
-/// per chi. Code that needs strongly typed access decodes the body into
-/// the appropriate per-chi struct. Serializing a `Tone` flattens body
-/// fields up next to the envelope ones into one flat wire object.
 #[derive(Debug, Clone)]
 pub struct Tone {
     pub envelope: Envelope,
@@ -96,14 +94,11 @@ impl Tone {
 
 impl Serialize for Tone {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        // Round-trip envelope through Value so we can merge it with body
-        // into one flat wire object.
         let env_value = serde_json::to_value(&self.envelope).map_err(serde::ser::Error::custom)?;
         let Value::Object(mut merged) = env_value else {
             return Err(serde::ser::Error::custom("envelope did not serialize to an object"));
         };
         for (k, v) in &self.body {
-            // Envelope fields win — never let body shadow chi/rid/etc.
             merged.entry(k.clone()).or_insert_with(|| v.clone());
         }
         merged.serialize(ser)
@@ -113,7 +108,6 @@ impl Serialize for Tone {
 impl<'de> Deserialize<'de> for Tone {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let mut all: Map<String, Value> = Map::deserialize(de)?;
-        // Pull envelope keys out, leave the rest as body.
         const ENV_KEYS: &[&str] =
             &["chi", "rid", "from", "to", "sigil", "sid", "wane", "sentAt", "dusk", "mid", "ext"];
         let mut env_map = Map::with_capacity(ENV_KEYS.len());

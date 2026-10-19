@@ -15,6 +15,14 @@
 //! This is a *leaf* crate for remote hives: it depends only on
 //! `hum-paths` (for the seed path) and its own bundled `ids` module
 //! for [`Hid`]. No daemon, mesh, or nest machinery.
+//!
+//! The socket hello is signed over the hid and the timestamp only —
+//! nothing else on the hello. The timestamp binds freshness, so a
+//! recorded hello cannot be replayed after the skew window. It is
+//! domain-separated from the ensemble peer handshake: a bee talking to
+//! its own humd over a unix socket and two humds over iroh are
+//! different wires with different signing keys, and sharing a domain
+//! would let one be mistaken for the other.
 
 use std::fs;
 use std::io::Write;
@@ -22,14 +30,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use ed25519_dalek::{Signer, SigningKey};
-mod ids;
-pub use ids::*;
+mod hid;
+mod humid;
+pub use hid::*;
+pub use humid::*;
 use rand::RngCore;
 use tracing::{info, trace};
 
-/// One bee's persistent identity: signing key + derived [`Hid`].
-/// Cheap to clone the bytes; the signing key is on the stack inside
-/// the wrapper.
 #[derive(Debug)]
 pub struct BeeKey {
     pub signing: SigningKey,
@@ -41,43 +48,34 @@ impl BeeKey {
         self.signing.verifying_key().to_bytes()
     }
 
-    /// Sign a socket hello so the local humd can bind the declared `hid`
-    /// to a key instead of trusting the string. Returns
-    /// `(pubkey_hex, signed_at_ms, signature_hex)` for the three
-    /// `pubkey`/`signedAt`/`signature` fields.
-    ///
-    /// Covers the hid and the timestamp only — nothing else on the
-    /// socket hello. Timestamp binds freshness, so a recorded hello
-    /// cannot be replayed after the skew window.
-    pub fn sign_socket_hello(&self, signed_at_ms: i64) -> (String, i64, String) {
+    pub fn sign_socket_hello(&self, signed_at_ms: i64) -> SocketSignature {
         let msg = socket_hello_message(&self.hid, signed_at_ms);
         let sig = self.signing.sign(&msg);
-        (
-            hex::encode(self.pubkey_bytes()),
-            signed_at_ms,
-            hex::encode(sig.to_bytes()),
-        )
+        SocketSignature {
+            pubkey: hex::encode(self.pubkey_bytes()),
+            signed_at: signed_at_ms,
+            signature: hex::encode(sig.to_bytes()),
+        }
     }
 }
 
-/// Domain-separate socket-hello identity from the ensemble peer
-/// handshake. Different wire (a bee talking to its own humd over a unix
-/// socket, not two humds over iroh) and a different signing key, so
-/// sharing a domain would only let one be confused for the other.
+#[derive(Debug, Clone)]
+pub struct SocketSignature {
+    pub pubkey: String,
+    pub signed_at: i64,
+    pub signature: String,
+}
+
 pub const BEE_SOCKET_DOMAIN: &str = "hum-bee-socket-v1";
 
 pub fn socket_hello_message(hid: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", BEE_SOCKET_DOMAIN, hid.to_hex(), signed_at_ms).into_bytes()
 }
 
-/// Path to a bee kind's identity seed: `$XDG_STATE_HOME/hum/bees/<kind>.key`.
 pub fn bee_key_path(kind: &str) -> PathBuf {
     hum_paths::bee_key(kind)
 }
 
-/// Load the bee's persisted key, minting + persisting a fresh one
-/// on first boot. The returned [`Hid`] is derived from the pubkey
-/// with the given role `prefix`.
 pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
     let path = bee_key_path(kind);
     if path.exists() {
@@ -192,7 +190,8 @@ mod tests {
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
         let key = load_or_mint_bee_key("sig-bind", HidPrefix::Wbee).expect("mint");
-        let (pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        let sig = key.sign_socket_hello(1_700_000_000_000);
+        let (pubkey_hex, signed_at, sig_hex) = (sig.pubkey, sig.signed_at, sig.signature);
         assert_eq!(pubkey_hex, hex::encode(key.pubkey_bytes()));
 
         let msg = socket_hello_message(&key.hid, signed_at);
@@ -218,7 +217,8 @@ mod tests {
         let key = load_or_mint_bee_key("sig-rebind", HidPrefix::Wbee).expect("mint");
         let other = Hid::random(HidPrefix::Wbee);
 
-        let (_pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        let sig = key.sign_socket_hello(1_700_000_000_000);
+        let (signed_at, sig_hex) = (sig.signed_at, sig.signature);
         let msg = socket_hello_message(&other, signed_at);
         let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
         let mut sig_arr = [0u8; 64];
@@ -241,7 +241,8 @@ mod tests {
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
         let key = load_or_mint_bee_key("sig-replay", HidPrefix::Wbee).expect("mint");
-        let (_pubkey_hex, signed_at, sig_hex) = key.sign_socket_hello(1_700_000_000_000);
+        let sig = key.sign_socket_hello(1_700_000_000_000);
+        let (signed_at, sig_hex) = (sig.signed_at, sig.signature);
         let sig_bytes = hex::decode(&sig_hex).expect("sig hex");
         let mut sig_arr = [0u8; 64];
         sig_arr.copy_from_slice(&sig_bytes);

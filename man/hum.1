@@ -79,7 +79,8 @@ The hive name (e.g. \fBclaude-cli\fR) is accepted in place of a bee id.
 List orchd-managed bees (delegates to \fBorchd status\fR).
 .TP
 .B penny
-Show lifetime counters from penny.json (token swaps, tool executions, etc).
+Show the lifetime counters in penny.json. The file is currently empty:
+nothing in the daemon increments it yet, so this reports an empty set.
 .TP
 .B recipes [\fIname\fR]
 List available recipes (\fBrecipes/*\fR) or run one by name (e.g. \fBopencode\fR).
@@ -140,6 +141,10 @@ Print help.
 .B \-V, \-\-version
 Print the version.
 .SH FILES
+.PP
+Paths follow the XDG Base Directory spec. The defaults below assume
+\fBXDG_CONFIG_HOME\fR, \fBXDG_STATE_HOME\fR and \fBXDG_DATA_HOME\fR are
+unset.
 .TP
 .B ~/.config/hum/hum.json
 Main configuration (see \fBhum.schema.json\fR in the repo).
@@ -154,11 +159,35 @@ Overlay directory for the orchd bee supervisor.
 The humd identity: a 32-byte Ed25519 seed minted on install (chmod 600).
 HumdId is the sha256 of the humd's Ed25519 public key.
 .TP
-.B ~/.local/state/hum/penny.json
-Lifetime counters.
+.B ~/.local/state/hum/thrum.sock
+The thrum socket humd binds and bees connect to.
 .TP
-.B ~/.local/share/hum/
-Data: source checkout, logs, and the chi log.
+.B ~/.local/state/hum/runtime.json
+Rendezvous file: the running daemon publishes its socket path, pid and
+version here.
+.TP
+.B ~/.local/state/hum/bees.json
+Live bee manifest snapshot, written on every register and disconnect.
+.TP
+.B ~/.local/state/hum/revoked.json
+Withdrawn bee identities; checked at hello time, so a revoked bee is
+refused the socket. Edited with \fBhumctl revoke\fR, a separate binary.
+.TP
+.B ~/.local/state/hum/routing.json
+Kademlia routing table, restored on boot.
+.TP
+.B ~/.local/state/hum/drift/
+Drift rings, one NDJSON file per day.
+.TP
+.B ~/.local/state/hum/thehum/
+The persistent chi log, one NDJSON file per day plus seq.bin and
+snapshots/.
+.TP
+.B ~/.local/state/run/hum/penny.json
+Lifetime counters. Under the runtime root, so a reboot clears them.
+.TP
+.B ~/.local/share/hum/src/
+Source checkout the installer builds from.
 .TP
 .B ~/.local/bin/
 Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorch\fR, \fBorchd\fR.
@@ -166,6 +195,29 @@ Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorch\fR, \fBorchd\fR
 .TP
 .B HUM_BIN
 Path to the humd binary; overrides the default resolved location.
+.TP
+.B HUM_THRUM_SOCK
+Path to the thrum socket. Overrides the default, for both the daemon
+(binds it) and clients (connect to it).
+.TP
+.B HUM_SOCKET
+Same as \fBHUM_THRUM_SOCK\fR, checked second.
+.TP
+.B HUM_TRUST_REMOTE_WORKERS
+Set to \fB1\fR, \fBtrue\fR or \fByes\fR to let humd forward a prompt to a peer
+on the strength of that peer's advertised model. Off by default: an
+unverified claim hands the prompt to whoever made it.
+.TP
+.B HUM_MCP_PORT
+Port for humd's own MCP server. Default 29147.
+.TP
+.B CLAUDE_CLI_PATH
+Path to the claude binary the worker cells spawn. Default \fBclaude\fR on
+\fBPATH\fR.
+.TP
+.B XDG_RUNTIME_DIR
+Where the per-boot runtime files live: the thrum socket, the http
+control socket, and penny.json. A reboot clears them.
 .SH INSTALLATION
 .PP
 Install with the canonical installer:
@@ -175,9 +227,11 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 .fi
 .PP
 The installer builds and registers \fBhumd\fR as a user service (launchd on
-macOS, systemd-style on Linux), mints the identity key, and pulls in the
-\fBorch\fR/\fBorchd\fR bee-supervisor binaries. Re-running it upgrades in
-place. From a cloned repo, \fB./install\fR accepts a subcommand:
+macOS, systemd-style on Linux), mints the identity key, pulls in the
+\fBorch\fR/\fBorchd\fR bee-supervisor binaries, and installs this page into
+\fB/usr/local/share/man/man1\fR or \fB~/.local/share/man/man1\fR. Re-running
+it upgrades in place. From a cloned repo, \fB./install\fR accepts a
+subcommand:
 .RS
 .B status
 \(em humd state + paths.
@@ -219,6 +273,7 @@ worker	a bee that produces compute (accepts prompt, emits chunk/finish/tool-call
 forager	a bee that translates outside wire <-> thrum (HTTP/gRPC/stdio)
 .TE
 .SH SEE ALSO
-.B hum.schema.json
-(1), the \fBscenarios/\fR directory for ensemble narratives, and the
-project website: https://adiled.github.io/hum/.
+.PP
+\fBhum.schema.json\fR in the project repo, the \fBscenarios/\fR directory for
+ensemble narratives, and the project website:
+https://adiled.github.io/hum/.

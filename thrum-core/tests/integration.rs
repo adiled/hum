@@ -10,7 +10,6 @@ use thrum_core::{
     dusk_in, is_dusk, sigil, Chi, Envelope, Tone, WaneTracker, THRUM_VERSION,
 };
 
-// ── sigil ──────────────────────────────────────────────────────────────
 
 #[test]
 fn sigil_is_deterministic() {
@@ -44,10 +43,7 @@ fn sigil_is_12_hex_chars() {
     assert!(s.chars().all(|c| !c.is_ascii_uppercase()));
 }
 
-// ── chi round-trip — every variant ─────────────────────────────────────
 
-/// Round-trip a Tone whose envelope carries `chi` through serde_json,
-/// then assert the parsed envelope reports the same chi.
 fn assert_chi_round_trips(chi: Chi) {
     let tone = Tone::new(Envelope::new(chi, "rid-rt"));
     let s = serde_json::to_string(&tone).expect("serialize tone");
@@ -176,11 +172,9 @@ fn chi_drone_retrofit_round_trips() {
     assert_chi_round_trips(Chi::DroneRetrofit);
 }
 
-// ── envelope rid contract ──────────────────────────────────────────────
 
 #[test]
 fn envelope_requires_rid_to_deserialize() {
-    // chi present, rid absent — must fail
     let wire = json!({ "chi": "hello" });
     let result: Result<Envelope, _> = serde_json::from_value(wire);
     assert!(
@@ -191,7 +185,6 @@ fn envelope_requires_rid_to_deserialize() {
 
 #[test]
 fn tone_requires_rid_to_deserialize() {
-    // Tone delegates envelope decoding — same contract applies
     let wire = json!({ "chi": "prompt", "content": "hi" });
     let result: Result<Tone, _> = serde_json::from_value(wire);
     assert!(
@@ -208,18 +201,15 @@ fn envelope_with_rid_deserializes() {
     assert_eq!(env.chi, Chi::Hello);
 }
 
-// ── dusk ───────────────────────────────────────────────────────────────
 
 #[test]
 fn is_dusk_true_past_expiry() {
-    // dusk_in(-1) yielded a timestamp 1ms in the past — already expired
     let env = Envelope { dusk: Some(dusk_in(-1)), ..Envelope::new(Chi::Hello, "r") };
     assert!(is_dusk(&env), "expired dusk must register as dusk");
 }
 
 #[test]
 fn is_dusk_false_before_expiry() {
-    // dusk_in(10_000) is 10s in the future — not yet expired
     let env = Envelope { dusk: Some(dusk_in(10_000)), ..Envelope::new(Chi::Hello, "r") };
     assert!(!is_dusk(&env), "future dusk must not register as dusk");
 }
@@ -230,7 +220,6 @@ fn is_dusk_false_when_unset() {
     assert!(!is_dusk(&env), "missing dusk must never register as dusk");
 }
 
-// ── WaneTracker ────────────────────────────────────────────────────────
 
 #[test]
 fn wane_tick_increments() {
@@ -258,10 +247,8 @@ fn wane_behind_detects_remote_ahead() {
     let w = WaneTracker::new();
     w.tick("s");
     w.tick("s");
-    // local at 2; remote claiming 5 — local is stale
     assert!(w.behind("s", 5));
     assert!(w.behind("s", 3));
-    // remote level or behind — local is not stale
     assert!(!w.behind("s", 2));
     assert!(!w.behind("s", 1));
     assert!(!w.behind("s", 0));
@@ -270,7 +257,6 @@ fn wane_behind_detects_remote_ahead() {
 #[test]
 fn wane_behind_on_untracked_sigil() {
     let w = WaneTracker::new();
-    // never seen — local is 0, remote of 1 puts us behind
     assert!(w.behind("fresh", 1));
     assert!(!w.behind("fresh", 0));
 }
@@ -283,14 +269,12 @@ fn wane_set_pins_value() {
     assert_eq!(w.tick("s"), 43);
 }
 
-// ── protocol version ──────────────────────────────────────────────────
 
 #[test]
 fn thrum_version_is_pinned() {
     assert_eq!(THRUM_VERSION, "0.7.0");
 }
 
-// ── bonus: a representative full-shape tone survives JSON ─────────────
 
 #[test]
 fn tone_with_body_round_trips_via_json_string() {

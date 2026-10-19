@@ -1,26 +1,29 @@
 //! Build script — keeps generated SDKs in `thrum-clients/{ts,python,go}/`
-//! in lockstep with `chi.rs`.
+//! in lockstep with the wire contract.
 //!
 //! Cargo reruns this whenever the listed files change. We parse the
-//! Rust enums via the `codegen` library and regenerate every target.
-//! No drift possible: every build of thrum-core refreshes every client.
-//! Output paths live in `codegen::paths` — never hand-write them here.
+//! Rust enums and `WIRE.md` via the `codegen` library and regenerate
+//! every target. No drift possible: every build of thrum-core refreshes
+//! every client. Output paths live in `codegen::paths` — never
+//! hand-write them here.
 
 use codegen::paths;
 
 fn main() {
     let chi_rs = paths::chi_rs();
     let lib_rs = paths::lib_rs();
+    let wire_md = paths::wire_md();
     let views_rs = paths::views_rs();
     let envelope_rs = paths::envelope_rs();
 
     println!("cargo:rerun-if-changed={}", chi_rs.display());
     println!("cargo:rerun-if-changed={}", lib_rs.display());
+    println!("cargo:rerun-if-changed={}", wire_md.display());
     println!("cargo:rerun-if-changed={}", views_rs.display());
     println!("cargo:rerun-if-changed={}", envelope_rs.display());
     println!("cargo:rerun-if-changed=build.rs");
 
-    let spec = match codegen::parse(&chi_rs, &lib_rs) {
+    let spec = match codegen::parse(&chi_rs, &lib_rs, &wire_md) {
         Ok(s) => s,
         Err(e) => {
             println!("cargo:warning=thrum-core build.rs: parse failed: {e}");

@@ -38,7 +38,8 @@ fn run() -> Result<()> {
         positional
     };
 
-    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs()).context("parse chi spec")?;
+    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs(), &paths::wire_md())
+        .context("parse chi spec")?;
     let proto = codegen::protocol::protocol_spec(
         &paths::views_rs(),
         &paths::envelope_rs(),

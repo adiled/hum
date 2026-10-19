@@ -24,46 +24,31 @@
 //! hum://humd_a4f2b8c19d3e/Users/op/auth  — shortid
 //! hum://humd_a4f2b8c19d3e…64hex/path     — full hid
 //! ```
+//!
+//! The host segment is classified by shape, not by asking: a known role
+//! prefix followed by `_` and hex means a hid, everything else is an
+//! alias. Aliases may therefore contain underscores.
 
 use std::fmt;
 
 use crate::{Hid, HidParseError};
 
-/// A parsed `hum://` URI. Cheap to clone (`HostRef::Alias` is the
-/// only heap allocation, and that's just the alias string).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumUri {
     pub host: HostRef,
-    /// Path component, always leading-slash-stripped. Empty string
-    /// when the URI was `hum://<host>/` with no body. Forager-side
-    /// interpretation: humfs treats this as a local absolute path
-    /// (prepends `/`); other foragers may interpret differently.
     pub path: String,
 }
 
-/// What the URI's host segment names. The asker humd canonicalizes
-/// [`HostRef::Alias`] to [`HostRef::Hid`] before any cross-humd
-/// forward — peer humds see only the resolved form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostRef {
-    /// Alias to be resolved by [`AliasResolver`]. Free-form string
-    /// matching `[A-Za-z0-9._-]+` — anything that doesn't look like
-    /// a hid (no `_` after the first 4 chars in the role prefix
-    /// pattern) lands here.
     Alias(String),
-    /// Resolved (or directly-specified) hid. Short or full form;
-    /// short widens with zeros on parse but routing always uses
-    /// the canonical hex repr.
     Hid(Hid),
 }
 
 #[derive(Debug)]
 pub enum UriParseError {
-    /// Input doesn't start with `hum://`.
     WrongScheme,
-    /// No host segment between `hum://` and the next `/`.
     EmptyHost,
-    /// Looks like a hid (has `<prefix>_`) but doesn't parse.
     BadHid(HidParseError),
 }
 
@@ -80,10 +65,6 @@ impl fmt::Display for UriParseError {
 impl std::error::Error for UriParseError {}
 
 impl HumUri {
-    /// Parse a `hum://<host>/<path>` string. Bare paths (no
-    /// `hum://` prefix) are rejected — callers wanting "either
-    /// bare-path or hum-uri" should branch on
-    /// [`HumUri::starts_with_scheme`] first.
     pub fn parse(s: &str) -> Result<Self, UriParseError> {
         let rest = s.strip_prefix("hum://").ok_or(UriParseError::WrongScheme)?;
         let (host_str, path_str) = match rest.find('/') {
@@ -92,8 +73,6 @@ impl HumUri {
         };
         if host_str.is_empty() { return Err(UriParseError::EmptyHost); }
 
-        // Hid heuristic: starts with one of the known prefixes
-        // followed by `_`. Otherwise treat as alias.
         let host = if looks_like_hid(host_str) {
             Hid::from_hex(host_str)
                 .map(HostRef::Hid)
@@ -104,15 +83,10 @@ impl HumUri {
         Ok(HumUri { host, path: path_str.to_string() })
     }
 
-    /// True when the string carries a `hum://` scheme prefix.
-    /// Callers building cwd / tool-arg paths use this to decide
-    /// whether to route the value through [`HumUri::parse`] or
-    /// treat it as a plain local path.
     pub fn starts_with_scheme(s: &str) -> bool {
         s.starts_with("hum://")
     }
 
-    /// Render back to canonical `hum://<host>/<path>` form.
     pub fn to_string_canonical(&self) -> String {
         let host = match &self.host {
             HostRef::Alias(a) => a.clone(),
@@ -121,34 +95,18 @@ impl HumUri {
         format!("hum://{host}/{}", self.path)
     }
 
-    /// Substitute the host with a resolved [`Hid`]. Returns a new
-    /// URI; the original stays unchanged (URIs are values, not
-    /// handles). Used by the canonicalization pass in the asker
-    /// humd before forwarding tones across the ensemble.
     pub fn with_hid(&self, hid: Hid) -> Self {
         HumUri { host: HostRef::Hid(hid), path: self.path.clone() }
     }
 }
 
 fn looks_like_hid(host: &str) -> bool {
-    // A hid is `<prefix>_<hex>` where prefix is one of the known
-    // tokens. Anything else (no underscore, or unknown prefix) is
-    // an alias. Aliases CAN contain underscores (`my_workstation`)
-    // — we use prefix matching, not just presence of `_`, so the
-    // disambiguation is unambiguous.
     let Some((p, rest)) = host.split_once('_') else { return false };
     if !matches!(p, "humd" | "wbee" | "fbee") { return false; }
-    // Rest must be pure hex (length checked by from_hex).
     rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Trait the asker humd uses to canonicalize aliases to [`Hid`]s
-/// before forwarding tones. v0 impl reads `peers.json`; future
-/// adapters chain ENS, HNS, libp2p kademlia, etc.
 pub trait AliasResolver: Send + Sync {
-    /// Resolve `alias` → [`Hid`]. Returns `None` when the alias is
-    /// not known to this resolver (callers fall back to the next
-    /// resolver in the chain, or surface an error).
     fn resolve(&self, alias: &str) -> Option<Hid>;
 }
 
@@ -188,8 +146,6 @@ mod tests {
 
     #[test]
     fn alias_with_underscore_not_treated_as_hid() {
-        // Underscore in alias but not a known prefix — must stay
-        // alias. The disambiguator is prefix-match, not just `_`.
         let u = HumUri::parse("hum://my_workstation/Users/op").unwrap();
         assert_eq!(u.host, HostRef::Alias("my_workstation".into()));
     }

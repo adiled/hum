@@ -1,27 +1,11 @@
-//! Federation handoff: two humds owned by different operators (T3 tier)
-//! announce themselves with Ed25519-signed hellos. The good case proves
-//! both sides verify the other's signature and learn its caps; the bad
-//! case proves a tampered hello (pubkey doesn't hash to the claimed
-//! humd_id) is rejected — the peer never enters the registry.
+//! Federation handoff.
 //!
-//! Narrative: org-A runs humd-A, org-B runs humd-B. On peer-add each
-//! ships its identity, signed under its own key. Each side verifies the
-//! signature against the claimed pubkey and rejects mismatched /
-//! unsigned hellos.
-//!
-//! This validates the cryptographic seam at the bottom of the
-//! federation-handoff scenario (`scenarios/federation-handoff.md`).
-//! Grant tokens, scoped capabilities, and revocation live one layer up
-//! and are exercised by separate tests — this one is *only* about
-//! "does the peer prove it owns its pubkey?"
+//! The prose spec is [`scenarios/federation-handoff.md`](../../../scenarios/federation-handoff.md).
 
 use std::time::Duration;
 
 use ensemble::HumdKey;
 
-/// Poll up to ~500ms for `cond` to hold. Avoids racy `sleep(50ms)`
-/// fixed waits — the handshake is async (spawned drainer tasks) but
-/// usually completes in <5ms.
 async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
     for _ in 0..100 {
         if cond() {
@@ -54,9 +38,6 @@ async fn good_signature_admits_peer() {
     .await;
     assert!(admitted, "both ensembles must learn each other's caps from verified hellos");
 
-    // Caps actually came from the hello (not the transport stub) — the
-    // learned caps include the hive_tag in nests because that's what
-    // `wire_signed` advertises (matches humd's default hive_tag).
     let b_caps_on_a = a.ensemble.peer_caps(&b.id).expect("b in A's registry");
     assert!(
         b_caps_on_a.nests.iter().any(|n| n == "claude-repl"),
@@ -76,9 +57,6 @@ async fn tampered_signature_rejects_peer() {
     let a = sim.spawn_humd_with_identity(HumdKey::generate()).await;
     let c = sim.spawn_humd_with_identity(HumdKey::generate()).await;
 
-    // C announces a tampered hello — pubkey doesn't hash to c.id. A is
-    // strict-auth and must eject C from its registry once the drainer
-    // sees the bad hello.
     sim.wire_signed_tampered(a.id, c.id).expect("tampered wire A↔C");
 
     let a_ens = a.ensemble.clone();

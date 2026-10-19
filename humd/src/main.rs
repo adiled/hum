@@ -29,13 +29,11 @@ fn print_help() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Minimum CLI handshake — anything beyond `humd` invokes inspection
-    // surface (TODO: clap subcommands once humd RPC exists).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         match args[0].as_str() {
             "--version" | "-V" => {
-                println!("humd {} (thrum {})", env!("CARGO_PKG_VERSION"), THRUM_VERSION);
+                println!("humd {} (thrum {})", env!("HUM_VERSION"), THRUM_VERSION);
                 return Ok(());
             }
             "--help" | "-h" | "help" => {
@@ -59,9 +57,6 @@ async fn main() -> Result<()> {
         .init();
     info!(version = %THRUM_VERSION, "humd.booting");
 
-    // A daemon must not boot on an invalid config. Validate hum.json
-    // against the schema and exit non-zero (violations verbatim) before
-    // any state is built.
     hum_paths::config::validate_or_exit();
 
     let cfg = DaemonConfig::from_env();
@@ -75,7 +70,6 @@ async fn main() -> Result<()> {
     humd::run(cfg, wait_for_shutdown()).await
 }
 
-/// Resolves the first time SIGTERM, SIGINT, or ctrl-c arrives.
 async fn wait_for_shutdown() {
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
     let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");

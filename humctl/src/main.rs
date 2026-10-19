@@ -66,12 +66,11 @@ fn run() -> Result<()> {
 fn parse_lines(rest: Vec<String>) -> u32 {
     let mut it = rest.iter();
     while let Some(a) = it.next() {
-        if a == "-n" || a == "--lines" {
-            if let Some(v) = it.next() {
-                if let Ok(n) = v.parse() {
-                    return n;
-                }
-            }
+        if matches!(a.as_str(), "-n" | "--lines")
+            && let Some(v) = it.next()
+            && let Ok(n) = v.parse()
+        {
+            return n;
         }
     }
     200
@@ -196,10 +195,10 @@ fn thehum() -> Result<()> {
         if ft.is_file() {
             total_bytes += ent.metadata().map(|m| m.len()).unwrap_or(0);
             let path = ent.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("ndjson") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ndjson.push(stem.to_string());
-                }
+            if path.extension().and_then(|x| x.to_str()) == Some("ndjson")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                ndjson.push(stem.to_string());
             }
         }
     }
@@ -235,7 +234,6 @@ fn thehum() -> Result<()> {
         }
         Err(_) => 0,
     };
-    // snapshots/ bytes count toward total too.
     if let Ok(it) = std::fs::read_dir(&snap_dir) {
         for e in it.flatten() {
             if e.file_type().map(|f| f.is_file()).unwrap_or(false) {

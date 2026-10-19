@@ -1,21 +1,6 @@
 //! eggs-on-the-hum — the role-distributed bloom.
 //!
-//! Operator on laptop fires one prompt, then walks away. Four
-//! humds, four roles:
-//!
-//! - **laptop** (humd-L): nestler — sends `chi:"prompt"`
-//! - **server** (humd-S): worker bee — runs the LLM
-//! - **workstation** (humd-W): humfs forager — handles tool-calls
-//! - **phone** (humd-P): SMS-relay observer — sees `chi:"finish"`
-//!
-//! Coverage:
-//! - laptop pins fs to workstation via `cwd: "hum://humd_<W>/work"`
-//! - humd-S parses the URI, stashes `(sid → workstation hid)`, and
-//!   routes the worker's chi:"tool-call" via ensemble to humd-W
-//! - humd-W routes inbound tool-call to its local humfs forager
-//! - humfs's chi:"tool-result" routes back via ensemble to humd-S
-//! - humd-S forwards the result to the worker
-//! - worker emits finish; observer fan-out reaches phone
+//! The prose spec is [`scenarios/eggs-on-the-hum.md`](../../../scenarios/eggs-on-the-hum.md).
 
 use std::time::Duration;
 
@@ -30,16 +15,13 @@ async fn eggs_on_the_hum() {
     let workstation = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     let phone       = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
-    // Full mesh — simpler than relaying for the test.
-    sim.wire(laptop.id, server.id).expect("L↔S");
-    sim.wire(laptop.id, workstation.id).expect("L↔W");
-    sim.wire(laptop.id, phone.id).expect("L↔P");
-    sim.wire(server.id, workstation.id).expect("S↔W");
-    sim.wire(server.id, phone.id).expect("S↔P");
-    sim.wire(workstation.id, phone.id).expect("W↔P");
+    sim.wire_unauthenticated(laptop.id, server.id).expect("L↔S");
+    sim.wire_unauthenticated(laptop.id, workstation.id).expect("L↔W");
+    sim.wire_unauthenticated(laptop.id, phone.id).expect("L↔P");
+    sim.wire_unauthenticated(server.id, workstation.id).expect("S↔W");
+    sim.wire_unauthenticated(server.id, phone.id).expect("S↔P");
+    sim.wire_unauthenticated(workstation.id, phone.id).expect("W↔P");
 
-    // Mock humfs forager on the WORKSTATION (not the server).
-    // Tool-calls reach it only via cross-humd routing (Q5).
     sim.attach_mock_forager(
         workstation.id,
         "humfs",
@@ -53,8 +35,6 @@ async fn eggs_on_the_hum() {
     .await
     .expect("humfs forager attaches to workstation");
 
-    // Mock worker on the SERVER. Emits one chi:tool-call after
-    // receiving the prompt, then chi:finish after the tool-result.
     let server_thrum = server.thrum.clone();
     let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
@@ -106,14 +86,11 @@ async fn eggs_on_the_hum() {
         }
     });
 
-    // Phone attaches as a hearOnly observer.
     let _phone_cid = sim
         .attach_observer(phone.id, server.id, "hum-eggs")
         .expect("phone observer attach");
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Laptop fires the prompt. The cwd pins the workstation as the
-    // fs host using the workstation's full hid in `hum://` form.
     let cwd_uri = format!("hum://{}/work", workstation.id.to_hex());
     sim.nestler_send(
         laptop.id,
@@ -130,7 +107,6 @@ async fn eggs_on_the_hum() {
     )
     .expect("laptop nestler sends prompt");
 
-    // Drain the phone's mailbox until finish lands.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut saw_finish = false;
     while std::time::Instant::now() < deadline {

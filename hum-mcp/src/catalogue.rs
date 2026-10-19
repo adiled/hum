@@ -17,14 +17,6 @@
 use crate::capability::capability_tools;
 use crate::protocol::ToolDef;
 
-/// Merge + filter the two tool streams into one `tools/list`
-/// catalogue. `provided` lists the capability categories some
-/// forager hive owns ("fs", future "net" / "shell" / …); names in
-/// those capabilities are stripped from `nestler_tools` so the
-/// agent picks the forager surface.
-///
-/// Filter is case-insensitive — askers ship tool names in whatever
-/// case they prefer (PascalCase, lowercase, snake_case).
 pub fn merge(
     forager_tools: Vec<ToolDef>,
     nestler_tools: Vec<ToolDef>,

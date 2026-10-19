@@ -17,18 +17,17 @@
 //! The on-disk format lives in [`hum_paths::Revocations`] so `humctl` can
 //! edit the list without depending on the daemon. This wrapper is the
 //! daemon-side handle.
+//!
+//! The set is read once at boot, never per hello. Re-reading would put
+//! disk on the admission path, and admission is the one path that must
+//! not stall. A revocation therefore takes effect on the next daemon
+//! start, which `humctl revoke` says out loud.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-/// The set of withdrawn hids, read once at boot.
-///
-/// Cloning is cheap. The set is deliberately *not* re-read per hello:
-/// that would put disk on the admission path, and admission is the one
-/// path that must not stall. A revocation therefore takes effect on the
-/// next daemon start, which `humctl revoke` says out loud.
 #[derive(Clone, Default)]
 pub struct Revocations {
     inner: Arc<RwLock<hum_paths::Revocations>>,
@@ -41,7 +40,6 @@ impl Revocations {
         }
     }
 
-    /// Whether `hid_hex` has been withdrawn.
     pub fn is_revoked(&self, hid_hex: &str) -> bool {
         self.inner.read().contains(hid_hex)
     }

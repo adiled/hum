@@ -14,6 +14,10 @@
 //! - `Soft`     — compensation / formality shift
 //! - `None`     — text looks fine
 //!
+//! The constant names carry the tier: CONTEXT_LOSS_EXPLICIT is
+//! critical, IDENTITY_RESET and GREETING_RESET are heavy,
+//! COMPENSATION and FORMALITY_SHIFT are soft.
+//!
 //! Ported from `drone/classify.ts`. Kept in lockstep with that file
 //! so the daemon and any TS-side stub classifier agree byte-for-byte.
 
@@ -22,7 +26,6 @@ use std::sync::OnceLock;
 use crate::{Classifier, Suspicion};
 use regex::RegexSet;
 
-// Critical: explicit context loss admission — the honest failure mode.
 const CONTEXT_LOSS_EXPLICIT: &[&str] = &[
     r"(?i)\bi don'?t (have|see|recall|remember) (any )?(previous|prior|earlier|context|history|conversation)",
     r"(?i)\bno (previous|prior) (context|history|conversation|messages?)",
@@ -35,7 +38,6 @@ const CONTEXT_LOSS_EXPLICIT: &[&str] = &[
     r"(?i)\bI (don'?t|do not) have (access to|visibility into|information about) (your |the |any )?(previous|prior)",
 ];
 
-// Heavy: identity reset — never legitimate after turn 1.
 const IDENTITY_RESET: &[&str] = &[
     r"(?i)\bI'?m (OpenCode|Claude|an AI|a coding) ?(assistant|agent|language model|helper)?[.,!]",
     r"(?i)\b(best coding agent|software engineering tasks|Use the instructions below)",
@@ -43,17 +45,13 @@ const IDENTITY_RESET: &[&str] = &[
     r"(?i)\bI apologize.{0,30}(don'?t|cannot|can'?t) (have|access)",
 ];
 
-// Heavy: greeting reset — emoji greetings or "how can I help" mid-stream.
 const GREETING_RESET: &[&str] = &[
-    // The TS regex starts with `^.{0,20}(👋|Hey!|Hello!|Hi there).{0,30}(help|assist|can I)`.
-    // Rust's `regex` does not support look-around but unicode literals are fine.
     r"(?i)^.{0,20}(\x{1F44B}|Hey!|Hello!|Hi there).{0,30}(help|assist|can I)",
     r"(?i)\bhow can I (help|assist) you( today| with)?\??",
     r"(?i)\bwhat (would you like|do you want|can I do|shall I) (me to |to )?(help|do|work)",
     r"(?i)\bI (can|could) help (you )?(with|by):\s*\n",
 ];
 
-// Soft: compensation — searches/hedges instead of remembering.
 const COMPENSATION: &[&str] = &[
     r"(?i)\b(let me|I'?ll) (search|look|check|scan|grep|find) (the |this |your |for )",
     r"(?i)\b(don'?t|do not|can'?t|cannot) (see|find) any (references?|mention|results?)\b",
@@ -63,7 +61,6 @@ const COMPENSATION: &[&str] = &[
     r"(?i)\b(not sure|unsure|unclear) what (you'?re|you are) (referring|asking|talking) (to|about)",
 ];
 
-// Soft: formality shift — trust reset back to transactional mode.
 const FORMALITY_SHIFT: &[&str] = &[
     r"(?i)\bI'?d (need|require) (more|additional) (information|context|details) (to|before|in order)",
     r"(?i)\bbefore I (proceed|continue|do that).{0,30}(confirm|sure|want)",
@@ -81,7 +78,7 @@ struct Bank {
 fn bank() -> &'static Bank {
     static B: OnceLock<Bank> = OnceLock::new();
     B.get_or_init(|| {
-        let crit_src: Vec<&str> = CONTEXT_LOSS_EXPLICIT.iter().copied().collect();
+        let crit_src: Vec<&str> = CONTEXT_LOSS_EXPLICIT.to_vec();
         let heavy_src: Vec<&str> = IDENTITY_RESET
             .iter()
             .chain(GREETING_RESET.iter())
@@ -100,7 +97,6 @@ fn bank() -> &'static Bank {
     })
 }
 
-/// Tiered regex classifier. Short-circuits at the loudest match.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RegexClassifier;
 

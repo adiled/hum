@@ -12,7 +12,7 @@ async fn two_humds_ping_pong() {
 
     sim.await_ready(a.id).await.expect("a ready");
     sim.await_ready(b.id).await.expect("b ready");
-    sim.wire(a.id, b.id).expect("wire humd-A and humd-B");
+    sim.wire_unauthenticated(a.id, b.id).expect("wire humd-A and humd-B");
 
     let a_id = a.id;
     let sim_arc = std::sync::Arc::new(sim);

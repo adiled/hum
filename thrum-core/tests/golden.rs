@@ -12,7 +12,6 @@ use serde_json::{Map, Value};
 
 use thrum_core::{Chi, EchoBody, Envelope, Tone};
 
-/// Body view → flat body map (serializes absent optionals off the wire).
 fn body_map<T: serde::Serialize>(b: &T) -> Map<String, Value> {
     serde_json::to_value(b)
         .expect("body serializes")
@@ -21,7 +20,6 @@ fn body_map<T: serde::Serialize>(b: &T) -> Map<String, Value> {
         .clone()
 }
 
-/// Fixed valid 52-char Crockford rid: 50 zeroes + the line index.
 fn rid(n: usize) -> String {
     format!("{:0>50}{:02}", "", n)
 }
@@ -44,11 +42,9 @@ fn env(chi: Chi, n: usize) -> Envelope {
 
 fn golden() -> Vec<Value> {
     let mut out = Vec::new();
-    let mut n = 0usize;
     macro_rules! push {
         ($chi:expr, $body:expr) => {{
-            out.push(tone(env($chi, n), body_map(&$body)));
-            n += 1;
+            out.push(tone(env($chi, out.len()), body_map(&$body)));
         }};
     }
 
@@ -196,8 +192,7 @@ fn golden_wire_locked() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden.ndjson");
     let want = golden();
     if !fixture.exists() {
-        // First run: materialize the fixture, then pass.
-        std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
         let mut s = String::new();
         for t in &want {
             s.push_str(&serde_json::to_string(t).unwrap());
@@ -222,9 +217,6 @@ fn golden_wire_locked() {
     }
 }
 
-/// Every tone passes through the wire serde round-trip: serialize to a
-/// flat frame, parse back into Envelope + raw body, decode the body into
-/// its typed view, and confirm envelope fields survived.
 #[test]
 fn golden_round_trips_through_views() {
     for (i, wire) in golden().iter().enumerate() {
@@ -236,9 +228,7 @@ fn golden_round_trips_through_views() {
 
 fn check_round_trip(tone: &Tone) {
     use thrum_core::*;
-    // Re-serialize body map from the parsed tone and decode into the view.
     let body = &tone.body;
-    // spot-check a representative set of shapes with the envelope merged
     match tone.chi() {
         Chi::Chunk => {
             let v: ChunkBody =
@@ -273,6 +263,5 @@ fn check_round_trip(tone: &Tone) {
         }
         _ => {}
     }
-    // Envelope fields came back intact.
     assert!(tone.envelope.sent_at.is_some());
 }

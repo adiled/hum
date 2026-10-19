@@ -14,8 +14,6 @@ use serde_json::Value;
 use crate::{canon, sign, Event, Hash32, Seq, TheHum};
 
 impl TheHum {
-    /// Append a wire envelope as a new authored event. Signs, chains,
-    /// fsyncs, broadcasts. Returns the assigned seq.
     pub async fn append(&self, chi: &str, sid: Option<crate::HumId>, rid: crate::HumId, body: Value) -> Result<Seq> {
         let ts_ms = chrono::Utc::now().timestamp_millis();
         let (seq, prev_hash_hex) = {
@@ -57,7 +55,6 @@ impl TheHum {
     }
 }
 
-/// Path of the daily ring for the given ts.
 pub(crate) fn daily_path(dir: &Path, ts_ms: i64) -> PathBuf {
     let dt = DateTime::<Utc>::from_timestamp_millis(ts_ms)
         .unwrap_or_else(|| DateTime::<Utc>::from_timestamp_millis(0).unwrap());
@@ -79,7 +76,6 @@ fn write_line(path: &Path, line: &str, fsync: bool) -> Result<()> {
     Ok(())
 }
 
-/// Atomic seq persistence: tmp + rename.
 fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
     let final_path = hum_paths::thehum_seq_file(dir);
     let tmp = final_path.with_extension("bin.tmp");
@@ -88,7 +84,6 @@ fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
     Ok(())
 }
 
-/// Cold-boot recovery: read seq.bin and the last line's pre-sig hash.
 pub fn recover_state(dir: &Path) -> Result<(Seq, Hash32)> {
     let seq = std::fs::read(hum_paths::thehum_seq_file(dir))
         .ok()
@@ -104,12 +99,12 @@ pub fn recover_state(dir: &Path) -> Result<(Seq, Hash32)> {
         .unwrap_or(0);
 
     let mut prev_hash: Hash32 = [0u8; 32];
-    if seq > 0 {
-        if let Some(line) = last_line_in_dir(dir)? {
-            let parsed: Value = serde_json::from_str(&line).context("parse last line")?;
-            let canonical = canon::canonical_bytes(&parsed);
-            prev_hash = sign::hash256(&canonical);
-        }
+    if seq > 0
+        && let Some(line) = last_line_in_dir(dir)?
+    {
+        let parsed: Value = serde_json::from_str(&line).context("parse last line")?;
+        let canonical = canon::canonical_bytes(&parsed);
+        prev_hash = sign::hash256(&canonical);
     }
     Ok((seq, prev_hash))
 }
@@ -123,10 +118,10 @@ fn last_line_in_dir(dir: &Path) -> Result<Option<String>> {
         .collect();
     files.sort();
     for path in files.iter().rev() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Some(last) = content.lines().filter(|l| !l.trim().is_empty()).last() {
-                return Ok(Some(last.to_string()));
-            }
+        if let Ok(content) = std::fs::read_to_string(path)
+            && let Some(last) = content.lines().rfind(|l| !l.trim().is_empty())
+        {
+            return Ok(Some(last.to_string()));
         }
     }
     Ok(None)

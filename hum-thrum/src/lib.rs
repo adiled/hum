@@ -14,6 +14,8 @@
 //! - [`read_tones`] — read NDJSON lines, parse each into a [`Value`],
 //!   and hand it to a caller-supplied per-chi dispatcher.
 //! - [`serve_forever`] — the reconnect loop with jittered backoff.
+//!   The jitter keeps parallel boot races with humd quiet, matching
+//!   serve_worker's grace window.
 //!
 //! The chi *semantics* (what a `tool-call`, `prompt`, or `cancel`
 //! actually does) stay in the caller — that's worker/forager-specific
@@ -29,9 +31,6 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{trace, warn};
 
-/// Dial the thrum Unix socket and split it. Returns the read half as
-/// a line reader and the write half wrapped in a shared mutex (so
-/// concurrent spawns can write).
 pub async fn connect(
     path: &Path,
 ) -> Result<(Lines<BufReader<tokio::net::unix::OwnedReadHalf>>, Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>)> {
@@ -43,15 +42,12 @@ pub async fn connect(
     Ok((reader, write_half))
 }
 
-/// Write one NDJSON line (a tone) to the shared write half.
 pub async fn send_json(write: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>, tone: &Value) -> Result<()> {
     let line = format!("{}\n", tone);
     write.lock().await.write_all(line.as_bytes()).await?;
     Ok(())
 }
 
-/// Read NDJSON tones and hand each to `on_tone`. Returns `Ok(())`
-/// when the stream ends (peer closed — caller reconnects).
 pub async fn read_tones<F>(mut reader: Lines<BufReader<tokio::net::unix::OwnedReadHalf>>, on_tone: F) -> Result<()>
 where
     F: Fn(Value),
@@ -67,11 +63,6 @@ where
     Ok(())
 }
 
-/// The reconnect loop. `dial` is called each attempt (it should
-/// connect, hello, and run the tone loop), returning `Ok(())` on a
-/// clean exit or `Err` on a failed connection. Sleeps with jittered
-/// backoff between attempts so parallel boot races with humd stay
-/// quiet (matching serve_worker's grace window).
 pub async fn serve_forever<F, Fut>(dial: F) -> !
 where
     F: Fn() -> Fut,
@@ -101,10 +92,6 @@ mod tests {
     use tokio::net::UnixListener;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    // Wire round-trip: a server accepts a Unix connection, the client
-    // dials via hum-thrum::connect, sends a hello tone, and the server
-    // reads it back. Confirms connect/send_json/read_tones line up with
-    // the NDJSON contract humd speaks.
     #[tokio::test]
     async fn wire_round_trip() {
         let dir = std::env::temp_dir().join(format!("hum-thrum-test-{}", std::process::id()));

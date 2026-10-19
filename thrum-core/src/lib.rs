@@ -5,6 +5,12 @@
 //! body. This crate enumerates the chi registry, defines the envelope,
 //! and provides the small primitives (sigil, rid, wane, dusk, echo)
 //! every other crate leans on.
+//!
+//! [`THRUM_VERSION`] is the protocol semver — independent of any
+//! package version. Bump rules:
+//! - patch: docstring tweaks, optional fields added with safe defaults
+//! - minor: new chi value, new required field with a backward-compat path
+//! - major: removed chi, renamed chi, removed field, changed semantics
 
 mod chi;
 mod envelope;
@@ -18,10 +24,4 @@ pub use prims::{dusk_in, echo_for, is_dusk, now_ms, rid, sigil};
 pub use views::*;
 pub use wane::WaneTracker;
 
-/// Protocol semver — independent of any package version.
-///
-/// Bump rules:
-///   - patch: docstring tweaks, optional fields added with safe defaults
-///   - minor: new chi value, new required field with backward-compat path
-///   - major: removed chi, renamed chi, removed field, changed semantics
 pub const THRUM_VERSION: &str = "0.7.0";

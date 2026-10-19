@@ -30,50 +30,48 @@
 //! }
 //! # Ok(()) }
 //! ```
+//!
+//! The ABI layout of `records(bytes32)` is decoded by hand, so the
+//! offsets are named below rather than written as bare slice indices.
+//! The selector is pinned to the keccak256 of the signature rather
+//! than computed, to avoid pulling in a keccak crate.
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// One record from the HumdRegistry contract — matches `Record` in
-/// `contracts/src/HumdRegistry.sol`.
+const WORD: usize = 32;
+
+const OWNER: usize = 0;
+const PUBKEY: usize = 1;
+const MANIFEST_HASH: usize = 2;
+const MANIFEST_URI: usize = 3;
+const UPDATED_AT: usize = 4;
+
+const RECORDS_SELECTOR: [u8; 4] = [0x52, 0xe8, 0x4c, 0x43];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumdRecord {
-    /// EVM address that controls this entry. `[0;20]` means "no record".
     pub owner: [u8; 20],
-    /// ed25519 pubkey. The off-chain Hid is `sha256(pubkey)`; here
-    /// we store the pubkey itself so the contract can derive it.
     pub pubkey: [u8; 32],
-    /// keccak256 of the full manifest JSON bytes. Readers MUST verify
-    /// `keccak256(fetched_bytes) == manifest_hash` before trusting.
     pub manifest_hash: [u8; 32],
-    /// Pointer to the manifest — `ipfs://<cid>` or `https://...`.
     pub manifest_uri: String,
-    /// Block timestamp of the latest update.
     pub updated_at: u64,
 }
 
 impl HumdRecord {
-    /// Convenience: `[0;20]` owner means "no record" in Solidity's
-    /// default-zero storage model.
     pub fn exists(&self) -> bool {
         self.owner != [0u8; 20]
     }
 }
 
-/// JSON-RPC client for the HumdRegistry contract.
 pub struct HumdRegistryClient {
     rpc_url: String,
-    /// 20-byte EVM contract address.
     contract: [u8; 20],
     http: reqwest::Client,
 }
 
 impl HumdRegistryClient {
-    /// Build a client.
-    ///
-    /// - `rpc_url`: HTTPS JSON-RPC endpoint of the chain (`https://rpc.testnet.arc.network`).
-    /// - `contract`: hex 0x-prefixed address of the deployed registry.
     pub fn new(rpc_url: impl Into<String>, contract: &str) -> Self {
         let mut bytes = [0u8; 20];
         let stripped = contract.strip_prefix("0x").unwrap_or(contract);
@@ -89,16 +87,9 @@ impl HumdRegistryClient {
         }
     }
 
-    /// Look up `records(pubkey)`. Returns `None` if owner is zero
-    /// (no record).
     pub async fn get(&self, pubkey: &[u8; 32]) -> Result<Option<HumdRecord>> {
-        // Selector: keccak256("records(bytes32)")[..4] = 0x52e84c43
-        // Computed by `cast sig "records(bytes32)"` — pinned here to
-        // avoid pulling a keccak crate. If the selector ever changes
-        // (it won't unless the function signature changes), regenerate.
-        const SELECTOR: [u8; 4] = [0x52, 0xe8, 0x4c, 0x43];
         let mut data = Vec::with_capacity(36);
-        data.extend_from_slice(&SELECTOR);
+        data.extend_from_slice(&RECORDS_SELECTOR);
         data.extend_from_slice(pubkey);
 
         let req = json!({
@@ -128,31 +119,20 @@ impl HumdRegistryClient {
         let raw = hex::decode(hex_result.strip_prefix("0x").unwrap_or(hex_result))
             .context("decode result hex")?;
 
-        // The auto-generated public getter for `records(bytes32)`
-        // returns 5 fields in declaration order, ABI-encoded:
-        //   (address, bytes32, bytes32, string, uint64)
-        // Layout:
-        //   word 0:  address (20-byte right-padded in 32 bytes)
-        //   word 1:  pubkey (bytes32)
-        //   word 2:  manifestHash (bytes32)
-        //   word 3:  offset to string head (relative to start of tuple)
-        //   word 4:  updatedAt (uint64 right-padded)
-        //   then at offset: string length + body padded to 32-byte boundary.
-        if raw.len() < 5 * 32 {
+        if raw.len() < (UPDATED_AT + 1) * WORD {
             return Err(anyhow!("eth_call result too short: {} bytes", raw.len()));
         }
 
         let mut owner = [0u8; 20];
-        owner.copy_from_slice(&raw[12..32]);
+        owner.copy_from_slice(&raw[OWNER * WORD + 12..OWNER * WORD + 32]);
         let mut pubkey_out = [0u8; 32];
-        pubkey_out.copy_from_slice(&raw[32..64]);
+        pubkey_out.copy_from_slice(&raw[PUBKEY * WORD..(PUBKEY + 1) * WORD]);
         let mut manifest_hash = [0u8; 32];
-        manifest_hash.copy_from_slice(&raw[64..96]);
+        manifest_hash.copy_from_slice(&raw[MANIFEST_HASH * WORD..(MANIFEST_HASH + 1) * WORD]);
 
-        let str_offset = u256_to_u64(&raw[96..128])? as usize;
-        // updated_at is a uint64 packed in word 4 (the LAST 8 bytes of
-        // the right-padded 32-byte slot).
-        let updated_at = u256_to_u64(&raw[128..160])?;
+        let str_offset =
+            u256_to_u64(&raw[MANIFEST_URI * WORD..(MANIFEST_URI + 1) * WORD])? as usize;
+        let updated_at = u256_to_u64(&raw[UPDATED_AT * WORD..(UPDATED_AT + 1) * WORD])?;
 
         let manifest_uri = decode_dynamic_string(&raw, str_offset)?;
 
@@ -170,10 +150,8 @@ impl HumdRegistryClient {
     }
 }
 
-/// Read the trailing 8 bytes of a 32-byte big-endian word as u64.
-/// (Solidity returns uint64 right-padded into a 32-byte slot.)
 fn u256_to_u64(word: &[u8]) -> Result<u64> {
-    if word.len() < 32 {
+    if word.len() < WORD {
         return Err(anyhow!("u256 word short"));
     }
     let mut buf = [0u8; 8];
@@ -181,14 +159,12 @@ fn u256_to_u64(word: &[u8]) -> Result<u64> {
     Ok(u64::from_be_bytes(buf))
 }
 
-/// ABI dynamic string: at `offset`, a 32-byte length followed by the
-/// UTF-8 bytes (padded to a 32-byte boundary).
 fn decode_dynamic_string(raw: &[u8], offset: usize) -> Result<String> {
-    if offset + 32 > raw.len() {
+    if offset + WORD > raw.len() {
         return Err(anyhow!("string head out of range"));
     }
-    let len = u256_to_u64(&raw[offset..offset + 32])? as usize;
-    let start = offset + 32;
+    let len = u256_to_u64(&raw[offset..offset + WORD])? as usize;
+    let start = offset + WORD;
     if start + len > raw.len() {
         return Err(anyhow!("string body out of range"));
     }
@@ -233,9 +209,6 @@ mod tests {
 
     #[test]
     fn decode_dynamic_string_round_trip() {
-        // ABI dynamic string at offset 0:
-        //   word 0:  length (5)
-        //   word 1:  "hello" + 27 bytes of zero padding
         let s = "hello";
         let mut raw = vec![0u8; 64];
         raw[24..32].copy_from_slice(&(s.len() as u64).to_be_bytes());

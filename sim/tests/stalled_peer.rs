@@ -27,8 +27,8 @@ async fn three(sim: &Sim) -> (Arc<SimHumd>, Arc<SimHumd>, Arc<SimHumd>) {
     for h in [&a, &b, &c] {
         sim.await_ready(h.id).await.expect("ready");
     }
-    sim.wire(a.id, b.id).expect("wire a-b");
-    sim.wire(a.id, c.id).expect("wire a-c");
+    sim.wire_unauthenticated(a.id, b.id).expect("wire a-b");
+    sim.wire_unauthenticated(a.id, c.id).expect("wire a-c");
     sim.await_handshake(a.id, b.id).await.expect("handshake a-b");
     sim.await_handshake(a.id, c.id).await.expect("handshake a-c");
     (a, b, c)
@@ -66,7 +66,7 @@ async fn a_fanout_past_two_stalled_peers_still_arrives() {
     let (a, b, c) = three(&sim).await;
     let d = sim.spawn_humd(Hid::random_humd()).await;
     sim.await_ready(d.id).await.expect("d ready");
-    sim.wire(a.id, d.id).expect("wire a-d");
+    sim.wire_unauthenticated(a.id, d.id).expect("wire a-d");
     sim.await_handshake(a.id, d.id).await.expect("handshake a-d");
 
     let topic = "stall/two";
@@ -173,7 +173,7 @@ async fn a_stall_is_reversible_and_does_not_fake_a_partition() {
 async fn a_stall_is_silence_at_the_far_side_rather_than_an_error() {
     let sim = Sim::new();
     let (_a, b, c) = three(&sim).await;
-    sim.wire(c.id, b.id).expect("wire c-b");
+    sim.wire_unauthenticated(c.id, b.id).expect("wire c-b");
     sim.await_handshake(c.id, b.id).await.expect("handshake c-b");
 
     sim.stall_dir(c.id, b.id).expect("stall C->B");
