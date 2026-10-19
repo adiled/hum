@@ -56,16 +56,13 @@ pub struct Event {
     pub sig: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RetentionMode {
+    #[default]
     Archive,
     Rolling,
     Light,
-}
-
-impl Default for RetentionMode {
-    fn default() -> Self { Self::Archive }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

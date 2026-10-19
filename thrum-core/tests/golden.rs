@@ -42,11 +42,9 @@ fn env(chi: Chi, n: usize) -> Envelope {
 
 fn golden() -> Vec<Value> {
     let mut out = Vec::new();
-    let mut n = 0usize;
     macro_rules! push {
         ($chi:expr, $body:expr) => {{
-            out.push(tone(env($chi, n), body_map(&$body)));
-            n += 1;
+            out.push(tone(env($chi, out.len()), body_map(&$body)));
         }};
     }
 

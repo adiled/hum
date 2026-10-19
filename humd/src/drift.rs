@@ -185,10 +185,10 @@ impl Drift {
             .or_insert_with(|| now.saturating_sub(b.started_at));
         let dir = g.store_dir.clone();
         drop(g);
-        if let Some(dir) = dir {
-            if let Err(e) = append_ndjson(&dir, &b) {
-                tracing::warn!(sid, error = %e, "drift.persist.failed");
-            }
+        if let Some(dir) = dir
+            && let Err(e) = append_ndjson(&dir, &b)
+        {
+            tracing::warn!(sid, error = %e, "drift.persist.failed");
         }
         Some(b)
     }

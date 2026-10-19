@@ -94,6 +94,85 @@ pub async fn spawn_local_mcp(bridge: Arc<McpBridge>) -> Result<SocketAddr> {
     Ok(addr)
 }
 
+
+async fn handle(
+    State(bridge): State<Arc<McpBridge>>,
+    Path(sid): Path<String>,
+    Json(req): Json<JsonRpcRequest>,
+) -> (StatusCode, Json<Option<JsonRpcResponse>>) {
+    let id = req.id.clone();
+    match req.method.as_str() {
+        "initialize" => (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "hum-worker-mcp", "version": "0.30.0" },
+        }))))),
+
+        "notifications/initialized" => (StatusCode::OK, Json(None)),
+
+        "tools/list" => {
+            let slot = bridge.catalogue.read().clone();
+            let tools_value = serde_json::to_value(&slot.tools).unwrap_or(serde_json::json!([]));
+            (StatusCode::OK, Json(Some(JsonRpcResponse::ok(
+                id,
+                serde_json::json!({ "tools": tools_value }),
+            ))))
+        }
+
+        "tools/call" => {
+            let params = req.params.unwrap_or(Value::Null);
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            if name.is_empty() {
+                return (StatusCode::OK, Json(Some(JsonRpcResponse::err(
+                    id, -32602, "Missing tool name",
+                ))));
+            }
+            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let call_id = thrum_core::rid();
+            let (tx, rx) = oneshot::channel::<Value>();
+            bridge.pending.lock().insert(call_id.clone(), tx);
+            let tone = translate::mcp_call_to_tone(&sid, &call_id, &params);
+            (bridge.ship_tool_call)(tone);
+            trace!(%sid, %name, %call_id, "mcp.bridge.tool-call.shipped");
+            match tokio::time::timeout(Duration::from_secs(300), rx).await {
+                Ok(Ok(tone)) => {
+                    let body = translate::tone_to_mcp_result(&tone);
+                    let output_text = body.get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|a| a.first())
+                        .and_then(|p| p.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let is_error = body.get("isError").and_then(Value::as_bool).unwrap_or(false);
+                    let chunk = serde_json::json!({
+                        "chi": "chunk",
+                        "sid": sid,
+                        "chunkType": "tool_executed",
+                        "callId": call_id,
+                        "toolName": name,
+                        "arguments": arguments,
+                        "output": output_text,
+                        "isError": is_error,
+                    });
+                    (bridge.ship_tool_call)(chunk);
+                    (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, body))))
+                }
+                _ => {
+                    bridge.pending.lock().remove(&call_id);
+                    (StatusCode::OK, Json(Some(JsonRpcResponse::err(
+                        id, -32000, format!("tool-result for callId {call_id} timed out"),
+                    ))))
+                }
+            }
+        }
+
+        other => (StatusCode::OK, Json(Some(JsonRpcResponse::err(
+            id, -32601, format!("unknown method '{other}'"),
+        )))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,83 +282,5 @@ mod tests {
                 serde_json::from_str(&self.body)
             }
         }
-    }
-}
-
-async fn handle(
-    State(bridge): State<Arc<McpBridge>>,
-    Path(sid): Path<String>,
-    Json(req): Json<JsonRpcRequest>,
-) -> (StatusCode, Json<Option<JsonRpcResponse>>) {
-    let id = req.id.clone();
-    match req.method.as_str() {
-        "initialize" => (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": "hum-worker-mcp", "version": "0.30.0" },
-        }))))),
-
-        "notifications/initialized" => (StatusCode::OK, Json(None)),
-
-        "tools/list" => {
-            let slot = bridge.catalogue.read().clone();
-            let tools_value = serde_json::to_value(&slot.tools).unwrap_or(serde_json::json!([]));
-            (StatusCode::OK, Json(Some(JsonRpcResponse::ok(
-                id,
-                serde_json::json!({ "tools": tools_value }),
-            ))))
-        }
-
-        "tools/call" => {
-            let params = req.params.unwrap_or(Value::Null);
-            let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            if name.is_empty() {
-                return (StatusCode::OK, Json(Some(JsonRpcResponse::err(
-                    id, -32602, "Missing tool name",
-                ))));
-            }
-            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
-            let call_id = thrum_core::rid();
-            let (tx, rx) = oneshot::channel::<Value>();
-            bridge.pending.lock().insert(call_id.clone(), tx);
-            let tone = translate::mcp_call_to_tone(&sid, &call_id, &params);
-            (bridge.ship_tool_call)(tone);
-            trace!(%sid, %name, %call_id, "mcp.bridge.tool-call.shipped");
-            match tokio::time::timeout(Duration::from_secs(300), rx).await {
-                Ok(Ok(tone)) => {
-                    let body = translate::tone_to_mcp_result(&tone);
-                    let output_text = body.get("content")
-                        .and_then(Value::as_array)
-                        .and_then(|a| a.first())
-                        .and_then(|p| p.get("text"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let is_error = body.get("isError").and_then(Value::as_bool).unwrap_or(false);
-                    let chunk = serde_json::json!({
-                        "chi": "chunk",
-                        "sid": sid,
-                        "chunkType": "tool_executed",
-                        "callId": call_id,
-                        "toolName": name,
-                        "arguments": arguments,
-                        "output": output_text,
-                        "isError": is_error,
-                    });
-                    (bridge.ship_tool_call)(chunk);
-                    (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, body))))
-                }
-                _ => {
-                    bridge.pending.lock().remove(&call_id);
-                    (StatusCode::OK, Json(Some(JsonRpcResponse::err(
-                        id, -32000, format!("tool-result for callId {call_id} timed out"),
-                    ))))
-                }
-            }
-        }
-
-        other => (StatusCode::OK, Json(Some(JsonRpcResponse::err(
-            id, -32601, format!("unknown method '{other}'"),
-        )))),
     }
 }

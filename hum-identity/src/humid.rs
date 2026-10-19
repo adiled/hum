@@ -312,9 +312,9 @@ mod tests {
     fn rejects_bad_chars_and_lengths() {
         assert!(!is_valid_id(""));
         assert!(!is_valid_id("ABC"));
-        let bad: String = std::iter::repeat('I').take(52).collect();
+        let bad: String = "I".repeat(52);
         assert!(!is_valid_id(&bad));
-        let short: String = std::iter::repeat('0').take(51).collect();
+        let short: String = "0".repeat(51);
         assert!(!is_valid_id(&short));
     }
 }

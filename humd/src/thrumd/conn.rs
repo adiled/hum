@@ -121,10 +121,11 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
         return;
     }
 
-    if chi != "echo" && chi != "log" {
-        if let Some(rid) = rid.as_deref() {
-            let _ = reach.send(echo_tone(rid, true, None));
-        }
+    if chi != "echo"
+        && chi != "log"
+        && let Some(rid) = rid.as_deref()
+    {
+        let _ = reach.send(echo_tone(rid, true, None));
     }
 
     if chi == "hello" {

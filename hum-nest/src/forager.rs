@@ -23,7 +23,7 @@
 //! chi semantics + tool dispatcher seam. Reconnect is built in —
 //! humd restarts don't strand foragers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -41,18 +41,12 @@ pub trait ToolDispatcher: Send + Sync + 'static {
     async fn dispatch(&self, tone: Value) -> ToolResult;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ForagerAdvert {
     pub hive: String,
     pub version: String,
     pub source: Option<String>,
     pub provides: Vec<String>,
-}
-
-impl Default for ForagerAdvert {
-    fn default() -> Self {
-        Self { hive: String::new(), version: String::new(), source: None, provides: Vec::new() }
-    }
 }
 
 fn default_socket_path() -> PathBuf {
@@ -68,7 +62,7 @@ pub async fn serve_forager<D: ToolDispatcher + 'static>(
 }
 
 async fn dial_and_serve<D: ToolDispatcher + 'static>(
-    path: &PathBuf,
+    path: &Path,
     dispatcher: Arc<D>,
     advert: &ForagerAdvert,
 ) -> Result<()> {

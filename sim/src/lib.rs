@@ -674,7 +674,7 @@ impl Sim {
 
         {
             let mut queues = h.out_queues.lock();
-            for (_cid, rx) in queues.iter_mut() {
+            for rx in queues.values_mut() {
                 while let Ok(tone) = rx.try_recv() {
                     let tone_sid = tone
                         .get("sid")

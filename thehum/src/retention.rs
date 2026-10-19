@@ -74,9 +74,11 @@ mod tests {
 
     fn mk(dir: &Path, mode: RetentionMode) -> TheHum {
         let key = SigningKey::generate(&mut OsRng);
-        let mut cfg = crate::Config::default();
-        cfg.mode = mode;
-        cfg.days = 7;
+        let cfg = crate::Config {
+            mode,
+            days: 7,
+            ..Default::default()
+        };
         TheHum::open(dir, key, cfg).unwrap()
     }
 

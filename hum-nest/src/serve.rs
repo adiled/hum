@@ -259,13 +259,13 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
                     let tone = tone.clone();
                     tokio::spawn(async move {
                         let mut r = cells.lock().await;
-                        if let Some(bundle) = r.get(&sid) {
-                            if let (Some(call_id), Some(result)) = (
+                        if let Some(bundle) = r.get(&sid)
+                            && let (Some(call_id), Some(result)) = (
                                 tone.get("callId").and_then(Value::as_str),
                                 tone.get("result").and_then(Value::as_str),
-                            ) {
-                                let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
-                            }
+                            )
+                        {
+                            let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
                         }
                     });
                 }
@@ -380,11 +380,11 @@ async fn handle_prompt<W: WorkerBee + 'static>(
 
     {
         let mut g = cells.lock().await;
-        if g.len() >= MAX_CELLS {
-            if let Some((esid, _evicted)) = g.pop_lru() {
-                warn!(evicted_sid = %esid, "worker.cell.evict.lru");
-                metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
-            }
+        if g.len() >= MAX_CELLS
+            && let Some((esid, _evicted)) = g.pop_lru()
+        {
+            warn!(evicted_sid = %esid, "worker.cell.evict.lru");
+            metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
         }
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
     }
@@ -528,10 +528,10 @@ impl WireListener {
         }
 
         let mut msg = value;
-        if msg.get("type").and_then(Value::as_str) == Some("stream_event") {
-            if let Some(inner) = msg.get("event").cloned() {
-                msg = inner;
-            }
+        if msg.get("type").and_then(Value::as_str) == Some("stream_event")
+            && let Some(inner) = msg.get("event").cloned()
+        {
+            msg = inner;
         }
         let typ = msg.get("type").and_then(Value::as_str).unwrap_or("").to_string();
 

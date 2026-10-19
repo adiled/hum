@@ -35,10 +35,11 @@ impl Penny {
                     for (k, v) in raw {
                         if let Some(n) = v.as_u64() {
                             out.insert(k, n);
-                        } else if let Some(f) = v.as_f64() {
-                            if f.is_finite() && f >= 0.0 {
-                                out.insert(k, f as u64);
-                            }
+                        } else if let Some(f) = v.as_f64()
+                            && f.is_finite()
+                            && f >= 0.0
+                        {
+                            out.insert(k, f as u64);
                         }
                     }
                     trace!(target: "penny", "penny.loaded keys={}", out.len());
@@ -64,15 +65,15 @@ impl Penny {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(dir) = path.parent() {
-            if !dir.as_os_str().is_empty() {
-                std::fs::create_dir_all(dir)?;
-            }
+        if let Some(dir) = path.parent()
+            && !dir.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(dir)?;
         }
         let snap = self.snapshot();
         let tmp = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec(&snap)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let bytes =
+            serde_json::to_vec(&snap).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         std::fs::write(&tmp, &bytes)?;
         std::fs::rename(&tmp, path)?;
         trace!(target: "penny", "penny.saved keys={} bytes={}", snap.len(), bytes.len());
@@ -139,7 +140,7 @@ mod tests {
         let snap = p.snapshot();
         assert_eq!(snap.get("blooms"), Some(&2));
         assert_eq!(snap.get("totalInputTokens"), Some(&1234));
-        assert!(snap.get("noop").is_none());
+        assert!(!snap.contains_key("noop"));
     }
 
     #[test]
@@ -191,6 +192,6 @@ mod tests {
         assert_eq!(snap.get("blooms"), Some(&7));
         assert_eq!(snap.get("started"), Some(&1_700_000_000_000));
         assert_eq!(snap.get("fractional"), Some(&3));
-        assert!(snap.get("label").is_none());
+        assert!(!snap.contains_key("label"));
     }
 }

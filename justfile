@@ -14,10 +14,10 @@ build:
 bees:
     #!/usr/bin/env bash
     set -euo pipefail
-    for n in openai-server anthropic-server ollama-server vercel-ai; do
-      if [ -f "bees/$n/package.json" ]; then
-        echo "→ bees/$n"
-        (cd "bees/$n" && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
+    for n in hives/*/; do
+      if [ -f "$n/package.json" ]; then
+        echo "→ $n"
+        (cd "$n" && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
       fi
     done
 
@@ -45,11 +45,23 @@ sim:
 check:
     cargo check --workspace
 
+# The repo is not rustfmt-clean — running fmt --all would rewrite ~380
+# hunks across every file. fmt reports; fmt-file formats one file.
 fmt:
-    cargo fmt --all
+    cargo fmt --all -- --check
 
+fmt-file file:
+    rustfmt --edition 2024 {{file}}
+
+# Clippy over the crates CI gates on. Same scope, same flags as
+# .github/workflows/wire.yml — if this passes, CI passes.
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
+
+# Clippy over everything. The daemon and the drone still carry dead
+# code, so this reports the dead_code findings too.
+lint-all:
+    cargo clippy --workspace --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
 
 # Docs site (Astro + Starlight)
 site:
@@ -73,7 +85,7 @@ recipe-opencode:
 clean:
     cargo clean
     rm -rf site/dist site/.astro site/src/content/docs
-    @for n in bees/*/dist; do rm -rf "$n" 2>/dev/null || true; done
+    @for n in hives/*/dist; do rm -rf "$n" 2>/dev/null || true; done
 
 purge: clean
     ./install purge

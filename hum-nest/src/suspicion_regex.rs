@@ -78,7 +78,7 @@ struct Bank {
 fn bank() -> &'static Bank {
     static B: OnceLock<Bank> = OnceLock::new();
     B.get_or_init(|| {
-        let crit_src: Vec<&str> = CONTEXT_LOSS_EXPLICIT.iter().copied().collect();
+        let crit_src: Vec<&str> = CONTEXT_LOSS_EXPLICIT.to_vec();
         let heavy_src: Vec<&str> = IDENTITY_RESET
             .iter()
             .chain(GREETING_RESET.iter())

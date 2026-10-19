@@ -99,12 +99,12 @@ pub fn recover_state(dir: &Path) -> Result<(Seq, Hash32)> {
         .unwrap_or(0);
 
     let mut prev_hash: Hash32 = [0u8; 32];
-    if seq > 0 {
-        if let Some(line) = last_line_in_dir(dir)? {
-            let parsed: Value = serde_json::from_str(&line).context("parse last line")?;
-            let canonical = canon::canonical_bytes(&parsed);
-            prev_hash = sign::hash256(&canonical);
-        }
+    if seq > 0
+        && let Some(line) = last_line_in_dir(dir)?
+    {
+        let parsed: Value = serde_json::from_str(&line).context("parse last line")?;
+        let canonical = canon::canonical_bytes(&parsed);
+        prev_hash = sign::hash256(&canonical);
     }
     Ok((seq, prev_hash))
 }
@@ -118,10 +118,10 @@ fn last_line_in_dir(dir: &Path) -> Result<Option<String>> {
         .collect();
     files.sort();
     for path in files.iter().rev() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Some(last) = content.lines().filter(|l| !l.trim().is_empty()).last() {
-                return Ok(Some(last.to_string()));
-            }
+        if let Ok(content) = std::fs::read_to_string(path)
+            && let Some(last) = content.lines().rfind(|l| !l.trim().is_empty())
+        {
+            return Ok(Some(last.to_string()));
         }
     }
     Ok(None)
