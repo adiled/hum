@@ -36,7 +36,6 @@ fn fresh_self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>, [u8;
 /// rustls 0.23 refuses to build a `ClientConfig` / `ServerConfig` until
 /// a provider is selected.
 fn install_crypto_provider() {
-    // Safe to call repeatedly: `install_default` returns an Err once the
     // slot is filled, which we swallow.
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
@@ -105,7 +104,6 @@ async fn tls_connect_rejects_wrong_fingerprint() {
     // client sees a handshake error, since the pinned verifier rejects
     // the cert.
     let _accept_task = tokio::spawn(async move {
-        // Best-effort: we don't assert on this side.
         let _ = listener.accept().await;
     });
 

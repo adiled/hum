@@ -20,19 +20,15 @@ use ensemble::Hid;
 use serde::{Deserialize, Serialize};
 use tracing::{trace, warn};
 
-/// One bootstrap entry, post-parse: id is typed, hints are passed through
-/// for the transport layer to decide which to dial.
 #[derive(Debug, Clone)]
 pub struct PeerConfig {
     pub humd_id: Hid,
     pub hints: Vec<String>,
-    /// Human-friendly alias for the peer (e.g. `"workstation"`).
-    /// Used by `hum://<alias>/<path>` URI resolution.
+    /// Human-friendly alias for the peer, used by `hum://<alias>/<path>`
+    /// URI resolution.
     pub alias: Option<String>,
 }
 
-/// Wire shape — fields stay loose strings so we can tolerate malformed
-/// rows and still parse the rest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RawFile {
     #[serde(default)]
@@ -98,8 +94,6 @@ pub(crate) fn load_from(path: &std::path::Path) -> Vec<PeerConfig> {
     out
 }
 
-/// Parse a Hid string (either `<prefix>_<hex>` or bare 64-hex
-/// legacy) back into the typed id. None on malformed input.
 fn parse_humd_id(s: &str) -> Option<Hid> {
     Hid::from_hex(s).ok()
 }
@@ -116,7 +110,6 @@ mod tests {
         (tmp, path)
     }
 
-    /// Fixture file with two good entries + one malformed → 2 loaded.
     #[test]
     fn load_parses_fixture_and_skips_bad_rows() {
         let (_tmp, path) = peers_file();
@@ -140,7 +133,6 @@ mod tests {
         assert_eq!(loaded[1].hints.len(), 2);
     }
 
-    /// Missing file returns empty without error.
     #[test]
     fn load_missing_file_is_empty() {
         let (_tmp, path) = peers_file();

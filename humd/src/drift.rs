@@ -91,7 +91,6 @@ impl Default for Drift {
 }
 
 impl Drift {
-    /// New instance with no persistence root.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(DriftInner {
@@ -101,7 +100,6 @@ impl Drift {
         }
     }
 
-    /// New instance rooted at `dir` (e.g. `${XDG_STATE_HOME}/hum/drift`).
     pub fn with_store_dir(dir: impl Into<PathBuf>) -> Self {
         let d = Self::new();
         d.set_store_dir(dir);
@@ -124,7 +122,6 @@ impl Drift {
         self.inner.read().active.len()
     }
 
-    /// Record a named instant. First observation wins per bloom.
     pub fn mark(&self, sid: &str, event: &str) {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -159,7 +156,6 @@ impl Drift {
         b.flags.insert(key.to_string(), value);
     }
 
-    /// Record one thrum transit sample. `direction` is `"oc"` or `"nest"`.
     pub fn thrum_sample(&self, sid: &str, direction: &str, ms: u64) {
         const SOFT_CAP: usize = 200;
         let now = now_ms();
@@ -179,8 +175,6 @@ impl Drift {
         });
     }
 
-    /// Close a bloom: stamp `ended_at`, write the `wilt` mark, evict from
-    /// the active set, and append one NDJSON line.
     pub fn wilt(&self, sid: &str) -> Option<Bloom> {
         let now = now_ms();
         let mut g = self.inner.write();
@@ -226,7 +220,6 @@ impl Drift {
         }
     }
 
-    /// Append every currently-active bloom to today's NDJSON file.
     pub fn persist_today(&self) -> Result<()> {
         let (dir, blooms) = {
             let g = self.inner.read();

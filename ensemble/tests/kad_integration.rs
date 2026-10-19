@@ -36,7 +36,6 @@ fn wire(ens_a: &Ensemble, a_key: &HumdKey, ens_b: &Ensemble, b_key: &HumdKey) {
 
 #[tokio::test]
 async fn kad_find_locates_distant_humd_via_intermediaries() {
-    // Real keypairs so signed hellos succeed.
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
     let c_key = HumdKey::generate();
@@ -54,7 +53,6 @@ async fn kad_find_locates_distant_humd_via_intermediaries() {
     let ens_d = Ensemble::new(d_id);
     let ens_e = Ensemble::new(e_id);
 
-    // No A↔E direct link.
     wire(&ens_a, &a_key, &ens_b, &b_key);
     wire(&ens_b, &b_key, &ens_c, &c_key);
     wire(&ens_c, &c_key, &ens_d, &d_key);

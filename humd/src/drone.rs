@@ -162,8 +162,7 @@ pub struct BeatLoad {
 }
 
 pub trait Evaluator: Send + Sync {
-    /// Probability (0.0..=1.0) that `text` represents real context loss
-    /// given `state`.
+    /// Probability (0.0..=1.0) that `text` represents real context loss.
     fn evaluate(&self, text: &str, state: &DroneState) -> f32;
 }
 
@@ -197,7 +196,6 @@ impl Default for Drone {
 }
 
 impl Drone {
-    /// Pure channel-health drone. No context-loss detection.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -209,7 +207,6 @@ impl Drone {
         }
     }
 
-    /// Drone with a pluggable classifier.
     pub fn with_classifier(classifier: Arc<dyn Classifier>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -221,7 +218,6 @@ impl Drone {
         }
     }
 
-    /// Drone with both a classifier and an LLM judge.
     pub fn with_classifier_and_evaluator(
         classifier: Arc<dyn Classifier>,
         evaluator: Arc<dyn Evaluator>,
@@ -237,13 +233,10 @@ impl Drone {
         }
     }
 
-    /// Back-compat: drone with only an LLM judge, classifier = noop.
-    /// Equivalent to `with_classifier_and_evaluator(NoopClassifier, …)`.
     pub fn with_evaluator(evaluator: Arc<dyn Evaluator>, swallow_threshold: f32) -> Self {
         Self::with_classifier_and_evaluator(Arc::new(NoopClassifier), evaluator, swallow_threshold)
     }
 
-    /// Observe an outgoing tone — track its rid if it deserves an echo.
     pub fn sent(&self, tone: &Tone) {
         if matches!(tone.chi(), Chi::Drone | Chi::Echo) {
             return;
@@ -268,7 +261,6 @@ impl Drone {
         }
     }
 
-    /// Observe an incoming tone — clear echoes, sync wane, reset missed beats.
     pub fn heard(&self, tone: &Tone) {
         match tone.chi() {
             Chi::Echo => {
@@ -314,7 +306,6 @@ impl Drone {
         }
     }
 
-    /// Observe an LLM-stream event surfaced by the nestler.
     pub fn observed(&self, sigil: &str, event: Observed) {
         let mut states = self.inner.states.write();
         let state = states
@@ -344,10 +335,6 @@ impl Drone {
     }
 
     /// Snapshot-and-judge. Returns the unified verdict the host steers on.
-    ///
-    /// This is the only place `Verdict::Swallow` can fire — and only if
-    /// either the heuristic is `Critical` or the optional [`Evaluator`]
-    /// agrees past the swallow threshold.
     pub fn assess(&self, sigil: &str) -> Assessment {
         let mut states = self.inner.states.write();
         let state = states
@@ -424,8 +411,6 @@ impl Drone {
         }
     }
 
-    /// Bump the local wane after a tone is committed. Hosts call this
-    /// from the same path that bumps the `WaneTracker`.
     pub fn set_local_wane(&self, sigil: &str, wane: u64) {
         let mut states = self.inner.states.write();
         let state = states
@@ -434,8 +419,6 @@ impl Drone {
         state.local_wane = wane;
     }
 
-    /// Mark a missed beat — the host's silence timer calls this when the
-    /// remote didn't speak within `rhythm * 2`.
     pub fn mark_missed_beat(&self, sigil: &str) {
         let mut states = self.inner.states.write();
         let state = states
@@ -444,8 +427,6 @@ impl Drone {
         state.missed_beats = state.missed_beats.saturating_add(1);
     }
 
-    /// Bump retries on a pending echo. Host calls after re-sending.
-    /// Returns the new retry count if the rid was tracked.
     pub fn note_retry(&self, sigil: &str, rid: &str) -> Option<u32> {
         let mut states = self.inner.states.write();
         let state = states.get_mut(sigil)?;
@@ -455,12 +436,10 @@ impl Drone {
         Some(entry.retries)
     }
 
-    /// Drop a sigil's state — the host calls this on `cleanup`.
     pub fn forget(&self, sigil: &str) {
         self.inner.states.write().remove(sigil);
     }
 
-    /// Build the periodic beat payload. Caller wraps it in a tone.
     pub fn beat(&self, sigil: &str) -> DroneBeat {
         let mut states = self.inner.states.write();
         let active = states.len() as u32;
@@ -483,8 +462,6 @@ impl Drone {
         }
     }
 
-    /// Serialize a beat as a tone body — convenience for the host's
-    /// thrum-send path.
     pub fn beat_body(beat: &DroneBeat) -> Map<String, Value> {
         match serde_json::to_value(beat) {
             Ok(Value::Object(m)) => m,
@@ -492,7 +469,6 @@ impl Drone {
         }
     }
 
-    /// Snapshot a single sigil's state. Returns `None` if unknown.
     pub fn inspect(&self, sigil: &str) -> Option<DroneState> {
         self.inner.states.read().get(sigil).cloned()
     }

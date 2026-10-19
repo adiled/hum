@@ -28,7 +28,7 @@ pub struct HumdSection {
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
     /// host:port the ensemble TCP transport binds on. None / empty
-    /// means dial-only. iroh is unaffected (independent transport).
+    /// means dial-only. iroh is unaffected.
     #[serde(default, rename = "tcpListen")]
     pub tcp_listen: Option<String>,
 }
@@ -55,7 +55,6 @@ pub enum FsMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsRoot {
-    /// Tilde-expanded at load time. Always stored as an absolute path.
     pub path: PathBuf,
     #[serde(default)]
     pub mode: FsMode,
@@ -80,7 +79,7 @@ impl Default for FsSection {
 
 impl FsSection {
     /// Resolve a candidate path against the fs policy. Returns the
-    /// effective mode of its enclosing root, or the reason it is denied.
+    /// effective mode of its enclosing root, or why it is denied.
     pub fn check(&self, candidate: &Path) -> Result<FsMode, FsDenial> {
         let abs = canonical_or_self(candidate);
         for d in &self.denied {
@@ -134,8 +133,6 @@ impl Default for NestSection {
 }
 
 
-/// Daemon-scoped policy: `humd` knobs, `fs` grounding, and `nest`
-/// routing/capacity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HumConfig {
     #[serde(default)]
@@ -196,12 +193,6 @@ pub fn load() -> HumConfig {
     cfg
 }
 
-/// Surface config keys humd silently ignores. The valid top level is
-/// `$schema`, `humd`, `fs`, `nest`. Anything else parses fine and does
-/// nothing — most often a `hives`/`perches`/`nestlings` block, which is
-/// the wrong place: a hive configures itself through its service env.
-/// Returns one human-readable line per finding. Called at boot (logged
-/// as `config.lint`) and by `hum doctor`.
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
 /// Validate raw hum.json text against [`SCHEMA`]. Returns every

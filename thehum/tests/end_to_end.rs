@@ -99,7 +99,6 @@ async fn cross_session_replay_isolates_correctly() {
     let order_a = vec!["hello", "prompt", "chunk", "chunk", "finish"];
     let order_b = vec!["hello", "prompt", "tool-call", "tool-result", "finish"];
 
-    // Interleave: a, b, a, b, ...
     for i in 0..order_a.len().max(order_b.len()) {
         if i < order_a.len() {
             t.append(order_a[i], Some(sid_a.clone()), HumId::mint(), json!({"i": i, "side": "a"}))
@@ -129,7 +128,6 @@ async fn cross_session_replay_isolates_correctly() {
     assert_eq!(a_chis, order_a, "sid_a history intact in order");
     assert_eq!(b_chis, order_b, "sid_b history intact in order");
 
-    // Seqs must be strictly increasing within each bucket.
     for bucket in [a_bucket, b_bucket] {
         for win in bucket.windows(2) {
             assert!(win[0].0 < win[1].0, "seqs monotonic within sid bucket");
@@ -148,7 +146,6 @@ async fn tampered_line_fails_verification() {
         t.append("e", None, rid.clone(), json!({"i": i})).await.unwrap();
     }
 
-    // Find the daily ndjson, mutate the middle line's body but keep JSON valid.
     let entries: Vec<_> = std::fs::read_dir(tmp.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -166,7 +163,6 @@ async fn tampered_line_fails_verification() {
     lines[1] = serde_json::to_string(&middle).unwrap();
     std::fs::write(path, lines.join("\n") + "\n").unwrap();
 
-    // Re-read events from disk and verify.
     let events = t.range(t.author_hid(), 0).unwrap();
     assert_eq!(events.len(), 3);
     let result = verify_chain(&events, &pubkey);
@@ -270,7 +266,6 @@ async fn tail_broadcast_skips_to_lagging_receiver() {
     }
 
     // First recv should surface a Lagged error; we just need to confirm
-    // it doesn't panic and we can keep consuming.
     let mut saw_lagged = false;
     let mut received = 0usize;
     loop {

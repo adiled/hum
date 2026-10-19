@@ -74,7 +74,6 @@ impl Hid {
         Self { prefix, bytes }
     }
 
-    /// Convenience: random hid tagged as a humd.
     pub fn random_humd() -> Self {
         Self::random(HidPrefix::Humd)
     }
@@ -91,9 +90,9 @@ impl Hid {
         format!("{}_{}", self.prefix.as_str(), hex::encode(&self.bytes[..6]))
     }
 
-    /// Parse `<prefix>_<hex>`. Accepts either the 12-char short or
-    /// 64-char full form, and a bare 64-hex string as a legacy
-    /// humd-prefixed value.
+    /// Parse `<prefix>_<hex>`. Accepts the 12-char short or 64-char
+    /// full form, and a bare 64-hex string as a legacy humd-prefixed
+    /// value.
     pub fn from_hex(s: &str) -> Result<Self, HidParseError> {
         if let Some((p, h)) = s.split_once('_') {
             let prefix = HidPrefix::parse(p).ok_or(HidParseError::UnknownPrefix)?;
@@ -168,7 +167,6 @@ impl<'de> Deserialize<'de> for Hid {
 }
 
 impl From<[u8; 32]> for Hid {
-    /// Legacy: bare 32-byte construction defaults to `humd_` prefix.
     fn from(bytes: [u8; 32]) -> Self {
         Self {
             prefix: HidPrefix::Humd,

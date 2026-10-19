@@ -17,7 +17,6 @@
 
 use std::path::PathBuf;
 
-// ── repo-relative strings (single source of truth) ────────────────────────
 
 pub const CHI_RS_REL: &str = "thrum-core/src/chi.rs";
 pub const LIB_RS_REL: &str = "thrum-core/src/lib.rs";
@@ -35,7 +34,6 @@ pub const GO_CHI_REL: &str = "thrum-clients/go/thrum/chi.go";
 pub const GO_HELPERS_REL: &str = "thrum-clients/go/thrum/helpers.go";
 pub const GO_PROTOCOL_REL: &str = "thrum-clients/go/thrum/protocol.go";
 
-// ── absolute resolution ───────────────────────────────────────────────────
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")

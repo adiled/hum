@@ -33,7 +33,6 @@ async fn tcp_endpoint_routes_tone_across_wire() {
 
     let b_endpoint = accept_task.await.expect("join").expect("accept");
 
-    // Lax auth so plain `install` works regardless of strict-auth toggles.
     let ensemble_a = Ensemble::with_strict_auth(a_id, false);
     let ensemble_b = Ensemble::with_strict_auth(b_id, false);
 

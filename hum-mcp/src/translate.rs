@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 use crate::protocol::{ToolResult, wrap_tool_result};
 
 /// Build a `chi:"tool-call"` tone from an MCP `tools/call` request
-/// payload. The caller mints the `call_id` and is responsible for
-/// correlating with the eventual tool-result.
+/// payload. The caller mints the `call_id` and correlates it with the
+/// eventual tool-result.
 pub fn mcp_call_to_tone(sid: &str, call_id: &str, params: &Value) -> Value {
     let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));

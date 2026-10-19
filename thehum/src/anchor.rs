@@ -29,8 +29,6 @@ pub struct AnchorReceipt {
     pub block_number: Option<u64>,
 }
 
-/// Per-network backend. `submit` posts the (hid, root, height) tuple
-/// signed by the humd's signing key.
 #[async_trait]
 pub trait AnchorBackend: Send + Sync {
     fn name(&self) -> &str;
@@ -44,7 +42,6 @@ pub trait AnchorBackend: Send + Sync {
 }
 
 impl TheHum {
-    /// Anchor the most recent snapshot to the configured network.
     pub async fn anchor(
         &self,
         backend: &dyn AnchorBackend,

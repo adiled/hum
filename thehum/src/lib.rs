@@ -56,7 +56,6 @@ pub struct Event {
     pub sig: String,
 }
 
-/// Retention mode for this humd's chi log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RetentionMode {
@@ -104,7 +103,6 @@ impl Default for Config {
     }
 }
 
-/// The per-humd chi-log handle. Single appender, many readers.
 pub struct TheHum {
     pub(crate) dir: PathBuf,
     pub(crate) signing_key: Arc<SigningKey>,
@@ -122,7 +120,6 @@ pub(crate) struct AppendState {
 }
 
 impl TheHum {
-    /// Open (or initialize) thehum at `dir`.
     pub fn open(dir: &Path, signing_key: SigningKey, cfg: Config) -> Result<Self> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("create thehum dir {}", dir.display()))?;

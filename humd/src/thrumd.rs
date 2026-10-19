@@ -55,7 +55,6 @@ pub fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock()
 }
 
-/// The thrum's living state — registry plus optional handler.
 #[derive(Clone)]
 pub struct Thrum {
     inner: Arc<ThrumInner>,
@@ -84,14 +83,10 @@ impl Thrum {
         self.inner.sink.read().is_some()
     }
 
-    /// True if the given client_id still has a live thrum connection
-    /// (either a real UDS conn or a synthetic registration).
     pub fn is_connected(&self, client_id: &str) -> bool {
         self.inner.clients.read().get(client_id).is_some()
     }
 
-    /// Send to one specific client. Drops silently if the client is gone
-    /// or its outbound queue is full.
     pub fn thrum_to(&self, client_id: &str, tone: Tone) {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
@@ -106,8 +101,7 @@ impl Thrum {
 
     /// Send to every client claiming the given sid's sigil. Falls back to
     /// every unregistered client (no sigils claimed) if nobody owns it.
-    /// `nest` selects which nest-kind namespace to compute the sigil
-    /// under (e.g. "claude-cli", "claude-repl").
+    /// `nest` selects the nest-kind namespace to compute the sigil under.
     pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
         let sigil = thrum_core::sigil(sid, nest);
         if let Some(obj) = tone.as_object_mut() {
@@ -139,7 +133,6 @@ impl Thrum {
         );
     }
 
-    /// Send to every connected client, regardless of sigils.
     pub fn thrum_all(&self, tone: Tone) {
         let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
@@ -172,8 +165,6 @@ impl Thrum {
         self.inner.clients.read().len()
     }
 
-    /// Register a synthetic in-process client. The returned receiver
-    /// drains outbound tones bound for this client.
     pub fn register_synthetic(
         &self,
         client_id: impl Into<String>,
@@ -189,16 +180,12 @@ impl Thrum {
         self.inner.clients.write().remove(client_id);
     }
 
-    /// Drop a client from the registry. Any tones already queued for it
-    /// still drain; once the queue empties the socket handler sees the
-    /// channel close and the connection ends.
     pub fn thrum_close(&self, client_id: &str) {
         self.inner.clients.write().remove(client_id);
     }
 
     /// Inject a tone as if it arrived from `client_id`. Bypasses the
-    /// NDJSON socket and goes straight to the installed sink. No
-    /// envelope validation, no auto-echo.
+    /// NDJSON socket and goes straight to the installed sink.
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
         let sink = self.inner.sink.read().clone();
         if let Some(sink) = sink {
@@ -219,8 +206,7 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
     serve_with_hook(thrum, path, |_| {}).await
 }
 
-/// Like [`serve`], but `on_bound` fires after `bind()` succeeds and
-/// before the accept loop starts.
+/// Like [`serve`], but `on_bound` fires after `bind()` succeeds.
 pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
 where
     F: FnOnce(&Path) + Send + 'static,
@@ -269,8 +255,6 @@ pub(crate) fn short(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-/// Validate envelope: chi must be a present, non-empty string. Returns
-/// None on success, Some(reason) on rejection.
 pub(crate) fn validate_envelope(tone: &Value) -> Option<&'static str> {
     let Some(obj) = tone.as_object() else {
         return Some("not-object");
@@ -287,7 +271,6 @@ pub(crate) fn validate_envelope(tone: &Value) -> Option<&'static str> {
     None
 }
 
-/// Dusk is `now_ms` past the `dusk` field if present and numeric.
 pub(crate) fn tone_is_dusk(tone: &Value) -> bool {
     if let Some(dusk) = tone.get("dusk").and_then(|v| v.as_u64()) {
         let now = std::time::SystemTime::now()

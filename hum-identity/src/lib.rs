@@ -37,7 +37,6 @@ pub use humid::*;
 use rand::RngCore;
 use tracing::{info, trace};
 
-/// One bee's persistent identity: signing key + derived [`Hid`].
 #[derive(Debug)]
 pub struct BeeKey {
     pub signing: SigningKey,
@@ -60,7 +59,6 @@ impl BeeKey {
     }
 }
 
-/// The three fields a signed socket hello carries.
 #[derive(Debug, Clone)]
 pub struct SocketSignature {
     pub pubkey: String,
@@ -74,14 +72,12 @@ pub fn socket_hello_message(hid: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", BEE_SOCKET_DOMAIN, hid.to_hex(), signed_at_ms).into_bytes()
 }
 
-/// Path to a bee kind's identity seed: `$XDG_STATE_HOME/hum/bees/<kind>.key`.
 pub fn bee_key_path(kind: &str) -> PathBuf {
     hum_paths::bee_key(kind)
 }
 
-/// Load the bee's persisted key, minting + persisting a fresh one
-/// on first boot. The returned [`Hid`] is derived from the pubkey
-/// with the given role `prefix`.
+/// Load the bee's persisted key, minting + persisting a fresh one on
+/// first boot. The returned [`Hid`] carries the given role `prefix`.
 pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
     let path = bee_key_path(kind);
     if path.exists() {

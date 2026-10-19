@@ -174,9 +174,7 @@ pub trait WorkerBee: Send + Sync {
     /// Curate the stored transcript for a sid — trim what can go without
     /// losing the thread. Answers `chi:"curate"`.
     ///
-    /// Operates on what the bee has persisted, not on a live cell: a
-    /// harness that exits between turns still has a transcript to
-    /// curate, and a curate may well arrive with nothing running.
+    /// Operates on what the bee has persisted, not on a live cell.
     async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {
         Ok(CurateReport::default())
     }
@@ -236,7 +234,6 @@ pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
     .to_string()
 }
 
-/// Encode a tool_result reply for stream-json stdin (TS `encodeToolResult`).
 pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {
     serde_json::json!({
         "type": "user",
@@ -252,7 +249,6 @@ pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {
     .to_string()
 }
 
-/// Encode a `control_cancel_request` (mid-turn interrupt) for pipe-mode stdin.
 pub fn encode_cancel(request_id: &str) -> String {
     serde_json::json!({
         "type": "control_cancel_request",

@@ -39,8 +39,7 @@ use hum_identity::load_or_mint_bee_key;
 pub trait ToolDispatcher: Send + Sync + 'static {
     fn tool_defs(&self) -> Vec<ToolDef>;
     /// Execute one tool. `tone` carries the full chi:"tool-call"
-    /// envelope (sid, callId, toolName, args). Implementations should
-    /// pull `args` and validate against the matching def's schema.
+    /// envelope (sid, callId, toolName, args).
     async fn dispatch(&self, tone: Value) -> ToolResult;
 }
 
@@ -49,9 +48,8 @@ pub struct ForagerAdvert {
     pub hive: String,
     pub version: String,
     pub source: Option<String>,
-    /// Capability categories this forager owns. humd uses these
-    /// hive-level claims to deauthorize the same surface from other
-    /// sources.
+    /// Capability categories this forager owns. humd uses these to
+    /// deauthorize the same surface from other sources.
     pub provides: Vec<String>,
 }
 

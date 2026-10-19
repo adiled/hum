@@ -30,7 +30,6 @@ pub fn key_path() -> PathBuf {
     hum_paths::humd_key()
 }
 
-/// Load the persisted key, minting + persisting a fresh one on first boot.
 pub fn load_or_mint_key() -> Result<HumdKey> {
     load_or_mint_key_at(&key_path())
 }
@@ -63,8 +62,6 @@ pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
     Ok(key)
 }
 
-/// Load the persisted key without minting. Returns `Ok(None)` when no
-/// key file exists yet.
 pub fn read_key() -> Result<Option<HumdKey>> {
     let path = key_path();
     if !path.exists() {
@@ -84,7 +81,6 @@ pub fn read_key() -> Result<Option<HumdKey>> {
     Ok(Some(HumdKey(SigningKey::from_bytes(&arr))))
 }
 
-/// Write 32 bytes atomically (tmp + rename) with mode 0o600.
 fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -132,7 +128,6 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    /// Mint a key, drop it, reload from the same path — same Hid.
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();
