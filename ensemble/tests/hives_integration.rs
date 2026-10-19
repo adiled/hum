@@ -43,15 +43,13 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     let mut discover = ens_c.hive_discover("market-maker");
     let mut raw = ens_c.hive_announcements();
 
-    // Wait for handshakes + topic subscription to wire up before A advertises.
+    // Wait for handshakes + topic subscription before A advertises.
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    // Noise: an unrelated bee — must not appear in the filtered receiver.
     ens_a
         .hive_advertise(HiveManifest::new("openai-server", "0.2.0", "0.7.0"))
         .await;
 
-    // Real advertise.
     let manifest = HiveManifest::new("market-maker", "0.1.0", "0.7.0")
         .with_propensity(Propensity {
             statefulness: Some("stateless".into()),
@@ -70,11 +68,10 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     assert_eq!(got_manifest.version, "0.1.0");
     assert_eq!(got_manifest.chis.len(), 4);
 
-    // Retract on the raw stream.
     ens_a.hive_retract("market-maker").await;
     let env = timeout(Duration::from_millis(300), async {
-        // We may see the two advertises first (one openai-server, one
-        // market-maker) before the retract; drain until we hit Retract.
+        // The two advertises may arrive before the retract; drain until
+        // we hit Retract.
         loop {
             let v = raw.recv().await.expect("raw channel closed");
             if matches!(v, HiveAnnounce::Retract { .. }) {
