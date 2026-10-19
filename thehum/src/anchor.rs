@@ -16,11 +16,17 @@
 //! Real submission needs a funded signer (the chain-side address) and is
 //! intentionally deferred — production users wire their own wallet
 //! (Foundry script, metamask-snap, etc) and call `prepare_calldata`.
+//!
+//! The calldata opens with `PLACEHOLDER_SELECTOR` — the real selector is
+//! the keccak of the signature, truncated, and is a placeholder until the
+//! contract is deployed and its selector is known.
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::{StateRoot, TheHum};
+
+const PLACEHOLDER_SELECTOR: [u8; 4] = [0x4e, 0x71, 0xd9, 0x2d];
 
 #[derive(Debug, Clone)]
 pub struct AnchorReceipt {
@@ -110,7 +116,7 @@ pub struct EvmAnchor {
 impl EvmAnchor {
     pub fn prepare_calldata(&self, hid: &str, root: &StateRoot, height: u64, sig_hex: &str) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(4 + 32 * 5);
-        bytes.extend_from_slice(&[0x4e, 0x71, 0xd9, 0x2d]); // placeholder selector
+        bytes.extend_from_slice(&PLACEHOLDER_SELECTOR);
         let mut hid_bytes = [0u8; 32];
         let raw = hex::decode(hid.trim_start_matches("humd_")).unwrap_or_default();
         let n = raw.len().min(32);

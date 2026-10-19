@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn noop_classifier_never_swallows() {
-        let d = Drone::new(); // NoopClassifier
+        let d = Drone::new();
         d.observed(
             "s1",
             Observed::TextDelta {

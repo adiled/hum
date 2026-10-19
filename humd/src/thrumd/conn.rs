@@ -76,7 +76,7 @@ async fn read_loop(
     loop {
         let line = match lines.next_line().await {
             Ok(Some(l)) => l,
-            Ok(None) => break, // EOF
+            Ok(None) => break,
             Err(e) => {
                 trace!(client_id = %short(client_id), err = %e, "thrum.read.failed");
                 break;

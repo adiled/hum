@@ -21,6 +21,8 @@ jobs:
         run: cargo build -p thrum-core
       - name: Generated mirrors are byte-identical to views.rs
         run: cargo run -p codegen -- --check
+      - name: The kernel speaks in code
+        run: python3 tools/speech.py
       - name: Codegen unit tests
         run: cargo test -p codegen --lib
       - name: Golden fixture round-trips through views
