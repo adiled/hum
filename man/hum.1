@@ -67,16 +67,18 @@ Manage running bee instances.
 \(em start a stopped bee.
 .br
 .B hum bee \fIname|id\fR exit
-\(em stop a bee (state preserved).
+\(em not supported yet. orchd exposes no per-service stop, so a single bee
+cannot be stopped on its own; \fBorchd fell\fR tears the whole grove down.
+Per-bee stop arrives with orchd's \fBtend\fR.
 .br
 .B hum bee \fIname|id\fR reenter
-\(em restart a bee gracefully, keeping the same id.
+\(em not supported yet, for the same reason as \fBexit\fR.
 .br
 The hive name (e.g. \fBclaude-cli\fR) is accepted in place of a bee id.
 .RE
 .TP
 .B nest
-List orchd-managed bees (delegates to \fBorchd status\fR).
+List orchd-managed bees (delegates to \fBorchd survey\fR).
 .TP
 .B comb [\fIbee\fR]
 Show the comb, the kernel's ledger of what crossed it: how many tones
@@ -126,11 +128,12 @@ URI resolution.
 .B uninstall
 Stop the service and remove the humd binary. State is preserved.
 .TP
-.B update [\-\-force]
+.B update [\-\-force] [\-\-edge]
 Check for a newer release and self-update. Compares the local version
 against GitHub's latest release; if newer, re-runs the canonical install
 (which bounces the service atomically). \fB\-\-force\fR reinstalls even when
-versions match.
+versions match. \fB\-\-edge\fR installs the latest main HEAD instead of the
+latest release tag.
 .TP
 .B help
 Print this message or the help of the given subcommand(s).
@@ -155,6 +158,14 @@ Bootstrap peers humd dials on boot; edited via \fBhum ensemble peer\fR.
 .TP
 .B ~/.config/hum/orch.d/
 Overlay directory for the orchd bee supervisor.
+.TP
+.B ~/.config/hum/Orchfile
+The assembled Orchfile: every registered hive's SERVICE block, in one
+file. orchd reads this to know which bees to keep running.
+.TP
+.B ~/.local/state/hum/orch/
+orchd's state dir: generated units, supervise specs and service data.
+hum keeps its own, so an unrelated orchd stack is never touched.
 .TP
 .B ~/.local/state/hum/humd.key
 The humd identity: a 32-byte Ed25519 seed minted on install (chmod 600).
@@ -189,7 +200,9 @@ them.
 Source checkout the installer builds from.
 .TP
 .B ~/.local/bin/
-Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorch\fR, \fBorchd\fR.
+Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorchd\fR.
+The \fBorchd\fR bee supervisor must be at least 0.3.4 and must expose
+the \fBgrow\fR, \fBsurvey\fR, \fBfell\fR and \fBlogs\fR subcommands.
 .SH ENVIRONMENT
 .TP
 .B HUM_BIN
@@ -227,21 +240,29 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 .PP
 The installer builds and registers \fBhumd\fR as a user service (launchd on
 macOS, systemd-style on Linux), mints the identity key, pulls in the
-\fBorch\fR/\fBorchd\fR bee-supervisor binaries, and installs this page into
+\fBorchd\fR bee-supervisor binary, and installs this page into
 \fB/usr/local/share/man/man1\fR or \fB~/.local/share/man/man1\fR. Re-running
-it upgrades in place. From a cloned repo, \fB./install\fR accepts a
-subcommand:
+it upgrades in place.
+
+Two channels. The default installs the latest release tag \(em what ships.
+\fB\-\-edge\fR installs the latest main HEAD \(em the unreleased tip.
 .RS
-.B status
+.B ./install
+\(em build + install the latest release tag.
+.br
+.B ./install \-\-edge
+\(em build + install the latest main HEAD.
+.br
+.B ./install status
 \(em humd state + paths.
 .br
-.B logs
+.B ./install logs
 \(em tail humd logs.
 .br
-.B uninstall
+.B ./install uninstall
 \(em stop + remove the humd unit (state preserved).
 .br
-.B purge
+.B ./install purge
 \(em remove everything including state.
 .RE
 .PP
