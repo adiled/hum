@@ -6,6 +6,7 @@ name: Wire protocol
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
