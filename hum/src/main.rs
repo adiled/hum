@@ -132,6 +132,8 @@ advertises (github tree URL of a hives/<kind> dir).")]
         #[command(subcommand)]
         verb: Option<EnsembleVerb>,
     },
+    #[command(about = "Show the hum paths and the orchd config hum writes (the .orchrc and the base Orchfile)")]
+    Config,
     #[command(about = "Stop the service and remove the humd binary. State preserved")]
     Uninstall,
     #[command(about = "Check for a newer release and self-update. Compares the local version against GitHub's latest release; if newer, re-runs the canonical install (which bounces the service atomically)")]
@@ -220,6 +222,7 @@ fn main() -> Result<()> {
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Ensemble { verb }) => ensemble(verb),
         Some(Cmd::Uninstall) => uninstall(),
+        Some(Cmd::Config) => config(),
         Some(Cmd::Update { force, edge }) => update(force, edge),
     }
 }
@@ -607,11 +610,15 @@ fn doctor() -> Result<()> {
     match orch::version() {
         Some(v) => {
             let min_ok = orch::version_at_least(&v, orch::MIN_VERSION);
+            let max_ok = orch::version_at_least(orch::MAX_VERSION, &v);
             let missing = orch::missing_subcommands();
-            let mark = if min_ok && missing.is_empty() { "✓" } else { "✗" };
-            println!("  orchd:      {mark} {v} (min {})", orch::MIN_VERSION);
+            let mark = if min_ok && max_ok && missing.is_empty() { "✓" } else { "✗" };
+            println!("  orchd:      {mark} {v} (pin {}..={})", orch::MIN_VERSION, orch::MAX_VERSION);
             if !min_ok {
                 println!("      version below {} — run ./install to upgrade", orch::MIN_VERSION);
+            }
+            if !max_ok {
+                println!("      version above {} — hum pins it exactly; run ./install to pin it back", orch::MAX_VERSION);
             }
             if !missing.is_empty() {
                 println!("      missing subcommand(s): {} — hum calls grow/survey/fell/logs", missing.join(", "));
@@ -732,20 +739,42 @@ fn hive_install(reference: &str) -> Result<()> {
     if !orchfile.exists() {
         anyhow::bail!("no Orchfile at {}", orchfile.display());
     }
+    let body = std::fs::read_to_string(&orchfile)?;
     let kind = read_orchfile_service(&orchfile)?
         .ok_or_else(|| anyhow::anyhow!("no SERVICE directive in {}", orchfile.display()))?;
 
     build_hive(&dir, &kind)?;
 
-    let orch_d = hum_paths::orch_d_dir();
-    std::fs::create_dir_all(&orch_d)?;
-    let dest = orch_d.join(format!("{kind}.orch"));
-    std::fs::copy(&orchfile, &dest)?;
+    orch::ensure_config()?;
+
+    let dest = orch::overlay_path(&kind);
+    std::fs::create_dir_all(hum_paths::orch_d_dir())?;
+    std::fs::write(&dest, &body)?;
     println!("registered {kind} ({})", dest.display());
 
-    rewrite_hum_orchfile(&orch_d)?;
+    let overrides = orch::env_overrides(&orch::declared_args(&body));
+    let mut map = std::collections::HashMap::new();
+    for (k, v) in &overrides {
+        map.insert(k.clone(), v.clone());
+    }
+    let (base, overlay) = orch::base_and_overlay(&kind)?;
+    let parsed = orch::parse(
+        &[
+            (hum_paths::orchfile().display().to_string(), base),
+            (dest.display().to_string(), overlay),
+        ],
+        &map,
+    )?;
+    for svc in &parsed.services {
+        println!("  {} → {}", svc.name, svc.run_command.as_deref().unwrap_or(""));
+    }
 
-    let s = orchd_cmd().arg("grow").arg(&kind).status()
+    let mut c = orch::with_overlays(orch::cmd(), std::slice::from_ref(&dest));
+    for (k, v) in &overrides {
+        c.arg("--arg").arg(format!("{k}={v}"));
+    }
+    let _ = orch::unload(&kind);
+    let s = c.arg("grow").arg(&kind).status()
         .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
     if !s.success() { anyhow::bail!("orchd grow {kind} failed"); }
     println!("✓ {kind} entered; see `hum bee --list`");
@@ -782,9 +811,9 @@ fn build_node(dir: &Path, kind: &str) -> Result<()> {
     let pkg_mgr = ["pnpm", "npm"].iter().find(|m| which(m)).copied();
     if let Some(mgr) = pkg_mgr {
         println!("building {kind} ({mgr} install + build) in {}", dir.display());
-        let s = Command::new(mgr).arg("install").current_dir(dir).status()?;
+        let s = Command::new(mgr).arg("install").env("CI", "true").current_dir(dir).status()?;
         if !s.success() { anyhow::bail!("{mgr} install failed"); }
-        let s = Command::new(mgr).args(["run", "build"]).current_dir(dir).status()?;
+        let s = Command::new(mgr).args(["run", "build"]).env("CI", "true").current_dir(dir).status()?;
         if !s.success() { anyhow::bail!("{mgr} run build failed"); }
     } else if dist.exists() {
         println!("using pre-built {} (no pnpm/npm in PATH)", dist.display());
@@ -844,22 +873,6 @@ fn read_orchfile_service(path: &Path) -> Result<Option<String>> {
     Ok(raw.lines()
         .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
         .next())
-}
-
-fn rewrite_hum_orchfile(orch_d: &Path) -> Result<()> {
-    let mut combined = String::new();
-    let mut entries: Vec<_> = std::fs::read_dir(orch_d)?.flatten()
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("orch"))
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let body = std::fs::read_to_string(e.path())?;
-        combined.push_str(&body);
-        if !combined.ends_with('\n') { combined.push('\n'); }
-        combined.push('\n');
-    }
-    std::fs::write(hum_paths::orchfile(), combined)?;
-    Ok(())
 }
 
 fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
@@ -1137,20 +1150,24 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 
 
-fn orchd_cmd() -> Command {
-    orch::cmd()
-}
-
 fn orch_catalog() -> Vec<String> {
-    let path = hum_paths::orchfile();
-    let Ok(raw) = std::fs::read_to_string(&path) else { return Vec::new(); };
-    raw.lines()
-        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
-        .collect()
+    let mut out = Vec::new();
+    for path in orch::overlays() {
+        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        for line in raw.lines() {
+            if let Some(name) = line.trim().strip_prefix("SERVICE ") {
+                out.push(name.trim().to_string());
+            }
+        }
+    }
+    out
 }
 
 fn nest() -> Result<()> {
-    let out = orchd_cmd().arg("survey").output()
+    orch::ensure_config()?;
+    let out = orch::with_overlays(orch::cmd(), &orch::overlays())
+        .arg("survey")
+        .output()
         .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1166,9 +1183,12 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
     }
     match verb {
         "enter" => {
-            let s = orchd_cmd().arg("grow").arg(kind).status()
-                .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-            if !s.success() { anyhow::bail!("orchd grow {kind} failed"); }
+            orch::ensure_config()?;
+            let overlay = orch::overlay_path(kind);
+            if !overlay.exists() {
+                anyhow::bail!("{kind} is not registered — run `hum hive {kind} install`");
+            }
+            orch::grow(kind, &overlay)?;
             println!("  ✓ entered {kind} (orchd)");
         }
         "exit" | "reenter" => {
@@ -1180,6 +1200,27 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
         other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
     }
     Ok(true)
+}
+
+fn config() -> Result<()> {
+    orch::ensure_config()?;
+    println!("[paths]");
+    println!("  config dir:   {}", hum_paths::config_dir().display());
+    println!("  state dir:    {}", hum_paths::state_dir().display());
+    println!("  orch project: {}", hum_paths::orch_project_dir().display());
+    println!("  orch state:   {}", hum_paths::orch_state_dir().display());
+    println!("  orchrc:       {}", hum_paths::orchrc_path().display());
+    println!("  base file:    {}", hum_paths::orchfile().display());
+    println!("  overlays:     {}", hum_paths::orch_d_dir().display());
+    println!("\n[.orchrc]");
+    print!("{}", std::fs::read_to_string(hum_paths::orchrc_path()).unwrap_or_default());
+    println!("\n[base Orchfile]");
+    print!("{}", std::fs::read_to_string(hum_paths::orchfile()).unwrap_or_default());
+    println!("\n[registered hives]");
+    for kind in orch_catalog() {
+        println!("  {kind}");
+    }
+    Ok(())
 }
 
 fn uninstall() -> Result<()> {

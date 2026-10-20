@@ -11,6 +11,7 @@ path = "src/main.rs"
 hum-paths = { path = "../hum-paths" }
 humd = { path = "../humd" }
 thehum = { path = "../thehum" }
+the-orch = "0.2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

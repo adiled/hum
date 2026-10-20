@@ -3,14 +3,22 @@
 //! orchd renamed its verbs: up/down/restart/status became
 //! grow/survey/fell. hum speaks the new names, and keeps its own state
 //! dir so orchd's units never mix with an unrelated stack.
+//!
+//! hum reaches orchd the way orchd's own CONFIG.md says to: a
+//! `.orchrc` in hum's project dir carries the namespace and the paths,
+//! so nothing lands in the global orchd folders. The Orchfile itself
+//! is composed the way the Orch spec composes: hum keeps one base
+//! Orchfile that declares the shared variables, and every hive's
+//! Orchfile is an overlay on it.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
-pub const MIN_VERSION: &str = "0.3.4";
+pub const MIN_VERSION: &str = "0.4.0";
+pub const MAX_VERSION: &str = "0.4.0";
 pub const REQUIRED_SUBCOMMANDS: [&str; 4] = ["grow", "survey", "fell", "logs"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,12 +58,154 @@ pub fn cmd() -> Command {
         Some(p) => Command::new(p),
         None => Command::new("orchd"),
     };
-    c.arg("--orchfile").arg(hum_paths::orchfile())
-        .arg("--user")
-        .arg("--namespace").arg(hum_paths::orch_namespace())
-        .arg("--state-dir").arg(hum_paths::orch_state_dir());
+    c.arg("--project-dir").arg(hum_paths::orch_project_dir());
     c
 }
+
+pub fn with_overlays(mut c: Command, overlays: &[PathBuf]) -> Command {
+    for o in overlays {
+        c.arg("--overlay").arg(o);
+    }
+    c
+}
+
+pub fn orchrc_body() -> String {
+    format!(
+        "# Written by hum. orchd reads this from the project dir.\n\
+         namespace={ns}\n\
+         scope=user\n\
+         state_dir={state}\n\
+         data_dir={data}\n\
+         orchfile={orchfile}\n",
+        ns = hum_paths::orch_namespace(),
+        state = hum_paths::orch_state_dir().display(),
+        data = hum_paths::orch_state_dir().join("data").display(),
+        orchfile = hum_paths::orchfile().display(),
+    )
+}
+
+pub fn base_orchfile_body() -> String {
+    format!(
+        "# Written by hum. The base every hive Orchfile overlays.\n\
+         ARG HOME={home}\n",
+        home = hum_paths::home().display(),
+    )
+}
+
+pub fn ensure_config() -> Result<()> {
+    let project = hum_paths::orch_project_dir();
+    std::fs::create_dir_all(&project)?;
+    std::fs::create_dir_all(hum_paths::orch_d_dir())?;
+
+    let orchrc = hum_paths::orchrc_path();
+    let want = orchrc_body();
+    if std::fs::read_to_string(&orchrc).ok().as_deref() != Some(want.as_str()) {
+        std::fs::write(&orchrc, &want)
+            .with_context(|| format!("write {}", orchrc.display()))?;
+    }
+
+    let base = hum_paths::orchfile();
+    let want = base_orchfile_body();
+    if std::fs::read_to_string(&base).ok().as_deref() != Some(want.as_str()) {
+        std::fs::write(&base, &want)
+            .with_context(|| format!("write {}", base.display()))?;
+    }
+    Ok(())
+}
+
+pub fn overlay_path(kind: &str) -> PathBuf {
+    hum_paths::orch_d_dir().join(format!("{kind}.orch"))
+}
+
+pub fn overlays() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(hum_paths::orch_d_dir()) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("orch") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+pub fn declared_args(text: &str) -> Vec<String> {
+    match the_orch::parser::parse_raw(text, 0) {
+        Ok(raw) => {
+            let mut names: Vec<String> = raw.args.keys().cloned().collect();
+            names.sort();
+            names
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+pub fn env_overrides(declared: &[String]) -> Vec<(String, String)> {
+    declared
+        .iter()
+        .filter_map(|n| std::env::var(n).ok().map(|v| (n.clone(), v)))
+        .collect()
+}
+
+pub fn parse(files: &[(String, String)], overrides: &std::collections::HashMap<String, String>) -> Result<the_orch::types::OrchFile> {
+    the_orch::parse_files(files, overrides).map_err(|errs| {
+        let msg: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+        anyhow::anyhow!("orchfile: {}", msg.join("; "))
+    })
+}
+
+pub fn base_and_overlay(kind: &str) -> Result<(String, String)> {
+    let base = std::fs::read_to_string(hum_paths::orchfile())
+        .with_context(|| format!("read {}", hum_paths::orchfile().display()))?;
+    let overlay_path = overlay_path(kind);
+    let overlay = std::fs::read_to_string(&overlay_path)
+        .with_context(|| format!("read {}", overlay_path.display()))?;
+    Ok((base, overlay))
+}
+
+pub fn grow(kind: &str, overlay: &Path) -> Result<()> {
+    let mut c = with_overlays(cmd(), &[overlay.to_path_buf()]);
+    let status = c
+        .arg("grow")
+        .arg(kind)
+        .status()
+        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+    if !status.success() {
+        bail!("orchd grow {kind} failed");
+    }
+    Ok(())
+}
+
+pub fn unload(kind: &str) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let plist = hum_paths::home()
+            .join("Library/LaunchAgents")
+            .join(format!("{}.plist", label(kind)));
+        let status = Command::new("launchctl")
+            .arg("bootout")
+            .arg(format!("gui/{}", uid()))
+            .arg(&plist)
+            .status()
+            .map_err(|e| anyhow::anyhow!("launchctl bootout: {e}"))?;
+        if !status.success() {
+            bail!("launchctl bootout {} failed", label(kind));
+        }
+    } else {
+        let status = Command::new("systemctl")
+            .arg("--user")
+            .arg("stop")
+            .arg(unit(kind))
+            .status()
+            .map_err(|e| anyhow::anyhow!("systemctl stop: {e}"))?;
+        if !status.success() {
+            bail!("systemctl stop {} failed", unit(kind));
+        }
+    }
+    Ok(())
+}
+
 
 pub fn label(kind: &str) -> String {
     format!("{}.{}", hum_paths::orch_namespace(), kind)
@@ -113,7 +263,7 @@ pub fn version_at_least(found: &str, min: &str) -> bool {
 }
 
 pub fn survey() -> Result<BTreeMap<String, Bee>> {
-    let out = cmd()
+    let out = with_overlays(cmd(), &overlays())
         .arg("survey")
         .arg("--json")
         .output()

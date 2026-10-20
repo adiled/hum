@@ -1661,6 +1661,7 @@ dependencies = [
  "hum-paths",
  "humd",
  "serde_json",
+ "the-orch",
  "thehum",
  "thrum-core",
  "tokio",
@@ -4402,6 +4403,16 @@ dependencies = [
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "the-orch"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6def679e429ef0478234e4aecdc471e7f9a21d9ab8efd977d36ad4d42cd14282"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

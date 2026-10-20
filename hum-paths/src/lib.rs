@@ -328,6 +328,14 @@ pub fn orch_state_dir() -> PathBuf {
     state_dir().join("orch")
 }
 
+pub fn orch_project_dir() -> PathBuf {
+    config_dir()
+}
+
+pub fn orchrc_path() -> PathBuf {
+    config_dir().join(".orchrc")
+}
+
 pub fn bee_config(kind: &str) -> PathBuf {
     config_dir().join("bees").join(format!("{kind}.json"))
 }

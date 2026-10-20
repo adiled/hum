@@ -40,14 +40,13 @@ ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
 
-# orchd — the bee supervisor. Built from git, not crates.io: the released
-# 0.3.4 still carries the launchd status bug where a running job is
-# reported inactive (orchd#56), which makes `hum bee --list` lie about
-# every bee. Bump ORCHD_REV when orchd cuts a release that carries the
-# fix; ORCHD_MIN_VERSION is the floor hum refuses to run below.
-ORCHD_REPO="${ORCHD_REPO:-https://github.com/adiled/orchd.git}"
-ORCHD_REV="${ORCHD_REV:-72e84c96935eb5085428b581acbf4641d7e64736}"
-ORCHD_MIN_VERSION="0.3.4"
+# orchd — the bee supervisor. Built from crates.io, pinned to an exact
+# version: hum calls its verbs and reads its survey, so the version is
+# part of hum's contract. 0.4.0 carries the launchd status fix
+# (orchd#56), without which `orchd survey` reports running bees as
+# inactive on macOS.
+ORCHD_MIN_VERSION="0.4.0"
+ORCHD_MAX_VERSION="0.4.0"
 ORCHD_NAMESPACE="hum"
 ORCHD_STATE="$HUM_STATE/orch"
 
@@ -148,10 +147,7 @@ JSON
 
 ensure_orch_overlay_dir() {
   mkdir -p "$HUM_CONFIG/orch.d"
-  : > "$HUM_CONFIG/Orchfile"
-  mkdir -p "$ORCHD_STATE"
   log "orch overlay dir: $HUM_CONFIG/orch.d/"
-  log "orch state dir:   $ORCHD_STATE/"
 }
 
 # Install man/hum.1 where `man hum` will find it.
@@ -234,16 +230,14 @@ prepare_src() {
 }
 
 install_orchd() {
-  log "installing orchd (bee supervisor) from git ${ORCHD_REV:0:8}"
-  if ! cargo install --quiet --locked --git "$ORCHD_REPO" --rev "$ORCHD_REV" \
-        --root "$HUM_BIN_ROOT" --force; then
-    warn "git install of orchd failed — falling back to crates.io $ORCHD_MIN_VERSION"
-    warn "crates.io orchd carries the launchd survey bug (running bees reported inactive),"
-    warn "so 'hum bee --list' will misreport their state until orchd is updated."
-    cargo install --quiet orchd --version "=$ORCHD_MIN_VERSION" --root "$HUM_BIN_ROOT" --force
-  fi
+  log "installing orchd (bee supervisor) ${ORCHD_MIN_VERSION} from crates.io, pinned"
+  cargo install --quiet orchd --version "=$ORCHD_MIN_VERSION" --root "$HUM_BIN_ROOT" --force
   ensure_min_version orchd "$ORCHD_BIN" "$ORCHD_MIN_VERSION"
   ensure_orchd_api "$ORCHD_BIN"
+  local CUR; CUR="$(read_version "$ORCHD_BIN" || true)"
+  if [ -n "$CUR" ] && ! version_gte "$ORCHD_MAX_VERSION" "$CUR"; then
+    fail "orchd ${CUR} > pinned ${ORCHD_MAX_VERSION} — hum pins it exactly; update the pin in ./install"
+  fi
 }
 
 build_binaries() {
@@ -432,6 +426,7 @@ do_install() {
   ensure_peers_config
   ensure_hum_config
   ensure_orch_overlay_dir
+  "$HUM_CLI_BIN" config >/dev/null 2>&1 || warn "could not write the orchd config — run 'hum config'"
   start_daemons
   log ""
   print_next_steps
