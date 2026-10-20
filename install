@@ -264,8 +264,12 @@ build_binaries() {
 linux_unit_dir="${XDG_CONFIG_HOME}/systemd/user"
 darwin_unit_dir="$HOME/Library/LaunchAgents"
 
+trust_remote_workers="${HUM_TRUST_REMOTE_WORKERS:-0}"
+
 write_linux_unit() {
   mkdir -p "$linux_unit_dir"
+  local TRUST_LINE=""
+  [ "$trust_remote_workers" = "0" ] || TRUST_LINE="Environment=HUM_TRUST_REMOTE_WORKERS=$trust_remote_workers"
   cat > "$linux_unit_dir/humd.service" <<EOF
 [Unit]
 Description=hum router daemon
@@ -273,6 +277,7 @@ Description=hum router daemon
 [Service]
 Type=simple
 ExecStart=$HUMD_BIN
+$TRUST_LINE
 Restart=always
 RestartSec=2
 
@@ -286,6 +291,13 @@ EOF
 
 write_darwin_unit() {
   mkdir -p "$darwin_unit_dir"
+  local TRUST_XML=""
+  if [ "$trust_remote_workers" != "0" ]; then
+    TRUST_XML="  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HUM_TRUST_REMOTE_WORKERS</key><string>$trust_remote_workers</string>
+  </dict>"
+  fi
   cat > "$darwin_unit_dir/humd.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -296,6 +308,7 @@ write_darwin_unit() {
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$HOME/Library/Logs/sh.hum.humd.out.log</string>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/sh.hum.humd.err.log</string>
+$TRUST_XML
 </dict></plist>
 EOF
   local uid; uid="$(id -u)"
