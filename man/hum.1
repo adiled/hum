@@ -125,6 +125,12 @@ URI resolution.
 \(em drop all entries matching \fItarget\fR (a humd_id hex or alias).
 .RE
 .TP
+.B config
+Show the hum paths and the orchd config hum writes: the \fB.orchrc\fR that
+carries the namespace and the paths, and the base Orchfile every hive's
+Orchfile overlays. Writing them is idempotent; running the command is
+also how you see them.
+.TP
 .B uninstall
 Stop the service and remove the humd binary. State is preserved.
 .TP
@@ -218,7 +224,10 @@ Same as \fBHUM_THRUM_SOCK\fR, checked second.
 .B HUM_TRUST_REMOTE_WORKERS
 Set to \fB1\fR, \fBtrue\fR or \fByes\fR to let humd forward a prompt to a peer
 on the strength of that peer's advertised model. Off by default: an
-unverified claim hands the prompt to whoever made it.
+unverified claim hands the prompt to whoever made it. The setting
+also lives in \fBhum.json\fR as \fBhumd.trustRemoteWorkers\fR, which is
+where it belongs: the installer never rewrites hum.json, so the gate
+does not shut under you. This variable overrides that key.
 .TP
 .B HUM_MCP_PORT
 Port for humd's own MCP server. Default 29147.

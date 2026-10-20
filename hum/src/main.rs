@@ -10,6 +10,7 @@
 //!   hum bee --list         list bees + state
 //!   hum bee <id> VERB      enter a bee (exit/reenter: not supported yet)
 //!   hum nest               list orchd-managed bees (delegates to `orchd survey`)
+//!   hum config             show the paths + the orchd config hum writes
 //!   hum comb [bee]         show the comb — lifetime measures
 //!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
