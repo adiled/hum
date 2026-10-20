@@ -57,6 +57,9 @@ async fn main() -> Result<()> {
         .init();
     info!(version = %THRUM_VERSION, "humd.booting");
 
+    for key in hum_paths::config::migrate_file() {
+        info!(key = %key, "config.retired_key_dropped");
+    }
     hum_paths::config::validate_or_exit();
 
     let cfg = DaemonConfig::from_env();

@@ -12,6 +12,12 @@
 //!
 //! serde tolerates unknown keys, so validity is enforced by the schema
 //! rather than by the deserializer.
+//!
+//! Keys a released humd wrote and a later one no longer reads are
+//! [`RETIRED`]. A daemon that dies because the file carries a key it has
+//! moved on from turns every upgrade into an outage, so a retired key is
+//! dropped on sight instead of failing validation. A key that was never
+//! known is still a violation.
 
 use std::path::{Path, PathBuf};
 
@@ -188,9 +194,57 @@ pub fn load() -> HumConfig {
 
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
+pub const RETIRED: &[(&str, &str)] = &[("humd", "driftRetentionDays")];
+
+pub fn drop_retired(instance: &mut serde_json::Value) -> Vec<String> {
+    let mut dropped = Vec::new();
+    for (section, key) in RETIRED {
+        let Some(obj) = instance.get_mut(*section).and_then(|s| s.as_object_mut()) else {
+            continue;
+        };
+        if obj.remove(*key).is_some() {
+            dropped.push(format!("{section}.{key}"));
+        }
+    }
+    dropped
+}
+
+pub fn retired_in_raw(raw: &str) -> Vec<String> {
+    let Ok(mut instance) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    drop_retired(&mut instance)
+}
+
+pub fn retired_in_file() -> Vec<String> {
+    let path = config_path();
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    retired_in_raw(&raw)
+}
+
+pub fn migrate_file() -> Vec<String> {
+    let path = config_path();
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(mut instance) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let dropped = drop_retired(&mut instance);
+    if dropped.is_empty() { return Vec::new(); }
+    if let Ok(mut pretty) = serde_json::to_string_pretty(&instance) {
+        pretty.push('\n');
+        let _ = std::fs::write(&path, pretty);
+    }
+    dropped
+}
+
 pub fn validate(raw: &str) -> Result<(), Vec<String>> {
-    let instance: serde_json::Value = serde_json::from_str(raw)
+    let mut instance: serde_json::Value = serde_json::from_str(raw)
         .map_err(|e| vec![format!("invalid JSON: {e}")])?;
+    drop_retired(&mut instance);
     let schema: serde_json::Value = serde_json::from_str(SCHEMA)
         .expect("embedded hum.schema.json is itself valid JSON");
     let validator = jsonschema::validator_for(&schema)
@@ -294,6 +348,21 @@ mod tests {
             "hives": { "claude-cli": { "bin": "claude", "flags": [], "model": "opus" } }
         }"#;
         assert!(validate(bad).is_err(), "legacy hives block must fail schema validation");
+    }
+
+    #[test]
+    fn retired_key_does_not_fail_validation() {
+        let stale = r#"{
+            "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 }
+        }"#;
+        assert!(validate(stale).is_ok(), "a retired key must not brick the daemon: {:?}", validate(stale));
+        assert_eq!(retired_in_raw(stale), vec!["humd.driftRetentionDays".to_string()]);
+    }
+
+    #[test]
+    fn unknown_key_still_fails_validation() {
+        let typo = r#"{ "humd": { "permissionDuskMsec": 60000 } }"#;
+        assert!(validate(typo).is_err(), "a key that was never known is still a violation");
     }
 
     #[test]

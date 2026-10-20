@@ -185,6 +185,9 @@ install_man_page() {
 # --edge, where "the source" means main HEAD. The stable channel always
 # builds the published tag from the managed clone, so a dev's working
 # tree never leaks into someone else's install.
+#
+# The resolved path goes to stdout; everything else goes to stderr, so
+# the caller can capture the path without swallowing the narration.
 prepare_src() {
   local MODE="$1" LOCAL_SRC=""
   if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
@@ -197,35 +200,35 @@ prepare_src() {
       fail "--edge builds main HEAD, but $LOCAL_SRC is on '$BRANCH'. Check out main, or drop --edge."
     fi
     if git -C "$LOCAL_SRC" diff --quiet && git -C "$LOCAL_SRC" diff --cached --quiet; then
-      log "updating $LOCAL_SRC to origin/main"
-      git -C "$LOCAL_SRC" pull --ff-only --quiet origin main || warn "could not fast-forward — building the local HEAD as-is"
+      log "updating $LOCAL_SRC to origin/main" >&2
+      git -C "$LOCAL_SRC" pull --ff-only --quiet origin main >&2 || warn "could not fast-forward — building the local HEAD as-is" >&2
     else
-      warn "working tree has uncommitted changes — the build will include them"
+      warn "working tree has uncommitted changes — the build will include them" >&2
     fi
     echo "$LOCAL_SRC"
     return 0
   fi
 
   if [ ! -d "$HUM_SRC/.git" ]; then
-    log "cloning $HUM_REPO_URL into $HUM_SRC"
+    log "cloning $HUM_REPO_URL into $HUM_SRC" >&2
     mkdir -p "$HUM_DATA"
-    git clone --quiet "$HUM_REPO_URL" "$HUM_SRC"
+    git clone --quiet "$HUM_REPO_URL" "$HUM_SRC" >&2
   fi
   if [ "$(git -C "$HUM_SRC" rev-parse --is-shallow-repository 2>/dev/null || echo false)" = "true" ]; then
-    git -C "$HUM_SRC" fetch --quiet --unshallow --tags --force origin
+    git -C "$HUM_SRC" fetch --quiet --unshallow --tags --force origin >&2
   else
-    git -C "$HUM_SRC" fetch --quiet --tags --force origin
+    git -C "$HUM_SRC" fetch --quiet --tags --force origin >&2
   fi
 
   if [ "$MODE" = edge ]; then
-    log "checking out origin/main in $HUM_SRC"
-    git -C "$HUM_SRC" checkout --quiet -B main origin/main
-    git -C "$HUM_SRC" reset --quiet --hard origin/main
+    log "checking out origin/main in $HUM_SRC" >&2
+    git -C "$HUM_SRC" checkout --quiet -B main origin/main >&2
+    git -C "$HUM_SRC" reset --quiet --hard origin/main >&2
   else
     local TAG; TAG="$(git -C "$HUM_SRC" tag --sort=-v:refname | head -1)"
     [ -n "$TAG" ] || fail "no release tags found in $HUM_SRC"
-    log "checking out $TAG in $HUM_SRC"
-    git -C "$HUM_SRC" checkout --quiet --detach "$TAG"
+    log "checking out $TAG in $HUM_SRC" >&2
+    git -C "$HUM_SRC" checkout --quiet --detach "$TAG" >&2
   fi
   echo "$HUM_SRC"
 }
@@ -297,7 +300,19 @@ write_darwin_unit() {
 EOF
   local uid; uid="$(id -u)"
   launchctl bootout "gui/$uid/humd" 2>/dev/null || true
-  launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humd.plist"
+  # bootout returns before launchd has finished unloading the job, and a
+  # bootstrap that lands in that window fails with EIO. Wait for the job
+  # to be gone, then retry the bootstrap once for good measure.
+  local i
+  for i in $(seq 1 20); do
+    launchctl print "gui/$uid/humd" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+  if ! launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humd.plist" 2>/dev/null; then
+    sleep 1
+    launchctl bootstrap "gui/$uid" "$darwin_unit_dir/humd.plist" \
+      || fail "could not register humd as a launchd agent ($darwin_unit_dir/humd.plist)"
+  fi
 }
 
 start_daemons() {

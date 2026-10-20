@@ -550,7 +550,15 @@ fn doctor() -> Result<()> {
     match std::fs::read_to_string(&hum_json) {
         Err(_) => println!("  (no hum.json — humd runs on defaults)"),
         Ok(raw) => match hum_paths::config::validate(&raw) {
-            Ok(()) => println!("  ✓ valid against hum.schema.json"),
+            Ok(()) => {
+                let retired = hum_paths::config::retired_in_raw(&raw);
+                if retired.is_empty() {
+                    println!("  ✓ valid against hum.schema.json");
+                } else {
+                    println!("  ✓ valid against hum.schema.json");
+                    println!("      retired key(s) the daemon drops on boot: {}", retired.join(", "));
+                }
+            }
             Err(violations) => {
                 println!("  ✗ INVALID — humd will refuse to start:");
                 for v in &violations { println!("      - {v}"); }
