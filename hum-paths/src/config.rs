@@ -33,6 +33,8 @@ pub struct HumdSection {
     pub metrics_addr: String,
     #[serde(default, rename = "tcpListen")]
     pub tcp_listen: Option<String>,
+    #[serde(default, rename = "trustRemoteWorkers")]
+    pub trust_remote_workers: bool,
 }
 
 impl Default for HumdSection {
@@ -41,6 +43,7 @@ impl Default for HumdSection {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             metrics_addr: defaults::metrics_addr(),
             tcp_listen: None,
+            trust_remote_workers: false,
         }
     }
 }

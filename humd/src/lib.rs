@@ -72,13 +72,21 @@ impl DaemonConfig {
             }
         };
         let bootstrap_peers = peers::load();
+        let hum_cfg = hum_paths::config::load();
+        let trust_remote_workers = matches!(
+            std::env::var("HUM_TRUST_REMOTE_WORKERS")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        ) || hum_cfg.humd.trust_remote_workers;
         Self {
             thrum_path,
             http_path,
             mcp_addr: ([127, 0, 0, 1], mcp_port).into(),
             comb_path: hum_paths::comb(),
             routing_path: hum_paths::routing_json(),
-            hum_cfg: hum_paths::config::load(),
+            hum_cfg,
             cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             comb_persist_interval: Duration::from_secs(10),
             routing_persist_interval: Duration::from_secs(30),
@@ -91,13 +99,7 @@ impl DaemonConfig {
             humd_key,
             bootstrap_peers,
             thehum_cfg: None,
-            trust_remote_workers: matches!(
-                std::env::var("HUM_TRUST_REMOTE_WORKERS")
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .as_deref(),
-                Some("1") | Some("true") | Some("yes")
-            ),
+            trust_remote_workers,
         }
     }
 }

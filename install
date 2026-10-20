@@ -262,8 +262,16 @@ trust_remote_workers="${HUM_TRUST_REMOTE_WORKERS:-0}"
 
 write_linux_unit() {
   mkdir -p "$linux_unit_dir"
+  # Keep whatever environment the unit already carries. An install that
+  # rewrites the unit from its own environment silently unsets what the
+  # daemon was configured with — the trust flag, for one.
   local TRUST_LINE=""
-  [ "$trust_remote_workers" = "0" ] || TRUST_LINE="Environment=HUM_TRUST_REMOTE_WORKERS=$trust_remote_workers"
+  if [ -f "$linux_unit_dir/humd.service" ]; then
+    TRUST_LINE="$(grep -E '^Environment=' "$linux_unit_dir/humd.service" || true)"
+  fi
+  if [ -z "$TRUST_LINE" ] && [ "$trust_remote_workers" != "0" ]; then
+    TRUST_LINE="Environment=HUM_TRUST_REMOTE_WORKERS=$trust_remote_workers"
+  fi
   cat > "$linux_unit_dir/humd.service" <<EOF
 [Unit]
 Description=hum router daemon
@@ -285,8 +293,13 @@ EOF
 
 write_darwin_unit() {
   mkdir -p "$darwin_unit_dir"
+  # Same as the systemd unit: an install keeps the environment the
+  # daemon already had, and only adds to it.
   local TRUST_XML=""
-  if [ "$trust_remote_workers" != "0" ]; then
+  if [ -f "$darwin_unit_dir/humd.plist" ]; then
+    TRUST_XML="$(awk '/<key>EnvironmentVariables<\/key>/{f=1} f{print} /<\/dict>/{if(f){exit}}' "$darwin_unit_dir/humd.plist")"
+  fi
+  if [ -z "$TRUST_XML" ] && [ "$trust_remote_workers" != "0" ]; then
     TRUST_XML="  <key>EnvironmentVariables</key>
   <dict>
     <key>HUM_TRUST_REMOTE_WORKERS</key><string>$trust_remote_workers</string>

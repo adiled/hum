@@ -4,8 +4,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
-
+    "$schema": {
+      "type": "string"
+    },
     "humd": {
       "type": "object",
       "additionalProperties": false,
@@ -24,15 +25,19 @@
         },
         "tcpListen": {
           "type": "string",
-          "description": "host:port the ensemble TCP transport binds for inbound peers. Omit / empty for dial-only (no listener). Plaintext — the signed ensemble hello is the only authentication on the wire; use iroh for non-LAN."
+          "description": "host:port the ensemble TCP transport binds for inbound peers. Omit / empty for dial-only (no listener). Plaintext \u2014 the signed ensemble hello is the only authentication on the wire; use iroh for non-LAN."
+        },
+        "trustRemoteWorkers": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let humd forward a prompt to a peer that advertises the model. A peer can claim any model it likes, so this is a trust decision, not a default. The env var HUM_TRUST_REMOTE_WORKERS overrides it."
         }
       }
     },
-
     "fs": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Filesystem primitive — what humd is allowed to read and write. Built-in MCP tools (Read/Write/Edit/Glob/Grep/Bash) clamp to these roots. SpawnSpec.cwd must be inside one of them.",
+      "description": "Filesystem primitive \u2014 what humd is allowed to read and write. Built-in MCP tools (Read/Write/Edit/Glob/Grep/Bash) clamp to these roots. SpawnSpec.cwd must be inside one of them.",
       "properties": {
         "roots": {
           "type": "array",
@@ -40,7 +45,9 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "properties": {
               "path": {
                 "type": "string",
@@ -48,22 +55,31 @@
               },
               "mode": {
                 "type": "string",
-                "enum": ["rw", "ro"],
+                "enum": [
+                  "rw",
+                  "ro"
+                ],
                 "default": "rw",
-                "description": "rw — read + write tools allowed. ro — Read/Glob/Grep allowed, Write/Edit refused."
+                "description": "rw \u2014 read + write tools allowed. ro \u2014 Read/Glob/Grep allowed, Write/Edit refused."
               }
             }
           }
         },
         "denied": {
           "type": "array",
-          "default": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"],
-          "items": { "type": "string" },
+          "default": [
+            "~/.ssh",
+            "~/.aws",
+            "~/.gnupg",
+            "~/.config/hum"
+          ],
+          "items": {
+            "type": "string"
+          },
           "description": "Hard blacklist. Any path under a denied prefix is refused even if it sits inside a root. Tilde expanded."
         }
       }
     },
-
     "nest": {
       "type": "object",
       "additionalProperties": false,
