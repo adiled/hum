@@ -80,6 +80,7 @@ pub const REVOKED_BEES_BASENAME: &str = "revoked.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
+pub const ORCH_NAMESPACE: &str = "hum";
 pub const ROUTING_JSON_BASENAME: &str = "routing.json";
 pub const HIVES_SUBDIR: &str = "hives";
 pub const RECIPES_SUBDIR: &str = "recipes";
@@ -317,6 +318,14 @@ pub fn orch_d_dir() -> PathBuf {
 
 pub fn orchfile() -> PathBuf {
     config_dir().join(ORCHFILE_BASENAME)
+}
+
+pub fn orch_namespace() -> &'static str {
+    ORCH_NAMESPACE
+}
+
+pub fn orch_state_dir() -> PathBuf {
+    state_dir().join("orch")
 }
 
 pub fn bee_config(kind: &str) -> PathBuf {

@@ -8,8 +8,8 @@
 //!   hum hive --list        list hive kinds (catalogue / configured / running)
 //!   hum hive <ref> install build a hive + register its bee
 //!   hum bee --list         list bees + state
-//!   hum bee <id> VERB      enter | exit | reenter a bee (start/stop/restart)
-//!   hum nest               list orchd-managed bees (delegates to `orchd status`)
+//!   hum bee <id> VERB      enter a bee (exit/reenter: not supported yet)
+//!   hum nest               list orchd-managed bees (delegates to `orchd survey`)
 //!   hum comb [bee]         show the comb — lifetime measures
 //!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
@@ -26,6 +26,9 @@
 //! Live peer state lives in the running daemon, which has no
 //! admin-tone RPC yet — `hum ensemble` reads the on-disk files.
 
+mod orch;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -78,8 +81,8 @@ advertises (github tree URL of a hives/<kind> dir).")]
 
   hum bee --list                  list bees + state
   hum bee <name|id> enter         start a stopped bee
-  hum bee <name|id> exit          stop (state preserved)
-  hum bee <name|id> reenter       restart (graceful, same id)")]
+  hum bee <name|id> exit          not supported yet (orchd has no per-service stop)
+  hum bee <name|id> reenter       not supported yet (orchd has no per-service stop)")]
     #[command(verbatim_doc_comment)]
     Bee {
         #[arg(help = "Bee name or id (hive name accepted, e.g. \"claude-cli\")")]
@@ -90,7 +93,7 @@ advertises (github tree URL of a hives/<kind> dir).")]
         #[arg(long)]
         list: bool,
     },
-    #[command(about = "List orchd-managed bees (delegates to `orchd status`)")]
+    #[command(about = "List orchd-managed bees (delegates to `orchd survey`)")]
     Nest,
     #[command(about = "Show the comb — lifetime measures of what crossed the kernel")]
     Comb {
@@ -136,6 +139,9 @@ advertises (github tree URL of a hives/<kind> dir).")]
         #[arg(help = "Update even when versions match (force reinstall)")]
         #[arg(long)]
         force: bool,
+        #[arg(help = "Update to the latest main HEAD instead of the latest release tag")]
+        #[arg(long)]
+        edge: bool,
     },
 }
 
@@ -214,11 +220,11 @@ fn main() -> Result<()> {
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Ensemble { verb }) => ensemble(verb),
         Some(Cmd::Uninstall) => uninstall(),
-        Some(Cmd::Update { force }) => update(force),
+        Some(Cmd::Update { force, edge }) => update(force, edge),
     }
 }
 
-fn update(force: bool) -> Result<()> {
+fn update(force: bool, edge: bool) -> Result<()> {
     let local = env!("CARGO_PKG_VERSION").to_string();
     let stamped = env!("HUM_VERSION");
     let upstream = match latest_release_tag() {
@@ -230,15 +236,20 @@ fn update(force: bool) -> Result<()> {
     };
     let upstream_trim = upstream.trim_start_matches('v').to_string();
     println!("local: {stamped}  upstream: {upstream_trim}");
-    if !force && upstream_trim == local {
-        println!("up to date.");
-        return Ok(());
+    if edge {
+        println!("updating to the latest main HEAD …");
+    } else {
+        if !force && upstream_trim == local {
+            println!("up to date.");
+            return Ok(());
+        }
+        println!("updating to {upstream_trim} …");
     }
-    println!("updating to {upstream_trim} …");
     let url = "https://raw.githubusercontent.com/adiled/hum/main/install";
+    let script = if edge { format!("curl -fsSL {url} | bash -s -- --edge") } else { format!("curl -fsSL {url} | bash") };
     let status = Command::new("bash")
         .arg("-c")
-        .arg(format!("curl -fsSL {url} | bash"))
+        .arg(script)
         .status()?;
     if !status.success() {
         anyhow::bail!("installer exited with {status}");
@@ -585,10 +596,22 @@ fn doctor() -> Result<()> {
         Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
     }
 
-    match Command::new("orchd").arg("--version").output() {
-        Ok(o) if o.status.success() => println!("  orchd:      ✓ {}", String::from_utf8_lossy(&o.stdout).trim()),
-        _ => println!("  orchd:      ✗ NOT FOUND in PATH (run ./install to build it)"),
+    match orch::version() {
+        Some(v) => {
+            let min_ok = orch::version_at_least(&v, orch::MIN_VERSION);
+            let missing = orch::missing_subcommands();
+            let mark = if min_ok && missing.is_empty() { "✓" } else { "✗" };
+            println!("  orchd:      {mark} {v} (min {})", orch::MIN_VERSION);
+            if !min_ok {
+                println!("      version below {} — run ./install to upgrade", orch::MIN_VERSION);
+            }
+            if !missing.is_empty() {
+                println!("      missing subcommand(s): {} — hum calls grow/survey/fell/logs", missing.join(", "));
+            }
+        }
+        None => println!("  orchd:      ✗ NOT FOUND (run ./install to build it)"),
     }
+    println!("  orch state: {}", hum_paths::orch_state_dir().display());
 
     println!("\n[claude binary]");
     let claude = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
@@ -714,9 +737,9 @@ fn hive_install(reference: &str) -> Result<()> {
 
     rewrite_hum_orchfile(&orch_d)?;
 
-    let s = orchd_cmd().arg("up").arg(&kind).status()
+    let s = orchd_cmd().arg("grow").arg(&kind).status()
         .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-    if !s.success() { anyhow::bail!("orchd up {kind} failed"); }
+    if !s.success() { anyhow::bail!("orchd grow {kind} failed"); }
     println!("✓ {kind} entered; see `hum bee --list`");
     Ok(())
 }
@@ -860,6 +883,22 @@ fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
     anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
 }
 
+fn bee_service_state(kind: &str, survey: &BTreeMap<String, orch::Bee>) -> String {
+    match survey.get(kind) {
+        Some(b) if b.running() => "in nest (service running)".to_string(),
+        Some(_) => match orch::job(kind) {
+            Some(j) if j.running() => "in nest (service running)".to_string(),
+            Some(j) => match j.last_exit {
+                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
+                Some(_) => "in nest (service stopped)".to_string(),
+                None => "in nest (service stopped?)".to_string(),
+            },
+            None => "in nest (service stopped?)".to_string(),
+        },
+        None => "installed, not handshaked".to_string(),
+    }
+}
+
 fn bee_list_full(installed: &[String]) -> Result<()> {
     let snap_path = hum_paths::bees_snapshot();
     let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
@@ -873,21 +912,31 @@ fn bee_list_full(installed: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    let (survey, survey_err) = match orch::survey() {
+        Ok(m) => (m, None),
+        Err(e) => (BTreeMap::new(), Some(e.to_string())),
+    };
+
     let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
     let arr = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
 
     let mut matched_kinds: Vec<String> = Vec::new();
     for m in &live {
         let hive = s(m, "name");
-        let managed = installed.iter().any(|k| k == &hive || hive.starts_with(&format!("{k}-")));
-        if managed { matched_kinds.push(hive.clone()); }
+        let kind = installed.iter()
+            .find(|k| *k == &hive || hive.starts_with(&format!("{k}-")))
+            .cloned();
+        if let Some(k) = &kind { matched_kinds.push(k.clone()); }
 
         let role = arr(m, "bee").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>().join("+");
         let models = arr(m, "models").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let tools: Vec<String> = arr(m, "tools").iter().map(|t| s(t, "name")).filter(|x| !x.is_empty()).collect();
         let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
         let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
-        let state = if managed { "in nest (orchd-managed)" } else { "in nest (unmanaged)" };
+        let state = match &kind {
+            Some(k) => bee_service_state(k, &survey),
+            None => "in nest (unmanaged)".to_string(),
+        };
 
         println!("● {hive}  —  {state}");
         let hid = s(m, "hid");
@@ -906,7 +955,12 @@ fn bee_list_full(installed: &[String]) -> Result<()> {
 
     for kind in installed {
         if matched_kinds.contains(kind) { continue; }
-        println!("● {kind}  —  installed, not handshaked");
+        println!("● {kind}  —  {}", bee_service_state(kind, &survey));
+        println!();
+    }
+
+    if let Some(e) = survey_err {
+        println!("(orchd survey unavailable: {e})");
         println!();
     }
 
@@ -1076,12 +1130,7 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 
 fn orchd_cmd() -> Command {
-    let abs = hum_paths::hum_bin("orchd");
-    let mut c = if abs.exists() { Command::new(&abs) } else { Command::new("orchd") };
-    c.arg("--orchfile").arg(hum_paths::orchfile())
-     .arg("--user")
-     .arg("--namespace").arg("hum");
-    c
+    orch::cmd()
 }
 
 fn orch_catalog() -> Vec<String> {
@@ -1093,11 +1142,13 @@ fn orch_catalog() -> Vec<String> {
 }
 
 fn nest() -> Result<()> {
-    let status = orchd_cmd().arg("status").status()
+    let out = orchd_cmd().arg("survey").output()
         .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-    if !status.success() {
-        anyhow::bail!("orchd status failed");
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        anyhow::bail!("orchd survey failed: {err}");
     }
+    print!("{}", String::from_utf8_lossy(&out.stdout));
     Ok(())
 }
 
@@ -1105,19 +1156,21 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
     if !orch_catalog().iter().any(|k| k == kind) {
         return Ok(false);
     }
-    let verb_arg = match verb {
-        "enter"   => "up",
-        "exit"    => "down",
-        "reenter" => "restart",
+    match verb {
+        "enter" => {
+            let s = orchd_cmd().arg("grow").arg(kind).status()
+                .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
+            if !s.success() { anyhow::bail!("orchd grow {kind} failed"); }
+            println!("  ✓ entered {kind} (orchd)");
+        }
+        "exit" | "reenter" => {
+            anyhow::bail!(
+                "per-bee `{verb}` is not supported yet — orchd exposes no per-service stop. \
+                 `orchd fell` tears the whole grove down; per-bee stop arrives with orchd's `tend`."
+            );
+        }
         other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
-    };
-    let past = match verb { "enter" => "entered", "exit" => "exited", _ => "re-entered" };
-    let status = orchd_cmd().arg(verb_arg).arg(kind).status()
-        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-    if !status.success() {
-        anyhow::bail!("orchd {verb_arg} {kind} failed");
     }
-    println!("  ✓ {past} {kind} (orchd)");
     Ok(true)
 }
 

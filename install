@@ -2,16 +2,22 @@
 # hum installer.
 #
 # Builds + registers humd as a user service. Pulls the orchd supervisor
-# (bee lifecycle) from crates.io, pinned to an exact version. `hum hive
-# install <kind>` brings up bees via orchd; no per-bee bash scripts. The
-# `orch` Orchfile CLI is not installed — it's dead weight; hum parses
-# Orchfiles in-process, and Orchfile parsing is available as the
-# `the-orch` library should we ever need it.
+# (bee lifecycle) from git, pinned to an exact commit. `hum hive install
+# <kind>` brings up bees via orchd; no per-bee bash scripts. The `orch`
+# Orchfile CLI is not installed — it's dead weight; hum parses Orchfiles
+# in-process, and Orchfile parsing is available as the `the-orch` library
+# should we ever need it.
 #
 # Idempotent — re-running upgrades in place.
 #
+# Two channels:
+#   default  the latest release tag  — what ships, what others run
+#   --edge   the latest main HEAD    — unreleased tip, for the machine
+#                                     that lives on the edge
+#
 # Usage:
-#   ./install              # from a cloned repo
+#   ./install              # build + install the latest release tag
+#   ./install --edge       # build + install the latest main HEAD
 #   ./install status       # humd state + paths
 #   ./install logs         # tail humd logs
 #   ./install uninstall    # stop + remove humd unit (state preserved)
@@ -34,7 +40,27 @@ ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
 
-CMD="${1:-install}"
+# orchd — the bee supervisor. Built from git, not crates.io: the released
+# 0.3.4 still carries the launchd status bug where a running job is
+# reported inactive (orchd#56), which makes `hum bee --list` lie about
+# every bee. Bump ORCHD_REV when orchd cuts a release that carries the
+# fix; ORCHD_MIN_VERSION is the floor hum refuses to run below.
+ORCHD_REPO="${ORCHD_REPO:-https://github.com/adiled/orchd.git}"
+ORCHD_REV="${ORCHD_REV:-72e84c96935eb5085428b581acbf4641d7e64736}"
+ORCHD_MIN_VERSION="0.3.4"
+ORCHD_NAMESPACE="hum"
+ORCHD_STATE="$HUM_STATE/orch"
+
+EDGE=0
+declare -a REST=()
+for arg in "$@"; do
+  case "$arg" in
+    --edge) EDGE=1 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) REST+=("$arg") ;;
+  esac
+done
+CMD="${REST[0]:-install}"
 OS="$(uname -s)"
 
 log()  { printf '\033[1m[hum]\033[0m %s\n' "$*"; }
@@ -51,6 +77,22 @@ ensure_min_version() {
   if [ -z "$CUR" ]; then fail "$NAME found but couldn't read version."; fi
   if version_gte "$CUR" "$MIN"; then log "$NAME ${CUR} ≥ ${MIN} ✓"
   else fail "$NAME ${CUR} < ${MIN} — upgrade and re-run."; fi
+}
+
+# orchd renamed its verbs (up/down/restart/status -> grow/survey/fell).
+# A version number cannot tell the two apart — both report 0.3.4 — so
+# hum checks the command surface it actually calls. Version gates catch
+# old builds; this catches a build from the wrong side of the rename.
+ensure_orchd_api() {
+  local BIN="$1" HELP MISSING=""
+  HELP="$("$BIN" --help 2>/dev/null || true)"
+  for sub in grow survey fell logs; do
+    printf '%s' "$HELP" | grep -Eq "^ +${sub}( |$)" || MISSING="$MISSING $sub"
+  done
+  if [ -n "$MISSING" ]; then
+    fail "orchd is missing the subcommand(s):$MISSING — hum calls grow/survey/fell/logs. Update orchd (or re-run ./install)."
+  fi
+  log "orchd API: grow survey fell logs ✓"
 }
 
 ensure_prereqs() {
@@ -107,7 +149,9 @@ JSON
 ensure_orch_overlay_dir() {
   mkdir -p "$HUM_CONFIG/orch.d"
   : > "$HUM_CONFIG/Orchfile"
+  mkdir -p "$ORCHD_STATE"
   log "orch overlay dir: $HUM_CONFIG/orch.d/"
+  log "orch state dir:   $ORCHD_STATE/"
 }
 
 # Install man/hum.1 where `man hum` will find it.
@@ -134,27 +178,79 @@ install_man_page() {
   done
 }
 
+# Resolve the source tree to build from, and the ref to build.
+#
+# The script never mutates a checkout it did not create. When it is run
+# from inside a hum checkout, that checkout is the source — but only for
+# --edge, where "the source" means main HEAD. The stable channel always
+# builds the published tag from the managed clone, so a dev's working
+# tree never leaks into someone else's install.
+prepare_src() {
+  local MODE="$1" LOCAL_SRC=""
+  if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
+    LOCAL_SRC="$(cd "$(dirname "$0")" && pwd)"
+  fi
+
+  if [ "$MODE" = edge ] && [ -n "$LOCAL_SRC" ]; then
+    local BRANCH; BRANCH="$(git -C "$LOCAL_SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    if [ "$BRANCH" != "main" ]; then
+      fail "--edge builds main HEAD, but $LOCAL_SRC is on '$BRANCH'. Check out main, or drop --edge."
+    fi
+    if git -C "$LOCAL_SRC" diff --quiet && git -C "$LOCAL_SRC" diff --cached --quiet; then
+      log "updating $LOCAL_SRC to origin/main"
+      git -C "$LOCAL_SRC" pull --ff-only --quiet origin main || warn "could not fast-forward — building the local HEAD as-is"
+    else
+      warn "working tree has uncommitted changes — the build will include them"
+    fi
+    echo "$LOCAL_SRC"
+    return 0
+  fi
+
+  if [ ! -d "$HUM_SRC/.git" ]; then
+    log "cloning $HUM_REPO_URL into $HUM_SRC"
+    mkdir -p "$HUM_DATA"
+    git clone --quiet "$HUM_REPO_URL" "$HUM_SRC"
+  fi
+  if [ "$(git -C "$HUM_SRC" rev-parse --is-shallow-repository 2>/dev/null || echo false)" = "true" ]; then
+    git -C "$HUM_SRC" fetch --quiet --unshallow --tags --force origin
+  else
+    git -C "$HUM_SRC" fetch --quiet --tags --force origin
+  fi
+
+  if [ "$MODE" = edge ]; then
+    log "checking out origin/main in $HUM_SRC"
+    git -C "$HUM_SRC" checkout --quiet -B main origin/main
+    git -C "$HUM_SRC" reset --quiet --hard origin/main
+  else
+    local TAG; TAG="$(git -C "$HUM_SRC" tag --sort=-v:refname | head -1)"
+    [ -n "$TAG" ] || fail "no release tags found in $HUM_SRC"
+    log "checking out $TAG in $HUM_SRC"
+    git -C "$HUM_SRC" checkout --quiet --detach "$TAG"
+  fi
+  echo "$HUM_SRC"
+}
+
+install_orchd() {
+  log "installing orchd (bee supervisor) from git ${ORCHD_REV:0:8}"
+  if ! cargo install --quiet --locked --git "$ORCHD_REPO" --rev "$ORCHD_REV" \
+        --root "$HUM_BIN_ROOT" --force; then
+    warn "git install of orchd failed — falling back to crates.io $ORCHD_MIN_VERSION"
+    warn "crates.io orchd carries the launchd survey bug (running bees reported inactive),"
+    warn "so 'hum bee --list' will misreport their state until orchd is updated."
+    cargo install --quiet orchd --version "=$ORCHD_MIN_VERSION" --root "$HUM_BIN_ROOT" --force
+  fi
+  ensure_min_version orchd "$ORCHD_BIN" "$ORCHD_MIN_VERSION"
+  ensure_orchd_api "$ORCHD_BIN"
+}
+
 build_binaries() {
   local SRC
-  if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
-    SRC="$(dirname "$0")"
-  else
-    if [ ! -d "$HUM_SRC/.git" ]; then
-      log "cloning $HUM_REPO_URL into $HUM_SRC"
-      mkdir -p "$HUM_DATA"
-      git clone --depth 1 "$HUM_REPO_URL" "$HUM_SRC"
-    else
-      log "updating $HUM_SRC"
-      (cd "$HUM_SRC" && git pull --ff-only --quiet)
-    fi
-    SRC="$HUM_SRC"
-  fi
-  log "building Rust binaries"
+  SRC="$(prepare_src "$( [ "$EDGE" = 1 ] && echo edge || echo stable )")"
+  log "building Rust binaries from $SRC"
   cargo install --quiet --locked --path "$SRC/humd"   --root "$HUM_BIN_ROOT" --force
   cargo install --quiet --locked --path "$SRC/humctl" --root "$HUM_BIN_ROOT" --force
   cargo install --quiet --locked --path "$SRC/hum"    --root "$HUM_BIN_ROOT" --force
-  log "installing orchd (bee supervisor) from crates.io, pinned"
-  cargo install --quiet orchd --version "=0.3.4" --root "$HUM_BIN_ROOT" --force
+  install_orchd
   [ -x "$HUMD_BIN" ]    || fail "humd not at $HUMD_BIN after build"
   [ -x "$HUMCTL_BIN" ]  || fail "humctl not at $HUMCTL_BIN after build"
   [ -x "$HUM_CLI_BIN" ] || fail "hum not at $HUM_CLI_BIN after build"
@@ -248,6 +344,7 @@ show_status() {
   echo "  version:      $($HUMD_BIN --version 2>&1 || echo 'not installed')"
   echo "orchd binary:   $ORCHD_BIN"
   echo "  version:      $($ORCHD_BIN --version 2>&1 || echo 'not installed')"
+  echo "  required:     >= $ORCHD_MIN_VERSION (subcommands: grow survey fell logs)"
   echo "identity:       $HUM_STATE/humd.key $([ -s "$HUM_STATE/humd.key" ] && echo ✓ || echo MISSING)"
   echo "peers.json:     $HUM_CONFIG/peers.json $([ -s "$HUM_CONFIG/peers.json" ] && echo ✓ || echo MISSING)"
   echo "hum.json:       $HUM_CONFIG/hum.json $([ -s "$HUM_CONFIG/hum.json" ] && echo ✓ || echo MISSING)"
@@ -257,7 +354,8 @@ show_status() {
   esac
   if [ -x "$ORCHD_BIN" ]; then
     echo "--- bees ---"
-    "$ORCHD_BIN" --orchfile "$HUM_CONFIG/Orchfile" --user --namespace hum status 2>&1 || true
+    "$ORCHD_BIN" --orchfile "$HUM_CONFIG/Orchfile" --user --namespace "$ORCHD_NAMESPACE" \
+      --state-dir "$ORCHD_STATE" survey 2>&1 || true
   fi
 }
 
@@ -297,6 +395,8 @@ purge() {
 
 do_install() {
   log "hum installer"
+  if [ "$EDGE" = 1 ]; then log "channel: edge — latest main HEAD"
+  else log "channel: stable — latest release tag"; fi
   ensure_prereqs
   if [ "${SKIP_BUILD:-0}" != "1" ]; then build_binaries; fi
   install_man_page
