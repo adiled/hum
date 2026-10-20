@@ -70,6 +70,14 @@ pub(crate) async fn dial_all(
     }
 }
 
+pub(crate) fn without(peers: &[PeerConfig], reached: &[String]) -> Vec<PeerConfig> {
+    peers
+        .iter()
+        .filter(|p| !reached.contains(&p.humd_id.to_hex()))
+        .cloned()
+        .collect()
+}
+
 pub(crate) async fn spawn_listener(
     addr: &str,
     ens: Arc<Ensemble>,

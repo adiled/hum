@@ -184,11 +184,12 @@ where
     if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
         let my_caps = my_capabilities(&cfg);
         let mut iroh_transport: Option<Arc<ensemble::IrohTransport>> = None;
+        let mut reached_by_iroh: Vec<String> = Vec::new();
 
         match peer_transport::iroh::bind(key, cfg.hum_cfg.humd.iroh_port).await {
             Ok((transport, hints)) => {
                 let transport = Arc::new(transport);
-                peer_transport::iroh::dial_all(
+                reached_by_iroh = peer_transport::iroh::dial_all(
                     &transport,
                     ens,
                     key,
@@ -228,7 +229,13 @@ where
             }
         }
 
-        peer_transport::tcp::dial_all(ens, key, &cfg.bootstrap_peers, &my_caps).await;
+        peer_transport::tcp::dial_all(
+            ens,
+            key,
+            &peer_transport::tcp::without(&cfg.bootstrap_peers, &reached_by_iroh),
+            &my_caps,
+        )
+        .await;
 
         if !cfg.bootstrap_peers.is_empty() {
             supervisor = Some(supervisor::Supervisor::new(

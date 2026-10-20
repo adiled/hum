@@ -114,10 +114,14 @@ pub(crate) async fn dial_all(
     key: &HumdKey,
     peers: &[PeerConfig],
     my_caps: &PeerCapabilities,
-) {
+) -> Vec<String> {
+    let mut reached = Vec::new();
     for peer in peers {
-        dial_and_install_peer(transport, ens, key, peer, my_caps).await;
+        if dial_and_install_peer(transport, ens, key, peer, my_caps).await {
+            reached.push(peer.humd_id.to_hex());
+        }
     }
+    reached
 }
 
 pub(crate) fn spawn_listener(
