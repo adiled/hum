@@ -36,11 +36,7 @@ pub struct Job {
 
 impl Job {
     pub fn running(&self) -> bool {
-        if cfg!(target_os = "macos") {
-            self.state == "running" && self.pid.is_some()
-        } else {
-            self.state == "active"
-        }
+        self.state == "running" && self.pid != Some(0)
     }
 }
 
@@ -181,6 +177,15 @@ pub fn job(kind: &str) -> Option<Job> {
             .output()
             .ok()
             .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().ok());
+        let pid = Command::new("systemctl")
+            .arg("--user")
+            .arg("show")
+            .arg(unit(kind))
+            .arg("--property=MainPID")
+            .arg("--value")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok());
         let state = Command::new("systemctl")
             .arg("--user")
             .arg("is-active")
@@ -189,12 +194,17 @@ pub fn job(kind: &str) -> Option<Job> {
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_else(|| "unknown".to_string());
+        let state = normalize_systemd_state(&state);
         Some(Job {
             state,
-            pid: None,
+            pid,
             last_exit: code,
         })
     }
+}
+
+pub fn normalize_systemd_state(state: &str) -> String {
+    if state == "active" { "running".to_string() } else { state.to_string() }
 }
 
 pub fn parse_launchctl_print(raw: &str) -> Job {
@@ -262,6 +272,13 @@ mod tests {
         assert_eq!(job.pid, Some(791));
         assert_eq!(job.last_exit, None);
         assert!(job.running());
+    }
+
+    #[test]
+    fn systemd_state_normalizes_to_running() {
+        assert_eq!(normalize_systemd_state("active"), "running");
+        assert_eq!(normalize_systemd_state("inactive"), "inactive");
+        assert_eq!(normalize_systemd_state("failed"), "failed");
     }
 
     #[test]
