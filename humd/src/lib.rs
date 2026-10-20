@@ -185,7 +185,7 @@ where
         let my_caps = my_capabilities(&cfg);
         let mut iroh_transport: Option<Arc<ensemble::IrohTransport>> = None;
 
-        match peer_transport::iroh::bind(key).await {
+        match peer_transport::iroh::bind(key, cfg.hum_cfg.humd.iroh_port).await {
             Ok((transport, hints)) => {
                 let transport = Arc::new(transport);
                 peer_transport::iroh::dial_all(

@@ -33,6 +33,8 @@ pub struct HumdSection {
     pub metrics_addr: String,
     #[serde(default, rename = "tcpListen")]
     pub tcp_listen: Option<String>,
+    #[serde(default = "defaults::iroh_port", rename = "irohPort")]
+    pub iroh_port: u16,
     #[serde(default, rename = "trustRemoteWorkers")]
     pub trust_remote_workers: bool,
 }
@@ -43,6 +45,7 @@ impl Default for HumdSection {
             permission_dusk_ms: defaults::permission_dusk_ms(),
             metrics_addr: defaults::metrics_addr(),
             tcp_listen: None,
+            iroh_port: defaults::iroh_port(),
             trust_remote_workers: false,
         }
     }
@@ -290,6 +293,10 @@ mod defaults {
     }
     pub(crate) fn metrics_addr() -> String {
         "127.0.0.1:9909".into()
+    }
+
+    pub(crate) fn iroh_port() -> u16 {
+        41641
     }
     pub(crate) fn max_active_cells() -> u32 {
         4

@@ -178,11 +178,28 @@ impl IrohTransport {
     }
 
     pub async fn bind_direct_with_key(humd_key: &crate::HumdKey) -> Result<Self> {
+        Self::bind_direct_with_key_on(humd_key, None).await
+    }
+
+    pub async fn bind_direct_with_key_on(
+        humd_key: &crate::HumdKey,
+        port: Option<u16>,
+    ) -> Result<Self> {
         let sk = iroh::SecretKey::from_bytes(&humd_key.0.to_bytes());
-        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .alpns(vec![IROH_ALPN.to_vec()])
             .relay_mode(iroh::RelayMode::Disabled)
-            .secret_key(sk)
+            .secret_key(sk);
+        if let Some(port) = port {
+            let addr = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                port,
+            );
+            builder = builder
+                .bind_addr(addr)
+                .map_err(|e| anyhow!("iroh bind_addr {addr}: {e}"))?;
+        }
+        let endpoint = builder
             .bind()
             .await
             .map_err(|e| anyhow!("iroh bind (with key): {e}"))?;

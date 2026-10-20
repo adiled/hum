@@ -31,6 +31,13 @@
           "type": "boolean",
           "default": false,
           "description": "Let humd forward a prompt to a peer that advertises the model. A peer can claim any model it likes, so this is a trust decision, not a default. The env var HUM_TRUST_REMOTE_WORKERS overrides it."
+        },
+        "irohPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 41641,
+          "description": "UDP port the iroh (QUIC) transport binds for the ensemble. A fixed port keeps the address a peer is handed true across restarts; 0 takes an ephemeral port, which rots on every restart."
         }
       }
     },

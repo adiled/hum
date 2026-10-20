@@ -32,8 +32,21 @@ use tracing::{info, warn};
 
 use crate::peers::PeerConfig;
 
-pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, Vec<String>)> {
-    let transport = IrohTransport::bind_direct_with_key(humd_key).await?;
+pub(crate) async fn bind(
+    humd_key: &HumdKey,
+    port: u16,
+) -> anyhow::Result<(IrohTransport, Vec<String>)> {
+    let transport = match IrohTransport::bind_direct_with_key_on(humd_key, port_nonzero(port)).await {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(
+                port,
+                err = %e,
+                "peer.iroh.fixed_port.bind_failed — taking an ephemeral port; the address peers hold goes stale on restart"
+            );
+            IrohTransport::bind_direct_with_key(humd_key).await?
+        }
+    };
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
     let discovered: Vec<SocketAddr> = transport
         .endpoint()
@@ -48,6 +61,10 @@ pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, V
         "peer.iroh.bound"
     );
     Ok((transport, hints))
+}
+
+fn port_nonzero(port: u16) -> Option<u16> {
+    if port == 0 { None } else { Some(port) }
 }
 
 fn dial_hints(node_id_hex: &str, addrs: &[SocketAddr]) -> Vec<String> {
