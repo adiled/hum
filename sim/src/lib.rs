@@ -812,9 +812,21 @@ impl Sim {
     pub async fn humd_peer_tap(&self, humd: Hid, timeout: Duration) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
         let mut rx = h.ensemble.subscribe();
-        match tokio::time::timeout(timeout, rx.recv()).await {
-            Ok(Ok(tone)) => Some(tone),
-            _ => None,
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(tone)) => {
+                    if matches!(
+                        tone.get("chi").and_then(|v| v.as_str()),
+                        Some("peer-add") | Some("peer-remove")
+                    ) {
+                        continue;
+                    }
+                    return Some(tone);
+                }
+                _ => return None,
+            }
         }
     }
 

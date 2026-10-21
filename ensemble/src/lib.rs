@@ -13,7 +13,7 @@ pub mod handshake;
 pub use handshake::{
     EnsembleHello, HelloParse, Hid, HidParseError, HidPrefix, HumdAddr, HumdKey, PeerCapabilities,
     PeerConnection, SocketIdentity, Transport, hello_tone, hello_tone_unsigned, parse_hello,
-    parse_hello_caps, parse_socket_identity,
+    parse_hello_caps, parse_socket_identity, peer_add_tone, peer_remove_tone,
 };
 
 pub mod link;
@@ -49,7 +49,8 @@ pub use gossip::{
 
 pub mod liveness;
 pub use liveness::{
-    Lease, Liveness, LivenessSignal, PING_CHI, PONG_CHI, ping_tone, pong_tone, probe_seq,
+    Lease, Liveness, LivenessSignal, LIVENESS_TTL, PING_CHI, PONG_CHI, ping_tone, pong_tone,
+    probe_seq,
 };
 
 pub mod kad;
@@ -670,6 +671,7 @@ impl Drain {
                         conn.close();
                         return;
                     }
+                    self.inbox.publish(peer_add_tone(&self.me, &id));
                 } else {
                     self.unverified.fetch_add(1, Ordering::SeqCst);
                     continue;
@@ -1445,11 +1447,16 @@ mod tests {
             .await
             .unwrap();
 
-        let got = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
-            .await
-            .expect("subscribe channel timed out")
-            .expect("subscribe channel closed");
-        assert_eq!(got.get("chi").unwrap(), "hello");
+        let mut got = None;
+        while let Ok(Ok(tone)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        {
+            if tone.get("chi").and_then(|v| v.as_str()) == Some("hello") {
+                got = Some(tone);
+                break;
+            }
+        }
+        let got = got.expect("the second hello should reach the subscriber");
         assert_eq!(got.get("rid").unwrap(), "tunneled-hello");
         assert_eq!(got.get("bee").unwrap(), "vercel-ai");
     }
@@ -1540,12 +1547,23 @@ mod tests {
             .await
             .unwrap();
 
-        let got = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
-            .await
-            .expect("subscribe channel timed out")
-            .expect("subscribe channel closed");
-        assert_eq!(got.get("chi").unwrap(), "ping");
+        let mut got = None;
+        let mut saw_hello = false;
+        while let Ok(Ok(tone)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        {
+            match tone.get("chi").and_then(|v| v.as_str()) {
+                Some("ping") => {
+                    got = Some(tone);
+                    break;
+                }
+                Some("hello") => saw_hello = true,
+                _ => {}
+            }
+        }
+        let got = got.expect("the ping should reach the subscriber");
         assert_eq!(got.get("rid").unwrap(), "r1");
+        assert!(!saw_hello, "the hello should be swallowed");
     }
 }
 

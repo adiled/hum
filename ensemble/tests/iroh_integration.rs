@@ -131,13 +131,16 @@ async fn iroh_endpoint_routes_tones_both_ways() {
         let mut sub = ensemble.subscribe();
         ensemble.install(endpoint.clone(), PeerCapabilities::default(), &server_key);
 
-        let got = tokio::time::timeout(Duration::from_secs(5), sub.recv())
-            .await
-            .map_err(|_| "server: recv timed out".to_string())?
-            .map_err(|e| format!("server: recv: {e}"))?;
-        if got.get("chi").and_then(|v| v.as_str()) != Some("perf-mark") {
-            return Err(format!("server: expected perf-mark, got {got:?}"));
+        let mut got = None;
+        while let Ok(Ok(tone)) = tokio::time::timeout(Duration::from_secs(5), sub.recv()).await {
+            if tone.get("chi").and_then(|v| v.as_str()) == Some("perf-mark") {
+                got = Some(tone);
+                break;
+            }
         }
+        let Some(got) = got else {
+            return Err("server: recv timed out".to_string());
+        };
 
         let pong = json!({
             "chi": "ping",
@@ -181,22 +184,29 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     ensemble.route(mark).await.expect("route perf-mark");
 
     let mut server_task = server_task;
-    let got = tokio::select! {
-        biased;
-        srv = &mut server_task => {
-            srv.expect("server task panicked")
-                .expect("server task error");
-            tokio::time::timeout(Duration::from_secs(2), sub.recv())
-                .await
-                .expect("client recv timed out after server done")
-                .expect("client recv closed")
+    let mut got = None;
+    loop {
+        let tone = tokio::select! {
+            biased;
+            srv = &mut server_task => {
+                srv.expect("server task panicked")
+                    .expect("server task error");
+                tokio::time::timeout(Duration::from_secs(2), sub.recv())
+                    .await
+                    .expect("client recv timed out after server done")
+                    .expect("client recv closed")
+            }
+            got = tokio::time::timeout(Duration::from_secs(10), sub.recv()) => {
+                got.expect("client recv timed out")
+                    .expect("client recv closed")
+            }
+        };
+        if tone.get("chi").and_then(|v| v.as_str()) == Some("ping") {
+            got = Some(tone);
+            break;
         }
-        got = tokio::time::timeout(Duration::from_secs(10), sub.recv()) => {
-            got.expect("client recv timed out")
-                .expect("client recv closed")
-        }
-    };
-    assert_eq!(got.get("chi").and_then(|v| v.as_str()), Some("ping"));
+    }
+    let got = got.expect("the pong should reach the client");
     assert_eq!(got.get("rid").and_then(|v| v.as_str()), Some("iroh-pong-1"));
 
     let _ = done_tx.send(());

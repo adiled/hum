@@ -44,10 +44,13 @@ async fn tcp_endpoint_routes_tone_across_wire() {
     let ping = json!({"chi": "ping", "rid": "tcp-1", "to": b_id.to_hex(), "from": a_id.to_hex()});
     ensemble_a.route(ping).await.expect("route ping");
 
-    let got = tokio::time::timeout(Duration::from_secs(2), sub_b.recv())
-        .await
-        .expect("recv timed out")
-        .expect("subscribe closed");
-    assert_eq!(got.get("chi").and_then(|v| v.as_str()), Some("ping"));
+    let mut got = None;
+    while let Ok(Ok(tone)) = tokio::time::timeout(Duration::from_secs(2), sub_b.recv()).await {
+        if tone.get("chi").and_then(|v| v.as_str()) == Some("ping") {
+            got = Some(tone);
+            break;
+        }
+    }
+    let got = got.expect("the ping should reach the subscriber");
     assert_eq!(got.get("rid").and_then(|v| v.as_str()), Some("tcp-1"));
 }

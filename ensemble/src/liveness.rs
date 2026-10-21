@@ -6,6 +6,8 @@ pub const PING_CHI: &str = "peer-ping";
 
 pub const PONG_CHI: &str = "peer-pong";
 
+pub const LIVENESS_TTL: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Liveness {
     Live,

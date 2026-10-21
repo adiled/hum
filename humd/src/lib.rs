@@ -1645,9 +1645,14 @@ impl ToneSink for HumdSink {
                     let mut id = [0u8; 32];
                     id.copy_from_slice(&bytes);
                     let gone = ensemble::Hid::from(id);
-                    ensemble.remove_peer(&gone);
-                    if self.remote_hives.write().remove(&gone).is_some() {
-                        trace!(peer = %gone.short(), "discovery.evicted");
+                    let live = ensemble
+                        .peer_liveness(&gone, ensemble::LIVENESS_TTL)
+                        .is_some_and(|l| l == ensemble::Liveness::Live);
+                    if !live {
+                        ensemble.remove_peer(&gone);
+                        if self.remote_hives.write().remove(&gone).is_some() {
+                            trace!(peer = %gone.short(), "discovery.evicted");
+                        }
                     }
                 }
             }

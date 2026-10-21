@@ -106,6 +106,25 @@ pub enum HelloParse {
     Invalid,
 }
 
+pub fn peer_add_tone(me: &Hid, peer: &Hid) -> Tone {
+    serde_json::json!({
+        "chi": "peer-add",
+        "rid": hum_identity::HumId::mint().to_string(),
+        "from": me.to_hex(),
+        "humd_id": hex::encode(peer.bytes),
+        "hints": Vec::<String>::new(),
+    })
+}
+
+pub fn peer_remove_tone(me: &Hid, peer: &Hid) -> Tone {
+    serde_json::json!({
+        "chi": "peer-remove",
+        "rid": hum_identity::HumId::mint().to_string(),
+        "from": me.to_hex(),
+        "humd_id": hex::encode(peer.bytes),
+    })
+}
+
 pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
     serde_json::json!({
         "chi": "hello",
