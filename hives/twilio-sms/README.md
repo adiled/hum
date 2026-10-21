@@ -58,7 +58,7 @@ the bee itself terminates the SMS, hum stays private).
 | `HUM_TWILIO_SYSTEM` | terse SMS-friendly system prompt | system instruction prepended to every turn |
 | `HUM_TWILIO_REPLY_LIMIT` | `1500` | hard cap on reply length (Twilio caps long-form SMS) |
 | `TWILIO_AUTH_TOKEN` | _(unset)_ | reserved — signature verification not yet implemented |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 ## Run
 

@@ -23,7 +23,7 @@ The hum process tree is anchored at four XDG roots:
 | `state_dir()` | `$XDG_STATE_HOME/hum` | identity key, thehum log, runtime info, bees snapshot |
 | `config_dir()` | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `orch.d/`, `hum.orch` |
 | `data_dir()` | `$XDG_DATA_HOME/hum` | installed source clone, recipes |
-| `runtime_dir()` | `$XDG_RUNTIME_DIR/hum` | thrum socket, http socket, comb.json |
+| `runtime_dir()` | `$XDG_RUNTIME_DIR/hum` | http socket, comb.json |
 
 Every concrete path is one accessor down from these:
 

@@ -58,7 +58,7 @@ counterparty  ──── chi:tool-call { name:"quote", args:{ pair:"ETH/USDC" 
 | `PAID_ORACLE_USDC` | no | `0x000…` (native) / `0x833…2913` (erc20) | ERC-20 contract address (only used when `pay_kind=erc20`) |
 | `PAID_ORACLE_DECIMALS` | no | `18` (native) / `6` (erc20) | USDC decimals on this chain |
 | `PAID_ORACLE_PRICE_URL` | no | CoinGecko ETH/USD | where to fetch the underlying |
-| `HUM_THRUM_SOCK` | no | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | no | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 Quote is hardcoded at $0.05 (5 cents). The atomic amount scales with
 `PAID_ORACLE_DECIMALS` automatically — same $0.05 quote works whether
@@ -109,7 +109,7 @@ while let Some((humd_id, manifest)) = found.recv().await {
   POSTing the proof to a facilitator URL and trusting its signature.
 - **No persistence.** Restart loses the `spent` nonce set. A real
   deploy writes it to disk so payments can't be replayed.
-- **No KYC, no rate-limit, no auth beyond payment.** The trust seam
+- **No KYC, no rate-limit, no auth beyond payment.** The trust boundary
   is "the chain confirmed payment to my address." Layer your own
   policy on top.
 

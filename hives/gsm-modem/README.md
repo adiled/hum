@@ -64,7 +64,7 @@ work fine.
 | `HUM_GSM_MODEL` | `claude-haiku-4.5` | model humd spawns |
 | `HUM_GSM_SYSTEM` | terse SMS-friendly system prompt | system instruction |
 | `HUM_GSM_REPLY_LIMIT` | `1500` | hard cap on reply length |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 The process needs read+write access to the serial device. On Debian /
 Ubuntu add yourself to `dialout`:

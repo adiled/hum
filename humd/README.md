@@ -51,7 +51,7 @@ they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
    `hum.json`. Walk `peers.json` and dial outbound. Detach an accept
    loop per transport.
 7. **thrum**. Bind the unix socket at
-   `$XDG_RUNTIME_DIR/hum/thrum.sock`. Worker and forager bees connect
+   `$XDG_STATE_HOME/hum/thrum.sock`. Worker and forager bees connect
    here and exchange tones.
 8. **MCP**. Bind the HTTP listener at `cfg.http_path` so bees can
    expose tools to their compute via MCP if they want.

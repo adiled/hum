@@ -57,7 +57,7 @@ matching `callId`.
 | `ANTHROPIC_SERVER_PORT` | `14622` | HTTP listen port |
 | `ANTHROPIC_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
 | `ANTHROPIC_SERVER_API_KEY` | (empty = no auth) | required `x-api-key` header value |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 You can also drop a JSON config at
 `~/.config/hum/hives/anthropic-server.json` with shape

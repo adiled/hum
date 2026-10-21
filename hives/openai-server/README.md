@@ -87,7 +87,7 @@ conversation and continues streaming. Everything gets hummed.
 | `OPENAI_SERVER_PORT` | `14620` | HTTP listen port |
 | `OPENAI_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
 | `OPENAI_SERVER_API_KEY` | _(unset → no auth)_ | bearer token required on requests |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 | `OPENAI_API_KEY` | `OPENAI_SERVER_API_KEY` | upstream OpenAI bearer (worker half) |
 | `OPENAI_API_BASE` | `https://api.openai.com/v1` | upstream OpenAI-compatible base URL (worker half) |
 

@@ -51,7 +51,7 @@ streams.
 | `BP7_LISTEN` | `0.0.0.0:4556` | UDP convergence-layer address |
 | `BP7_NODE_EID` | `dtn://hum.local/inference` | this node's endpoint id (URI). Bundles addressed elsewhere are dropped |
 | `BP7_MODEL` | `claude-sonnet-4` | model humd spawns when a payload doesn't specify one |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 ## Run
 

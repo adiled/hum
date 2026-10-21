@@ -1,11 +1,11 @@
 ---
 title: "federation-handoff"
-description: "two orgs shake hands, one hum crosses the seam under bounded power"
+description: "two orgs shake hands, one hum crosses the boundary under bounded power"
 ---
 
 # federation-handoff
 
-> _two orgs shake hands, one hum crosses the seam under bounded power_
+> _two orgs shake hands, one hum crosses the boundary under bounded power_
 
 See `sim/tests/federation_handoff.rs` for the executable form.
 

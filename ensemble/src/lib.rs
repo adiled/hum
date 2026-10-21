@@ -1,3 +1,13 @@
+//! The README's examples, compiled.
+//!
+//! `#[cfg(doctest)]` puts this item in the build only while doctests
+//! are being collected, so the README's Rust blocks are compiled and
+//! run by `cargo test -p ensemble` without the README becoming the
+//! crate's documentation. A snippet that stops being true stops the
+//! build instead of quietly rotting in a corner of the docs.
+
+#![cfg_attr(doctest, doc = include_str!("../README.md"))]
+
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
