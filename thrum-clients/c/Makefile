@@ -10,7 +10,7 @@
 #   make install  copy the headers where a hive can find them
 
 CC      ?= cc
-CFLAGS  ?= -O2 -std=c11 -Wall -Wextra
+CFLAGS  ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 BUILD   ?= out
 INCLUDE := -I.
 

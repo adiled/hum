@@ -35,7 +35,7 @@ CC        ?= cc
 CFLAGS    ?= -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99
 OBJCFLAGS ?= -O3 -ffast-math -mcpu=native -Wall -Wextra -fobjc-arc
 # The bee itself: strict C11, no fast-math games.
-HIVE_CFLAGS ?= -O2 -std=c11 -Wall -Wextra
+HIVE_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 LDFLAGS   ?=
 LDLIBS    ?= -lm -pthread
 
