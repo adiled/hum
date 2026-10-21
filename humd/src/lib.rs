@@ -179,6 +179,8 @@ where
         );
     }
 
+    let discovery = ensemble_opt.as_ref().map(|e| e.hive_discover_all());
+
     let mut peer_reach: Vec<String> = Vec::new();
     let mut supervisor: Option<supervisor::Supervisor> = None;
     if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
@@ -373,11 +375,9 @@ where
         revoked: revoked::Revocations::load(&cfg.revoked_path),
     });
     thrum.set_sink(sink);
-    if let Some(ens) = &ensemble_for_sink {
-        let ens = ens.clone();
+    if let Some(mut seen) = discovery {
         let remote = remote_hives.clone();
         tokio::spawn(async move {
-            let mut seen = ens.hive_discover_all();
             while let Some((humd_id, manifest)) = seen.recv().await {
                 let key = bee_key(&manifest);
                 remote
