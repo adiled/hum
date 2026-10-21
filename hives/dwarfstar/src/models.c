@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 
 static int has(const char *haystack, const char *needle) {
@@ -36,15 +38,21 @@ static int is_support_file(const char *name) {
 }
 
 static int quant_suffix(const char *name, char *out, size_t cap) {
+    int q4 = has(name, "Q4K") || has(name, "Q4_K") || has(name, "Q4");
+    int q2 = has(name, "Q2_K") || has(name, "IQ2_XXS") || has(name, "Q2K") || has(name, "Q2");
+    if (q4 && q2) {
+        snprintf(out, cap, "-q2-q4");
+        return 1;
+    }
     if (has(name, "MXFP4")) {
         snprintf(out, cap, "-mxfp4");
         return 1;
     }
-    if (has(name, "Q4K") || has(name, "Q4_K") || has(name, "Q4")) {
+    if (q4) {
         snprintf(out, cap, "-q4");
         return 1;
     }
-    if (has(name, "Q2_K") || has(name, "IQ2_XXS") || has(name, "Q2")) {
+    if (q2) {
         snprintf(out, cap, "-q2");
         return 1;
     }
@@ -87,6 +95,7 @@ int ds4_models_scan(ds4_models *models, const char *dir) {
     struct dirent *entry;
     char default_path[1024];
     int have_default = 0;
+    int pass;
 
     memset(models, 0, sizeof *models);
     if (!dir || !dir[0]) return -1;
@@ -97,34 +106,57 @@ int ds4_models_scan(ds4_models *models, const char *dir) {
         have_default = stat(default_path, &st) == 0;
     }
 
-    handle = opendir(dir);
-    if (!handle) return -1;
-    while ((entry = readdir(handle)) != NULL) {
-        char path[1200];
-        const char *family;
-        char quant[16];
-        struct stat st;
-
-        if (!ends_with(entry->d_name, ".gguf")) continue;
-        if (is_support_file(entry->d_name)) continue;
-        family = family_of(entry->d_name);
-        if (!family) continue;
-
-        snprintf(path, sizeof path, "%s/%s", dir, entry->d_name);
-        if (stat(path, &st) != 0) continue;
-
-        if (quant_suffix(entry->d_name, quant, sizeof quant)) {
-            char id[128];
-            snprintf(id, sizeof id, "%s%s", family, quant);
-            add(models, id, path);
+    for (pass = 0; pass < 2; pass++) {
+        char scan_dir[1024];
+        if (pass == 0) {
+            snprintf(scan_dir, sizeof scan_dir, "%s", dir);
+        } else {
+            snprintf(scan_dir, sizeof scan_dir, "%s/gguf", dir);
         }
-        if (have_default && strcmp(path, default_path) == 0) {
-            add(models, family, path);
-        } else if (!already_have(models, family)) {
-            add(models, family, path);
+        handle = opendir(scan_dir);
+        if (!handle) continue;
+        while ((entry = readdir(handle)) != NULL) {
+            char path[1200];
+            const char *family;
+            char quant[16];
+            struct stat st;
+            char resolved[1200];
+
+            if (!ends_with(entry->d_name, ".gguf")) continue;
+            if (is_support_file(entry->d_name)) continue;
+
+            snprintf(path, sizeof path, "%s/%s", scan_dir, entry->d_name);
+            if (stat(path, &st) != 0) continue;
+
+            family = family_of(entry->d_name);
+            if (!family) {
+                const char *target = realpath(path, resolved) ? resolved : NULL;
+                const char *base = target ? strrchr(target, '/') : NULL;
+                if (!base) continue;
+                if (is_support_file(base)) continue;
+                family = family_of(base);
+                if (!family) continue;
+                if (quant_suffix(entry->d_name, quant, sizeof quant)) {
+                    char id[128];
+                    snprintf(id, sizeof id, "%s%s", family, quant);
+                    add(models, id, path);
+                }
+                add(models, family, path);
+                continue;
+            }
+            if (quant_suffix(entry->d_name, quant, sizeof quant)) {
+                char id[128];
+                snprintf(id, sizeof id, "%s%s", family, quant);
+                add(models, id, path);
+            }
+            if (have_default && strcmp(path, default_path) == 0) {
+                add(models, family, path);
+            } else if (!already_have(models, family)) {
+                add(models, family, path);
+            }
         }
+        closedir(handle);
     }
-    closedir(handle);
     return models->count;
 }
 
