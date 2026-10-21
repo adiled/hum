@@ -14,17 +14,23 @@ CFLAGS  ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 BUILD   ?= out
 INCLUDE := -I.
 
-SRC     := thrum/json.c thrum/client.c
-OBJ     := $(patsubst thrum/%.c,$(BUILD)/thrum/%.o,$(SRC))
+SRC     := thrum/json.c thrum/client.c thrum/identity.c
+ED25519_SRC := $(wildcard thrum/ed25519/*.c)
+OBJ     := $(patsubst thrum/%.c,$(BUILD)/thrum/%.o,$(SRC)) \
+           $(patsubst thrum/ed25519/%.c,$(BUILD)/thrum/ed25519/%.o,$(ED25519_SRC))
 TEST    := $(BUILD)/test_client
 
 .PHONY: all test clean install
 
 all: $(TEST)
 
+$(BUILD)/thrum/ed25519/%.o: thrum/ed25519/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDE) -Ithrum/ed25519 -c -o $@ $<
+
 $(BUILD)/thrum/%.o: thrum/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDE) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDE) -Ithrum/ed25519 -c -o $@ $<
 
 $(TEST): tests/test_client.c $(OBJ)
 	@mkdir -p $(BUILD)
@@ -36,7 +42,7 @@ test: $(TEST)
 install:
 	install -d $(DESTDIR)/usr/local/include/thrum
 	install -m 0644 thrum/chi.h thrum/helpers.h thrum/protocol.h thrum/json.h thrum/client.h \
-		$(DESTDIR)/usr/local/include/thrum/
+		thrum/identity.h $(DESTDIR)/usr/local/include/thrum/
 
 clean:
 	rm -rf $(BUILD)

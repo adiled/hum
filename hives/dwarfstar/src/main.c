@@ -32,6 +32,7 @@
 #endif
 
 #include "thrum/client.h"
+#include "thrum/identity.h"
 
 #include "ds4_bridge.h"
 #include "models.h"
@@ -42,6 +43,7 @@
 #define HIVE_SOURCE "https://github.com/adiled/hum/tree/main/hives/dwarfstar"
 
 static thrum_client g_client;
+static thrum_identity g_identity;
 static ds4_bridge *g_bridge;
 static ds4_models g_models;
 static char g_dir[1024] = "";
@@ -277,14 +279,27 @@ int main(void) {
     thrum_client_init(&g_client, NULL);
     if (thrum_client_connect(&g_client) != 0) return 1;
 
+    if (!thrum_identity_load_or_mint(HIVE_NAME, "wbee", &g_identity)) {
+        fprintf(stderr, "dwarfstar: could not load the bee identity\n");
+        return 1;
+    }
     {
         thrum_buf hello;
+        char pubkey_hex[THRUM_PUBKEY_HEX_LEN];
+        char sig_hex[THRUM_SIG_HEX_LEN];
         thrum_buf_init(&hello);
         thrum_tone_begin(&hello, CHI_HELLO, "hello-1", NULL);
         thrum_tone_raw(&hello, "bee", "[\"worker\"]");
         thrum_tone_str(&hello, "hive", HIVE_NAME);
         thrum_tone_str(&hello, "version", HIVE_VERSION);
         thrum_tone_str(&hello, "protoVersion", THRUM_VERSION);
+        thrum_tone_str(&hello, "hid", g_identity.hid);
+        thrum_tone_str(&hello, "from", g_identity.hid);
+        if (thrum_identity_sign_hello(&g_identity, thrum_now_ms(), pubkey_hex, sig_hex)) {
+            thrum_tone_str(&hello, "pubkey", pubkey_hex);
+            thrum_tone_int(&hello, "signedAt", thrum_now_ms());
+            thrum_tone_str(&hello, "signature", sig_hex);
+        }
         thrum_tone_raw(&hello, "propensity", propensity);
         thrum_tone_raw(&hello, "chis", chis);
         {
@@ -319,8 +334,8 @@ int main(void) {
         }
         thrum_json_free(tone);
     }
-    fprintf(stderr, "dwarfstar: nested, models=%d dir=%s ctx=%d\n", g_models.count, g_dir,
-            g_ctx);
+    fprintf(stderr, "dwarfstar: nested as %s, models=%d dir=%s ctx=%d\n", g_identity.hid,
+            g_models.count, g_dir, g_ctx);
 
     thrum_client_on_any(&g_client, on_tone, NULL);
     thrum_client_run(&g_client);

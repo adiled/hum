@@ -25,6 +25,8 @@ make test     # run the tests
 | `thrum/protocol.h` | every chi's body view — generated |
 | `thrum/json.c` | the tone parser and writer — written |
 | `thrum/client.c` | the socket loop — written |
+| `thrum/identity.c` | the bee's own identity — written |
+| `thrum/ed25519/` | vendored, Zlib, © Orson Peters |
 | `thrum/jsmn.h` | vendored, MIT, © Serge Zaitsev |
 
 The generated half cannot drift from the Rust registry: `codegen` emits
@@ -68,3 +70,28 @@ registered `sid` — the same shape as the Go client.
 - Lines that are not JSON are dropped, the way humd drops them.
 - `clock_gettime` is POSIX, not ISO C: compile with `-std=gnu11`, or
   let the header's `_POSIX_C_SOURCE` do its work.
+
+## Identity
+
+A bee that wants to be *this* bee and not just *a* bee signs its hello.
+`thrum/identity.c` is the mirror of `hum-identity`: an Ed25519 keypair
+persisted at `$XDG_STATE_HOME/hum/bees/<kind>.key` (raw 32-byte seed,
+mode 0600), whose public key hashes to a role-prefixed hid —
+`wbee_<hex>` for a worker, `fbee_<hex>` for a forager.
+
+The hello carries the hid, the public key, the timestamp, and a
+signature over
+
+```
+hum-bee-socket-v1:<hid>:<signedAt>
+```
+
+which is the same bytes the Rust signs, in the same order, under the
+same domain. A signature made here verifies under `ed25519-dalek`, and
+one made there verifies here.
+
+Without a signature the daemon admits the bee and marks it
+`hid_verified: false` — a self-declared name, revocable by nobody in
+particular. With one, it is `hid_verified: true`, and the revocation
+list can name it.
+

@@ -96,6 +96,17 @@ registers the bee with humd through the Orchfile.
 | `DWARFSTAR_TEMPERATURE` | sampling temperature | `1.0` |
 | `DWARFSTAR_METAL_DIR` | where the `.metal` kernels live | next to the binary |
 
+## Identity
+
+The bee signs its hello. It holds an Ed25519 keypair at
+`$XDG_STATE_HOME/hum/bees/dwarfstar.key` — a raw 32-byte seed, mode
+0600 — and the public key hashes to a `wbee_` hid. The hello carries the
+hid, the public key, the timestamp, and a signature over the hid and the
+timestamp under hum's own domain, so the daemon can tell this bee from
+any other, revoke this bee, and count this bee's work.
+
+The C client carries the identity code; the Ed25519 is orlp's, vendored.
+
 ## Licence
 
 The engine is MIT, © Salvatore Sanfilippo. ds4 itself credits llama.cpp

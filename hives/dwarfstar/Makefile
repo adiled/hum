@@ -54,7 +54,8 @@ DS4_CORE_OBJ = $(patsubst %.c,$(BUILD)/ds4/%.o,$(DS4_CORE_SRC))
 DS4_METAL_OBJ = $(BUILD)/ds4/ds4_metal.o
 
 HIVE_SRC = src/main.c src/ds4_bridge.c src/models.c src/shaders.c
-CLIENT_SRC = $(THRUM_DIR)/thrum/json.c $(THRUM_DIR)/thrum/client.c
+CLIENT_SRC = $(THRUM_DIR)/thrum/json.c $(THRUM_DIR)/thrum/client.c $(THRUM_DIR)/thrum/identity.c
+ED25519_SRC = $(wildcard $(THRUM_DIR)/thrum/ed25519/*.c)
 
 .PHONY: all fetch clean check test
 
@@ -62,8 +63,8 @@ all: $(BIN)
 
 $(BIN): $(HIVE_SRC) $(CLIENT_SRC) $(DS4_CORE_OBJ) $(DS4_METAL_OBJ)
 	@mkdir -p $(BUILD)
-	$(CC) $(HIVE_CFLAGS) -I$(THRUM_DIR) -I$(DS4_DIR) -I$(DS4_DIR)/metal \
-		-o $@ $(HIVE_SRC) $(CLIENT_SRC) $(DS4_CORE_OBJ) $(DS4_METAL_OBJ) \
+	$(CC) $(HIVE_CFLAGS) -I$(THRUM_DIR) -I$(THRUM_DIR)/thrum/ed25519 -I$(DS4_DIR) -I$(DS4_DIR)/metal \
+		-o $@ $(HIVE_SRC) $(CLIENT_SRC) $(ED25519_SRC) $(DS4_CORE_OBJ) $(DS4_METAL_OBJ) \
 		$(LDFLAGS) $(METAL_LDLIBS)
 	@cp -R $(DS4_DIR)/metal $(BUILD)/metal
 	@echo "built $@"
@@ -98,7 +99,8 @@ check: $(BIN)
 
 $(BUILD)/wire_smoke: tests/wire_smoke.c $(CLIENT_SRC)
 	@mkdir -p $(BUILD)
-	$(CC) $(HIVE_CFLAGS) -I$(THRUM_DIR) -o $@ tests/wire_smoke.c $(CLIENT_SRC)
+	$(CC) $(HIVE_CFLAGS) -I$(THRUM_DIR) -I$(THRUM_DIR)/thrum/ed25519 \
+		-o $@ tests/wire_smoke.c $(CLIENT_SRC) $(ED25519_SRC)
 
 # Needs a humd on the socket: the smoke test asks it for one prompt and
 # prints what comes back.
