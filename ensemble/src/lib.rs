@@ -703,7 +703,9 @@ impl Drain {
             self.inbox.publish(tone);
         }
 
-        if let Some(p) = self.peers.write().get_mut(&id) {
+        if let Some(p) = self.peers.write().get_mut(&id)
+            && Arc::ptr_eq(&p.conn, &conn)
+        {
             p.lease.observe(LivenessSignal::TransportClosed);
         }
     }
@@ -1450,6 +1452,52 @@ mod tests {
         assert_eq!(got.get("chi").unwrap(), "hello");
         assert_eq!(got.get("rid").unwrap(), "tunneled-hello");
         assert_eq!(got.get("bee").unwrap(), "vercel-ai");
+    }
+
+    #[tokio::test]
+    async fn a_stale_connection_dying_does_not_kill_the_live_peer() {
+        let me_key = HumdKey::generate();
+        let peer_key = HumdKey::generate();
+        let me = me_key.hid();
+        let peer_id = peer_key.hid();
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
+        );
+        let (mine2, theirs2) = InMemoryEndpoint::pair_concrete(
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
+        );
+
+        let ensemble = Ensemble::new(me);
+        ensemble.install(mine, PeerCapabilities::default(), &me_key);
+        theirs
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities::default()))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        ensemble.install(mine2, PeerCapabilities::default(), &me_key);
+        theirs2
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities::default()))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        theirs.kill();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let liveness = ensemble
+            .peer_liveness(&peer_id, std::time::Duration::from_secs(30))
+            .expect("the peer should still be installed");
+        assert!(
+            matches!(liveness, Liveness::Live),
+            "a stale connection's death marked the live peer {liveness:?}"
+        );
     }
 
     #[tokio::test]
