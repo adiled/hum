@@ -81,7 +81,7 @@ holds the manifest under humd-S's Hid.
 
 - **Discovery feeding routing.** `hive_advertise` was already called on
   every bee handshake and `hive_discover` existed with no production
-  caller. This is the seam joining them to `Ensemble::route`.
+  caller. This is the path joining them to `Ensemble::route`.
 - **The remote table is humd-keyed, not bee-keyed.** A bee has no
   ensemble presence of its own; only its humd is dialable, so the Hid
   returned by discovery is the routing address and the bee is the value.

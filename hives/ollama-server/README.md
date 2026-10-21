@@ -61,7 +61,7 @@ client                              ollama-server                     humd
 | `OLLAMA_SERVER_PORT` | `11434` | HTTP listen port (matches Ollama's default) |
 | `OLLAMA_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
 | `OLLAMA_SERVER_MODELS` | `claude-sonnet-4,claude-haiku-4.5,claude-opus-4.7` | comma-separated list returned by `/api/tags` |
-| `HUM_THRUM_SOCK` | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
+| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
 
 Optional per-kind config file at `~/.config/hum/hives/ollama-server.json`:
 

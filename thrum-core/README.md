@@ -35,7 +35,7 @@ use tokio::net::UnixStream;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Connect to the local humd socket — humd binds it at
-    // $XDG_RUNTIME_DIR/hum/thrum.sock by default.
+    // $XDG_STATE_HOME/hum/thrum.sock by default.
     let sock = UnixStream::connect(humd_socket_path()).await?;
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
@@ -66,9 +66,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn humd_socket_path() -> std::path::PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::geteuid() }));
-    std::path::PathBuf::from(runtime).join("hum/thrum.sock")
+    let state = std::env::var("XDG_STATE_HOME")
+        .unwrap_or_else(|_| format!("{}/.local/state", std::env::var("HOME").unwrap_or_default()));
+    std::path::PathBuf::from(state).join("hum/thrum.sock")
 }
 ```
 

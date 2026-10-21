@@ -37,7 +37,7 @@ import { humProvider } from "@hum/vercel-ai";
 import { generateText } from "ai";
 
 const hum = humProvider({
-  // socket path; defaults to $XDG_RUNTIME_DIR/hum/hum.sock.thrum
+  // socket path; defaults to $XDG_STATE_HOME/hum/thrum.sock
 });
 
 const { text } = await generateText({
@@ -70,7 +70,7 @@ for await (const chunk of textStream) process.stdout.write(chunk);
 | tool result feedback | `chi:"tool-result"` |
 
 Everything else thrum carries (pulses, performance marks, drone
-events, permission asks) gets dropped at the seam — the SDK has no
+events, permission asks) gets dropped at the boundary — the SDK has no
 place to surface them.
 
 ## Status

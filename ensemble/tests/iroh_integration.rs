@@ -141,6 +141,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
         let Some(got) = got else {
             return Err("server: recv timed out".to_string());
         };
+        assert_eq!(got.get("rid").and_then(|v| v.as_str()), Some("iroh-mark-1"));
 
         let pong = json!({
             "chi": "ping",
@@ -184,8 +185,7 @@ async fn iroh_endpoint_routes_tones_both_ways() {
     ensemble.route(mark).await.expect("route perf-mark");
 
     let mut server_task = server_task;
-    let mut got = None;
-    loop {
+    let got = loop {
         let tone = tokio::select! {
             biased;
             srv = &mut server_task => {
@@ -196,17 +196,15 @@ async fn iroh_endpoint_routes_tones_both_ways() {
                     .expect("client recv timed out after server done")
                     .expect("client recv closed")
             }
-            got = tokio::time::timeout(Duration::from_secs(10), sub.recv()) => {
-                got.expect("client recv timed out")
+            res = tokio::time::timeout(Duration::from_secs(10), sub.recv()) => {
+                res.expect("client recv timed out")
                     .expect("client recv closed")
             }
         };
         if tone.get("chi").and_then(|v| v.as_str()) == Some("ping") {
-            got = Some(tone);
-            break;
+            break tone;
         }
-    }
-    let got = got.expect("the pong should reach the client");
+    };
     assert_eq!(got.get("rid").and_then(|v| v.as_str()), Some("iroh-pong-1"));
 
     let _ = done_tx.send(());

@@ -118,7 +118,7 @@ The old `clwnd.json` was flat. New `hum.json` is namespaced:
 | `driftRetentionDays` | **dropped** — drift is a hive now; the kernel keeps no rings |
 | `projects` | **dropped** — filesystem is now `fs.roots`; project IDs are a bee-side concern |
 | `droned` | **dropped** — drone is always on; the swallow path is internal |
-| `droneModel` | **dropped** — the LLM-judge seam is in code (`drone::Evaluator` trait); no default judge ships |
+| `droneModel` | **dropped** — the LLM-judge hook is in code (`drone::Evaluator` trait); no default judge ships |
 | `smallModel` | **dropped** — title generation was a plugin concern; opencode handles it natively |
 | `ccFlags` | `hives.claude-cli.ccFlags` (per-hive, not global) |
 | `experimental.subpath` | **dropped** — plugin-only feature |
@@ -181,7 +181,7 @@ The regex pattern bank (heuristic gate) lives in
 [`hives/common`](hives/common). Concrete `WorkerBee` impls
 (`claude-cli`, `claude-repl`) can register the regex `Classifier` if
 they want context-loss swallow behavior. The
-[`drone::Evaluator`](drone) trait is the seam for a future LLM judge
+[`drone::Evaluator`](drone) trait is the hook for a future LLM judge
 — host code can plug one in.
 
 To effectively disable drone behavior: don't register a Classifier
@@ -207,7 +207,7 @@ the config dir — all renamed `hum`. Safe to delete:
   defaults. If you see a hard error, file an issue with your
   `hum.json` + the warn line from `./install logs`.
 - Socket isn't there: check the systemd unit's env. The unit pins
-  `HUM_THRUM_SOCK` to `<XDG_RUNTIME_DIR>/hum/thrum.sock`.
+  `HUM_THRUM_SOCK` to `<XDG_STATE_HOME>/hum/thrum.sock`.
 - opencode doesn't see hum: confirm `openai-server` is running on
   port 14620 (`curl http://127.0.0.1:14620/v1/models`), then confirm
   the `provider.hum` block is in opencode.json.

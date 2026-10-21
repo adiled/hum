@@ -52,7 +52,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const sockPath = process.env.HUM_THRUM_SOCK ??
-  join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`,
+  join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"),
        "hum/thrum.sock");
 
 const sock = createConnection(sockPath);

@@ -1,3 +1,13 @@
+//! The README's examples, compiled.
+//!
+//! `#[cfg(doctest)]` puts this item in the build only while doctests
+//! are being collected, so the README's Rust blocks are compiled and
+//! run by `cargo test -p ensemble` without the README becoming the
+//! crate's documentation. A snippet that stops being true stops the
+//! build instead of quietly rotting in a corner of the docs.
+
+#![cfg_attr(doctest, doc = include_str!("../README.md"))]
+
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -260,7 +270,7 @@ impl Ensemble {
         });
 
         let rx = conn.take_receiver();
-        self.peers.write().insert(
+        let displaced = self.peers.write().insert(
             id,
             Peer {
                 conn: conn.clone(),
@@ -268,6 +278,7 @@ impl Ensemble {
                 lease: Lease::new(),
             },
         );
+        close_displaced_link(displaced.map(|p| p.conn), &conn);
         self.kad.note_peer(conn.peer().clone());
 
         let Some(rx) = rx else { return };
@@ -767,14 +778,43 @@ fn rekey_peer(
     old_id: Hid,
     new_id: Hid,
 ) {
-    let mut w = peers.write();
-    if let Some(p) = w.remove(&old_id) {
-        w.insert(new_id, p);
-    }
-    drop(w);
+    let displaced = {
+        let mut w = peers.write();
+        let mut displaced = None;
+        if let Some(p) = w.remove(&old_id) {
+            if old_id != new_id {
+                displaced = w.remove(&new_id).map(|p| p.conn);
+            }
+            w.insert(new_id, p);
+        } else if old_id != new_id {
+            displaced = w.remove(&new_id).map(|p| p.conn);
+            w.insert(
+                new_id,
+                Peer {
+                    conn: conn.clone(),
+                    learned_caps: None,
+                    lease: Lease::new(),
+                },
+            );
+        }
+        displaced
+    };
+    close_displaced_link(displaced, conn);
     let mut addr = conn.peer().clone();
     addr.id = new_id;
     kad.note_peer(addr);
+}
+
+fn close_displaced_link(
+    displaced: Option<Arc<dyn PeerConnection>>,
+    keep: &Arc<dyn PeerConnection>,
+) {
+    if let Some(old) = displaced
+        && !Arc::ptr_eq(&old, keep)
+    {
+        tracing::debug!(target: "ensemble.link", "link.displaced");
+        old.close();
+    }
 }
 
 async fn handle_kad(
@@ -1400,6 +1440,70 @@ mod tests {
         let learned_a = ensemble_b.peer_caps(&a_id).expect("a registered on b");
         assert_eq!(learned_a.nests, vec!["claude-cli".to_string()]);
         assert!(learned_a.can_relay);
+    }
+
+    #[tokio::test]
+    async fn a_second_link_to_a_peer_closes_the_first() {
+        let a_key = HumdKey::generate();
+        let b_key = HumdKey::generate();
+        let a_id = a_key.hid();
+        let b_id = b_key.hid();
+        let caps = PeerCapabilities::default();
+        let (first, first_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+        let (second, second_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+
+        let ensemble_a = Ensemble::new(a_id);
+        let ensemble_b = Ensemble::new(b_id);
+        ensemble_a.install(first.clone(), caps.clone(), &a_key);
+        ensemble_b.install(first_peer, caps.clone(), &b_key);
+        ensemble_a.install(second.clone(), caps.clone(), &a_key);
+        ensemble_b.install(second_peer, caps.clone(), &b_key);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            first.send(tone("first")).await.is_err(),
+            "the displaced link must be closed"
+        );
+        assert!(
+            second.send(tone("second")).await.is_ok(),
+            "the link holding the slot must stay open"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rekeyed_link_closes_the_link_it_displaces() {
+        let a_key = HumdKey::generate();
+        let b_key = HumdKey::generate();
+        let a_id = a_key.hid();
+        let b_id = b_key.hid();
+        let caps = PeerCapabilities::default();
+        let (dialed, dialed_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+        let placeholder = Hid::random_humd();
+        let (accepted, accepted_peer) =
+            InMemoryEndpoint::pair(a_id, caps.clone(), placeholder, caps.clone());
+
+        let ensemble_a = Ensemble::new(a_id);
+        let ensemble_b = Ensemble::new(b_id);
+        ensemble_a.install(dialed.clone(), caps.clone(), &a_key);
+        ensemble_b.install(dialed_peer, caps.clone(), &b_key);
+        ensemble_a.install(accepted.clone(), caps.clone(), &a_key);
+        ensemble_b.install(accepted_peer, caps.clone(), &b_key);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            ensemble_a.peers().contains(&b_id),
+            "the peer must be keyed by its real id once the hello lands"
+        );
+        assert!(
+            dialed.send(tone("dialed")).await.is_err(),
+            "the link the rekey displaced must be closed"
+        );
+        assert!(
+            accepted.send(tone("accepted")).await.is_ok(),
+            "the rekeyed link must hold the slot"
+        );
     }
 
     #[tokio::test]
