@@ -70,3 +70,13 @@ jobs:
           python-version: "3.x"
       - name: Golden-wire parse + rid parity (stdlib only)
         run: python -m unittest discover -s thrum-clients/python/tests
+
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The C client builds and its tests pass
+        working-directory: thrum-clients/c
+        run: |
+          make
+          make test

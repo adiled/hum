@@ -33,7 +33,7 @@ fn run() -> Result<()> {
         }
     }
     let targets: Vec<String> = if positional.is_empty() {
-        vec!["ts".into(), "python".into(), "go".into()]
+        vec!["ts".into(), "python".into(), "go".into(), "c".into()]
     } else {
         positional
     };
@@ -91,7 +91,15 @@ fn run_target(
             Box::new(codegen::emit_go_helpers),
             Box::new(|p| codegen::protocol::emit_protocol_go(proto, p)),
         ),
-        other => anyhow::bail!("unknown target {other}; valid: ts, python, go"),
+        "c" => (
+            paths::c_chi(),
+            paths::c_helpers(),
+            paths::c_protocol(),
+            Box::new(|p| codegen::emit_c(spec, p)),
+            Box::new(codegen::emit_c_helpers),
+            Box::new(|p| codegen::protocol::emit_protocol_c(proto, p)),
+        ),
+        other => anyhow::bail!("unknown target {other}; valid: ts, python, go, c"),
     };
 
     if check {

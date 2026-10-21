@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Build the dwarfstar hive and install the bee.
+#
+# hum hive <ref> install runs this script when the hive dir carries a
+# `build` file. It compiles the DwarfStar engine from the pinned source
+# and links it into the bee, then puts the bee and its Metal kernels
+# where the Orchfile expects them.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin_dir="${HOME}/.local/bin"
+share_dir="${HOME}/.local/share/hum/dwarfstar"
+
+cd "$here"
+
+make
+
+install -m 0755 out/dwarfstar-bee "${bin_dir}/dwarfstar-bee"
+mkdir -p "$share_dir"
+rm -rf "${share_dir}/metal"
+cp -R out/metal "${share_dir}/metal"
+
+echo "installed ${bin_dir}/dwarfstar-bee"
+echo "metal kernels in ${share_dir}/metal"

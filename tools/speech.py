@@ -23,11 +23,6 @@ EXEMPT_PREFIXES = ("hives/", "thrum-clients/")
 
 
 def strip_literals(src):
-    """Blank out string and char literal contents, preserving line count.
-
-    A `//` inside a URL or a path is not a comment, so the scanner must
-    not see it as one.
-    """
     out = []
     i = 0
     n = len(src)
@@ -78,7 +73,6 @@ def strip_literals(src):
 
 
 def scan(src):
-    """Return the forbidden comments in src as (lineno, text) pairs."""
     found = []
     i = 0
     n = len(src)
@@ -118,7 +112,6 @@ def scan(src):
         i += 1
     return found
 
-
 def main():
     files = subprocess.run(
         ["git", "ls-files", "*.rs"], capture_output=True, text=True
@@ -137,7 +130,6 @@ def main():
         return 1
     print("the kernel speaks in code — no comments")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

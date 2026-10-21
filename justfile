@@ -24,6 +24,18 @@ bees:
 # Everything (Rust + TS bees)
 build-all: build bees
 
+# The C reference client
+client-c:
+	cd thrum-clients/c && make
+
+# The C client tests
+test-c:
+	cd thrum-clients/c && make test
+
+# The DwarfStar hive: the engine is fetched and compiled, so it is slow
+hive-dwarfstar:
+	cd hives/dwarfstar && make
+
 # Rust tests across all crates
 test:
     cargo test --workspace

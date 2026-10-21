@@ -45,12 +45,16 @@ like the thing — readers and writers share the same mental model.
 ## Ensemble
 
 - **ensemble** — the mesh of cooperating humds.
-- **hive** — the *kind*. A typology slot. Doesn't run; doesn't send anything.
-  The conformance an actor must match to be allowed to commission bees.
-  `claude-cli` is a hive; `openai-server` is a hive; `market-maker` is a hive.
-- **bee** — the *instance*. A running participant commissioned by a hive.
-  Each bee declares its kinds on `chi:"hello"` via `bee: ["worker"]`,
-  `bee: ["forager"]`, or both (hybrid bees are allowed).
+- **hive** — the *kind*, and the entrypoint it opens. A typology slot. Doesn't
+  run; doesn't send anything. A bee may name the hive it came in through; the
+  name is optional in the hello, and a participant that names none is its own
+  kind. `claude-cli` is a hive; `openai-server` is a hive; `market-maker` is a
+  hive.
+- **bee** — a *participant* in the network. Anything that speaks thrum and
+  handshakes with a humd: a process, a device, a person with a chip, another
+  agent. It declares what it is (`bee: ["worker"]`, `bee: ["forager"]`, or
+  both — hybrid bees are allowed), what it can serve (`models`), and which
+  hive it came in through (`hive`).
   - **worker** — produces compute. Implements the `WorkerBee` trait
     (or its non-Rust equivalent) — accepts `chi:"prompt"` for advertised
     models and emits `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"`.

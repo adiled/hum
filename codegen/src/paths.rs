@@ -34,6 +34,9 @@ pub const PY_PROTOCOL_REL: &str = "thrum-clients/python/thrum/protocol.py";
 pub const GO_CHI_REL: &str = "thrum-clients/go/thrum/chi.go";
 pub const GO_HELPERS_REL: &str = "thrum-clients/go/thrum/helpers.go";
 pub const GO_PROTOCOL_REL: &str = "thrum-clients/go/thrum/protocol.go";
+pub const C_CHI_REL: &str = "thrum-clients/c/thrum/chi.h";
+pub const C_HELPERS_REL: &str = "thrum-clients/c/thrum/helpers.h";
+pub const C_PROTOCOL_REL: &str = "thrum-clients/c/thrum/protocol.h";
 
 
 fn repo_root() -> PathBuf {
@@ -81,4 +84,13 @@ pub fn go_helpers() -> PathBuf {
 }
 pub fn go_protocol() -> PathBuf {
     repo_root().join(GO_PROTOCOL_REL)
+}
+pub fn c_chi() -> PathBuf {
+    repo_root().join(C_CHI_REL)
+}
+pub fn c_helpers() -> PathBuf {
+    repo_root().join(C_HELPERS_REL)
+}
+pub fn c_protocol() -> PathBuf {
+    repo_root().join(C_PROTOCOL_REL)
 }

@@ -42,7 +42,7 @@ fn main() {
         return;
     }
 
-    let emits: [(&str, std::path::PathBuf, &dyn Fn() -> codegen::Result<()>); 9] = [
+    let emits: [(&str, std::path::PathBuf, &dyn Fn() -> codegen::Result<()>); 12] = [
         ("emit_ts", paths::ts_chi(), &|| {
             codegen::emit_ts(&spec, &paths::ts_chi())
         }),
@@ -69,6 +69,15 @@ fn main() {
         }),
         ("emit_protocol_go", paths::go_protocol(), &|| {
             codegen::protocol::emit_protocol_go(&proto, &paths::go_protocol())
+        }),
+        ("emit_c", paths::c_chi(), &|| {
+            codegen::emit_c(&spec, &paths::c_chi())
+        }),
+        ("emit_c_helpers", paths::c_helpers(), &|| {
+            codegen::emit_c_helpers(&paths::c_helpers())
+        }),
+        ("emit_protocol_c", paths::c_protocol(), &|| {
+            codegen::protocol::emit_protocol_c(&proto, &paths::c_protocol())
         }),
     ];
     for (label, _out, emit) in &emits {
