@@ -9,7 +9,7 @@ description: "how to build a hive, the kind a bee is commissioned from, and run 
 
 ## The vocabulary, once
 
-A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`. It does not run on its own; it is a typology plus a binary. A **bee** is the running instance a hive commissions. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can be both. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`. It does not run on its own; it is a typology plus a binary. A **bee** is a participant in the network — anything that speaks thrum and handshakes: a process, a device, a person with a chip, another agent. It declares what it is, what it can serve, and which hive it came in through. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can be both. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
 A bee is just a process that handshakes with a humd over thrum. The handshake is the registration. Once it completes, humd knows the bee exists, what `chi` it speaks, and how to route to it. humd never links a hive in at build time; bees attach at runtime, in any language.
 
@@ -29,9 +29,27 @@ A bee is just a process that handshakes with a humd over thrum. The handshake is
 | [`twilio-sms`](twilio-sms) | forager | `twilio-sms` | Twilio Messaging webhook |
 | [`gsm-modem`](gsm-modem) | forager | `gsm-modem` | GSM AT-command serial SMS |
 | [`bp7`](bp7) | forager | `bp7-forager` | Bundle Protocol v7 (DTN) |
+| [`dwarfstar`](dwarfstar) | worker | `dwarfstar-bee` | the DwarfStar C engine, linked in |
 | [`common`](common) | library | n/a | `serve_worker` / `serve_forager` plus identity |
 
 Listing here is editorial, reserved for exemplars the maintainers keep. Your hive works the moment it handshakes a humd, whether or not it lives in this repo.
+
+## Naming a hive
+
+A **hive** is a kind, and it is also the entrypoint: the door a participant comes in through. A **bee** is the participant that comes through it. The hive is what you write; the bee is what you ship.
+
+So a hive is named after the **upstream it opens a door to**, and a word is added only when that upstream has more than one door:
+
+| word | meaning | example |
+|---|---|---|
+| *(none)* | the upstream, plainly | `humfs`, `bp7`, `dwarfstar` |
+| `-server` | an HTTP API surface, presented outward | `openai-server`, `ollama-server` |
+| `-cli` | a command-line client surface | |
+| `-repl` | an interactive terminal surface | |
+
+The **role never rides in the hive name**. A bee is a worker or a forager, but that is what the participant does once it is inside — a property of the bee, declared in its hello and in the catalogue's role column, not part of the kind's name. `ollama-worker` was the old spelling; the hive is `ollama` and the role is in the column.
+
+The **binary** is the participant, so it takes the role: `dwarfstar-bee` for the DwarfStar bee, `humfs-forager` for the filesystem one. Where a name is already unambiguous, the role is left off: `openai-server` is a forager and says so.
 
 ## Propensity, the three axes of a bee
 
@@ -49,7 +67,7 @@ A forager picks a contract that already exists in the wild and hides the rest of
 
 ### 1. Speak thrum
 
-Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `nest_common::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.
+Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `nest_common::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go, and C, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), [`thrum-clients/go`](../thrum-clients/go), or [`thrum-clients/c`](../thrum-clients/c). humd does not care what language the process is written in.
 
 ### 2. Handshake, the hello contract
 
