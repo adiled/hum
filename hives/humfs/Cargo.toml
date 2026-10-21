@@ -1,6 +1,6 @@
 [package]
 name = "humfs"
-version = "0.33.0"
+version = "0.33.1"
 edition = "2024"
 license = "MIT"
 description = "humfs — hum's native filesystem forager hive. Symbol-aware code surface (read/do_code/do_noncode/bash/task), AST-grounded via tree-sitter. Translates chi:tool-call ↔ filesystem ops; humd routes other foragers' tool-calls here."

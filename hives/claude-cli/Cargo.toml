@@ -1,6 +1,6 @@
 [package]
 name = "claude-cli"
-version = "0.33.0"
+version = "0.33.1"
 edition = "2024"
 license = "MIT"
 description = "Concrete WorkerBee impl: `claude -p` over a pipe. Builds the CLI command line from a high-level SpawnSpec, parses stream-json stdout."

@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "ollama-server"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
