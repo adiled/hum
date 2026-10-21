@@ -802,6 +802,7 @@ fn close_displaced_link(
     if let Some(old) = displaced
         && !Arc::ptr_eq(&old, keep)
     {
+        tracing::debug!(target: "ensemble.link", "link.displaced");
         old.close();
     }
 }
