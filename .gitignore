@@ -10,3 +10,6 @@ dev/deploy.*
 target/
 AGENTS.md
 CLAUDE.md
+hives/*/vendor/
+hives/*/out/
+thrum-clients/c/out/
