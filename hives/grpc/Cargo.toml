@@ -1,6 +1,6 @@
 [package]
 name = "grpc-forager"
-version = "0.32.0"
+version = "0.33.0"
 edition = "2024"
 license = "MIT"
 description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only bee."

@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "regex",
@@ -1067,7 +1067,7 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "ensemble"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1652,7 +1652,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hum"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "hum-identity"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek 2.2.0",
@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "hum-mcp"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "hum-nest"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "jsonschema",
  "serde",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "hum-thrum"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "hum-identity",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "humctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "hum-paths",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "humd"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4136,7 +4136,7 @@ checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 
 [[package]]
 name = "sim"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek 2.2.0",
@@ -4417,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "thehum"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4490,7 +4490,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "codegen",
  "hex",
