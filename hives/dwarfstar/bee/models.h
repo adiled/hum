@@ -20,6 +20,7 @@ typedef struct {
 } ds4_models;
 
 int ds4_models_scan(ds4_models *models, const char *dir);
+int ds4_models_pin(ds4_models *models, const char *path);
 const char *ds4_models_path(const ds4_models *models, const char *id);
 void ds4_models_json(const ds4_models *models, thrum_buf *buf);
 

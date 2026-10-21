@@ -160,6 +160,17 @@ int ds4_models_scan(ds4_models *models, const char *dir) {
     return models->count;
 }
 
+int ds4_models_pin(ds4_models *models, const char *path) {
+    const char *base = strrchr(path, '/');
+    const char *family;
+    base = base ? base + 1 : path;
+    family = family_of(base);
+    if (!family) return 0;
+    memset(models, 0, sizeof *models);
+    add(models, family, path);
+    return models->count;
+}
+
 const char *ds4_models_path(const ds4_models *models, const char *id) {
     int i;
     if (!id || !id[0]) {

@@ -1,3 +1,3 @@
 SERVICE paid-oracle
-RUN ${HOME}/.local/bin/paid-oracle
+RUN ${HUM_SRC}/target/release/paid-oracle
 RESTART always

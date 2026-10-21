@@ -46,6 +46,7 @@ static thrum_client g_client;
 static thrum_identity g_identity;
 static ds4_bridge *g_bridge;
 static ds4_models g_models;
+static char g_archetype[256] = HIVE_NAME;
 static char g_dir[1024] = "";
 static int g_ctx = 32768;
 static int g_max_tokens = 4096;
@@ -253,7 +254,8 @@ int main(void) {
     if ((env = getenv("DWARFSTAR_DIR")) && env[0]) {
         snprintf(g_dir, sizeof g_dir, "%s", env);
     } else {
-        snprintf(g_dir, sizeof g_dir, "%s/ds4", getenv("HOME") ? getenv("HOME") : ".");
+        fprintf(stderr, "dwarfstar: DWARFSTAR_DIR is not set — the bee does not guess where the models are\n");
+        return 1;
     }
     if ((env = getenv("DWARFSTAR_CTX")) && env[0]) g_ctx = atoi(env);
     if ((env = getenv("DWARFSTAR_MAX_TOKENS")) && env[0]) g_max_tokens = atoi(env);
@@ -269,7 +271,18 @@ int main(void) {
         }
         snprintf(metal_dir, sizeof metal_dir, "%s/metal", dir);
     }
-    ds4_models_scan(&g_models, g_dir);
+    {
+        const char *env = getenv("HUM_BEE_ARCHETYPE");
+        if (env && env[0]) snprintf(g_archetype, sizeof g_archetype, "%s", env);
+    }
+    {
+        const char *env = getenv("DWARFSTAR_MODEL");
+        if (env && env[0]) {
+            ds4_models_pin(&g_models, env);
+        } else {
+            ds4_models_scan(&g_models, g_dir);
+        }
+    }
 
     if (dwarfstar_shaders_point_at(metal_dir) != 0) {
         fprintf(stderr, "dwarfstar: metal kernels not found under %s\n", metal_dir);
@@ -279,7 +292,7 @@ int main(void) {
     thrum_client_init(&g_client, NULL);
     if (thrum_client_connect(&g_client) != 0) return 1;
 
-    if (!thrum_identity_load_or_mint(HIVE_NAME, "wbee", &g_identity)) {
+    if (!thrum_identity_load_or_mint(g_archetype, "wbee", &g_identity)) {
         fprintf(stderr, "dwarfstar: could not load the bee identity\n");
         return 1;
     }
@@ -291,6 +304,7 @@ int main(void) {
         thrum_tone_begin(&hello, CHI_HELLO, "hello-1", NULL);
         thrum_tone_raw(&hello, "bee", "[\"worker\"]");
         thrum_tone_str(&hello, "hive", HIVE_NAME);
+        thrum_tone_str(&hello, "nestlerId", g_archetype);
         thrum_tone_str(&hello, "version", HIVE_VERSION);
         thrum_tone_str(&hello, "protoVersion", THRUM_VERSION);
         thrum_tone_str(&hello, "hid", g_identity.hid);
@@ -334,7 +348,7 @@ int main(void) {
         }
         thrum_json_free(tone);
     }
-    fprintf(stderr, "dwarfstar: nested as %s, models=%d dir=%s ctx=%d\n", g_identity.hid,
+    fprintf(stderr, "dwarfstar: nested as %s (%s), models=%d dir=%s ctx=%d\n", g_archetype, g_identity.hid,
             g_models.count, g_dir, g_ctx);
 
     thrum_client_on_any(&g_client, on_tone, NULL);

@@ -1,3 +1,3 @@
 SERVICE vercel-ai
-RUN ${HOME}/.local/bin/vercel-ai
+RUN node ${HUM_SRC}/dist/index.js
 RESTART always

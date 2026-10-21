@@ -53,7 +53,7 @@ DS4_CORE_SRC = ds4.c ds4_image.c ds4_distributed.c ds4_tp.c ds4_ssd.c ds4_layer_
 DS4_CORE_OBJ = $(patsubst %.c,$(BUILD)/ds4/%.o,$(DS4_CORE_SRC))
 DS4_METAL_OBJ = $(BUILD)/ds4/ds4_metal.o
 
-HIVE_SRC = src/main.c src/ds4_bridge.c src/models.c src/shaders.c
+HIVE_SRC = bee/main.c bee/ds4_bridge.c bee/models.c bee/shaders.c
 CLIENT_SRC = $(THRUM_DIR)/thrum/json.c $(THRUM_DIR)/thrum/client.c $(THRUM_DIR)/thrum/identity.c
 ED25519_SRC = $(wildcard $(THRUM_DIR)/thrum/ed25519/*.c)
 

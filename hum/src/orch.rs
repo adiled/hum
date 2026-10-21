@@ -151,9 +151,28 @@ pub fn env_overrides(declared: &[String]) -> Vec<(String, String)> {
 
 pub fn parse(files: &[(String, String)], overrides: &std::collections::HashMap<String, String>) -> Result<the_orch::types::OrchFile> {
     the_orch::parse_files(files, overrides).map_err(|errs| {
-        let msg: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+        let msg: Vec<String> = errs.into_iter().map(|e| e.to_string()).collect();
         anyhow::anyhow!("orchfile: {}", msg.join("; "))
     })
+}
+
+pub fn parse_file(path: &std::path::Path) -> Result<the_orch::types::OrchFile> {
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    parse(&[(path.display().to_string(), body)], &std::collections::HashMap::new())
+}
+
+pub fn services_in(path: &std::path::Path) -> Result<Vec<String>> {
+    Ok(parse_file(path)?.services.into_iter().map(|s| s.name).collect())
+}
+
+pub fn overlay_for_service(service: &str) -> Result<std::path::PathBuf> {
+    for overlay in overlays() {
+        if services_in(&overlay)?.iter().any(|s| s == service) {
+            return Ok(overlay);
+        }
+    }
+    anyhow::bail!("no registered hive declares {service}")
 }
 
 pub fn base_and_overlay(kind: &str) -> Result<(String, String)> {
@@ -165,24 +184,30 @@ pub fn base_and_overlay(kind: &str) -> Result<(String, String)> {
     Ok((base, overlay))
 }
 
-pub fn grow(kind: &str, overlay: &Path) -> Result<()> {
+pub fn grow(service: &str, overlay: &Path) -> Result<()> {
+    let body = std::fs::read_to_string(overlay)
+        .with_context(|| format!("read {}", overlay.display()))?;
+    let overrides = env_overrides(&declared_args(&body));
     let mut c = with_overlays(cmd(), &[overlay.to_path_buf()]);
+    for (k, v) in &overrides {
+        c.arg("--arg").arg(format!("{k}={v}"));
+    }
     let status = c
         .arg("grow")
-        .arg(kind)
+        .arg(service)
         .status()
         .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
     if !status.success() {
-        bail!("orchd grow {kind} failed");
+        bail!("orchd grow {service} failed");
     }
     Ok(())
 }
 
-pub fn unload(kind: &str) -> Result<()> {
+pub fn unload(service: &str) -> Result<()> {
     if cfg!(target_os = "macos") {
         let plist = hum_paths::home()
             .join("Library/LaunchAgents")
-            .join(format!("{}.plist", label(kind)));
+            .join(format!("{}.plist", label(service)));
         let status = Command::new("launchctl")
             .arg("bootout")
             .arg(format!("gui/{}", uid()))
@@ -190,17 +215,17 @@ pub fn unload(kind: &str) -> Result<()> {
             .status()
             .map_err(|e| anyhow::anyhow!("launchctl bootout: {e}"))?;
         if !status.success() {
-            bail!("launchctl bootout {} failed", label(kind));
+            bail!("launchctl bootout {} failed", label(service));
         }
     } else {
         let status = Command::new("systemctl")
             .arg("--user")
             .arg("stop")
-            .arg(unit(kind))
+            .arg(unit(service))
             .status()
             .map_err(|e| anyhow::anyhow!("systemctl stop: {e}"))?;
         if !status.success() {
-            bail!("systemctl stop {} failed", unit(kind));
+            bail!("systemctl stop {} failed", unit(service));
         }
     }
     Ok(())
