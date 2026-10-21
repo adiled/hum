@@ -184,14 +184,14 @@ mod tests {
 
         let caps = PeerCapabilities::default();
 
-        let (a_tx, a_hints) = match bind(&a_key).await {
+        let (a_tx, a_hints) = match bind(&a_key, 0).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("skipping: iroh bind A failed: {e}");
                 return;
             }
         };
-        let (b_tx, _b_hints) = match bind(&b_key).await {
+        let (b_tx, _b_hints) = match bind(&b_key, 0).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("skipping: iroh bind B failed: {e}");
