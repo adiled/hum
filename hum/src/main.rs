@@ -784,7 +784,7 @@ fn hive_register(reference: &str) -> Result<String> {
     std::fs::write(&dest, with_source(&body, &dir))?;
     println!("registered {kind} ({})", dest.display());
 
-    let overrides = orch::env_overrides(&orch::declared_args(&body));
+    let overrides = orch::env_overrides(&orch::decl_args(&body));
     let mut map = std::collections::HashMap::new();
     for (k, v) in &overrides {
         map.insert(k.clone(), v.clone());

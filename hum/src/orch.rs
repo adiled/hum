@@ -11,7 +11,7 @@
 //! Orchfile that declares the shared variables, and every hive's
 //! Orchfile is an overlay on it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -131,6 +131,19 @@ pub fn overlays() -> Vec<PathBuf> {
     out
 }
 
+pub fn decl_args(text: &str) -> std::collections::HashMap<String, String> {
+    match the_orch::parser::parse_raw(text, 0) {
+        Ok(raw) => {
+            let mut args = std::collections::HashMap::new();
+            for (k, v) in raw.args {
+                args.insert(k, v);
+            }
+            args
+        }
+        Err(_) => std::collections::HashMap::new(),
+    }
+}
+
 pub fn declared_args(text: &str) -> Vec<String> {
     match the_orch::parser::parse_raw(text, 0) {
         Ok(raw) => {
@@ -142,10 +155,10 @@ pub fn declared_args(text: &str) -> Vec<String> {
     }
 }
 
-pub fn env_overrides(declared: &[String]) -> Vec<(String, String)> {
+pub fn env_overrides(declared: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
     declared
         .iter()
-        .filter_map(|n| std::env::var(n).ok().map(|v| (n.clone(), v)))
+        .filter_map(|(n, _)| std::env::var(n).ok().map(|v| (n.clone(), v)))
         .collect()
 }
 
@@ -185,9 +198,17 @@ pub fn base_and_overlay(kind: &str) -> Result<(String, String)> {
 }
 
 pub fn grow(service: &str, overlay: &Path) -> Result<()> {
-    let body = std::fs::read_to_string(overlay)
+    let overlay_body = std::fs::read_to_string(overlay)
         .with_context(|| format!("read {}", overlay.display()))?;
-    let overrides = env_overrides(&declared_args(&body));
+    let base = std::fs::read_to_string(hum_paths::orchfile())
+        .with_context(|| format!("read {}", hum_paths::orchfile().display()))?;
+    let mut args = decl_args(&overlay_body);
+    let base_args = decl_args(&std::fs::read_to_string(hum_paths::orchfile())
+        .with_context(|| format!("read {}", hum_paths::orchfile().display()))?);
+    for (k, v) in base_args {
+        args.entry(k).or_insert(v);
+    }
+    let overrides = env_overrides(&args);
     let mut c = with_overlays(cmd(), &[overlay.to_path_buf()]);
     for (k, v) in &overrides {
         c.arg("--arg").arg(format!("{k}={v}"));
