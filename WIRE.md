@@ -423,7 +423,9 @@ the model unblocks.
 
 A clean port to a new language takes ~80 LoC. The minimum:
 
-1. Resolve the socket path (env override → XDG runtime → `/run/user/<uid>`).
+1. Resolve the socket path: `HUM_THRUM_SOCK`, then `HUM_SOCKET`, then the
+   `socket` named in `$XDG_STATE_HOME/hum/runtime.json`, then
+   `$XDG_STATE_HOME/hum/thrum.sock`.
 2. `connect()` over a Unix stream socket. Buffer incoming bytes,
    split on `\n`, JSON-parse each line, drop on parse error.
 3. Send `chi:"hello"` immediately after connect. Buffer subsequent
@@ -432,6 +434,11 @@ A clean port to a new language takes ~80 LoC. The minimum:
    handler for tones without a sid (breath, echo, pulse).
 5. Serialize outbound tones with newline termination (`json.dumps(t) + "\n"`).
 6. On close: drop any pending writes, surface the disconnect to handlers.
+7. Outlive humd. humd restarts (an upgrade, a crash, a reboot), so when
+   the socket closes, reconnect with backoff (250 ms, doubling to 30 s)
+   and send a freshly signed hello. A refused hello is final. A bee that
+   does not reconnect must exit non-zero, so whatever supervises it
+   starts it again; exiting 0 reads as done.
 
 Reference: [`thrum-core`](../thrum-core),
 [`thrum-clients/ts`](../thrum-clients/ts),

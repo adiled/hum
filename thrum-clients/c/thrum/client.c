@@ -10,11 +10,13 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "chi.h"
@@ -23,6 +25,9 @@
 #define READ_CHUNK 65536
 #define HELLO_VERDICT_MS 10000
 #define TIMED_OUT -2
+#define BACKOFF_FIRST_MS 250
+#define BACKOFF_CEILING_MS 30000
+#define PAUSE_SLICE_MS 50
 
 struct handler {
     char *sid;
@@ -49,6 +54,8 @@ struct thrum_client {
     void *any_user;
 
     char hello_rid[128];
+    bool refused;
+    atomic_int stopping;
 };
 
 thrum_client *thrum_client_new(const char *socket_path) {
@@ -71,6 +78,7 @@ thrum_client *thrum_client_new(const char *socket_path) {
     }
     pthread_mutex_init(&client->send_lock, NULL);
     pthread_mutex_init(&client->handler_lock, NULL);
+    atomic_init(&client->stopping, 0);
     return client;
 }
 
@@ -116,13 +124,36 @@ int thrum_client_connect(thrum_client *client) {
         close(fd);
         return thrum__fail("connect %s: %s", client->path, strerror(err));
     }
-    client->fd = fd;
+    client->start = client->scan = client->len = 0;
     client->eof = false;
+    client->refused = false;
+    client->hello_rid[0] = '\0';
+    pthread_mutex_lock(&client->send_lock);
+    client->fd = fd;
+    pthread_mutex_unlock(&client->send_lock);
     return 0;
 }
 
+static void disconnect(thrum_client *client) {
+    pthread_mutex_lock(&client->send_lock);
+    if (client->fd >= 0) close(client->fd);
+    client->fd = -1;
+    pthread_mutex_unlock(&client->send_lock);
+    client->start = client->scan = client->len = 0;
+    client->eof = false;
+}
+
 void thrum_client_shutdown(thrum_client *client) {
-    if (client && client->fd >= 0) (void)shutdown(client->fd, SHUT_RDWR);
+    if (!client) return;
+    pthread_mutex_lock(&client->send_lock);
+    if (client->fd >= 0) (void)shutdown(client->fd, SHUT_RDWR);
+    pthread_mutex_unlock(&client->send_lock);
+}
+
+void thrum_client_stop(thrum_client *client) {
+    if (!client) return;
+    atomic_store(&client->stopping, 1);
+    thrum_client_shutdown(client);
 }
 
 static int write_all(int fd, const char *bytes, size_t n) {
@@ -148,7 +179,6 @@ int thrum_client_send(thrum_client *client, const cJSON *tone) {
     size_t n;
     int rc;
 
-    if (client->fd < 0) return thrum__fail("not connected");
     if (!cJSON_IsObject(tone)) return thrum__fail("a tone is a JSON object");
     json = cJSON_PrintUnformatted(tone);
     if (!json) return thrum__fail("could not serialise the tone");
@@ -163,7 +193,7 @@ int thrum_client_send(thrum_client *client, const cJSON *tone) {
     cJSON_free(json);
 
     pthread_mutex_lock(&client->send_lock);
-    rc = write_all(client->fd, line, n + 1);
+    rc = client->fd >= 0 ? write_all(client->fd, line, n + 1) : thrum__fail("not connected");
     pthread_mutex_unlock(&client->send_lock);
     free(line);
     return rc;
@@ -360,12 +390,13 @@ static bool answers_hello(const thrum_client *client, const cJSON *tone) {
     return client->hello_rid[0] && rid && strcmp(rid, client->hello_rid) == 0;
 }
 
-static bool refuses_hello(const thrum_client *client, const cJSON *tone) {
+static bool refuses_hello(thrum_client *client, const cJSON *tone) {
     const char *why;
     if (!is_chi(tone, THRUM_CHI_ECHO) || !answers_hello(client, tone)) return false;
     if (!cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(tone, "ok"))) return false;
     why = string_of(tone, "error");
     thrum__fail("hello refused: %s", why ? why : "no reason given");
+    client->refused = true;
     return true;
 }
 
@@ -428,6 +459,7 @@ int thrum_client_hello_within(thrum_client *client, const thrum_bee *bee, cJSON 
         if (is_chi(tone, THRUM_CHI_ERROR)) {
             const char *why = string_of(tone, "message");
             thrum__fail("hello refused: %s", why ? why : "no reason given");
+            client->refused = true;
             cJSON_Delete(tone);
             return -1;
         }
@@ -451,6 +483,55 @@ int thrum_client_hello_within(thrum_client *client, const thrum_bee *bee, cJSON 
 
 int thrum_client_hello(thrum_client *client, const thrum_bee *bee, cJSON *hello, cJSON **breath) {
     return thrum_client_hello_within(client, bee, hello, breath, HELLO_VERDICT_MS);
+}
+
+static bool stopping(thrum_client *client) {
+    return atomic_load(&client->stopping) != 0;
+}
+
+static bool pause_for(thrum_client *client, int64_t ms) {
+    int64_t until = thrum_now_ms() + ms;
+    while (!stopping(client) && thrum_now_ms() < until) {
+        struct timespec slice = {0, PAUSE_SLICE_MS * 1000000L};
+        nanosleep(&slice, NULL);
+    }
+    return stopping(client);
+}
+
+int thrum_client_serve(thrum_client *client, const thrum_bee *bee, const thrum_serve_hooks *hooks) {
+    int64_t delay = BACKOFF_FIRST_MS;
+
+    if (!hooks || !hooks->hello) return thrum__fail("serving needs a hello hook");
+    for (;;) {
+        cJSON *hello;
+        int rc;
+
+        if (stopping(client)) return 0;
+        if (thrum_client_connect(client) != 0) {
+            if (hooks->lost) hooks->lost(hooks->user, thrum_error());
+            if (pause_for(client, delay)) return 0;
+            delay = delay * 2 > BACKOFF_CEILING_MS ? BACKOFF_CEILING_MS : delay * 2;
+            continue;
+        }
+        hello = hooks->hello(hooks->user);
+        if (!hello) {
+            disconnect(client);
+            return thrum__fail("the hello hook made no hello");
+        }
+        rc = thrum_client_hello(client, bee, hello, NULL);
+        cJSON_Delete(hello);
+        if (rc == 0) {
+            delay = BACKOFF_FIRST_MS;
+            if (hooks->nestled) hooks->nestled(hooks->user);
+            rc = thrum_client_run(client);
+        }
+        disconnect(client);
+        if (stopping(client)) return 0;
+        if (client->refused) return -1;
+        if (hooks->lost) hooks->lost(hooks->user, rc < 0 ? thrum_error() : "humd closed the socket");
+        if (pause_for(client, delay)) return 0;
+        delay = delay * 2 > BACKOFF_CEILING_MS ? BACKOFF_CEILING_MS : delay * 2;
+    }
 }
 
 cJSON *thrum_tone_new(const char *chi, const char *rid, const char *sid) {

@@ -78,6 +78,7 @@ nestles, and answers every prompt with its own text.
 | `thrum_default_socket_path` | `HUM_THRUM_SOCK` > `HUM_SOCKET` > `runtime.json` > `$XDG_STATE_HOME/hum/thrum.sock` |
 | `thrum_bee_enter_as`, `thrum_bee_load`, `thrum_bee_sign_hello` | the bee's identity |
 | `thrum_client_*` | Unix-socket client: sid dispatch, locked sends, the hello verdict |
+| `thrum_client_serve`, `thrum_client_stop` | stay nestled across humd restarts: reconnect with backoff, a fresh signed hello each time |
 | `thrum_tone_new(chi, rid, sid)` | an envelope to add a body to |
 
 Functions that can fail return -1 and leave the reason in
