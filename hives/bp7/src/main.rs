@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UdpSocket, UnixStream};
 use tracing::{info, warn};
 
-const HIVE_NAME: &str = "bp7-forager";
+const HIVE_NAME: &str = "bp7";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_NODE_EID: &str = "dtn://hum.local/inference";
 const DEFAULT_MODEL: &str = "claude-sonnet-4";
@@ -144,16 +144,14 @@ async fn run_prompt(cfg: &Config, payload: &Payload) -> Result<String> {
     let (rd, mut wr) = stream.into_split();
     let mut lines = BufReader::new(rd).lines();
 
-    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
-        .map(|k| k.hid.to_hex())
-        .unwrap_or_default();
+    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
 
-    let hello = json!({
+    let mut hello = json!({
         "chi": Chi::Hello,
         "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
-        "hid": hid,
-        "bee": ["forager"],
+        "roles": ["forager"],
+        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
         "protoVersion": THRUM_VERSION,
         "propensity": {
@@ -164,6 +162,7 @@ async fn run_prompt(cfg: &Config, payload: &Payload) -> Result<String> {
         "chis": ["hello", "prompt", "chunk", "finish", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/bp7",
     });
+    bee.sign_hello(&mut hello);
     write_line(&mut wr, &hello).await?;
 
     let sid = format!("bp7-{}", now_ms());

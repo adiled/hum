@@ -63,7 +63,7 @@ async fn comb_counts_chi_and_measures_nectar() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn comb_attributes_work_to_the_bee_that_did_it() {
+async fn comb_attributes_work_to_the_hive_of_the_bee_that_did_it() {
     let sim = Sim::new();
     let a = Hid::random_humd();
     let h = sim.spawn_humd(a).await;
@@ -88,8 +88,8 @@ async fn comb_attributes_work_to_the_bee_that_did_it() {
     sim.shutdown().await;
 
     let comb = read_comb(&a);
-    assert_eq!(comb.get("bee:claude-repl:chi:finish"), Some(&1));
-    assert_eq!(comb.get("bee:claude-repl:nectar:in"), Some(&900));
+    assert_eq!(comb.get("hive:claude-repl:chi:finish"), Some(&1));
+    assert_eq!(comb.get("hive:claude-repl:nectar:in"), Some(&900));
 }
 
 #[tokio::test(flavor = "multi_thread")]

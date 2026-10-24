@@ -25,11 +25,9 @@ FIXTURE = os.path.join(
 
 ENV_KEYS = {"chi", "rid", "from", "to", "sigil", "sid", "wane", "sentAt", "dusk", "ext"}
 
-
 def lines():
     with open(FIXTURE) as f:
         return f.read().splitlines()
-
 
 class GoldenWireTest(unittest.TestCase):
     def test_every_line_is_a_known_tone(self):
@@ -46,11 +44,9 @@ class GoldenWireTest(unittest.TestCase):
             chi = tone["chi"]
             body = {k: v for k, v in tone.items() if k not in ENV_KEYS}
             view = p.from_wire(p.TONE_VIEWS[chi], body)
-            # every wire key must be a declared field of the view
             declared = set(p.TONE_VIEWS[chi]._wire.values())
             unknown = set(body) - declared
             self.assertEqual(unknown, set(), f"{raw}: {unknown}")
-            # and the view must re-serialize to exactly this body
             self.assertEqual(p.to_wire(view), body, raw)
             decoded += 1
         self.assertEqual(decoded, 15)
@@ -60,8 +56,9 @@ class GoldenWireTest(unittest.TestCase):
         hello = p.from_wire(
             p.HelloBody, {k: v for k, v in tones["hello"].items() if k not in ENV_KEYS}
         )
-        self.assertEqual(hello.proto_version, "0.7.0")
-        self.assertEqual(hello.tool_names, ["Read", "Bash"])
+        self.assertEqual(hello.proto_version, "0.8.0")
+        self.assertEqual(hello.hive, "claude-cli")
+        self.assertEqual(hello.roles, ["worker"])
         chunk = p.from_wire(
             p.ChunkBody, {k: v for k, v in tones["chunk"].items() if k not in ENV_KEYS}
         )
@@ -74,7 +71,6 @@ class GoldenWireTest(unittest.TestCase):
         )
         self.assertEqual(result.output, "file contents")
         self.assertEqual(result.is_error, False)
-
 
 if __name__ == "__main__":
     unittest.main()

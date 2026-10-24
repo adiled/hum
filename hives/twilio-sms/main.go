@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
@@ -30,6 +29,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,10 +42,10 @@ import (
 const beeVersion = "0.0.0"
 
 type config struct {
-	listen       string
-	model        string
-	system       string
-	replyLimit   int
+	listen     string
+	model      string
+	system     string
+	replyLimit int
 }
 
 func loadConfig() config {
@@ -104,12 +104,14 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		rid = "sms-" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
 
-	if err := client.Send(thrum.Tone{
+	hello, err := signedAs()
+	if err != nil {
+		return "", fmt.Errorf("thrum.hello: %w", err)
+	}
+	for k, v := range (thrum.Tone{
 		"chi":          string(thrum.ChiHello),
 		"rid":          "hello-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"from":         "twilio-sms",
-		"hid":          beeHid("twilio-sms", "fbee"),
-		"bee":          []string{"forager"},
+		"roles":        []string{"forager"},
 		"hive":         "twilio-sms",
 		"version":      beeVersion,
 		"protoVersion": thrum.ThrumVersion,
@@ -120,7 +122,10 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		},
 		"chis":   []string{"hello", "prompt", "chunk", "finish", "error"},
 		"source": "https://github.com/adiled/hum/tree/main/hives/twilio-sms",
-	}); err != nil {
+	}) {
+		hello[k] = v
+	}
+	if err := client.Send(hello); err != nil {
 		return "", fmt.Errorf("thrum.hello: %w", err)
 	}
 
@@ -177,7 +182,7 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 	}
 
 	cancel()
-	<-runErrCh // drain
+	<-runErrCh
 
 	mu.Lock()
 	reply := strings.TrimSpace(buf.String())
@@ -201,7 +206,6 @@ func handleSms(cfg config) http.HandlerFunc {
 		_ = r.Body.Close()
 
 		if err := r.ParseForm(); err != nil {
-			// Fall back to manual parse since we already consumed Body.
 			form, perr := parseForm(string(raw))
 			if perr != nil {
 				http.Error(w, "bad form", http.StatusBadRequest)
@@ -209,7 +213,6 @@ func handleSms(cfg config) http.HandlerFunc {
 			}
 			r.PostForm = form
 		}
-		// re-read into PostForm if not already populated
 		if r.PostForm == nil {
 			form, perr := parseForm(string(raw))
 			if perr != nil {
@@ -283,39 +286,54 @@ func pctDecode(s string) (string, error) {
 	return string(out), nil
 }
 
-// beeHid loads (or mints + persists) this bee's ed25519 seed and
-// returns its "<prefix>_<hex>" Hid, where hex is sha256(public key) —
-// byte-identical to the Rust hives/common identity. humd dedupes a
-// bee across reconnects by this hid; without it every reconnect leaks
-// a manifest. Seed lives at $XDG_STATE_HOME/hum/bees/<kind>.key (else
-// ~/.local/state/...), the same path + raw 32-byte format the Rust
-// and TS hives use.
-func beeHid(kind, prefix string) string {
+func humBin() string {
+	if p, err := exec.LookPath("hum"); err == nil {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "bin", "hum")
+}
+
+func signedAs() (thrum.Tone, error) {
+	out, err := exec.Command(humBin(), "bee", "enter", "--hive", "twilio-sms", "--as", "main").Output()
+	if err != nil {
+		return nil, fmt.Errorf("hum bee enter: %w", err)
+	}
+	id := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(id, "bee_") || len(id) != 68 || strings.ContainsAny(id, "/\\.") {
+		return nil, fmt.Errorf("hum bee enter answered %q, not a bee id", id)
+	}
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return ""
+			return nil, err
 		}
 		base = filepath.Join(home, ".local", "state")
 	}
-	path := filepath.Join(base, "hum", "bees", kind+".key")
-
-	var seed []byte
-	if b, err := os.ReadFile(path); err == nil && len(b) == ed25519.SeedSize {
-		seed = b
-	} else {
-		seed = make([]byte, ed25519.SeedSize)
-		if _, err := rand.Read(seed); err != nil {
-			return ""
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-			_ = os.WriteFile(path, seed, 0o600)
-		}
+	seed, err := os.ReadFile(filepath.Join(base, "hum", "bees", id+".key"))
+	if err != nil {
+		return nil, err
 	}
-	pub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("bee key for %s is %d bytes, expected %d", id, len(seed), ed25519.SeedSize)
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
 	sum := sha256.Sum256(pub)
-	return prefix + "_" + hex.EncodeToString(sum[:])
+	hid := "bee_" + hex.EncodeToString(sum[:])
+	if hid != id {
+		return nil, fmt.Errorf("the key filed as %s is not that bee's key", id)
+	}
+	signedAt := time.Now().UnixMilli()
+	sig := ed25519.Sign(priv, []byte("hum-bee-socket-v1:"+hid+":"+strconv.FormatInt(signedAt, 10)))
+	return thrum.Tone{
+		"hid":       hid,
+		"from":      hid,
+		"pubkey":    hex.EncodeToString(pub),
+		"signedAt":  signedAt,
+		"signature": hex.EncodeToString(sig),
+	}, nil
 }
 
 func main() {

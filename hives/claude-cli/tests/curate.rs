@@ -1,4 +1,4 @@
-//! `WorkerBee::curate` — the compute side of `chi:"curate"`.
+//! `Worker::curate` — the compute side of `chi:"curate"`.
 //!
 //! Curation works on the transcript on disk, not on a live cell: `claude -p`
 //! exits after every turn, so a curate almost always arrives with nothing
@@ -12,7 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use claude_cli::graft::session_path;
 use claude_cli::ClaudeCliWorker;
-use hum_nest::WorkerBee;
+use hum_nest::Worker;
 use tempfile::TempDir;
 
 // HOME is process-global and cargo runs these tests on parallel threads.

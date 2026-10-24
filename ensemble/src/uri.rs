@@ -31,7 +31,7 @@
 
 use std::fmt;
 
-use crate::{Hid, HidParseError};
+use crate::{Hid, HidParseError, HidPrefix};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumUri {
@@ -102,7 +102,7 @@ impl HumUri {
 
 fn looks_like_hid(host: &str) -> bool {
     let Some((p, rest)) = host.split_once('_') else { return false };
-    if !matches!(p, "humd" | "wbee" | "fbee") { return false; }
+    if HidPrefix::parse(p).is_none() { return false; }
     rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -113,7 +113,6 @@ pub trait AliasResolver: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HidPrefix;
 
     #[test]
     fn parses_alias_host() {

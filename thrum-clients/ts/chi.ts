@@ -4,12 +4,12 @@
 // the file is regenerated on every cargo build of thrum-core (build.rs).
 // Manual regen: `cargo run -p codegen`.
 
-export const THRUM_VERSION = "0.7.0" as const;
+export const THRUM_VERSION = "0.8.0" as const;
 
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 export const Chi = {
-  /** announce self — protoVersion, bee, version */
+  /** announce self: hive, roles, signed identity */
   hello: "hello",
   /** start a turn — content, system, tools */
   prompt: "prompt",

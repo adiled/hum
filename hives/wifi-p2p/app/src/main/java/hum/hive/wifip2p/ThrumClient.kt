@@ -1,3 +1,6 @@
+// The bee's thrum connection: humd's Unix socket when it runs on the
+// phone (Termux), or a TCP bridge to a humd elsewhere.
+
 package hum.hive.wifip2p
 
 import kotlinx.coroutines.*
@@ -11,16 +14,6 @@ import java.nio.channels.Channels
 import java.nio.file.Path
 import kotlinx.coroutines.sync.withLock
 
-/**
- * NDJSON client to humd over Unix socket (Termux) or TCP bridge.
- *
- * Mirrors hives/openai-server/src/thrum.ts — same framing, same
- * hello contract, same reconnect behavior.
- *
- * Connect modes:
- *   LOCAL_UNIX — connect to humd's Unix socket (Termux context)
- *   TCP — connect to a remote TCP bridge (e.g., humd's ensemble port)
- */
 class ThrumClient(
     private val sockPath: String,
     private val dataDir: String,
@@ -50,7 +43,7 @@ class ThrumClient(
     }
 
     private suspend fun attemptConnect() {
-        val hid = IdentityStore.getHid(dataDir)
+        val proof = IdentityStore.signedAs(dataDir)
         val mode = resolveMode()
 
         try {
@@ -62,14 +55,12 @@ class ThrumClient(
             connected = true
             reconnectAttempt = 0
 
-            // Send hello
             val hello = Tone(
                 chi = Chi.HELLO,
                 rid = "hello-${System.currentTimeMillis().toString(36)}",
-                from = HIVE_NAME,
-                body = mapOf(
-                    "hid" to hid,
-                    "bee" to listOf("forager"),
+                from = proof["hid"] as String,
+                body = proof + mapOf(
+                    "roles" to listOf("forager"),
                     "hive" to HIVE_NAME,
                     "version" to BEE_VERSION,
                     "protoVersion" to THRUM_VERSION,
@@ -87,7 +78,6 @@ class ThrumClient(
                 )
             )
             sendNow(writer, hello)
-            // Flush pending
             writeLock.withLock {
                 for (line in pending) {
                     writer.println(line)
@@ -95,7 +85,6 @@ class ThrumClient(
                 pending.clear()
             }
 
-            // Read loop
             val readerThread = BufferedReader(InputStreamReader(reader))
             while (isActive) {
                 val line = readerThread.readLine() ?: break
@@ -104,13 +93,11 @@ class ThrumClient(
                     val tone = Tone.fromJson(line)
                     handleTone(tone)
                 } catch (_: Exception) {
-                    // drop malformed lines per wire spec
                 }
             }
         } catch (e: CancellationException) {
             return
         } catch (e: Exception) {
-            // Connection failed — schedule reconnect
         }
 
         connected = false
@@ -146,7 +133,6 @@ class ThrumClient(
         scope.launch {
             writeLock.withLock {
                 if (connected) {
-                    // Write queued — the read/write pair handles this
                 }
             }
             pending.add(line)
@@ -168,7 +154,7 @@ class ThrumClient(
 
     private fun connectUnix(path: String): Pair<Any, PrintWriter> {
         val addr = UnixDomainSocketAddress.of(path)
-        val socket = java.net.Socket() // Use SocketChannel for Unix domain
+        val socket = java.net.Socket()
         val channel = java.nio.channels.SocketChannel.open()
         channel.connect(addr)
         val input = Channels.newInputStream(channel)

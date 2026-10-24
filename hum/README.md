@@ -21,12 +21,13 @@ hum doctor                   # one-shot full diagnostic for bug reports
 hum ensemble                 # show identity, reach hints, configured peers
 hum ensemble peer add <id> --hint <X> [--alias <name>]
 hum ensemble peer rm  <id|alias>
-hum hive --list              # bundled + configured + running
-hum hive <ref> install       # build + register + orchd up
-hum bee --list               # bees and their state
-hum bee <name> enter|exit|reenter
-hum nest                     # orchd-managed bees (delegates to orchd status)
-hum comb [bee]              # the comb — lifetime measures
+hum hive --list              # the catalogue, and what is installed here
+hum hive <ref> install       # teach this humd a hive (runs its hive-install)
+hum hive <ref> uninstall     # forget it
+hum bee --list               # bees entered here, and which have nestled
+hum bee enter --hive <hive> [--as <label>]  # sign a bee in; prints its id
+hum bee <id> exit|reenter
+hum comb [hive]              # the comb: lifetime measures
 hum thehum status|tail|range|verify|replay
 hum recipes [name]           # list / run recipes
 hum uninstall                # stop + remove binary (state preserved)
@@ -84,23 +85,25 @@ Hints are wire-shaped strings: `tcp:host:port`, `iroh:<64-hex>`,
 what a remote peer pastes in.
 
 ### `hive`
-Hive kinds. A hive is the typology slot; a bee is the running
-instance. `hum hive --list` shows the catalogue (installer present in
-`hives/`), the configured slot (`hives.<kind>` in `hum.json`), and
-running state. `hum hive <ref> install` resolves the ref (bundled
-name, local path, or github tree URL), runs the auto-detected build
-(cargo / pnpm / go / `./build`), copies the Orchfile under
-`~/.config/hum/orch.d/<kind>.orch`, rewrites `hum.orch`, and runs
-`orchd up <kind>`.
+Hives are the kinds this humd understands. A directory with an
+`Orchfile` is a hive. `hum hive --list` shows the catalogue (`hives/`),
+what is installed here, and how many bees each has entered. `hum hive
+<ref> install` resolves the ref (bundled name, local path, or github
+tree URL), records the hive at `~/.config/hum/hives.d/<hive>.orch`, and
+runs its `hive-install` unit if it declares one, with `HUM_SRC`,
+`HUM_HIVE`, and `hum` on its `PATH`, so the unit can enter bees and start
+whatever it runs. A failed unit takes the record back. `hum hive <ref>
+uninstall` forgets the hive; what the hive started is its own to stop.
 
 ### `bee`
-Bee instances. `hum bee --list` shows running bees by name and state.
-`hum bee <name> enter|exit|reenter` flips lifecycle (`enter` starts a
-stopped bee, `exit` stops while preserving state, `reenter` is a
-graceful restart that keeps the same id).
-
-### `nest`
-Delegates to `orchd status` for the orchd-managed bees view.
+Bees are the participants humd hears from. A bee is a key its hive
+entered. `hum bee enter --hive <hive> --as <label>` signs one in under
+the hive and prints its id: the same bee every time for one label, so a
+process can enter itself at each start and a runtime can hold one bee per
+requester. Whatever acts as the bee signs its hello with the key. `hum bee
+<id> exit` signs it out, so humd refuses its next hello, and `reenter`
+signs it back in. `hum bee --list` shows every entered bee and whether
+it has nestled. hum starts no process.
 
 ### `thehum`
 The signed append-only chi log on disk.
@@ -120,8 +123,8 @@ move before trusting derived state.
 ### `comb`
 The kernel's ledger of what crossed it, from `comb.json`: how many
 tones of each chi, and nectar — tokens in, tokens out, cache reads —
-per bee. `hum comb` shows the whole comb; `hum comb claude-cli` shows
-one bee. The measure is written by the daemon, so it is observed
+per hive. `hum comb` shows the whole comb; `hum comb claude-cli` shows
+one hive. The measure is written by the daemon, so it is observed
 rather than self-reported.
 
 ### `recipes`

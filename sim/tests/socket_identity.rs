@@ -1,15 +1,13 @@
 //! Socket hello identity binding.
 //!
-//! A bee declares `hid` as a string. When it also signs that hid, humd
-//! binds the string to a key before trusting it. These tests drive the
-//! Hello arm the same way the admission tests do — through the installed
-//! sink — so they cover the decision humd actually makes, not a
-//! re-implementation of it.
+//! A bee nestles only by signing its hello with a key its hive entered.
+//! These tests drive the Hello arm through the installed sink, so they
+//! cover the decision humd actually makes, not a re-implementation of it.
 
 use std::time::Duration;
 
-use ed25519_dalek::{Signer, SigningKey};
-use hum_identity::{BeeKey, Hid, HidPrefix};
+use ed25519_dalek::Signer;
+use hum_identity::BeeKey;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -19,9 +17,7 @@ fn now_ms() -> i64 {
 }
 
 fn fresh_bee() -> BeeKey {
-    let signing = SigningKey::generate(&mut rand::thread_rng());
-    let hid = Hid::from_pubkey(HidPrefix::Wbee, &signing.verifying_key().to_bytes());
-    BeeKey { signing, hid }
+    BeeKey::generate()
 }
 
 fn hello_with_identity(tone: &mut serde_json::Value, bee: &BeeKey) {
@@ -37,7 +33,7 @@ fn hello_with_identity(tone: &mut serde_json::Value, bee: &BeeKey) {
 fn base_hello() -> serde_json::Value {
     serde_json::json!({
         "chi": "hello",
-        "bee": ["worker"],
+        "roles": ["worker"],
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -56,6 +52,7 @@ async fn a_bee_that_signs_its_hid_stays_connected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
+    humd.bees.enter("claude-cli", &bee);
     let mut hello = base_hello();
     hello_with_identity(&mut hello, &bee);
     humd.thrum.inject_tone(&cid, hello).await;
@@ -63,12 +60,53 @@ async fn a_bee_that_signs_its_hid_stays_connected() {
     tokio::time::sleep(Duration::from_millis(120)).await;
     assert!(
         humd.thrum.is_connected(&cid),
-        "a correctly signed hello must be admitted"
+        "a correctly signed hello from an entered bee must be admitted"
+    );
+}
+
+async fn signed_hello_survives(enter_under: Option<&str>, exit_first: bool) -> bool {
+    let sim = sim::Sim::new();
+    let humd = sim.spawn_humd(ensemble::Hid::random_humd()).await;
+    sim.await_ready(humd.id).await.expect("humd ready");
+    let cid = hum_identity::HumId::mint().to_string();
+    let _rx = humd.thrum.register_synthetic(cid.clone());
+    let bee = fresh_bee();
+    if let Some(hive) = enter_under {
+        humd.bees.enter(hive, &bee);
+    }
+    if exit_first {
+        humd.bees.exit(&bee.id());
+    }
+    let mut hello = base_hello();
+    hello_with_identity(&mut hello, &bee);
+    humd.thrum.inject_tone(&cid, hello).await;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    humd.thrum.is_connected(&cid)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_signed_bee_that_never_entered_is_disconnected() {
+    let _ = tracing_subscriber::fmt::try_init();
+    assert!(!signed_hello_survives(None, false).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bee_entered_under_another_hive_is_disconnected() {
+    let _ = tracing_subscriber::fmt::try_init();
+    assert!(
+        !signed_hello_survives(Some("humfs"), false).await,
+        "a bee speaks for the hive it entered under, not the one it claims"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_bee_with_no_signature_is_still_admitted() {
+async fn a_bee_that_exited_is_disconnected_at_its_next_hello() {
+    let _ = tracing_subscriber::fmt::try_init();
+    assert!(!signed_hello_survives(Some("claude-cli"), true).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_entered_bee_that_does_not_sign_is_disconnected() {
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
     let humd = sim.spawn_humd(ensemble::Hid::random_humd()).await;
@@ -78,14 +116,15 @@ async fn a_bee_with_no_signature_is_still_admitted() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
+    humd.bees.enter("claude-cli", &bee);
     let mut hello = base_hello();
     hello["hid"] = serde_json::json!(bee.hid.to_hex());
     humd.thrum.inject_tone(&cid, hello).await;
 
     tokio::time::sleep(Duration::from_millis(120)).await;
     assert!(
-        humd.thrum.is_connected(&cid),
-        "an unsigned hid must stay admitted"
+        !humd.thrum.is_connected(&cid),
+        "claiming an entered hid without proving the key must not be enough"
     );
 }
 
@@ -100,6 +139,7 @@ async fn a_bee_with_a_forged_signature_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
+    humd.bees.enter("claude-cli", &bee);
     let mut hello = base_hello();
     hello_with_identity(&mut hello, &bee);
     hello["signature"] = serde_json::json!(hex::encode([0u8; 64]));
@@ -125,6 +165,7 @@ async fn a_bee_claiming_anothers_hid_is_disconnected() {
 
     let mallory = fresh_bee();
     let victim = fresh_bee();
+    humd.bees.enter("claude-cli", &victim);
     let signed_at = now_ms();
     let msg = hum_identity::socket_hello_message(&victim.hid, signed_at);
     let sig = mallory.signing.sign(&msg);
@@ -155,6 +196,7 @@ async fn a_replayed_hello_outside_the_skew_window_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
+    humd.bees.enter("claude-cli", &bee);
     let stale = now_ms() - 3_600_000;
     let sig = bee.sign_socket_hello(stale);
     let (pubkey, signature) = (sig.pubkey, sig.signature);

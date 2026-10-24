@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use hum_nest::{serve_worker, HiveAdvert};
+use hum_nest::{serve_worker, WorkerAdvert};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
             "claude-haiku-4-5".to_string(),
         ]);
 
-    let advert = HiveAdvert {
+    let advert = WorkerAdvert {
         hive: "claude-repl".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,

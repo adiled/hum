@@ -16,7 +16,7 @@ fn tone_to(target: Hid, rid: &str) -> Value {
         "rid": rid,
         "from": "test",
         "to": target.to_string(),
-        "body": {"text": "x"},
+        "delta": "x",
     })
 }
 

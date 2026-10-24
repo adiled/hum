@@ -1,9 +1,5 @@
 package thrum
 
-// Golden-wire parse test: every committed tone byte-decodes into its
-// generated view struct without losing or inventing keys. When views.rs
-// changes a wire key or shape, regen + rerun me.
-
 import (
 	"bufio"
 	"encoding/json"
@@ -63,8 +59,6 @@ func TestGoldenDecodesIntoViews(t *testing.T) {
 		if !ok {
 			t.Fatalf("line %d: chi %q has no view", i, chi)
 		}
-		// Allocate a fresh instance of the body view type and unmarshal
-		// into it — this is the decode path real balks take.
 		blob, _ := json.Marshal(body)
 		inst := reflect.New(reflect.TypeOf(pick))
 		if err := json.Unmarshal(blob, inst.Interface()); err != nil {
@@ -91,7 +85,7 @@ func TestGoldenSpotChecks(t *testing.T) {
 			if err := json.Unmarshal(blob, &h); err != nil {
 				t.Fatal(err)
 			}
-			if h.ProtoVersion != "0.7.0" || h.Bee != "claude-cli" {
+			if h.ProtoVersion != "0.8.0" || h.Hive != "claude-cli" || len(h.Roles) != 1 || h.Roles[0] != "worker" {
 				t.Fatalf("hello mismatch: %+v", h)
 			}
 		case ChiToolResult:

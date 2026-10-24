@@ -6,7 +6,7 @@
 //! child. On non-Linux the apply is a no-op so callers compile and degrade
 //! gracefully.
 //!
-//! Wall-clock enforcement does NOT live here; the WorkerBee arms its own
+//! Wall-clock enforcement does NOT live here; the Worker arms its own
 //! timer and kills the child. `wall_clock_ms` is stored on the spec only so
 //! it travels alongside the rlimit fields.
 //!

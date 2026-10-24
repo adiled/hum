@@ -32,7 +32,7 @@ use super::{
 
 pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
     let client_id = hum_identity::HumId::mint().to_string();
-    let (reach, rx) = Reach::new(client_id.clone());
+    let (reach, rx) = thrum.reach(client_id.clone());
     let reach = Arc::new(reach);
 
     {
@@ -97,6 +97,7 @@ async fn read_loop(
 }
 
 async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Value) {
+    thrum.heard(client_id, &tone);
     if let Some(reason) = validate_envelope(&tone) {
         trace!(client_id = %short(client_id), reason, "thrum.tone.rejected");
         return;
@@ -129,18 +130,20 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
     }
 
     if chi == "hello" {
-        let bee = tone
-            .get("bee")
+        let hive = tone
+            .get("hive")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string();
+        let hid = tone.get("hid").and_then(|v| v.as_str()).unwrap_or("?").to_string();
         let proto_version = tone
             .get("protoVersion")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         info!(
             client_id = %short(client_id),
-            bee = %bee,
+            hive = %hive,
+            hid = %hid,
             proto_version = %proto_version,
             "thrum.hello"
         );

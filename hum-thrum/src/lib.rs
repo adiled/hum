@@ -106,11 +106,11 @@ mod tests {
             r.read_line(&mut buf).await.unwrap();
             let tone: Value = serde_json::from_str(&buf).unwrap();
             assert_eq!(tone["chi"], "hello");
-            assert_eq!(tone["bee"][0], "forager");
+            assert_eq!(tone["roles"][0], "forager");
         });
 
         let (_, write) = connect(&sock).await.unwrap();
-        let hello = json!({ "chi": "hello", "bee": ["forager"], "hid": "fbee_abcd" });
+        let hello = json!({ "chi": "hello", "roles": ["forager"], "hid": "bee_abcd" });
         send_json(&write, &hello).await.unwrap();
 
         server.await.unwrap();

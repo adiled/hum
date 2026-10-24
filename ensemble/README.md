@@ -100,7 +100,7 @@ async fn main() {
     let peer_id = peer_key.hid();
 
     let caps = PeerCapabilities {
-        proto_version: "0.7.0".into(),
+        proto_version: "0.8.0".into(),
         nests: vec!["market-maker".into()],
         ..Default::default()
     };
@@ -242,10 +242,10 @@ These are written as if they work. They do not.
   `hello`, `prompt`, `cancel`, `attach`, `peer-add`, `peer-remove`,
   `wane-sync` and the rest, but there is no `gossip-publish` arm,
   so a tone a bee writes to the local thrum socket never reaches a
-  peer. The daemon publishes hive manifests; a bee's own topics do
+  peer. The daemon publishes bee manifests; a bee's own topics do
   not travel.
 - **There is no retraction.** `chi:"bee-retract"` does not exist, and
-  the ensemble's `hive_retract` is called by nothing but a test. A
+  the ensemble's `bee_retract` is called by nothing but a test. A
   manifest that is announced stays announced.
 - **The DHT cannot bootstrap.** The Kademlia table is seeded from
   `peers.json` and from the persisted routing store. There is no DNS
@@ -315,12 +315,13 @@ keys. Three pieces have to exist for that, and two of them do not:
    > else (a `hum.sh`, a curl-pipe-sh URL, a package manager entry) does
    > not exist.
 
-2. **Get advertised**: when a bee completes its handshake, the
-   daemon builds a `HiveManifest` and gossips it on the
-   `hum/hives/announce` topic. Every humd subscribed to that topic
-   learns "humd X runs market-maker (version, propensity, chi)". The
-   mere act of completing a handshake adds you to the on-mesh
-   registry. There is no retraction, and no heartbeat that evicts a
+2. **Get advertised**: when a bee completes its handshake with a humd
+   that has its hive installed, the daemon builds a `BeeManifest` and
+   gossips it on the `hum/hives/announce` topic. Every humd subscribed
+   to that topic learns "a bee of market-maker landed on humd X
+   (version, propensity, chi)". A humd routes to it only if it has the
+   market-maker hive installed too. The mere act of completing a
+   handshake adds you to the on-mesh registry. There is no retraction, and no heartbeat that evicts a
    manifest whose bee has gone away.
 
 3. **Get discovered**: a peer that wants a service subscribes to the
@@ -332,7 +333,7 @@ keys. Three pieces have to exist for that, and two of them do not:
    use std::time::Duration;
 
    # async fn run(ensemble: &Ensemble) {
-   let mut seen = ensemble.hive_discover("market-maker");
+   let mut seen = ensemble.bee_discover("market-maker");
    while let Some((humd_id, manifest)) = seen.recv().await {
        if manifest.proto_version != thrum_core::THRUM_VERSION {
            continue;
@@ -373,7 +374,7 @@ keeps the mesh layer thin and reusable.
   never reads or writes chain state.
 - **AML / KYC / reputation.** A bee layered on top can rate-limit,
   scorecard, or refuse to fill. ensemble has no policy.
-- **Model inference.** The nest (orchd and the hives) spawns the
+- **Model inference.** The hives spawn the
   worker that answers a `chi:"prompt"`. ensemble doesn't know what
   is inside the prompt.
 - **Persistence.** ensemble is in-RAM. The daemon keeps its own
@@ -386,7 +387,7 @@ keeps the mesh layer thin and reusable.
 ## The protocol surface
 
 When a new bee wants to ride the mesh, it picks which chi values it
-speaks. The surface today, THRUM_VERSION 0.7.0:
+speaks. The surface today, THRUM_VERSION 0.8.0:
 
 | chi | direction | use |
 |---|---|---|

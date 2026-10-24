@@ -1,3 +1,9 @@
+ARG HUM_SRC=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE vercel-ai
-RUN ${HOME}/.local/bin/vercel-ai
+RUN node ${HUM_SRC}/dist/index.js
 RESTART always

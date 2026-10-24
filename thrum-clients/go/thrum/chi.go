@@ -6,7 +6,7 @@
 
 package thrum
 
-const ThrumVersion = "0.7.0"
+const ThrumVersion = "0.8.0"
 
 // Chi is the discriminator on every tone.
 type Chi string
@@ -14,7 +14,7 @@ type Chi string
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 const (
-    // announce self — protoVersion, bee, version
+    // announce self: hive, roles, signed identity
     ChiHello Chi = "hello"
     // start a turn — content, system, tools
     ChiPrompt Chi = "prompt"

@@ -1,11 +1,10 @@
 import { createConnection, type Socket } from "node:net";
-import { beeHid } from "./identity";
+import { enter, signedAs } from "./identity";
 import pkg from "../package.json";
 
-export const THRUM_VERSION = "0.7.0";
+export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "openai-server";
 export const BEE_VERSION = pkg.version;
-export const BEE_ROLE = "forager";
 export const BEE_ROLES = ["forager", "worker"];
 export const BEE_PROVIDES = ["session"];
 
@@ -33,8 +32,18 @@ function defaultThrumPath(): string {
   return `${stateHome}/hum/thrum.sock`;
 }
 
+export interface BeeShape {
+  label: string;
+  roles: string[];
+  provides?: string[];
+}
+
+export const MAIN_BEE: BeeShape = { label: "main", roles: BEE_ROLES, provides: BEE_PROVIDES };
+
 export class ThrumClient {
   private sock: Socket | null = null;
+  private bee: BeeShape;
+  lastUsed = Date.now();
   private buf = "";
   private byId = new Map<string, SidHandler>();
   private byChi = new Map<string, SidHandler>();
@@ -47,9 +56,14 @@ export class ThrumClient {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
-  constructor(path?: string, models?: string[]) {
+  constructor(bee: BeeShape = MAIN_BEE, path?: string, models?: string[]) {
+    this.bee = bee;
     this.path = path ?? defaultThrumPath();
     this.models = models ?? [];
+  }
+
+  busy(): boolean {
+    return this.byId.size > 0;
   }
 
   async connect(bind?: BindInfo): Promise<void> {
@@ -63,6 +77,15 @@ export class ThrumClient {
     resolve?: () => void,
     reject?: (e: unknown) => void,
   ): void {
+    let id: string;
+    try {
+      id = enter(HIVE_NAME, this.bee.label);
+    } catch (e) {
+      console.error(`[thrum] cannot enter ${this.bee.label}:`, e);
+      if (reject) reject(e);
+      else this.scheduleReconnect();
+      return;
+    }
     const s = createConnection(this.path);
     let settled = false;
     s.on("connect", () => {
@@ -72,13 +95,12 @@ export class ThrumClient {
       const hello: Tone = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: HIVE_NAME,
-        hid: beeHid(HIVE_NAME, "fbee"),
-        bee: BEE_ROLES,
+        ...signedAs(id),
+        roles: this.bee.roles,
         hive: HIVE_NAME,
         version: BEE_VERSION,
-        provides: BEE_PROVIDES,
-        models: this.models,
+        ...(this.bee.provides ? { provides: this.bee.provides } : {}),
+        ...(this.models.length > 0 ? { models: this.models } : {}),
         propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
         protoVersion: THRUM_VERSION,
         chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
@@ -145,6 +167,7 @@ export class ThrumClient {
   }
 
   send(msg: Tone): void {
+    this.lastUsed = Date.now();
     const line = JSON.stringify(msg) + "\n";
     if (this.connected && this.sock) this.sock.write(line);
     else this.pending.push(line);

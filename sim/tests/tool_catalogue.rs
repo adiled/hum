@@ -33,7 +33,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     let forager_cid = hum_identity::HumId::mint().to_string();
     let _frx = humd.thrum.register_synthetic(forager_cid.clone());
     let forager_hello = json!({
-        "chi":"hello","bee":["forager"],"hive":"humfs","version":"0.0.0",
+        "chi":"hello","roles":["forager"],"hive":"humfs","version":"0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
         "provides":["fs"],
         "tools":[
@@ -44,17 +44,17 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         ],
         "chis":["hello","tool-call","tool-result"],
     });
-    humd.thrum.inject_tone(&forager_cid, forager_hello).await;
+    humd.thrum.inject_tone(&forager_cid, humd.signed_hello(forager_hello)).await;
 
     let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
     let hello = json!({
-        "chi":"hello","bee":["worker"],"hive":"claude-cli","version":"0.0.0",
+        "chi":"hello","roles":["worker"],"hive":"claude-cli","version":"0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
         "models":["claude-opus-4-7"],
         "chis":["hello","prompt","chunk","tool-call","finish"],
     });
-    humd.thrum.inject_tone(&worker_cid, hello).await;
+    humd.thrum.inject_tone(&worker_cid, humd.signed_hello(hello)).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     sim.nestler_send(humd.id, json!({

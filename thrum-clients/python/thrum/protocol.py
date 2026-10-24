@@ -13,21 +13,35 @@ from typing import Any, ClassVar, Optional
 @dataclass
 class HelloBody:
     proto_version: str
-    bee: str
-    version: str
-    hid: Optional[str] = None
-    tool_names: Optional[list[str]] = None
+    hive: str
+    hid: str
+    pubkey: str
+    signed_at: int
+    signature: str
+    roles: Optional[list[str]] = None
+    version: Optional[str] = None
+    models: Optional[list[str]] = None
+    tools: Optional[list[Any]] = None
     provides: Optional[list[str]] = None
+    chis: Optional[list[str]] = None
+    propensity: Optional[Any] = None
     source: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "proto_version": "protoVersion",
-        "bee": "bee",
-        "version": "version",
+        "hive": "hive",
         "hid": "hid",
-        "tool_names": "tool_names",
+        "pubkey": "pubkey",
+        "signed_at": "signedAt",
+        "signature": "signature",
+        "roles": "roles",
+        "version": "version",
+        "models": "models",
+        "tools": "tools",
         "provides": "provides",
+        "chis": "chis",
+        "propensity": "propensity",
         "source": "source",
     }
 

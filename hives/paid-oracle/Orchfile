@@ -1,3 +1,9 @@
+ARG HUM_SRC=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE paid-oracle
-RUN ${HOME}/.local/bin/paid-oracle
+RUN ${HUM_SRC}/target/release/paid-oracle
 RESTART always

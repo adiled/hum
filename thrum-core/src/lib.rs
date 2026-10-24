@@ -15,6 +15,7 @@
 mod chi;
 mod envelope;
 mod prims;
+mod spec;
 mod views;
 mod wane;
 
@@ -22,6 +23,7 @@ pub use chi::{Chi, PulseKind};
 pub use envelope::{Envelope, Tone};
 pub use prims::{dusk_in, echo_for, is_dusk, now_ms, rid, sigil};
 pub use views::*;
+pub use spec::{body_keys, envelope_keys, undeclared};
 pub use wane::WaneTracker;
 
-pub const THRUM_VERSION: &str = "0.7.0";
+pub const THRUM_VERSION: &str = "0.8.0";

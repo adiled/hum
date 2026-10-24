@@ -1658,6 +1658,7 @@ dependencies = [
  "chrono",
  "clap",
  "ed25519-dalek 2.2.0",
+ "hum-identity",
  "hum-paths",
  "humd",
  "serde_json",

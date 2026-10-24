@@ -34,7 +34,7 @@ import {
   Chi,            // const map of every chi value
   ALL_CHI,        // string array, useful for switch-exhaustiveness
   PulseKind,      // pulse.kind enum
-  THRUM_VERSION,  // "0.7.0" today; bump when chi.rs changes
+  THRUM_VERSION,  // "0.8.0" today; bump when chi.rs changes
   sigil,          // sha256(nest, sid)[..12] hex
   rid,            // monotonic request id
   WaneTracker,    // Lamport-clock per sigil

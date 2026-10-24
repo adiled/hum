@@ -1,24 +1,14 @@
-//! Universal identity primitive for everything addressable on the
-//! hum wire: humds, worker bees, forager bees, future kinds. 32-byte
-//! SHA-256 of a public key (Ed25519); wire form is `<prefix>_<hex>`
-//! where prefix discriminates the role.
+//! Universal identity primitive for everything addressable on the hum
+//! wire: SHA-256 of an Ed25519 public key, written `<prefix>_<hex>`.
+//! Content-addressable: no registry, no central naming.
 //!
-//! Short form keeps the prefix: `humd_a4f2b8c19d3e` (12 hex chars
-//! after the underscore). Long form is the full 64-hex tail. Both
-//! parse via [`Hid::from_hex`].
-//!
-//! Prefixes locked in v0:
-//! - `humd_` — daemon
-//! - `wbee_` — worker bee
-//! - `fbee_` — forager bee
-//!
-//! Stable per install (each binary persists its own key). The hex is
-//! content-addressable — no registry, no central naming.
+//! The prefix tells a daemon from a participant and nothing more. A
+//! bee's role is a claim in its hello, so a worker that starts foraging
+//! is still the same bee.
 //!
 //! The 12-char short form widens with zeros so it still round-trips
 //! through serializers. It is for logs and sigils, not for
 //! security-bearing addresses.
-//!
 
 use std::fmt;
 
@@ -35,25 +25,26 @@ pub struct Hid {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HidPrefix {
     Humd,
-    Wbee,
-    Fbee,
+    Bee,
 }
 
 impl HidPrefix {
     pub fn as_str(self) -> &'static str {
         match self {
             HidPrefix::Humd => "humd",
-            HidPrefix::Wbee => "wbee",
-            HidPrefix::Fbee => "fbee",
+            HidPrefix::Bee => "bee",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "humd" => Some(HidPrefix::Humd),
-            "wbee" => Some(HidPrefix::Wbee),
-            "fbee" => Some(HidPrefix::Fbee),
+            "bee" => Some(HidPrefix::Bee),
             _ => None,
         }
+    }
+
+    pub fn is_bee(self) -> bool {
+        self == HidPrefix::Bee
     }
 }
 

@@ -37,8 +37,11 @@ use thrum_core::THRUM_VERSION;
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
+mod audit;
 mod conn;
 mod registry;
+
+pub use audit::WireCheck;
 
 pub use registry::{ClientId, Reach};
 
@@ -63,6 +66,7 @@ pub struct Thrum {
 struct ThrumInner {
     clients: RwLock<registry::Registry>,
     sink: RwLock<Option<Arc<dyn ToneSink>>>,
+    audit: Arc<audit::Audit>,
 }
 
 impl Thrum {
@@ -71,12 +75,29 @@ impl Thrum {
             inner: Arc::new(ThrumInner {
                 clients: RwLock::new(registry::Registry::new()),
                 sink: RwLock::new(None),
+                audit: Arc::default(),
             }),
         }
     }
 
     pub fn set_sink(&self, sink: Arc<dyn ToneSink>) {
         *self.inner.sink.write() = Some(sink);
+    }
+
+    pub fn set_wire_check(&self, mode: WireCheck) {
+        self.inner.audit.set(mode);
+    }
+
+    pub fn wire_strays(&self) -> Vec<String> {
+        self.inner.audit.strays()
+    }
+
+    pub(crate) fn reach(&self, client_id: String) -> (registry::Reach, tokio::sync::mpsc::Receiver<Value>) {
+        registry::Reach::audited(client_id, self.inner.audit.clone())
+    }
+
+    pub(crate) fn heard(&self, client_id: &str, tone: &Value) {
+        self.inner.audit.heard(client_id, tone);
     }
 
     pub fn has_sink(&self) -> bool {
@@ -167,7 +188,7 @@ impl Thrum {
         client_id: impl Into<String>,
     ) -> tokio::sync::mpsc::Receiver<Value> {
         let cid: String = client_id.into();
-        let (reach, rx) = registry::Reach::new(cid);
+        let (reach, rx) = self.reach(cid);
         let mut reg = self.inner.clients.write();
         reg.insert(Arc::new(reach));
         rx
@@ -182,6 +203,7 @@ impl Thrum {
     }
 
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
+        self.heard(client_id, &tone);
         let sink = self.inner.sink.read().clone();
         if let Some(sink) = sink {
             sink.hear(client_id, tone).await;

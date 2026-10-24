@@ -5,10 +5,10 @@
 // a different bee name.
 
 import { createConnection, type Socket } from "node:net";
-import { beeHid } from "./identity";
+import { enter, signedAs } from "./identity";
 import pkg from "../package.json";
 
-export const THRUM_VERSION = "0.7.0";
+export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "anthropic-server";
 export const BEE_VERSION = pkg.version;
 
@@ -62,15 +62,11 @@ export class ThrumClient {
       this.sock = s;
       this.connected = true;
       this.reconnectAttempt = 0;
-      // hello — humd reads `bee`, `version`, `protoVersion`,
-      // `propensity`, `chi`, `source` to build a HiveManifest
-      // and gossip it on hum/hives/announce. See WIRE.md §Handshake.
       const hello: Tone = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: HIVE_NAME,
-        hid: beeHid(HIVE_NAME, "fbee"),
-        bee: ["forager"],
+        ...signedAs(enter(HIVE_NAME, "main")),
+        roles: ["forager"],
         hive: HIVE_NAME,
         provides: ["session"],
         version: BEE_VERSION,

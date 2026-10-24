@@ -17,17 +17,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ThrumClient } from "./thrum.ts";
 
-interface BeeConfig {
+interface HiveConfig {
   host?: string;
   port?: number;
   apiKey?: string;
 }
 
-function readConfigFile(): BeeConfig {
+function readConfigFile(): HiveConfig {
   const path = join(homedir(), ".config", "hum", "hives", "anthropic-server.json");
   try {
     const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as BeeConfig;
+    const parsed = JSON.parse(raw) as HiveConfig;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -494,9 +494,9 @@ async function start(): Promise<void> {
   // Persistent startup-level client announces the bee with its
   // actual bound address. Per-request handlers use their own short-
   // lived clients.
-  const registrar = new ThrumClient();
+  const bee = new ThrumClient();
   try {
-    await registrar.connect({ host: boundHost, port: boundPort, scheme: "http" });
+    await bee.connect({ host: boundHost, port: boundPort, scheme: "http" });
   } catch (e) {
     console.warn(`anthropic-server: thrum announce failed: ${(e as Error).message}`);
   }

@@ -3,12 +3,10 @@
 // framed tones, dispatch incoming tones to per-sid subscribers.
 
 import { createConnection, type Socket } from "node:net";
-import { beeHid } from "./identity";
+import { enter, signedAs } from "./identity";
 import pkg from "../package.json";
 
-// Thrum protocol version this bee targets. Bump when adopting a new
-// chi or envelope field that the daemon must understand.
-export const THRUM_VERSION = "0.7.0";
+export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "vercel-ai";
 export const BEE_VERSION = pkg.version;
 
@@ -44,14 +42,11 @@ export class ThrumClient {
         this.sock = s;
         this.connected = true;
         this.connecting = null;
-        // Announce ourselves before flushing pending. Daemon traces
-        // version mismatches but does not yet reject.
         s.write(JSON.stringify({
           chi: "hello",
           rid: `hello-${Date.now().toString(36)}`,
-          from: HIVE_NAME,
-          hid: beeHid(HIVE_NAME, "fbee"),
-          bee: ["forager"],
+          ...signedAs(enter(HIVE_NAME, "main")),
+          roles: ["forager"],
           hive: HIVE_NAME,
           provides: ["session"],
           version: BEE_VERSION,
@@ -98,8 +93,6 @@ export class ThrumClient {
   off(sid: string): void { this.byId.delete(sid); }
 }
 
-// Process-wide shared client. Vercel AI consumers instantiate many
-// HumModels per session, but one daemon connection is plenty.
 let shared: ThrumClient | null = null;
 export function getThrum(): ThrumClient {
   if (!shared) shared = new ThrumClient();

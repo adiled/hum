@@ -8,8 +8,7 @@
 //!
 //! Wire contract:
 //!
-//! - **Hello**: announce as `bee:["forager"]`, advertise `tools` (the
-//!   list of toolNames this forager owns) + `hive` (kind).
+//! - **Hello**: announce the hive it belongs to and the tools it owns.
 //! - **Tool-call in**: humd routes `chi:"tool-call"` tones whose
 //!   `toolName` matches one of the advertised tools. The forager
 //!   passes the tool args to its [`ToolDispatcher`] and emits
@@ -28,12 +27,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use hum_identity::HidPrefix;
+
 use hum_mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 
-use hum_identity::load_or_mint_bee_key;
+use hum_identity::enter_as;
 
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync + 'static {
@@ -69,36 +68,33 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Fbee)
-        .with_context(|| format!("load/mint fbee key for hive {}", advert.hive))?;
+    let bee_key = enter_as(&advert.hive, "main")
+        .with_context(|| format!("enter the main bee of {}", advert.hive))?;
 
     let defs = dispatcher.tool_defs();
-    let tool_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     let tools_value: Vec<Value> = defs.iter().map(|d| json!({
         "name": d.name,
         "description": d.description,
         "inputSchema": d.input_schema,
     })).collect();
 
-    let hello = json!({
+    let mut hello = json!({
         "chi": "hello",
-        "bee": ["forager"],
-        "hid": bee_key.hid.to_hex(),
-        "from": bee_key.hid.to_hex(),
+        "roles": ["forager"],
         "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
         "tools": tools_value,
-        "toolNames": tool_names,
         "provides": &advert.provides,
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
     });
+    bee_key.sign_hello(&mut hello);
     hum_thrum::send_json(&write_half, &hello).await?;
     info!(
         hive = %advert.hive,
         hid = %bee_key.hid.short(),
-        tools = ?tool_names,
+        tools = defs.len(),
         provides = ?advert.provides,
         "forager.hello.sent"
     );
@@ -112,13 +108,11 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
                 tokio::spawn(async move {
                     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
                     let call_id = tone.get("callId").and_then(Value::as_str).unwrap_or("").to_string();
-                    let tool_name = tone.get("toolName").and_then(Value::as_str).unwrap_or("").to_string();
                     let result = dispatcher.dispatch(tone).await;
                     let body = json!({
                         "chi": "tool-result",
                         "sid": sid,
                         "callId": call_id,
-                        "toolName": tool_name,
                         "output": result.output,
                         "isError": result.is_error,
                         "title": result.title,

@@ -6,12 +6,12 @@
 
 from __future__ import annotations
 
-THRUM_VERSION = "0.7.0"
+THRUM_VERSION = "0.8.0"
 
 class Chi:
     """Every wire-known chi value. Adding a new variant bumps the
     protocol minor; renaming/removing bumps major."""
-    # announce self — protoVersion, bee, version
+    # announce self: hive, roles, signed identity
     HELLO: str = "hello"
     # start a turn — content, system, tools
     PROMPT: str = "prompt"

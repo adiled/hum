@@ -1,3 +1,9 @@
+ARG HUM_SRC=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE bp7
-RUN ${HOME}/.local/bin/bp7-forager
+RUN ${HUM_SRC}/target/release/bp7-forager
 RESTART always

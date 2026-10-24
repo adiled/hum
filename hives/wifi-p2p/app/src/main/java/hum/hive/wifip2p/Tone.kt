@@ -1,3 +1,6 @@
+// Hand-kept mirror of thrum-core's chi registry and envelope; thrum-core
+// is the source of truth, and nothing generates this file.
+
 package hum.hive.wifip2p
 
 import kotlinx.serialization.Serializable
@@ -8,11 +11,7 @@ import kotlinx.serialization.json.put
 import java.security.MessageDigest
 import java.time.Instant
 
-// ── Chi registry ─────────────────────────────────────────────
-// Mirrors thrum-core/src/chi.rs (the Rust source of truth).
-// Wire values are kebab-case.
-
-const val THRUM_VERSION = "0.7.0"
+const val THRUM_VERSION = "0.8.0"
 const val HIVE_NAME = "wifi-p2p"
 
 object Chi {
@@ -42,8 +41,6 @@ object Chi {
     const val DRONE = "drone"
     const val DRONE_RETROFIT = "drone-retrofit"
 }
-
-// ── Tone envelope ────────────────────────────────────────────
 
 data class Tone(
     val chi: String,
@@ -98,8 +95,6 @@ data class Tone(
 
         private val envelopeKeys = setOf("chi", "rid", "sid", "from", "to", "sigil", "wane", "sentAt", "dusk", "ext")
         private fun parseJsonObject(json: String): Map<String, Any> {
-            // Minimal JSON parser for NDJSON tones — no dependency needed.
-            // In production, use kotlinx-serialization.
             val trimmed = json.trim().removeSurrounding("{", "}")
             val result = mutableMapOf<String, Any>()
             var depth = 0
@@ -198,8 +193,6 @@ private fun escapeJson(s: String): String = s
     .replace("\n", "\\n")
     .replace("\r", "\\r")
     .replace("\t", "\\t")
-
-// ── Helpers (mirror thrum-core) ───────────────────────────────
 
 fun sigil(sid: String, nest: String): String {
     val digest = MessageDigest.getInstance("SHA-256")

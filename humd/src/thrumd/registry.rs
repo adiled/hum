@@ -7,6 +7,7 @@
 //! be a wire break.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -19,17 +20,26 @@ const OUTBOUND_CAPACITY: usize = 1024;
 pub struct Reach {
     pub client_id: ClientId,
     tx: mpsc::Sender<Value>,
+    audit: Arc<super::audit::Audit>,
     sigils: Mutex<HashSet<String>>,
     chis: Mutex<HashSet<String>>,
 }
 
 impl Reach {
     pub fn new(client_id: ClientId) -> (Self, mpsc::Receiver<Value>) {
+        Self::audited(client_id, Arc::default())
+    }
+
+    pub fn audited(
+        client_id: ClientId,
+        audit: Arc<super::audit::Audit>,
+    ) -> (Self, mpsc::Receiver<Value>) {
         let (tx, rx) = mpsc::channel(OUTBOUND_CAPACITY);
         (
             Self {
                 client_id,
                 tx,
+                audit,
                 sigils: Mutex::new(HashSet::new()),
                 chis: Mutex::new(HashSet::new()),
             },
@@ -38,6 +48,7 @@ impl Reach {
     }
 
     pub fn send(&self, tone: Value) -> Result<(), mpsc::error::TrySendError<Value>> {
+        self.audit.sent(&self.client_id, &tone);
         self.tx.try_send(tone)
     }
 

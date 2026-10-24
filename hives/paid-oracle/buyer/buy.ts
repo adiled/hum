@@ -22,6 +22,8 @@
 // Keys at $XDG_CONFIG_HOME/hum/paid-oracle/keys.json.
 
 import { connect } from "node:net";
+import { execFileSync } from "node:child_process";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -35,6 +37,24 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
+
+function signedAs(): Record<string, string | number> {
+  const id = execFileSync("hum", ["bee", "enter", "--hive", "paid-oracle", "--as", "buyer"], { encoding: "utf8" }).trim();
+  if (!/^bee_[0-9a-f]{64}$/.test(id)) throw new Error(`hum bee enter answered ${JSON.stringify(id)}, not a bee id`);
+  const stateDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  const seed = readFileSync(join(stateDir, "hum", "bees", `${id}.key`));
+  const priv = createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const pub = Buffer.from((createPublicKey(priv).export({ format: "jwk" }) as { x: string }).x, "base64url");
+  const hid = "bee_" + createHash("sha256").update(pub).digest("hex");
+  if (hid !== id) throw new Error(`the key filed as ${id} is not that bee's key`);
+  const signedAt = Date.now();
+  const signature = sign(null, Buffer.from(`hum-bee-socket-v1:${hid}:${signedAt}`), priv).toString("hex");
+  return { hid, from: hid, pubkey: pub.toString("hex"), signedAt, signature };
+}
 
 const baseDir = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const keysPath = join(baseDir, "hum", "paid-oracle", "keys.json");
@@ -59,9 +79,6 @@ interface X402Terms {
 
 function log(...m: unknown[]): void { console.log("[buy]", ...m); }
 
-// One thrum-socket session: hello → tool-call (quote) → consume
-// frames until either chi:"error" (402, expected first time) or
-// chi:"tool-result". Resolves with the parsed body.
 function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body: any } | { kind: "result"; body: any }> {
   return new Promise((resolve, reject) => {
     const sock = connect(SOCK_PATH);
@@ -72,11 +89,11 @@ function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body
       const hello = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: "paid-oracle-buyer",
-        bee: ["asker"],
-        hive: "paid-oracle-buyer",
+        ...signedAs(),
+        roles: ["asker"],
+        hive: "paid-oracle",
         version: "0.0.1",
-        protoVersion: "0.7.0",
+        protoVersion: "0.8.0",
         chis: ["hello", "tool-call", "tool-result", "error"],
       };
       sock.write(JSON.stringify(hello) + "\n");
@@ -117,10 +134,6 @@ function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body
   });
 }
 
-// ERC-20 transfer(address,uint256). Standard 4-byte selector + 32-byte
-// recipient + 32-byte amount. paid-oracle's verifier also expects the
-// nonce ASCII bytes appended after the standard calldata so the
-// payment is bound to a specific challenge.
 function buildTransferCalldata(recipient: `0x${string}`, amountAtomic: bigint, nonce: string): Hex {
   const base = encodeFunctionData({
     abi: [{
@@ -145,7 +158,6 @@ async function main(): Promise<void> {
   log(`pair=${PAIR}`);
   log(`socket=${SOCK_PATH}`);
 
-  // Step 1: ask for the quote without payment. Expect 402.
   log("step 1: thrum tool-call quote (no payment) →");
   const first = await thrumCall({ args: { pair: PAIR } });
   if (first.kind !== "error" || first.body.code !== 402) {
@@ -161,8 +173,6 @@ async function main(): Promise<void> {
   log(`    price     = ${priceAtomic.toString()} atomic = $${Number(priceAtomic) / 10 ** terms.decimals}`);
   log(`    nonce     = ${terms.nonce}`);
 
-  // Step 2: send USDC.transfer + nonce. Hardcoded to Base Sepolia
-  // for now; trivial to extend by switching on terms.chain.
   if (terms.chain !== "base-sepolia") {
     log(`buyer.ts only knows base-sepolia today; got ${terms.chain}`);
     process.exit(3);
@@ -177,7 +187,6 @@ async function main(): Promise<void> {
   const publicClient = createPublicClient({ chain: baseSepolia, transport });
   const walletClient = createWalletClient({ chain: baseSepolia, transport, account });
 
-  // Pre-flight balances so we fail loudly with a faucet hint.
   const usdcBal = await publicClient.readContract({
     address: terms.asset,
     abi: [{ name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ name: "b", type: "uint256" }] }],
@@ -211,7 +220,6 @@ async function main(): Promise<void> {
   log(`  block=${receipt.blockNumber} status=${receipt.status}`);
   if (receipt.status !== "success") { log("tx failed on-chain"); process.exit(6); }
 
-  // Step 3: resubmit the quote with paymentProof.
   log("step 3: resubmitting with paymentProof →");
   const second = await thrumCall({
     args: { pair: PAIR },

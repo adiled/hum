@@ -70,9 +70,9 @@ pub use kad::{
     mint_query_id, parse_find_node, parse_find_node_resp,
 };
 
-pub mod hives;
+pub mod bees;
 pub mod uri;
-pub use hives::{ANNOUNCE_TOPIC, BindAddr, HiveAnnounce, HiveManifest, Propensity, ToolEntry};
+pub use bees::{ANNOUNCE_TOPIC, BindAddr, BeeAnnounce, BeeManifest, Propensity, ToolEntry};
 pub use uri::{AliasResolver, HostRef, HumUri, UriParseError};
 
 pub mod headroom;
@@ -443,35 +443,35 @@ impl Ensemble {
         self.gossip.subscribe(topic)
     }
 
-    pub async fn hive_advertise(&self, manifest: hives::HiveManifest) {
-        let env = hives::HiveAnnounce::Advertise {
+    pub async fn bee_advertise(&self, manifest: bees::BeeManifest) {
+        let env = bees::BeeAnnounce::Advertise {
             humd_id: self.me.to_hex(),
             manifest: Box::new(manifest),
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Ok(payload) => self.publish(bees::ANNOUNCE_TOPIC, payload).await,
             Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "advertise serialize"),
         }
     }
 
-    pub async fn hive_retract(&self, name: &str) {
-        let env = hives::HiveAnnounce::Retract {
+    pub async fn bee_retract(&self, hid: Hid) {
+        let env = bees::BeeAnnounce::Retract {
             humd_id: self.me.to_hex(),
-            name: name.to_string(),
+            hid,
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Ok(payload) => self.publish(bees::ANNOUNCE_TOPIC, payload).await,
             Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "retract serialize"),
         }
     }
 
-    pub fn hive_announcements(&self) -> mpsc::Receiver<hives::HiveAnnounce> {
-        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
+    pub fn bee_announcements(&self) -> mpsc::Receiver<bees::BeeAnnounce> {
+        let mut raw = self.subscribe_topic(bees::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
-                    Ok(v) => match serde_json::from_value::<hives::HiveAnnounce>(v.clone()) {
+                    Ok(v) => match serde_json::from_value::<bees::BeeAnnounce>(v.clone()) {
                         Ok(env) => {
                             if tx.send(env).await.is_err() {
                                 break;
@@ -492,15 +492,15 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover_all(&self) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
-        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
+    pub fn bee_discover_all(&self) -> mpsc::Receiver<(Hid, bees::BeeManifest)> {
+        let mut raw = self.subscribe_topic(bees::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
                     Ok(v) => {
-                        let parsed: Result<hives::HiveAnnounce, _> = serde_json::from_value(v);
-                        if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed
+                        let parsed: Result<bees::BeeAnnounce, _> = serde_json::from_value(v);
+                        if let Ok(bees::BeeAnnounce::Advertise { humd_id, manifest }) = parsed
                             && let Ok(id) = Hid::from_hex(&humd_id)
                             && tx.send((id, *manifest)).await.is_err()
                         {
@@ -515,16 +515,16 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover(
+    pub fn bee_discover(
         &self,
-        name: impl Into<String>,
-    ) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
-        let needle = name.into();
-        let mut raw = self.hive_discover_all();
+        hive: impl Into<String>,
+    ) -> mpsc::Receiver<(Hid, bees::BeeManifest)> {
+        let needle = hive.into();
+        let mut raw = self.bee_discover_all();
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             while let Some((id, manifest)) = raw.recv().await {
-                if manifest.name != needle {
+                if manifest.hive != needle {
                     continue;
                 }
                 if tx.send((id, manifest)).await.is_err() {
@@ -895,14 +895,14 @@ fn announce_origin_matches_payload(tone: &Tone) -> bool {
     let Some(from) = tone.get("from").and_then(|v| v.as_str()) else {
         return true;
     };
-    let Ok(payload) = serde_json::from_value::<hives::HiveAnnounce>(
+    let Ok(payload) = serde_json::from_value::<bees::BeeAnnounce>(
         tone.get("payload").cloned().unwrap_or(serde_json::Value::Null),
     ) else {
         return true;
     };
     let claimed = match payload {
-        hives::HiveAnnounce::Advertise { humd_id, .. } => humd_id,
-        hives::HiveAnnounce::Retract { humd_id, .. } => humd_id,
+        bees::BeeAnnounce::Advertise { humd_id, .. } => humd_id,
+        bees::BeeAnnounce::Retract { humd_id, .. } => humd_id,
     };
     claimed == from
 }
@@ -921,7 +921,7 @@ async fn handle_gossip(
     if !gossip.note_seen(parsed.msg_id) {
         return true;
     }
-    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
+    if parsed.topic == bees::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
         tracing::warn!(
             target: "ensemble.bees",
             topic = parsed.topic,
@@ -967,10 +967,10 @@ mod tests {
     }
 
     fn worker_announce(claimed: &str, model: &str) -> serde_json::Value {
-        let mut manifest = hives::HiveManifest::new("worker-bee", "0.1.0", "0.7.0");
-        manifest.bee = vec!["worker".to_string()];
+        let mut manifest = bees::BeeManifest::new("worker-bee", "0.1.0", "0.7.0");
+        manifest.roles = vec!["worker".to_string()];
         manifest.models = vec![model.to_string()];
-        serde_json::to_value(hives::HiveAnnounce::Advertise {
+        serde_json::to_value(bees::BeeAnnounce::Advertise {
             humd_id: claimed.to_string(),
             manifest: Box::new(manifest),
         })
@@ -981,7 +981,7 @@ mod tests {
         json!({
             "chi": "gossip-publish",
             "rid": "g1",
-            "topic": hives::ANNOUNCE_TOPIC,
+            "topic": bees::ANNOUNCE_TOPIC,
             "from": origin,
             "msg_id": "m1",
             "payload": payload,
@@ -1308,10 +1308,10 @@ mod tests {
     }
 
     #[test]
-    fn hid_wbee_prefix_parses() {
-        let id = Hid::random(HidPrefix::Wbee);
+    fn hid_bee_prefix_parses() {
+        let id = Hid::random(HidPrefix::Bee);
         let hex = id.to_hex();
-        assert!(hex.starts_with("wbee_"));
+        assert!(hex.starts_with("bee_"));
         let parsed: Hid = serde_json::from_str(&format!("\"{}\"", hex)).unwrap();
         assert_eq!(id, parsed);
     }

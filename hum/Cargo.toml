@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 hum-paths = { path = "../hum-paths" }
+hum-identity = { path = "../hum-identity" }
 humd = { path = "../humd" }
 thehum = { path = "../thehum" }
 the-orch = "0.2"

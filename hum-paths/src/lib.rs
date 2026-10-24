@@ -80,11 +80,11 @@ pub const REVOKED_BEES_BASENAME: &str = "revoked.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
-pub const ORCH_NAMESPACE: &str = "hum";
 pub const ROUTING_JSON_BASENAME: &str = "routing.json";
 pub const HIVES_SUBDIR: &str = "hives";
 pub const RECIPES_SUBDIR: &str = "recipes";
-pub const HIVE_INSTALL_SCRIPT: &str = "install";
+pub const HIVE_INSTALL_UNIT: &str = "hive-install";
+pub const RECIPE_INSTALL_SCRIPT: &str = "install";
 
 pub fn claude_session_dir(cwd_hash: &str) -> PathBuf {
     claude_data_dir().join("projects").join(cwd_hash)
@@ -133,8 +133,25 @@ pub fn bees_dir() -> PathBuf {
     state_dir().join("bees")
 }
 
-pub fn bee_key(kind: &str) -> PathBuf {
-    bees_dir().join(format!("{kind}.key"))
+pub fn bee_key(id: &str) -> PathBuf {
+    bees_dir().join(format!("{id}.key"))
+}
+
+pub fn entered_dir() -> PathBuf {
+    state_dir().join("bees.d")
+}
+
+pub fn bee_entry(id: &str) -> PathBuf {
+    entered_dir().join(format!("{id}.json"))
+}
+
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub fn bees_snapshot() -> PathBuf {
@@ -312,32 +329,20 @@ pub fn foreign_hive_cache(org: &str, repo: &str, branch: &str) -> PathBuf {
         .join(format!("{org}-{repo}-{branch}"))
 }
 
-pub fn orch_d_dir() -> PathBuf {
-    config_dir().join("orch.d")
+pub fn hives_d_dir() -> PathBuf {
+    config_dir().join("hives.d")
 }
 
-pub fn orchfile() -> PathBuf {
-    config_dir().join(ORCHFILE_BASENAME)
+pub fn hive_installation(hive: &str) -> PathBuf {
+    hives_d_dir().join(format!("{hive}.orch"))
 }
 
-pub fn orch_namespace() -> &'static str {
-    ORCH_NAMESPACE
+pub fn hive_installed(hive: &str) -> bool {
+    is_plain_name(hive) && hive_installation(hive).is_file()
 }
 
-pub fn orch_state_dir() -> PathBuf {
-    state_dir().join("orch")
-}
-
-pub fn orch_project_dir() -> PathBuf {
-    config_dir()
-}
-
-pub fn orchrc_path() -> PathBuf {
-    config_dir().join(".orchrc")
-}
-
-pub fn bee_config(kind: &str) -> PathBuf {
-    config_dir().join("bees").join(format!("{kind}.json"))
+pub fn hive_config(hive: &str) -> PathBuf {
+    config_dir().join("hives").join(format!("{hive}.json"))
 }
 
 pub enum DaemonLogs {
@@ -395,34 +400,46 @@ mod revocation_tests {
     fn an_absent_file_revokes_nothing() {
         let tmp = tempfile::TempDir::new().unwrap();
         let list = Revocations::read_from(&tmp.path().join("nope.json"));
-        assert!(!list.contains("wbee_abc"));
+        assert!(!list.contains("bee_abc"));
     }
 
     #[test]
     fn a_listed_hid_is_contained() {
         let mut list = Revocations::default();
-        assert!(list.revoke("wbee_dead"));
-        assert!(list.contains("wbee_dead"));
-        assert!(!list.contains("wbee_other"));
+        assert!(list.revoke("bee_dead"));
+        assert!(list.contains("bee_dead"));
+        assert!(!list.contains("bee_other"));
     }
 
     #[test]
     fn revoking_twice_is_not_a_duplicate() {
         let mut list = Revocations::default();
-        assert!(list.revoke("wbee_dead"));
-        assert!(!list.revoke("wbee_dead"), "already listed");
+        assert!(list.revoke("bee_dead"));
+        assert!(!list.revoke("bee_dead"), "already listed");
         assert_eq!(list.revoked.len(), 1);
     }
 
     #[test]
     fn unrevoking_removes_only_that_hid() {
         let mut list = Revocations::default();
-        list.revoke("wbee_dead");
-        list.revoke("wbee_gone");
-        assert!(list.unrevoke("wbee_dead"));
-        assert!(!list.contains("wbee_dead"));
-        assert!(list.contains("wbee_gone"));
-        assert!(!list.unrevoke("wbee_dead"), "nothing left to remove");
+        list.revoke("bee_dead");
+        list.revoke("bee_gone");
+        assert!(list.unrevoke("bee_dead"));
+        assert!(!list.contains("bee_dead"));
+        assert!(list.contains("bee_gone"));
+        assert!(!list.unrevoke("bee_dead"), "nothing left to remove");
+    }
+
+    #[test]
+    fn a_hive_installation_lives_under_hives_d() {
+        assert!(hive_installation("humfs").ends_with("hives.d/humfs.orch"));
+        assert!(is_plain_name("openai-server"));
+        assert!(is_plain_name("claude_cli.2"));
+        assert!(!is_plain_name(""));
+        assert!(!is_plain_name("../x"));
+        assert!(!is_plain_name(".hidden"));
+        assert!(!is_plain_name("a b"));
+        assert!(!hive_installed("../../etc/passwd"));
     }
 
     #[test]
@@ -430,9 +447,9 @@ mod revocation_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("revoked.json");
         let mut list = Revocations::default();
-        list.revoke("wbee_dead");
+        list.revoke("bee_dead");
         list.write_to(&path).unwrap();
-        assert!(Revocations::read_from(&path).contains("wbee_dead"));
+        assert!(Revocations::read_from(&path).contains("bee_dead"));
     }
 
     #[test]
@@ -440,6 +457,6 @@ mod revocation_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("revoked.json");
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(!Revocations::read_from(&path).contains("wbee_abc"));
+        assert!(!Revocations::read_from(&path).contains("bee_abc"));
     }
 }

@@ -10,11 +10,18 @@ import type { Chi } from "./chi.ts";
 
 export interface HelloBody {
   protoVersion: string;
-  bee: string;
-  version: string;
-  hid?: string;
-  tool_names?: string[];
+  hive: string;
+  roles?: string[];
+  version?: string;
+  hid: string;
+  pubkey: string;
+  signedAt: number;
+  signature: string;
+  models?: string[];
+  tools?: unknown[];
   provides?: string[];
+  chis?: string[];
+  propensity?: unknown;
   source?: string;
 }
 

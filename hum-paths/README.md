@@ -21,7 +21,7 @@ The hum process tree is anchored at four XDG roots:
 | function | resolves to | what lives here |
 |----------|-------------|-----------------|
 | `state_dir()` | `$XDG_STATE_HOME/hum` | identity key, thehum log, runtime info, bees snapshot |
-| `config_dir()` | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `orch.d/`, `hum.orch` |
+| `config_dir()` | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `hives.d/` |
 | `data_dir()` | `$XDG_DATA_HOME/hum` | installed source clone, recipes |
 | `runtime_dir()` | `$XDG_RUNTIME_DIR/hum` | http socket, comb.json |
 
@@ -36,7 +36,9 @@ hum_paths::comb()            // runtime_dir/comb.json
 hum_paths::thehum_dir()      // state_dir/thehum/
 hum_paths::runtime_info()    // state_dir/runtime-info.json
 hum_paths::bees_snapshot()   // state_dir/bees.json
-hum_paths::bee_key(kind)     // state_dir/bees/<kind>.key
+hum_paths::bee_key(id)       // state_dir/bees/<id>.key
+hum_paths::bee_entry(id)     // state_dir/bees.d/<id>.json
+hum_paths::hive_installation(hive) // config_dir/hives.d/<hive>.orch
 hum_paths::hum_bin(kind)     // local_bin/<kind>
 hum_paths::humd_bin()        // local_bin/humd
 ```

@@ -33,8 +33,6 @@ use tracing::info;
 const HIVE_NAME: &str = "ollama-server";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Shape of `~/.config/hum/hives/ollama-server.json`. All fields
-/// optional — precedence is env > config file > built-in defaults.
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     #[serde(default)]
@@ -46,7 +44,7 @@ struct FileConfig {
 }
 
 fn config_file_path() -> PathBuf {
-    hum_paths::bee_config("ollama-server")
+    hum_paths::hive_config(HIVE_NAME)
 }
 
 fn read_file_config() -> FileConfig {
@@ -63,8 +61,6 @@ struct Config {
     sock_path: String,
     listen: String,
     models: Vec<String>,
-    /// Resolved bind address — filled in after the TcpListener actually
-    /// binds, so that requested port 0 reports the kernel-assigned port.
     bind: Option<SocketAddr>,
 }
 
@@ -189,8 +185,6 @@ fn tools_to_thrum(tools: Option<Vec<OllamaTool>>) -> Option<Vec<Value>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// Connect to humd, send hello, send the prompt, return a receiver of
-/// inbound tones filtered to this sid.
 async fn open_prompt(
     cfg: &Config,
     sid: &str,
@@ -208,7 +202,8 @@ async fn open_prompt(
     hello.insert("chi".into(), json!(Chi::Hello));
     hello.insert("rid".into(), Value::String(hum_identity::HumId::mint().to_string()));
     hello.insert("from".into(), Value::String(HIVE_NAME.into()));
-    hello.insert("bee".into(), Value::String(HIVE_NAME.into()));
+    hello.insert("hive".into(), Value::String(HIVE_NAME.into()));
+    hello.insert("roles".into(), json!(["forager"]));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
     hello.insert("protoVersion".into(), Value::String(THRUM_VERSION.into()));
     hello.insert(
@@ -224,7 +219,6 @@ async fn open_prompt(
         Value::String("https://github.com/adiled/hum/tree/main/hives/ollama-server".into()),
     );
     if let Some(addr) = cfg.bind {
-        // Raw JSON matching `ensemble::BindAddr` shape — no ensemble dep.
         hello.insert(
             "bind".into(),
             json!({
@@ -234,7 +228,9 @@ async fn open_prompt(
             }),
         );
     }
-    write_line(&mut wr, &Value::Object(hello)).await?;
+    let mut hello = Value::Object(hello);
+    hum_identity::enter_as(HIVE_NAME, "main")?.sign_hello(&mut hello);
+    write_line(&mut wr, &hello).await?;
 
     let mut prompt = serde_json::Map::new();
     prompt.insert("chi".into(), json!(Chi::Prompt));
@@ -279,8 +275,6 @@ async fn write_line(wr: &mut tokio::net::unix::OwnedWriteHalf, tone: &Value) -> 
     wr.write_all(buf.as_bytes()).await?;
     Ok(())
 }
-
-// ── routes ────────────────────────────────────────────────────────────────
 
 async fn chat(
     State(cfg): State<Arc<Config>>,

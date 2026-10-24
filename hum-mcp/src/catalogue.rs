@@ -61,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_capability_strips_fs_named_nestlers() {
+    fn fs_capability_strips_the_askers_own_fs_tools() {
         let merged = merge(
             vec![def("humfs_read"), def("humfs_do_code")],
             vec![def("Read"), def("Write"), def("MyTodo")],

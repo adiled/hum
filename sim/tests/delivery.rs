@@ -137,7 +137,7 @@ async fn a_retransmitted_mid_is_delivered_once() {
     let (sim, a, b) = pair().await;
     let mut rx = sim.humd_peer_sub(b).expect("subscribe");
     let tone = json!({
-        "chi": "chunk", "rid": "r-1", "mid": "m-1", "to": b.to_hex(), "seq": 1
+        "chi": "chunk", "rid": "r-1", "mid": "m-1", "to": b.to_hex(), "blockIdx": 1
     });
     sim.nestler_send_ordered(a, tone.clone()).await.expect("send");
     sim.nestler_send_ordered(a, tone).await.expect("resend");

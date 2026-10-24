@@ -45,7 +45,8 @@ func main() {
         "chi":          string(thrum.ChiHello),
         "rid":          thrum.Rid(),
         "from":         "my-go-bee",
-        "bee":     "my-go-bee",
+        "hive":         "my-go-hive",
+        "roles":        []string{"worker"},
         "version":      "0.1.0",
         "protoVersion": thrum.ThrumVersion,
         "propensity": map[string]any{
@@ -82,7 +83,7 @@ func main() {
 |---|---|
 | `Chi`, `ChiHello`, `ChiPrompt`, … | typed wire values |
 | `PulseKind` | `pulse.kind` enum |
-| `ThrumVersion` | "0.7.0" today |
+| `ThrumVersion` | "0.8.0" today |
 | `AllChi`, `IsValidChi(s)` | membership checks |
 | `Sigil(sid, nest)` | 12-char content hash |
 | `Rid()` | monotonic correlation id |

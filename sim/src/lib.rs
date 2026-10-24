@@ -19,6 +19,8 @@ const CAPACITY_UNLIMITED: usize = usize::MAX;
 
 const SIM_NEST_KIND: &str = "claude-repl";
 
+pub const SIM_HIVES: [&str; 3] = ["claude-cli", "claude-repl", "humfs"];
+
 fn sim_caps(humd: &SimHumd) -> PeerCapabilities {
     let cap = humd.capacity.load(Ordering::SeqCst);
     PeerCapabilities {
@@ -49,12 +51,47 @@ pub struct SimHumd {
     capacity: AtomicUsize,
     pub waneman: Arc<WaneTracker>,
     pub key: Option<Arc<HumdKey>>,
+    pub hives: humd::InstalledHives,
+    pub bees: humd::EnteredBees,
+}
+
+impl SimHumd {
+    pub fn enter(&self, hive: &str) -> hum_identity::BeeKey {
+        let key = hum_identity::BeeKey::generate();
+        self.bees.enter(hive, &key);
+        key
+    }
+
+    pub fn signed_hello(&self, mut hello: Value) -> Value {
+        let hive = hello.get("hive").and_then(Value::as_str).unwrap_or("").to_string();
+        self.enter(&hive).sign_hello(&mut hello);
+        hello
+    }
 }
 
 pub struct Sim {
     humds: RwLock<HashMap<Hid, Arc<SimHumd>>>,
     pending_capacities: RwLock<HashMap<Hid, usize>>,
     links: RwLock<HashMap<(Hid, Hid), Link>>,
+}
+
+impl Drop for Sim {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let strays: Vec<String> = self
+            .humds
+            .read()
+            .values()
+            .flat_map(|h| h.thrum.wire_strays())
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "tones carried keys the thrum does not declare:\n  {}",
+            strays.join("\n  ")
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -121,6 +158,7 @@ impl Sim {
         revoked: &[&str],
     ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -147,6 +185,8 @@ impl Sim {
         let capacity = local_capacity(initial_capacity);
 
         let waneman = Arc::new(WaneTracker::new());
+        let hives = humd::InstalledHives::in_memory(SIM_HIVES);
+        let bees = humd::EnteredBees::in_memory();
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
@@ -167,6 +207,8 @@ impl Sim {
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
             trust_remote_workers,
+            hives: hives.clone(),
+            bees: bees.clone(),
         };
 
         let shutdown_fut = async move {
@@ -186,6 +228,8 @@ impl Sim {
             capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: None,
+            hives,
+            bees,
         });
 
         self.humds.write().insert(id, sim_humd.clone());
@@ -249,6 +293,7 @@ impl Sim {
     pub async fn spawn_humd_with_identity(&self, key: HumdKey) -> Arc<SimHumd> {
         let id = key.hid();
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, true));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -264,6 +309,8 @@ impl Sim {
         let capacity = local_capacity(initial_capacity);
 
         let waneman = Arc::new(WaneTracker::new());
+        let hives = humd::InstalledHives::in_memory(SIM_HIVES);
+        let bees = humd::EnteredBees::in_memory();
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
@@ -284,6 +331,8 @@ impl Sim {
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
             trust_remote_workers: true,
+            hives: hives.clone(),
+            bees: bees.clone(),
         };
 
         let shutdown_fut = async move {
@@ -303,6 +352,8 @@ impl Sim {
             capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: Some(Arc::new(key)),
+            hives,
+            bees,
         });
 
         self.humds.write().insert(id, sim_humd.clone());
@@ -571,15 +622,15 @@ impl Sim {
         }
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        let hello = serde_json::json!({
+        let hello = h.signed_hello(serde_json::json!({
             "chi": "hello",
-            "bee": ["worker"],
+            "roles": ["worker"],
             "hive": "claude-repl",
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "models": models,
             "chis": ["hello", "prompt", "chunk", "finish"],
-        });
+        }));
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
@@ -602,7 +653,7 @@ impl Sim {
                     continue;
                 }
                 let frames = vec![
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
@@ -729,6 +780,7 @@ impl Sim {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        h.hives.install(hive);
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         let tools: Vec<Value> = tool_names
@@ -741,15 +793,15 @@ impl Sim {
                 })
             })
             .collect();
-        let hello = serde_json::json!({
+        let hello = h.signed_hello(serde_json::json!({
             "chi": "hello",
-            "bee": ["forager"],
+            "roles": ["forager"],
             "hive": hive,
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "tools": tools,
             "chis": ["hello", "tool-call", "tool-result", "cancel"],
-        });
+        }));
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
@@ -786,7 +838,6 @@ impl Sim {
                     "chi": "tool-result",
                     "sid": sid,
                     "callId": call_id,
-                    "toolName": tool_name,
                     "result": result,
                 });
                 thrum.inject_tone(&cid_for_pump, reply).await;
@@ -953,7 +1004,7 @@ impl Sim {
                 "rid": format!("{tag}-{i}"),
                 "to": to.to_hex(),
                 "from": from.to_hex(),
-                "mark": tag,
+                "note": tag,
             });
             self.nestler_send_ordered(from, tone).await?;
         }

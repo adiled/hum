@@ -1,4 +1,4 @@
-//! Single humd serves a prompt end-to-end via MockWorkerBee.
+//! Single humd serves a prompt end-to-end via MockWorker.
 //!
 //! Pure single-humd path. No ensemble routing; if this fails, the in-
 //! process humd boot or the worker→listener bridge is broken.

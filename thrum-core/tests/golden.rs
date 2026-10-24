@@ -51,12 +51,19 @@ fn golden() -> Vec<Value> {
     push!(
         Chi::Hello,
         thrum_core::HelloBody {
-            proto_version: "0.7.0".into(),
-            bee: "claude-cli".into(),
-            version: "0.32.0".into(),
-            hid: Some("h-9".into()),
-            tool_names: Some(vec!["Read".into(), "Bash".into()]),
+            proto_version: "0.8.0".into(),
+            hive: "claude-cli".into(),
+            roles: Some(vec!["worker".into()]),
+            version: Some("0.32.0".into()),
+            hid: "bee_09".into(),
+            pubkey: "0a".into(),
+            signed_at: 1700000000000,
+            signature: "0b".into(),
+            models: None,
+            tools: None,
             provides: Some(vec!["env".into(), "token".into()]),
+            chis: None,
+            propensity: None,
             source: Some("cli".into()),
         }
     );
@@ -244,8 +251,9 @@ fn check_round_trip(tone: &Tone) {
         }
         Chi::Hello => {
             let v: HelloBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
-            assert_eq!(v.proto_version, "0.7.0");
-            assert_eq!(v.bee, "claude-cli");
+            assert_eq!(v.proto_version, "0.8.0");
+            assert_eq!(v.hive, "claude-cli");
+            assert_eq!(v.roles.as_deref(), Some(&["worker".to_string()][..]));
         }
         Chi::ToolResult => {
             let v: ToolResultBody = serde_json::from_value(Value::Object(body.clone())).unwrap();

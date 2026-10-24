@@ -14,7 +14,7 @@ use sim::{Sim, SimHumd};
 fn base_hello(chis: Option<&[&str]>) -> Value {
     let mut hello = serde_json::json!({
         "chi": "hello",
-        "bee": ["worker"],
+        "roles": ["worker"],
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -30,7 +30,7 @@ fn peer_reply(chi: &str, sid: &str) -> Value {
         "chi": chi,
         "from": "ensemble",
         "sid": sid,
-        "text": "hello from the other side",
+        "delta": "hello from the other side",
     })
 }
 
@@ -64,7 +64,7 @@ async fn a_scoped_client_does_not_receive_an_undeclared_chi() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
-        .inject_tone(&cid, base_hello(Some(&["prompt"])))
+        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt"]))))
         .await;
     humd.thrum
         .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
@@ -86,7 +86,7 @@ async fn a_scoped_client_receives_a_declared_chi() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
-        .inject_tone(&cid, base_hello(Some(&["prompt", "chunk"])))
+        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt", "chunk"]))))
         .await;
 
     humd.thrum
@@ -108,7 +108,7 @@ async fn a_client_that_declared_nothing_still_receives_everything() {
 
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
-    humd.thrum.inject_tone(&cid, base_hello(None)).await;
+    humd.thrum.inject_tone(&cid, humd.signed_hello(base_hello(None))).await;
 
     humd.thrum
         .inject_tone("ensemble", peer_reply("chunk", "sess-1"))

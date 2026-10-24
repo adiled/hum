@@ -424,8 +424,8 @@ pub fn parse_socket_identity(tone: &Tone) -> SocketIdentity {
     let Ok(claimed) = Hid::from_hex(hid_hex) else {
         return SocketIdentity::Invalid("hid unparseable");
     };
-    if !matches!(claimed.prefix, HidPrefix::Wbee | HidPrefix::Fbee) {
-        return SocketIdentity::Invalid("hid prefix is not a bee role");
+    if !claimed.prefix.is_bee() {
+        return SocketIdentity::Invalid("hid prefix is not a bee");
     }
 
     let Ok(pubkey_bytes) = hex::decode(pubkey_hex) else {
@@ -579,7 +579,7 @@ mod tests {
 
     fn signed_socket_hello() -> (Hid, SigningKey, Tone) {
         let signing = SigningKey::generate(&mut rand::thread_rng());
-        let hid = Hid::from_pubkey(HidPrefix::Wbee, &signing.verifying_key().to_bytes());
+        let hid = Hid::from_pubkey(HidPrefix::Bee, &signing.verifying_key().to_bytes());
         let signed_at = now_ms();
         let msg = hum_identity::socket_hello_message(&hid, signed_at);
         let sig = signing.sign(&msg);
@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn claiming_another_bees_hid_fails_verification() {
         let (_hid, _signing, mut tone) = signed_socket_hello();
-        let impostor = Hid::random(HidPrefix::Wbee);
+        let impostor = Hid::random(HidPrefix::Bee);
         tone["hid"] = serde_json::json!(impostor.to_hex());
         assert!(
             matches!(parse_socket_identity(&tone), SocketIdentity::Invalid(_)),
@@ -635,7 +635,7 @@ mod tests {
     fn a_tampered_hid_with_a_rehashed_pubkey_is_rejected() {
         let (_hid, _signing, mut tone) = signed_socket_hello();
         let mallory = SigningKey::generate(&mut rand::thread_rng());
-        let mallory_hid = Hid::from_pubkey(HidPrefix::Wbee, &mallory.verifying_key().to_bytes());
+        let mallory_hid = Hid::from_pubkey(HidPrefix::Bee, &mallory.verifying_key().to_bytes());
         tone["hid"] = serde_json::json!(mallory_hid.to_hex());
         tone["pubkey"] = serde_json::json!(hex::encode(mallory.verifying_key().to_bytes()));
         assert!(
@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn a_signature_over_a_different_domain_is_rejected() {
         let signing = SigningKey::generate(&mut rand::thread_rng());
-        let hid = Hid::from_pubkey(HidPrefix::Wbee, &signing.verifying_key().to_bytes());
+        let hid = Hid::from_pubkey(HidPrefix::Bee, &signing.verifying_key().to_bytes());
         let signed_at = now_ms();
         let peer_msg = format!("{}:{}:{}", HANDSHAKE_DOMAIN, hid.to_hex(), signed_at);
         let sig = signing.sign(peer_msg.as_bytes());
@@ -696,7 +696,7 @@ mod tests {
     fn a_signature_over_someone_elses_hid_is_rejected() {
         let mallory = SigningKey::generate(&mut rand::thread_rng());
         let victim = SigningKey::generate(&mut rand::thread_rng());
-        let victim_hid = Hid::from_pubkey(HidPrefix::Wbee, &victim.verifying_key().to_bytes());
+        let victim_hid = Hid::from_pubkey(HidPrefix::Bee, &victim.verifying_key().to_bytes());
 
         let signed_at = now_ms();
         let msg = hum_identity::socket_hello_message(&victim_hid, signed_at);

@@ -44,7 +44,7 @@ humfs is a symbol-aware filesystem surface for hum bees:
 
 humfs is a **forager hive** — same shape as any other thrum-attached
 process (openai-server, anthropic-server, ollama-server). It dials
-humd's thrum socket, says hello with `bee: ["forager"]` and its
+humd's thrum socket, says hello as a bee of the `humfs` hive with `roles: ["forager"]` and its
 advertised `tools: [...]`, then handles `chi:"tool-call"` tones humd
 routes here by `toolName`. Results go back as `chi:"tool-result"`.
 

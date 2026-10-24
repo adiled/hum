@@ -11,11 +11,18 @@ import "encoding/json"
 
 type HelloBody struct {
 	ProtoVersion string `json:"protoVersion"`
-	Bee string `json:"bee"`
-	Version string `json:"version"`
-	Hid *string `json:"hid,omitempty"`
-	ToolNames []string `json:"tool_names,omitempty"`
+	Hive string `json:"hive"`
+	Roles []string `json:"roles,omitempty"`
+	Version *string `json:"version,omitempty"`
+	Hid string `json:"hid"`
+	Pubkey string `json:"pubkey"`
+	SignedAt int64 `json:"signedAt"`
+	Signature string `json:"signature"`
+	Models []string `json:"models,omitempty"`
+	Tools []json.RawMessage `json:"tools,omitempty"`
 	Provides []string `json:"provides,omitempty"`
+	Chis []string `json:"chis,omitempty"`
+	Propensity json.RawMessage `json:"propensity,omitempty"`
 	Source *string `json:"source,omitempty"`
 }
 

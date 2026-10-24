@@ -11,14 +11,14 @@ hum \- the AI stack on a biodiverse agentic kernel
 .B hum
 is the user-facing command-line interface to the hum agentic stack: a daemon
 (\fBhumd\fR) that hosts a mesh of cooperating agents (bees) over a native
-vibration protocol called \fBthrum\fR (v0.7.0). It manages hives, bees, a
+vibration protocol called \fBthrum\fR (v0.8.0). It manages hives, bees, a
 persistent event log, a peer mesh, and the daemon lifecycle.
 .PP
 The core model:
 .TS
 l l.
-hive	the kind; a typology a bee conforms to (doesn't run itself)
-bee	the instance; a running participant commissioned by a hive
+hive	the kind; a directory with an Orchfile, installed on a humd
+bee	a participant; anything that lands on a humd, understood through its hive
 nestler	a bee mid-handshake, awaiting acceptance of its hello
 nestled	a bee registered into the nest
 nest	where nestled bees gather, inside humd
@@ -46,44 +46,50 @@ service state, and recent daemon + worker logs with warnings highlighted.
 Paste the output into a bug report.
 .TP
 .B hive
-Manage hive kinds \(em the source a bee is commissioned from.
+Manage the hives this humd understands. A directory with an Orchfile is a
+hive. A bee naming a hive that is not installed here is refused.
 .RS
 .B hum hive \-\-list
-\(em catalogue + configured + running hives.
+The catalogue, what is installed here, and how many bees each has entered.
 .br
 .B hum hive \fIref\fR install
-\(em build the hive and register its bee. \fIref\fR is a bundled name (e.g.
-\fBclaude-cli\fR, \fBhumfs\fR, \fBpaid-oracle\fR), a local path, or the source
-URL a bee advertises (a github tree URL of a \fBhives/<kind>\fR directory).
+Record the hive on this humd, then run its \fBhive-install\fR unit, if
+it has one, with \fBHUM_SRC\fR, \fBHUM_HIVE\fR and \fBhum\fR on its PATH; a
+failed unit takes the record back. hum starts nothing else: what the hive
+runs is its own business. \fIref\fR is a bundled name (e.g. \fBclaude-cli\fR,
+\fBhumfs\fR, \fBpaid-oracle\fR), a local path, or the source URL a bee
+advertises (a github tree URL of a \fBhives/<hive>\fR directory).
+.br
+.B hum hive \fIref\fR uninstall
+Forget the hive. What it started is its own to stop; a running humd
+keeps understanding it until restart.
 .RE
 .TP
 .B bee
-Manage running bee instances.
+A bee is a key its hive entered. Whatever signs a hello with that key is
+the bee; humd admits only a signed hello from an entered bee whose hive is
+installed. hum starts no process.
 .RS
 .B hum bee \-\-list
-\(em list bees and their state.
+Bees entered here, and which have nestled.
 .br
-.B hum bee \fIname|id\fR enter
-\(em start a stopped bee.
+.B hum bee enter \-\-hive \fIhive\fR [\-\-as \fIlabel\fR]
+Sign a bee in under the hive and print its id. With a label, the same
+hive and label are always the same bee, so a process enters itself each
+time it starts and a runtime can hold one bee per label; without one,
+every call mints a new bee.
 .br
-.B hum bee \fIname|id\fR exit
-\(em not supported yet. orchd exposes no per-service stop, so a single bee
-cannot be stopped on its own; \fBorchd fell\fR tears the whole grove down.
-Per-bee stop arrives with orchd's \fBtend\fR.
+.B hum bee \fIid\fR exit
+Sign the bee out; humd refuses its next hello.
 .br
-.B hum bee \fIname|id\fR reenter
-\(em not supported yet, for the same reason as \fBexit\fR.
-.br
-The hive name (e.g. \fBclaude-cli\fR) is accepted in place of a bee id.
+.B hum bee \fIid\fR reenter
+Sign it back in.
 .RE
 .TP
-.B nest
-List orchd-managed bees (delegates to \fBorchd survey\fR).
-.TP
-.B comb [\fIbee\fR]
+.B comb [\fIhive\fR]
 Show the comb, the kernel's ledger of what crossed it: how many tones
-of each chi, and nectar (tokens in, tokens out, cache reads) per bee.
-With a bee name, show only that bee's measures.
+of each chi, and nectar (tokens in, tokens out, cache reads) per hive.
+With a hive name, show only that hive's measures.
 .TP
 .B recipes [\fIname\fR]
 List available recipes (\fBrecipes/*\fR) or run one by name (e.g. \fBopencode\fR).
@@ -126,10 +132,7 @@ URI resolution.
 .RE
 .TP
 .B config
-Show the hum paths and the orchd config hum writes: the \fB.orchrc\fR that
-carries the namespace and the paths, and the base Orchfile every hive's
-Orchfile overlays. Writing them is idempotent; running the command is
-also how you see them.
+Show the paths hum keeps, and the hives installed here.
 .TP
 .B uninstall
 Stop the service and remove the humd binary. State is preserved.
@@ -162,16 +165,15 @@ Main configuration (see \fBhum.schema.json\fR in the repo).
 .B ~/.config/hum/peers.json
 Bootstrap peers humd dials on boot; edited via \fBhum ensemble peer\fR.
 .TP
-.B ~/.config/hum/orch.d/
-Overlay directory for the orchd bee supervisor.
+.B ~/.config/hum/hives.d/
+One record per installed hive: its Orchfile, as installed.
 .TP
-.B ~/.config/hum/Orchfile
-The assembled Orchfile: every registered hive's SERVICE block, in one
-file. orchd reads this to know which bees to keep running.
+.B ~/.local/state/hum/bees/
+One key per bee, filed under its id: a raw 32-byte Ed25519 seed (chmod 600).
+Whoever can read a bee's key is that bee.
 .TP
-.B ~/.local/state/hum/orch/
-orchd's state dir: generated units, supervise specs and service data.
-hum keeps its own, so an unrelated orchd stack is never touched.
+.B ~/.local/state/hum/bees.d/
+One entry per entered bee: its hive, its public key, and whether it has exited.
 .TP
 .B ~/.local/state/hum/humd.key
 The humd identity: a 32-byte Ed25519 seed minted on install (chmod 600).
@@ -207,8 +209,8 @@ Source checkout the installer builds from.
 .TP
 .B ~/.local/bin/
 Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorchd\fR.
-The \fBorchd\fR bee supervisor must be at least 0.3.4 and must expose
-the \fBgrow\fR, \fBsurvey\fR, \fBfell\fR and \fBlogs\fR subcommands.
+hum never calls \fBorchd\fR; it is installed as a supervisor hives may use
+for their own processes, as the bundled hives do.
 .SH ENVIRONMENT
 .TP
 .B HUM_BIN
@@ -249,7 +251,7 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 .PP
 The installer builds and registers \fBhumd\fR as a user service (launchd on
 macOS, systemd-style on Linux), mints the identity key, pulls in the
-\fBorchd\fR bee-supervisor binary, and installs this page into
+\fBorchd\fR supervisor binary for hives to use, and installs this page into
 \fB/usr/local/share/man/man1\fR or \fB~/.local/share/man/man1\fR. Re-running
 it upgrades in place.
 
@@ -275,12 +277,13 @@ Two channels. The default installs the latest release tag \(em what ships.
 \(em remove everything including state.
 .RE
 .PP
-After install, bring up bees:
+After install, teach the humd its hives; each bundled hive enters its bee
+and keeps it running itself:
 .nf
-hum hive install openai-server    # OpenAI inference cell (pnpm build)
-hum hive install humfs            # filesystem forager
-hum hive install paid-oracle      # x402 paid price oracle
-hum bee --list   /   hum nest
+hum hive openai-server install
+hum hive humfs install
+hum hive paid-oracle install
+hum bee --list
 .fi
 .SH VOCABULARY
 .PP
