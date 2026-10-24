@@ -134,6 +134,15 @@ pub fn emit_go_helpers(output: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn emit_c(spec: &ChiSpec, output: &Path) -> Result<()> {
+    let s = render_c(spec);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(output, s).with_context(|| format!("write {}", output.display()))?;
+    Ok(())
+}
+
 
 fn extract_version(lib: &str) -> Result<String> {
     let re = Regex::new(r#"pub\s+const\s+THRUM_VERSION\s*:\s*&\s*str\s*=\s*"([^"]+)""#)?;
@@ -849,9 +858,89 @@ func DefaultSocketPath() string {
     s
 }
 
+fn c_line_comment(doc: &str) -> String {
+    let flat: String = doc
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    format!("// {}\n", flat.trim_end().trim_end_matches('\\').trim_end())
+}
+
+fn render_c_set(s: &mut String, tag: &str, set: &str, variants: &[Variant]) {
+    for v in variants {
+        if !v.doc.is_empty() {
+            s.push_str(&c_line_comment(&v.doc));
+        }
+        s.push_str(&format!(
+            "#define THRUM_{tag}_{} \"{}\"\n",
+            pascal_to_screaming_snake(&v.pascal),
+            v.wire
+        ));
+    }
+    s.push_str(&format!("\n#define THRUM_{tag}_COUNT {}\n\n", variants.len()));
+    if variants.is_empty() {
+        s.push_str(&format!(
+            "static inline bool thrum_is_valid_{set}(const char *value) {{\n\
+             \x20   (void)value;\n\
+             \x20   return false;\n\
+             }}\n\n"
+        ));
+        return;
+    }
+    s.push_str(&format!("static const char *const THRUM_ALL_{tag}[THRUM_{tag}_COUNT] = {{\n"));
+    for v in variants {
+        s.push_str(&format!(
+            "    THRUM_{tag}_{},\n",
+            pascal_to_screaming_snake(&v.pascal)
+        ));
+    }
+    s.push_str("};\n\n");
+    s.push_str(&format!(
+        "static inline bool thrum_is_valid_{set}(const char *value) {{\n\
+         \x20   size_t i;\n\
+         \x20   if (!value) return false;\n\
+         \x20   for (i = 0; i < THRUM_{tag}_COUNT; i++) {{\n\
+         \x20       if (strcmp(THRUM_ALL_{tag}[i], value) == 0) return true;\n\
+         \x20   }}\n\
+         \x20   return false;\n\
+         }}\n\n"
+    ));
+}
+
+fn render_c(spec: &ChiSpec) -> String {
+    let mut s = String::new();
+    s.push_str(&chi_at_generated_header("//"));
+    s.push_str("#ifndef THRUM_CHI_H\n#define THRUM_CHI_H\n\n");
+    s.push_str("#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n\n");
+    s.push_str(&format!("#define THRUM_VERSION \"{}\"\n\n", spec.version));
+    render_c_set(&mut s, "CHI", "chi", &spec.chi);
+    render_c_set(&mut s, "PULSE", "pulse", &spec.pulse);
+    s.push_str("#endif\n");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_c_registry_names_every_chi_once() {
+        let spec = ChiSpec {
+            version: "9.9.9".into(),
+            chi: vec![
+                Variant { pascal: "Hello".into(), wire: "hello".into(), doc: "first \\".into() },
+                Variant { pascal: "ToolCall".into(), wire: "tool-call".into(), doc: String::new() },
+            ],
+            pulse: vec![],
+        };
+        let c = render_c(&spec);
+        assert!(c.contains("#define THRUM_VERSION \"9.9.9\"\n"));
+        assert!(c.contains("// first\n#define THRUM_CHI_HELLO \"hello\"\n"));
+        assert!(c.contains("#define THRUM_CHI_TOOL_CALL \"tool-call\"\n"));
+        assert!(c.contains("#define THRUM_CHI_COUNT 2\n"));
+        assert!(c.contains("#define THRUM_PULSE_COUNT 0\n"));
+        assert!(c.contains("static inline bool thrum_is_valid_chi(const char *value)"));
+    }
 
     #[test]
     fn kebab_and_camel_are_consistent() {

@@ -444,6 +444,112 @@ pub fn emit_protocol_go(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     write_out(output, &s)
 }
 
+pub fn emit_protocol_c(spec: &ProtocolSpec, output: &Path) -> Result<()> {
+    write_out(output, &render_protocol_c(spec))
+}
+
+fn render_protocol_c(spec: &ProtocolSpec) -> String {
+    let mut s = String::new();
+    s.push_str(&regen_header(
+        "//",
+        &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
+    ));
+    s.push_str("#ifndef THRUM_PROTOCOL_H\n#define THRUM_PROTOCOL_H\n\n");
+    s.push_str("#include <stdbool.h>\n#include <stddef.h>\n\n");
+    s.push_str(
+        "typedef enum {\n\
+         \x20   THRUM_FIELD_STRING,\n\
+         \x20   THRUM_FIELD_INT,\n\
+         \x20   THRUM_FIELD_UINT,\n\
+         \x20   THRUM_FIELD_BOOL,\n\
+         \x20   THRUM_FIELD_ARRAY,\n\
+         \x20   THRUM_FIELD_OBJECT,\n\
+         \x20   THRUM_FIELD_ANY\n\
+         } thrum_field_kind;\n\n\
+         typedef struct {\n\
+         \x20   const char *json;\n\
+         \x20   thrum_field_kind kind;\n\
+         \x20   bool optional;\n\
+         } thrum_field;\n\n\
+         typedef struct {\n\
+         \x20   const char *chi;\n\
+         \x20   const thrum_field *fields;\n\
+         \x20   size_t count;\n\
+         } thrum_view;\n\n",
+    );
+
+    for t in &spec.types {
+        if t.fields.is_empty() {
+            continue;
+        }
+        s.push_str(&format!(
+            "static const thrum_field {}[{}] = {{\n",
+            c_fields_ident(&t.name),
+            t.fields.len()
+        ));
+        for f in &t.fields {
+            s.push_str(&format!(
+                "    {{\"{}\", {}, {}}},\n",
+                f.json,
+                c_kind(&f.repr, spec),
+                f.optional
+            ));
+        }
+        s.push_str("};\n\n");
+    }
+
+    if let Some(env) = spec.types.iter().find(|t| t.name == "Envelope") {
+        s.push_str(&format!(
+            "static const thrum_view THRUM_ENVELOPE = {{NULL, {}, {}}};\n\n",
+            c_fields_ref(env),
+            env.fields.len()
+        ));
+    }
+
+    let views: Vec<&TypeSpec> = spec.types.iter().filter(|t| names_body_view(&t.name)).collect();
+    s.push_str(&format!("#define THRUM_VIEW_COUNT {}\n\n", views.len()));
+    s.push_str("static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {\n");
+    for t in &views {
+        s.push_str(&format!(
+            "    {{\"{}\", {}, {}}},\n",
+            body_chi(&t.name),
+            c_fields_ref(t),
+            t.fields.len()
+        ));
+    }
+    s.push_str("};\n\n#endif\n");
+    s
+}
+
+fn c_fields_ident(name: &str) -> String {
+    format!("THRUM_FIELDS_{}", crate::pascal_to_screaming_snake(name))
+}
+
+fn c_fields_ref(t: &TypeSpec) -> String {
+    if t.fields.is_empty() {
+        "NULL".into()
+    } else {
+        c_fields_ident(&t.name)
+    }
+}
+
+fn c_kind(r: &Repr, spec: &ProtocolSpec) -> &'static str {
+    match r {
+        Repr::Str => "THRUM_FIELD_STRING",
+        Repr::Int { unsigned: false } => "THRUM_FIELD_INT",
+        Repr::Int { unsigned: true } => "THRUM_FIELD_UINT",
+        Repr::Bool => "THRUM_FIELD_BOOL",
+        Repr::Json => "THRUM_FIELD_ANY",
+        Repr::Map(_) => "THRUM_FIELD_OBJECT",
+        Repr::Arr(_) => "THRUM_FIELD_ARRAY",
+        Repr::Ref(name) if name == "Chi" => "THRUM_FIELD_STRING",
+        Repr::Ref(name) if name == "Map" || spec.types.iter().any(|t| &t.name == name) => {
+            "THRUM_FIELD_OBJECT"
+        }
+        Repr::Ref(_) => "THRUM_FIELD_ANY",
+    }
+}
+
 fn pascal_of(name: &str) -> String {
     name.strip_suffix("Body")
         .map(|p| p.to_string())
@@ -536,6 +642,21 @@ mod tests {
         assert!(matches!(f[1].repr, Repr::Json));
         assert!(matches!(f[2].repr, Repr::Arr(_)));
         assert!(matches!(f[3].repr, Repr::Map(_)));
+    }
+
+    #[test]
+    fn the_c_views_carry_every_declared_key() {
+        let spec =
+            protocol_spec(&paths::views_rs(), &paths::envelope_rs(), &paths::lib_rs()).unwrap();
+        let c = render_protocol_c(&spec);
+        assert!(c.contains("{\"chunkType\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"signedAt\", THRUM_FIELD_INT, false},"));
+        assert!(c.contains("{\"chi\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"ext\", THRUM_FIELD_OBJECT, true},"));
+        assert!(c.contains("{\"cancel\", NULL, 0},"));
+        assert!(c.contains("{\"hello\", THRUM_FIELDS_HELLO_BODY, "));
+        let views = spec.types.iter().filter(|t| names_body_view(&t.name)).count();
+        assert!(c.contains(&format!("#define THRUM_VIEW_COUNT {views}\n")));
     }
 
     #[test]

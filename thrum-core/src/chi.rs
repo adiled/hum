@@ -6,8 +6,8 @@
 //!
 //! The wire contract — which chi exists, what it carries, and which way
 //! it flows — lives in [`WIRE.md`](../../WIRE.md). This enum is its
-//! Rust mirror; the generated TypeScript, Python, and Go clients are
-//! emitted from that same contract, so the four copies cannot drift.
+//! Rust mirror; the generated TypeScript, Python, Go and C clients are
+//! emitted from that same contract, so the five copies cannot drift.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoStaticStr};

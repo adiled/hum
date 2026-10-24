@@ -8,8 +8,8 @@ description: "the language-neutral protocol bees speak to humd. Implementable in
 > _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
 This is the **canonical wire spec**. Rust (`thrum-core`), TypeScript
-(`thrum-clients/ts`), Python (`thrum-clients/python`), and Go
-(`thrum-clients/go`) are reference clients — they all conform to the
+(`thrum-clients/ts`), Python (`thrum-clients/python`), Go
+(`thrum-clients/go`) and C (`thrum-clients/c`) are reference clients — they all conform to the
 rules below. If a client disagrees with this document, the document
 wins.
 
@@ -199,8 +199,8 @@ prompts your way. The wire stays exactly the same.
 ## Chi registry (THRUM_VERSION 0.8.0)
 
 This section is the wire contract. `thrum-core/src/chi.rs` mirrors it as
-the Rust enum, and `codegen` emits the TypeScript, Python, and Go
-mirrors from it — so the four copies cannot drift.
+the Rust enum, and `codegen` emits the TypeScript, Python, Go and C
+mirrors from it — so the five copies cannot drift.
 
 `body fields` below are the chi-specific fields only. `sid` is not
 among them — it is an [envelope](#envelope) field, and a tone carries it
@@ -436,7 +436,8 @@ A clean port to a new language takes ~80 LoC. The minimum:
 Reference: [`thrum-core`](../thrum-core),
 [`thrum-clients/ts`](../thrum-clients/ts),
 [`thrum-clients/python`](../thrum-clients/python),
-[`thrum-clients/go`](../thrum-clients/go).
+[`thrum-clients/go`](../thrum-clients/go),
+[`thrum-clients/c`](../thrum-clients/c).
 
 ## Version history
 
@@ -455,6 +456,7 @@ Reference: [`thrum-core`](../thrum-core),
 - [`thrum-core`](../thrum-core) — Rust source of truth (chi enum, helpers).
 - [`thrum-clients/ts`](../thrum-clients/ts) — TypeScript reference client.
 - [`thrum-clients/python`](../thrum-clients/python), [`thrum-clients/go`](../thrum-clients/go) — Python + Go reference clients.
+- [`thrum-clients/c`](../thrum-clients/c): the C reference client, over libsodium and cJSON.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
 - [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

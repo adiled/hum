@@ -2,7 +2,7 @@
 //!
 //! One struct per chi, field names renamed to EXACTLY the wire keys the
 //! runtime produces. This module is the single source of truth for body
-//! shapes; codegen emits the TS/Python/Go mirrors from it, and the
+//! shapes; codegen emits the TS/Python/Go/C mirrors from it, and the
 //! golden-message test locks the bytes.
 //!
 //! Optional fields are also `skip_serializing_if` so absent fields are
