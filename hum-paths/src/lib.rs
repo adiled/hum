@@ -14,6 +14,11 @@
 //! | `$XDG_CACHE_HOME/hum` | derived caches, e.g. foreign hive clones |
 //! | `$XDG_RUNTIME_DIR/hum` | non-essential per-boot runtime files |
 //!
+//! [`layout`] declares every entry hum keeps under those roots, and
+//! nothing else belongs there: while humd runs it moves a stray into its
+//! root's `tmp/`. Writes go through [`write_atomic`], which stages in that
+//! `tmp/` and renames into place.
+//!
 //! The `*_BASENAME` constants are the single source of truth for every
 //! filename hum reads or writes. Tests and any code building paths under
 //! a non-default root compose these against their own directory, never
@@ -32,6 +37,10 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+pub mod layout;
+
+pub use layout::{Root, write_atomic, write_atomic_private};
 
 pub fn init() {
     let home = home();
@@ -130,7 +139,7 @@ pub fn humd_key() -> PathBuf {
 }
 
 pub fn bees_dir() -> PathBuf {
-    state_dir().join("bees")
+    state_dir().join(layout::BEES_SUBDIR)
 }
 
 pub fn bee_key(id: &str) -> PathBuf {
@@ -138,7 +147,7 @@ pub fn bee_key(id: &str) -> PathBuf {
 }
 
 pub fn entered_dir() -> PathBuf {
-    state_dir().join("bees.d")
+    state_dir().join(layout::ENTERED_SUBDIR)
 }
 
 pub fn bee_entry(id: &str) -> PathBuf {
@@ -199,16 +208,11 @@ impl Revocations {
     }
 
     pub fn write_to(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
         let mut body = self.clone();
         body.version = 1;
         let body = serde_json::to_string_pretty(&body)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(tmp, path)
+        write_atomic(path, body.as_bytes())
     }
 
     pub fn write(&self) -> std::io::Result<()> {
@@ -252,15 +256,9 @@ impl RuntimeInfo {
     }
 
     pub fn write(&self) -> std::io::Result<()> {
-        let path = runtime_info();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
         let body = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(tmp, path)
+        write_atomic(&runtime_info(), body.as_bytes())
     }
 
     pub fn remove() {
@@ -277,7 +275,7 @@ pub fn peers_json() -> PathBuf {
 }
 
 pub fn thehum_dir() -> PathBuf {
-    state_dir().join("thehum")
+    state_dir().join(layout::THEHUM_SUBDIR)
 }
 
 pub const THEHUM_SEQ_BASENAME: &str = "seq.bin";
@@ -296,7 +294,7 @@ pub fn thehum_root_file(dir: &std::path::Path) -> PathBuf {
 }
 
 pub fn src_dir() -> PathBuf {
-    data_dir().join("src")
+    data_dir().join(layout::SRC_SUBDIR)
 }
 
 pub fn local_dir() -> PathBuf {
@@ -325,12 +323,12 @@ pub fn hum_bin(name: &str) -> PathBuf {
 
 pub fn foreign_hive_cache(org: &str, repo: &str, branch: &str) -> PathBuf {
     cache_dir()
-        .join("hives")
+        .join(layout::HIVES_SUBDIR)
         .join(format!("{org}-{repo}-{branch}"))
 }
 
 pub fn hives_d_dir() -> PathBuf {
-    config_dir().join("hives.d")
+    config_dir().join(layout::HIVES_D_SUBDIR)
 }
 
 pub fn hive_installation(hive: &str) -> PathBuf {
@@ -342,7 +340,11 @@ pub fn hive_installed(hive: &str) -> bool {
 }
 
 pub fn hive_config(hive: &str) -> PathBuf {
-    config_dir().join("hives").join(format!("{hive}.json"))
+    config_dir().join(layout::HIVES_SUBDIR).join(format!("{hive}.json"))
+}
+
+pub fn hive_state_dir(hive: &str) -> PathBuf {
+    state_dir().join(layout::HIVES_SUBDIR).join(hive)
 }
 
 pub enum DaemonLogs {

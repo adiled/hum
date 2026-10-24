@@ -87,7 +87,7 @@ function checkAuth(req: IncomingMessage): boolean {
 // uniform mental model across bees. Each bee carries its own
 // state directory to keep ledgers independent.
 
-const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/anthropic-server";
+const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/hives/anthropic-server";
 const AUDIT_LOG = join(STATE_DIR, "audit.log");
 const USAGE_PATH = join(STATE_DIR, "usage.json");
 try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}

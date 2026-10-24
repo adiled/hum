@@ -14,6 +14,7 @@ use tracing::{error, info, trace, warn};
 mod comb;
 mod drone;
 pub mod entered;
+pub mod guard;
 pub mod hives;
 mod identity;
 mod peer_transport;
@@ -656,14 +657,7 @@ impl HumdSink {
             serde_json::to_vec_pretty(&*m).unwrap_or_default()
         };
         let path = &self.bees_snapshot_path;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, &json)
-            .and_then(|_| std::fs::rename(&tmp, path))
-            .is_err()
-        {
+        if hum_paths::write_atomic(path, &json).is_err() {
             trace!(path = %path.display(), "bees.snapshot.write.failed");
         }
     }

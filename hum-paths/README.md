@@ -16,14 +16,17 @@ the rest of the workspace can lean on it.
 
 ## Layout
 
-The hum process tree is anchored at four XDG roots:
+hum keeps five XDG roots, and each holds only what
+[`layout::LAYOUT`](src/layout.rs) declares. While humd runs, anything
+else is moved to that root's `tmp/`.
 
-| function | resolves to | what lives here |
-|----------|-------------|-----------------|
-| `state_dir()` | `$XDG_STATE_HOME/hum` | identity key, thehum log, runtime info, bees snapshot |
-| `config_dir()` | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `hives.d/` |
-| `data_dir()` | `$XDG_DATA_HOME/hum` | installed source clone, recipes |
-| `runtime_dir()` | `$XDG_RUNTIME_DIR/hum` | http socket, comb.json |
+| root | resolves to | holds |
+|---|---|---|
+| state | `$XDG_STATE_HOME/hum` | `humd.key`, `thrum.sock`, `runtime.json`, `routing.json`, `bees.json`, `revoked.json`, `bees/`, `bees.d/`, `thehum/`, `hives/<hive>/` |
+| config | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `hives.d/`, `hives/<hive>.json` |
+| data | `$XDG_DATA_HOME/hum` | `src/` |
+| cache | `$XDG_CACHE_HOME/hum` | `hives/` |
+| runtime | `$XDG_RUNTIME_DIR/hum` | `comb.json`, `hum.sock.http` |
 
 Every concrete path is one accessor down from these:
 
@@ -31,14 +34,15 @@ Every concrete path is one accessor down from these:
 hum_paths::humd_key()        // state_dir/humd.key
 hum_paths::hum_json()        // config_dir/hum.json
 hum_paths::peers_json()      // config_dir/peers.json
-hum_paths::thrum_sock()      // runtime_dir/thrum.sock
+hum_paths::thrum_sock()      // state_dir/thrum.sock
 hum_paths::comb()            // runtime_dir/comb.json
 hum_paths::thehum_dir()      // state_dir/thehum/
-hum_paths::runtime_info()    // state_dir/runtime-info.json
+hum_paths::runtime_info()    // state_dir/runtime.json
 hum_paths::bees_snapshot()   // state_dir/bees.json
 hum_paths::bee_key(id)       // state_dir/bees/<id>.key
 hum_paths::bee_entry(id)     // state_dir/bees.d/<id>.json
 hum_paths::hive_installation(hive) // config_dir/hives.d/<hive>.orch
+hum_paths::hive_state_dir(hive)    // state_dir/hives/<hive>/
 hum_paths::hum_bin(kind)     // local_bin/<kind>
 hum_paths::humd_bin()        // local_bin/humd
 ```
@@ -64,7 +68,7 @@ error, not something a graceful fallback should hide.
 ## `RuntimeInfo`
 
 The one in-process write surface this crate owns is `RuntimeInfo`, a
-small struct humd writes to `state_dir/runtime-info.json` when it
+small struct humd writes to `state_dir/runtime.json` when it
 boots and removes when it shuts down. Other tools (`hum status`,
 `hum ensemble`, dev scripts, third-party probes) read it to learn the
 running daemon's pid, socket path, version, and the wire-shaped reach
@@ -113,11 +117,14 @@ When a new artifact lands somewhere on disk:
 1. Add a `pub fn foo() -> PathBuf` that returns the resolved path.
    Anchor on `state_dir()` / `config_dir()` / `data_dir()` /
    `runtime_dir()` as fits the lifecycle of the artifact.
-2. Add a basename const if the file name is reused elsewhere (the
+2. Declare it in `layout::LAYOUT`, or the guard moves it to `tmp/` the
+   moment it appears, and add it to `tests/layout.rs`.
+3. Add a basename const if the file name is reused elsewhere (the
    `*_BASENAME` constants in `src/lib.rs` are the pattern).
-3. Call it from the rest of the workspace. Never let a literal
-   `~/.config/hum/...` or `state_dir`-style string land in another
-   crate.
+4. Call it from the rest of the workspace, and write it with
+   `write_atomic`. Never let a literal `~/.config/hum/...` or a
+   `state_dir()`-style join land in another crate; `tools/paths.py`
+   fails the build if one does.
 
 ## See also
 

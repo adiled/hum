@@ -1,6 +1,6 @@
-// One-shot keypair generator. Writes JSON to
-// `$XDG_CONFIG_HOME/hum/paid-oracle/keys.json` (or
-// `~/.config/hum/paid-oracle/keys.json`).
+// One-shot keypair generator. Writes JSON to the hive's own state,
+// `$XDG_STATE_HOME/hum/hives/paid-oracle/keys.json` (or
+// `~/.local/state/hum/hives/paid-oracle/keys.json`).
 //
 // Receiver = where paid-oracle expects USDC to land. Address only;
 // private key is included for completeness but never used.
@@ -13,8 +13,8 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync } from "n
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const baseDir = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-const dir = join(baseDir, "hum", "paid-oracle");
+const baseDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+const dir = join(baseDir, "hum", "hives", "paid-oracle");
 const path = join(dir, "keys.json");
 
 if (existsSync(path) && !process.argv.includes("--force")) {

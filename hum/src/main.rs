@@ -373,6 +373,35 @@ fn status() -> Result<()> {
 
 fn yn(b: bool) -> &'static str { if b { "✓" } else { "missing" } }
 
+fn layout_report() {
+    use hum_paths::layout::{self, Root};
+    println!("\n[layout]  (strays move to their root's tmp/ while humd runs)");
+    let mut clean = true;
+    for root in Root::ALL {
+        let strays = layout::strays(root);
+        if !strays.is_empty() {
+            clean = false;
+            let names: Vec<String> = strays
+                .iter()
+                .map(|p| p.strip_prefix(root.dir()).unwrap_or(p).display().to_string())
+                .collect();
+            println!("  {}: not in the layout: {}", root.name(), names.join(", "));
+        }
+        let mut held: Vec<String> = std::fs::read_dir(root.tmp())
+            .map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        held.retain(|n| !n.starts_with(layout::STAGING_PREFIX));
+        held.sort();
+        if !held.is_empty() {
+            println!("  {}/tmp: {}", root.name(), held.join(", "));
+        }
+    }
+    if clean {
+        println!("  ✓ every root holds only the layout");
+    }
+    println!("  archive: {}", layout::archive_dir().display());
+}
+
 fn ensemble(verb: Option<EnsembleVerb>) -> Result<()> {
     match verb {
         None => ensemble_show(),
@@ -458,9 +487,7 @@ fn peers_save(
     }
     other_fields.insert("peers".into(), serde_json::Value::Array(peers));
     let body = serde_json::to_string_pretty(&serde_json::Value::Object(other_fields))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, &path)?;
+    hum_paths::write_atomic(&path, body.as_bytes())?;
     Ok(())
 }
 
@@ -590,6 +617,8 @@ fn doctor() -> Result<()> {
         },
     }
 
+    layout_report();
+
     let bees_dir = hum_paths::bees_dir();
     println!("\n[bee identities]  ({})", bees_dir.display());
     match std::fs::read_dir(&bees_dir) {
@@ -620,8 +649,10 @@ fn doctor() -> Result<()> {
     }
 
     println!("\n[env sanity]");
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
-    let runtime_exists = std::path::Path::new(&runtime).is_dir();
+    let runtime_root = hum_paths::runtime_dir();
+    let runtime_parent = runtime_root.parent().unwrap_or(&runtime_root);
+    let runtime = runtime_parent.display().to_string();
+    let runtime_exists = runtime_parent.is_dir();
     println!("  XDG_RUNTIME_DIR: {runtime} {}", if runtime_exists { "✓" } else { "✗ DOES NOT EXIST (comb writes will fail — common macOS trap when set to a Linux /run/user path)" });
 
     match hum_paths::RuntimeInfo::read() {

@@ -17,7 +17,6 @@
 //! exactly what [`ed25519_dalek::SigningKey::from_bytes`] expects.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -82,44 +81,8 @@ pub fn read_key() -> Result<Option<HumdKey>> {
 }
 
 fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
-    }
-    let tmp = match path.file_name() {
-        Some(name) => {
-            let mut tmp_name = name.to_os_string();
-            tmp_name.push(".tmp");
-            path.with_file_name(tmp_name)
-        }
-        None => return Err(anyhow!("humd key path has no file name: {}", path.display())),
-    };
-
-    {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts
-            .open(&tmp)
-            .with_context(|| format!("create {}", tmp.display()))?;
-        f.write_all(seed)
-            .with_context(|| format!("write {}", tmp.display()))?;
-        f.sync_all().ok();
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-    }
-
-    fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    hum_paths::write_atomic_private(path, seed)
+        .with_context(|| format!("write humd key {}", path.display()))
 }
 
 #[cfg(test)]

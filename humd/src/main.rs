@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 use tracing_subscriber::EnvFilter;
 
 use humd::DaemonConfig;
@@ -61,6 +61,10 @@ async fn main() -> Result<()> {
         info!(key = %key, "config.retired_key_dropped");
     }
     hum_paths::config::validate_or_exit();
+
+    if let Err(e) = humd::guard::spawn() {
+        warn!(err = %e, "guard.unavailable — the hum roots go unwatched");
+    }
 
     let cfg = DaemonConfig::from_env();
     info!(
