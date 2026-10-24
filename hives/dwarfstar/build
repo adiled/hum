@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Build this hive's bee: fetch the pinned ds4 source if it is not here,
+# compile the engine into the bee, and put the Metal kernels beside it.
+# Nothing is installed into the system's PATH: the bee is built here and
+# runs here. DS4_DIR points at a ds4 checkout to build against instead.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here"
+
+make
