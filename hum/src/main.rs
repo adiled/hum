@@ -62,8 +62,15 @@ enum Cmd {
     #[command(about = "Hive kinds — the source a bee is commissioned from.")]
     #[command(long_about = "Hive kinds — the source a bee is commissioned from.
 
-  hum hive --list           catalogue + configured + running
-  hum hive <ref> install    build the hive + register its bee
+  hum hive --list           catalogue + configured + registered + running
+  hum hive <ref> install    build the hive, register the kind, enter a bee of it
+
+  hum bee <kind> enter     start a bee of a kind that is already registered
+
+A hive is a kind; a bee is a participant. Installing registers the kind
+here — the spec of a bee of that kind — and enters a bee of it.
+Entering is a separate act: a node can know a kind and route a prompt to
+a bee of it on another node without running one itself.
 
 <ref> is a bundled name, a local path, or the source URL a bee
 advertises (github tree URL of a hives/<kind> dir).")]
@@ -71,7 +78,7 @@ advertises (github tree URL of a hives/<kind> dir).")]
     Hive {
         #[arg(help = "Hive ref (name | path | source URL). Omit with --list")]
         target: Option<String>,
-        #[arg(help = "Action on the hive: `install`")]
+        #[arg(help = "Action on the hive: `install` | `register`")]
         action: Option<String>,
         #[arg(help = "List the hive catalogue")]
         #[arg(long)]
@@ -718,7 +725,10 @@ fn hive_list() -> Result<()> {
         return Ok(());
     }
     println!("Hive kinds (catalogue: {}):\n", hives_dir.display());
-    println!("  {:<18} {:<10} {:<20} {}", "KIND", "INSTALLER", "CONFIGURED", "RUNNING");
+    println!(
+        "  {:<18} {:<10} {:<20} {:<12} {}",
+        "KIND", "INSTALLER", "CONFIGURED", "REGISTERED", "RUNNING"
+    );
     for (kind, (installer, model, running)) in &kinds {
         let configured = match (model, kind == &default_kind) {
             (Some(m), true)  => format!("{m} (default)"),
@@ -726,8 +736,12 @@ fn hive_list() -> Result<()> {
             (None, true)     => "(default)".to_string(),
             (None, false)    => "—".to_string(),
         };
-        println!("  {:<18} {:<10} {:<20} {}", kind,
-            if *installer { "✓" } else { "—" }, configured,
+        let registered = orch::overlay_path(kind).exists();
+        println!("  {:<18} {:<10} {:<20} {:<12} {}",
+            kind,
+            if *installer { "✓" } else { "—" },
+            configured,
+            if registered { "✓" } else { "—" },
             if *running { "✓" } else { "—" });
     }
     println!("\nbuild one: hum hive <name|path|source-url> install   |   bees: hum bee --list");
@@ -735,14 +749,31 @@ fn hive_list() -> Result<()> {
 }
 
 fn hive_install(reference: &str) -> Result<()> {
+    let kind = hive_register(reference)?;
+    let overlay = orch::overlay_path(&kind);
+    let services = orch::services_in(&overlay)?;
+    match services.iter().find(|s| *s == &kind) {
+        Some(default) => {
+            let _ = orch::unload(default);
+            enter_bee(default)?;
+        }
+        None => {
+            for service in &services {
+                println!("  hum bee {service} enter");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hive_register(reference: &str) -> Result<String> {
     let dir = resolve_hive_dir(reference)?;
     let orchfile = dir.join(hum_paths::ORCHFILE_BASENAME);
     if !orchfile.exists() {
         anyhow::bail!("no Orchfile at {}", orchfile.display());
     }
     let body = std::fs::read_to_string(&orchfile)?;
-    let kind = read_orchfile_service(&orchfile)?
-        .ok_or_else(|| anyhow::anyhow!("no SERVICE directive in {}", orchfile.display()))?;
+    let kind = hive_kind(&dir)?;
 
     build_hive(&dir, &kind)?;
 
@@ -750,7 +781,7 @@ fn hive_install(reference: &str) -> Result<()> {
 
     let dest = orch::overlay_path(&kind);
     std::fs::create_dir_all(hum_paths::orch_d_dir())?;
-    std::fs::write(&dest, &body)?;
+    std::fs::write(&dest, with_source(&body, &dir))?;
     println!("registered {kind} ({})", dest.display());
 
     let overrides = orch::env_overrides(&orch::declared_args(&body));
@@ -767,113 +798,65 @@ fn hive_install(reference: &str) -> Result<()> {
         &map,
     )?;
     for svc in &parsed.services {
+        if !belongs_to_kind(&svc.name, &kind) {
+            anyhow::bail!(
+                "service {} is not a bee of {kind} — name it {kind} or {kind}-<archetype>",
+                svc.name
+            );
+        }
         println!("  {} → {}", svc.name, svc.run_command.as_deref().unwrap_or(""));
     }
-
-    let mut c = orch::with_overlays(orch::cmd(), std::slice::from_ref(&dest));
-    for (k, v) in &overrides {
-        c.arg("--arg").arg(format!("{k}={v}"));
+    if parsed.services.is_empty() {
+        anyhow::bail!("no SERVICE directive in {}", orchfile.display());
     }
-    let _ = orch::unload(&kind);
-    let s = c.arg("grow").arg(&kind).status()
-        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-    if !s.success() { anyhow::bail!("orchd grow {kind} failed"); }
-    println!("✓ {kind} entered; see `hum bee --list`");
-    Ok(())
+
+    Ok(kind)
+}
+
+fn hive_kind(dir: &Path) -> Result<String> {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("cannot name a kind after {}", dir.display()))
+}
+
+fn belongs_to_kind(service: &str, kind: &str) -> bool {
+    service == kind || service.starts_with(&format!("{kind}-"))
 }
 
 fn build_hive(dir: &Path, kind: &str) -> Result<()> {
-    let custom = dir.join("build");
-    if custom.is_file() {
-        println!("building {kind} (./build in {}) ...", dir.display());
-        let s = Command::new("bash").arg(&custom).current_dir(dir).status()?;
-        if !s.success() { anyhow::bail!("custom build script failed: {}", custom.display()); }
-        return Ok(());
+    let script = dir.join("build");
+    if !script.is_file() {
+        anyhow::bail!("no build script in {}", dir.display());
     }
-    if dir.join("Cargo.toml").exists() { return build_cargo(dir, kind); }
-    if dir.join("package.json").exists() { return build_node(dir, kind); }
-    if dir.join("go.mod").exists() { return build_go(dir, kind); }
-    anyhow::bail!("no Cargo.toml / package.json / go.mod / build in {}", dir.display());
-}
-
-fn build_cargo(dir: &Path, kind: &str) -> Result<()> {
-    println!("building {kind} (cargo install --path {}) ...", dir.display());
-    let s = Command::new("cargo")
-        .args(["install", "--quiet", "--locked", "--path"]).arg(dir)
-        .args(["--root"]).arg(hum_paths::local_dir())
-        .arg("--force")
-        .status()?;
-    if !s.success() { anyhow::bail!("cargo install failed for {}", dir.display()); }
+    println!("building {kind} ({}) ...", script.display());
+    let s = Command::new("bash").arg(&script).current_dir(dir).status()?;
+    if !s.success() {
+        anyhow::bail!("build script failed: {}", script.display());
+    }
     Ok(())
 }
 
-fn build_node(dir: &Path, kind: &str) -> Result<()> {
-    let dist = dir.join("dist").join("index.js");
-    let pkg_mgr = ["pnpm", "npm"].iter().find(|m| which(m)).copied();
-    if let Some(mgr) = pkg_mgr {
-        println!("building {kind} ({mgr} install + build) in {}", dir.display());
-        let s = Command::new(mgr).arg("install").env("CI", "true").current_dir(dir).status()?;
-        if !s.success() { anyhow::bail!("{mgr} install failed"); }
-        let s = Command::new(mgr).args(["run", "build"]).env("CI", "true").current_dir(dir).status()?;
-        if !s.success() { anyhow::bail!("{mgr} run build failed"); }
-    } else if dist.exists() {
-        println!("using pre-built {} (no pnpm/npm in PATH)", dist.display());
-    } else {
-        anyhow::bail!("no pnpm/npm in PATH and no prebuilt {}", dist.display());
-    }
-    if !dist.exists() {
-        anyhow::bail!("build did not produce {}", dist.display());
-    }
-    let node = which_first(&["node", "/usr/local/bin/node"])
-        .or_else(|| Some(hum_paths::fnm_node_bin()).filter(|p| p.exists()))
-        .ok_or_else(|| anyhow::anyhow!("node not in PATH; install Node 22+"))?;
-    let bin = hum_paths::hum_bin(kind);
-    std::fs::create_dir_all(bin.parent().unwrap())?;
-    let wrapper = format!(
-        "#!/usr/bin/env bash\nexec {} {} \"$@\"\n",
-        node.display(), dist.display(),
-    );
-    std::fs::write(&bin, wrapper)?;
-    use std::os::unix::fs::PermissionsExt;
-    let mut perm = std::fs::metadata(&bin)?.permissions();
-    perm.set_mode(0o755);
-    std::fs::set_permissions(&bin, perm)?;
-    println!("wrote node wrapper at {}", bin.display());
-    Ok(())
-}
-
-fn build_go(dir: &Path, kind: &str) -> Result<()> {
-    if !which("go") { anyhow::bail!("go not in PATH; install Go"); }
-    let bin = hum_paths::hum_bin(kind);
-    std::fs::create_dir_all(bin.parent().unwrap())?;
-    println!("building {kind} (go build) in {}", dir.display());
-    let s = Command::new("go").args(["build", "-o"]).arg(&bin).arg(".").current_dir(dir).status()?;
-    if !s.success() { anyhow::bail!("go build failed"); }
-    Ok(())
-}
-
-fn which(name: &str) -> bool {
-    Command::new("sh").args(["-c", &format!("command -v {name} >/dev/null 2>&1")])
-        .status().map(|s| s.success()).unwrap_or(false)
-}
-
-fn which_first(candidates: &[&str]) -> Option<PathBuf> {
-    for c in candidates {
-        if c.starts_with('/') {
-            let p = PathBuf::from(c);
-            if p.exists() { return Some(p); }
-        } else if which(c) {
-            return Some(PathBuf::from(c));
+fn with_source(body: &str, dir: &Path) -> String {
+    let arg = format!("ARG HUM_SRC={}", dir.display());
+    let mut out = String::new();
+    let mut replaced = false;
+    for line in body.lines() {
+        if line.trim_start().starts_with("ARG HUM_SRC=") {
+            if !replaced {
+                out.push_str(&arg);
+                out.push('\n');
+                replaced = true;
+            }
+            continue;
         }
+        out.push_str(line);
+        out.push('\n');
     }
-    None
-}
-
-fn read_orchfile_service(path: &Path) -> Result<Option<String>> {
-    let raw = std::fs::read_to_string(path)?;
-    Ok(raw.lines()
-        .filter_map(|l| l.trim().strip_prefix("SERVICE ").map(|s| s.trim().to_string()))
-        .next())
+    if !replaced {
+        out.insert_str(0, &format!("{arg}\n"));
+    }
+    out
 }
 
 fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
@@ -1184,13 +1167,7 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
     }
     match verb {
         "enter" => {
-            orch::ensure_config()?;
-            let overlay = orch::overlay_path(kind);
-            if !overlay.exists() {
-                anyhow::bail!("{kind} is not registered — run `hum hive {kind} install`");
-            }
-            orch::grow(kind, &overlay)?;
-            println!("  ✓ entered {kind} (orchd)");
+            enter_bee(kind)?;
         }
         "exit" | "reenter" => {
             anyhow::bail!(
@@ -1201,6 +1178,17 @@ fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
         other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
     }
     Ok(true)
+}
+
+fn enter_bee(service: &str) -> Result<()> {
+    orch::ensure_config()?;
+    let overlay = match orch::overlay_path(service) {
+        p if p.exists() => p,
+        _ => orch::overlay_for_service(service)?,
+    };
+    orch::grow(service, &overlay)?;
+    println!("  ✓ entered {service} (orchd)");
+    Ok(())
 }
 
 fn config() -> Result<()> {
