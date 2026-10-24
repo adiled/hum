@@ -59,11 +59,11 @@ like the thing — readers and writers share the same mental model.
   hello with that key is the bee, be it a process its hive started, a
   runtime hosting many bees, or a service on a phone. The hello names the
   `hive` it belongs to and the `roles` it claims:
-  - **worker**: produces compute. Implements the `WorkerBee` trait (or
+  - **worker**: produces compute. Implements the `Worker` trait (or
     its non-Rust equivalent), accepts `chi:"prompt"` for advertised
     models and emits `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"`.
   - **forager**: translates outside wire ↔ thrum. Implements
-    `ForagerBee`, wrapping an HTTP / gRPC / stdio surface into thrum tones.
+    `ToolDispatcher`, wrapping an HTTP / gRPC / stdio surface into thrum tones.
 
   A role is a claim, never part of who the bee is; a bee may claim both,
   or a role a future hive invents.

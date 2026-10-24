@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use hum_nest::{Cell, Egg, WorkerBee};
+use hum_nest::{Cell, Egg, Worker};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -61,7 +61,7 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
 }
 
 #[async_trait]
-impl WorkerBee for ClaudeReplWorker {
+impl Worker for ClaudeReplWorker {
     fn ephemeral(&self) -> bool {
         true
     }

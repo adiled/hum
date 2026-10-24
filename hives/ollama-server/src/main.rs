@@ -44,7 +44,7 @@ struct FileConfig {
 }
 
 fn config_file_path() -> PathBuf {
-    hum_paths::bee_config("ollama-server")
+    hum_paths::hive_config(HIVE_NAME)
 }
 
 fn read_file_config() -> FileConfig {

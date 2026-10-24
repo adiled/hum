@@ -386,14 +386,13 @@ mod tests {
     }
 
     #[test]
-    fn a_role_prefixed_hid_is_the_same_participant() {
+    fn a_bee_hid_says_bee_and_nothing_about_its_role() {
         let pubkey = [7u8; 32];
-        let now = Hid::from_pubkey(HidPrefix::Bee, &pubkey);
-        let then = Hid::from_pubkey(HidPrefix::Wbee, &pubkey);
-        assert!(now.same_key(&then));
-        assert!(!now.same_key(&Hid::from_pubkey(HidPrefix::Humd, &pubkey)));
-        assert_eq!(Hid::from_hex(&now.to_hex()).unwrap(), now);
-        assert!(now.to_hex().starts_with("bee_"));
+        let bee = Hid::from_pubkey(HidPrefix::Bee, &pubkey);
+        assert_eq!(Hid::from_hex(&bee.to_hex()).unwrap(), bee);
+        assert!(bee.to_hex().starts_with("bee_"));
+        assert!(Hid::from_hex(&format!("wbee_{}", hex::encode(pubkey))).is_err());
+        assert_ne!(bee, Hid::from_pubkey(HidPrefix::Humd, &pubkey));
     }
 
     #[test]

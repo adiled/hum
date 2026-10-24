@@ -1,4 +1,4 @@
-//! ollama-worker — WorkerBee that calls Ollama's HTTP API.
+//! ollama-worker — Worker that calls Ollama's HTTP API.
 //!
 //! Sends prompts to Ollama's `/api/chat` endpoint and streams the
 //! response back over thrum. Run any local LLM Ollama supports.
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use hum_nest::{Cell, Egg, Propensity, WorkerBee};
+use hum_nest::{Cell, Egg, Propensity, Worker};
 
 /// Ollama chat request body — the exact shape Ollama's API expects.
 #[derive(Debug, Clone, Serialize)]
@@ -65,7 +65,7 @@ impl Default for OllamaWorker {
 }
 
 #[async_trait]
-impl WorkerBee for OllamaWorker {
+impl Worker for OllamaWorker {
     fn ephemeral(&self) -> bool { false }
 
     fn propensity(&self) -> Propensity {

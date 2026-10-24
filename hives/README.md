@@ -153,6 +153,6 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 ## See also
 
-- [`nest/`](../nest) defines `WorkerBee`, `Cell`, `SpawnSpec`, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `nest::lifecycle`.
+- [`hum-nest/`](../hum-nest) defines `Worker`, `ToolDispatcher`, `Egg`, `Cell`, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `hum_nest::lifecycle`.
 - [WIRE.md](../WIRE.md) explains what the wire sees of nests and cells.
 - [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, hive installation, bee, worker, forager, nestler, and nestled.

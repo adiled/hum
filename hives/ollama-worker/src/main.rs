@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use hum_nest::{serve_worker, HiveAdvert};
+use hum_nest::{serve_worker, WorkerAdvert};
 
 use lib::OllamaWorker;
 mod lib;
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         .collect();
 
     let worker = Arc::new(OllamaWorker::default());
-    let advert = HiveAdvert {
+    let advert = WorkerAdvert {
         hive: "ollama-worker".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,

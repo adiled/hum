@@ -216,7 +216,7 @@ impl Revocations {
     }
 
     pub fn contains(&self, hid_hex: &str) -> bool {
-        self.revoked.iter().any(|h| same_identity(h, hid_hex))
+        self.revoked.iter().any(|h| h == hid_hex)
     }
 
     pub fn revoke(&mut self, hid: &str) -> bool {
@@ -229,20 +229,8 @@ impl Revocations {
 
     pub fn unrevoke(&mut self, hid: &str) -> bool {
         let before = self.revoked.len();
-        self.revoked.retain(|h| !same_identity(h, hid));
+        self.revoked.retain(|h| h != hid);
         self.revoked.len() != before
-    }
-}
-
-fn bee_key_hex(hid: &str) -> Option<&str> {
-    let (prefix, tail) = hid.split_once('_')?;
-    matches!(prefix, "bee" | "wbee" | "fbee").then_some(tail)
-}
-
-fn same_identity(a: &str, b: &str) -> bool {
-    match (bee_key_hex(a), bee_key_hex(b)) {
-        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
-        _ => a == b,
     }
 }
 
@@ -353,8 +341,8 @@ pub fn hive_installed(hive: &str) -> bool {
     is_plain_name(hive) && hive_installation(hive).is_file()
 }
 
-pub fn bee_config(kind: &str) -> PathBuf {
-    config_dir().join("bees").join(format!("{kind}.json"))
+pub fn hive_config(hive: &str) -> PathBuf {
+    config_dir().join("hives").join(format!("{hive}.json"))
 }
 
 pub enum DaemonLogs {
@@ -412,46 +400,34 @@ mod revocation_tests {
     fn an_absent_file_revokes_nothing() {
         let tmp = tempfile::TempDir::new().unwrap();
         let list = Revocations::read_from(&tmp.path().join("nope.json"));
-        assert!(!list.contains("wbee_abc"));
+        assert!(!list.contains("bee_abc"));
     }
 
     #[test]
     fn a_listed_hid_is_contained() {
         let mut list = Revocations::default();
-        assert!(list.revoke("wbee_dead"));
-        assert!(list.contains("wbee_dead"));
-        assert!(!list.contains("wbee_other"));
+        assert!(list.revoke("bee_dead"));
+        assert!(list.contains("bee_dead"));
+        assert!(!list.contains("bee_other"));
     }
 
     #[test]
     fn revoking_twice_is_not_a_duplicate() {
         let mut list = Revocations::default();
-        assert!(list.revoke("wbee_dead"));
-        assert!(!list.revoke("wbee_dead"), "already listed");
+        assert!(list.revoke("bee_dead"));
+        assert!(!list.revoke("bee_dead"), "already listed");
         assert_eq!(list.revoked.len(), 1);
     }
 
     #[test]
     fn unrevoking_removes_only_that_hid() {
         let mut list = Revocations::default();
-        list.revoke("wbee_dead");
-        list.revoke("wbee_gone");
-        assert!(list.unrevoke("wbee_dead"));
-        assert!(!list.contains("wbee_dead"));
-        assert!(list.contains("wbee_gone"));
-        assert!(!list.unrevoke("wbee_dead"), "nothing left to remove");
-    }
-
-    #[test]
-    fn a_bee_revoked_under_its_old_role_prefix_stays_revoked() {
-        let mut list = Revocations::default();
-        list.revoke("wbee_dead");
-        assert!(list.contains("bee_dead"));
-        assert!(list.contains("fbee_dead"));
-        assert!(!list.contains("humd_dead"));
-        assert!(!list.revoke("bee_dead"), "already listed as wbee_dead");
+        list.revoke("bee_dead");
+        list.revoke("bee_gone");
         assert!(list.unrevoke("bee_dead"));
-        assert!(list.revoked.is_empty());
+        assert!(!list.contains("bee_dead"));
+        assert!(list.contains("bee_gone"));
+        assert!(!list.unrevoke("bee_dead"), "nothing left to remove");
     }
 
     #[test]
@@ -471,9 +447,9 @@ mod revocation_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("revoked.json");
         let mut list = Revocations::default();
-        list.revoke("wbee_dead");
+        list.revoke("bee_dead");
         list.write_to(&path).unwrap();
-        assert!(Revocations::read_from(&path).contains("wbee_dead"));
+        assert!(Revocations::read_from(&path).contains("bee_dead"));
     }
 
     #[test]
@@ -481,6 +457,6 @@ mod revocation_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("revoked.json");
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(!Revocations::read_from(&path).contains("wbee_abc"));
+        assert!(!Revocations::read_from(&path).contains("bee_abc"));
     }
 }

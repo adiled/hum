@@ -72,13 +72,13 @@ mod tests {
         let path = tmp.path().join("revoked.json");
         hum_paths::Revocations {
             version: 1,
-            revoked: vec!["wbee_dead".into()],
+            revoked: vec!["bee_dead".into()],
         }
         .write_to(&path)
         .unwrap();
         let rev = Revocations::load(&path);
-        assert!(rev.is_revoked("wbee_dead"));
-        assert!(!rev.is_revoked("wbee_other"));
+        assert!(rev.is_revoked("bee_dead"));
+        assert!(!rev.is_revoked("bee_other"));
     }
 
     #[test]

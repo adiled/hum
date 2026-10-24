@@ -10,17 +10,17 @@ import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
 import { OpenAIWorker } from "./openai.ts";
 export { toolsFromOpenAI } from "./tools.ts";
 
-interface BeeConfig {
+interface HiveConfig {
   host?: string;
   port?: number;
   apiKey?: string;
 }
 
-function readConfigFile(): BeeConfig {
+function readConfigFile(): HiveConfig {
   const path = join(homedir(), ".config", "hum", "hives", "openai-server.json");
   try {
     const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as BeeConfig;
+    const parsed = JSON.parse(raw) as HiveConfig;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};

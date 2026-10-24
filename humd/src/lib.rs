@@ -288,7 +288,6 @@ where
             let client_id = body
                 .get("client_id")
                 .and_then(Value::as_str)
-                .or_else(|| body.get("nestlerId").and_then(Value::as_str))
                 .or_else(|| body.get("from").and_then(Value::as_str))
                 .map(str::to_string);
             let Some(client_id) = client_id else { return };
@@ -330,10 +329,6 @@ where
                         .get("hid")
                         .and_then(Value::as_str)
                         .and_then(|s| ensemble::Hid::from_hex(s).ok());
-                    manifest.nestler_id = body
-                        .get("nestlerId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
                     manifests_for_replay.write().insert(client_id, manifest);
                 }
                 "disconnect" | "forget" => {
@@ -612,7 +607,6 @@ fn bee_key(manifest: &ensemble::BeeManifest) -> String {
     manifest
         .hid
         .map(|h| hex::encode(h.as_bytes()))
-        .or_else(|| manifest.nestler_id.clone())
         .unwrap_or_else(|| manifest.hive.clone())
 }
 
@@ -1153,17 +1147,11 @@ impl ToneSink for HumdSink {
                     let bind: Option<ensemble::BindAddr> = tone
                         .get("bind")
                         .and_then(|v| serde_json::from_value(v.clone()).ok());
-                    let nestler_id = tone
-                        .get("nestlerId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| client_id.to_string());
                     let mut manifest = ensemble::BeeManifest::new(name, version, proto);
                     manifest.propensity = propensity;
                     manifest.chis = chis;
                     manifest.source = source;
                     manifest.bind = bind;
-                    manifest.nestler_id = Some(nestler_id);
                     manifest.roles = roles.clone();
                     manifest.models = models.clone();
                     manifest.hid = signed_hid;
@@ -1229,7 +1217,7 @@ impl ToneSink for HumdSink {
                             let stale: Vec<String> = m
                                 .iter()
                                 .filter_map(|(cid, mf)| match mf.hid {
-                                    Some(h) if h.same_key(&new_hid) && cid != client_id => {
+                                    Some(h) if h == new_hid && cid != client_id => {
                                         Some(cid.clone())
                                     }
                                     _ => None,

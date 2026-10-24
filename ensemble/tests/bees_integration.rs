@@ -67,7 +67,8 @@ async fn advertise_percolates_and_discover_filters_by_hive() {
     assert_eq!(got_manifest.version, "0.1.0");
     assert_eq!(got_manifest.chis.len(), 4);
 
-    ens_a.bee_retract("market-maker").await;
+    let bee = ensemble::Hid::random(ensemble::HidPrefix::Bee);
+    ens_a.bee_retract(bee).await;
     let env = timeout(Duration::from_millis(300), async {
         loop {
             let v = raw.recv().await.expect("raw channel closed");
@@ -80,9 +81,9 @@ async fn advertise_percolates_and_discover_filters_by_hive() {
     .expect("C did not see retract within 300ms");
 
     match env {
-        BeeAnnounce::Retract { humd_id, name } => {
+        BeeAnnounce::Retract { humd_id, hid } => {
             assert_eq!(humd_id, a_id.to_hex());
-            assert_eq!(name, "market-maker");
+            assert_eq!(hid, bee);
         }
         _ => panic!("expected retract"),
     }

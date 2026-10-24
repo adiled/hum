@@ -170,7 +170,7 @@ The wire is **opaque to the cell's implementation.** A cell might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
 the wire sees identical chunks coming back either way. The kind of
-cell (`WorkerBee` impl, in Rust terms) is the hive's concern,
+cell (`Worker` impl, in Rust terms) is the hive's concern,
 exposed to the wire only via `hive: "<kind>"` on hello.
 
 What the wire *does* see, at the humd level:
@@ -188,7 +188,7 @@ field on a bee's hello — the kind is `hive: "<name>"` + bee role flag.
 **The advertise lives on the humd, not invented per-asker.**
 
 If you want to add a new kind of compute to the mesh, you ship a
-`WorkerBee` impl (any process speaking thrum), point it at a humd, and
+`Worker` impl (any process speaking thrum), point it at a humd, and
 the mesh discovers via the existing capability gossip; peers route
 prompts your way. The wire stays exactly the same.
 

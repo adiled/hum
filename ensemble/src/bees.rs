@@ -4,9 +4,7 @@
 //! humd that has its hive installed, and that humd gossips it to the
 //! ensemble. No central registry, no PR to this repo.
 //!
-//! [`ANNOUNCE_TOPIC`] keeps its old path, and a manifest still reads
-//! `name` as its hive and `bee` as its roles, so humds of different
-//! versions keep hearing each other. Versioning lives inside the
+//! [`ANNOUNCE_TOPIC`] keeps its old path. Versioning lives inside the
 //! manifest; unknown fields are tolerated so newer humds can add more.
 //!
 //! `roles` is a claim, never part of a bee's identity. `source` is
@@ -18,7 +16,6 @@ pub const ANNOUNCE_TOPIC: &str = "hum/hives/announce";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeeManifest {
-    #[serde(alias = "name")]
     pub hive: String,
     pub version: String,
     pub proto_version: String,
@@ -30,9 +27,7 @@ pub struct BeeManifest {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<BindAddr>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "nestlerId")]
-    pub nestler_id: Option<String>,
-    #[serde(default, alias = "bee", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hid: Option<crate::Hid>,
@@ -91,7 +86,6 @@ impl BeeManifest {
             models: Vec::new(),
             tools: Vec::new(),
             provides: Vec::new(),
-            nestler_id: None,
             hid: None,
             hid_verified: false,
         }
@@ -104,11 +98,6 @@ impl BeeManifest {
 
     pub fn with_bind(mut self, bind: BindAddr) -> Self {
         self.bind = Some(bind);
-        self
-    }
-
-    pub fn with_nestler_id(mut self, id: impl Into<String>) -> Self {
-        self.nestler_id = Some(id.into());
         self
     }
 
@@ -147,7 +136,7 @@ pub enum BeeAnnounce {
         humd_id: String,
         manifest: Box<BeeManifest>,
     },
-    Retract { humd_id: String, name: String },
+    Retract { humd_id: String, hid: crate::Hid },
 }
 
 #[cfg(test)]
@@ -183,24 +172,6 @@ mod tests {
             back.source.as_deref(),
             Some("https://github.com/example/mm-bee")
         );
-    }
-
-    #[test]
-    fn a_manifest_from_an_older_humd_still_reads() {
-        let old = serde_json::json!({
-            "name": "claude-cli",
-            "version": "0.1.0",
-            "proto_version": "0.7.0",
-            "bee": ["worker"],
-            "hid": "wbee_0101010101010101010101010101010101010101010101010101010101010101",
-        });
-        let m: BeeManifest = serde_json::from_value(old).unwrap();
-        assert_eq!(m.hive, "claude-cli");
-        assert!(m.plays("worker"));
-        assert!(!m.plays("forager"));
-        let now = serde_json::to_value(&m).unwrap();
-        assert_eq!(now["hive"], "claude-cli");
-        assert_eq!(now["roles"], serde_json::json!(["worker"]));
     }
 
     #[test]

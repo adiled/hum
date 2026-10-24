@@ -5,7 +5,6 @@ import pkg from "../package.json";
 export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "openai-server";
 export const BEE_VERSION = pkg.version;
-export const BEE_ROLE = "forager";
 export const BEE_ROLES = ["forager", "worker"];
 export const BEE_PROVIDES = ["session"];
 

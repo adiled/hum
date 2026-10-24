@@ -454,10 +454,10 @@ impl Ensemble {
         }
     }
 
-    pub async fn bee_retract(&self, name: &str) {
+    pub async fn bee_retract(&self, hid: Hid) {
         let env = bees::BeeAnnounce::Retract {
             humd_id: self.me.to_hex(),
-            name: name.to_string(),
+            hid,
         };
         match serde_json::to_value(&env) {
             Ok(payload) => self.publish(bees::ANNOUNCE_TOPIC, payload).await,

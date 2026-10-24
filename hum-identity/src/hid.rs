@@ -4,9 +4,7 @@
 //!
 //! The prefix tells a daemon from a participant and nothing more. A
 //! bee's role is a claim in its hello, so a worker that starts foraging
-//! is still the same bee. `wbee_` and `fbee_` date from when the role
-//! was baked in; they still parse, and an old bee and its upgraded self
-//! over one key are one participant.
+//! is still the same bee.
 //!
 //! The 12-char short form widens with zeros so it still round-trips
 //! through serializers. It is for logs and sigils, not for
@@ -28,8 +26,6 @@ pub struct Hid {
 pub enum HidPrefix {
     Humd,
     Bee,
-    Wbee,
-    Fbee,
 }
 
 impl HidPrefix {
@@ -37,22 +33,18 @@ impl HidPrefix {
         match self {
             HidPrefix::Humd => "humd",
             HidPrefix::Bee => "bee",
-            HidPrefix::Wbee => "wbee",
-            HidPrefix::Fbee => "fbee",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "humd" => Some(HidPrefix::Humd),
             "bee" => Some(HidPrefix::Bee),
-            "wbee" => Some(HidPrefix::Wbee),
-            "fbee" => Some(HidPrefix::Fbee),
             _ => None,
         }
     }
 
     pub fn is_bee(self) -> bool {
-        matches!(self, HidPrefix::Bee | HidPrefix::Wbee | HidPrefix::Fbee)
+        self == HidPrefix::Bee
     }
 }
 
@@ -74,10 +66,6 @@ impl Hid {
 
     pub fn random_humd() -> Self {
         Self::random(HidPrefix::Humd)
-    }
-
-    pub fn same_key(&self, other: &Hid) -> bool {
-        self.bytes == other.bytes && self.prefix.is_bee() == other.prefix.is_bee()
     }
 
     pub fn as_bytes(&self) -> &[u8; 32] {

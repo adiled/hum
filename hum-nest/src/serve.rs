@@ -1,4 +1,4 @@
-//! `serve_worker` — wraps a WorkerBee impl into a standalone process
+//! `serve_worker` — wraps a Worker impl into a standalone process
 //! that handshakes with humd via thrum and routes prompts over the wire.
 //!
 //! Mirrors the forager-bee client pattern: the worker process owns its own
@@ -8,7 +8,7 @@
 //!   humd routes to it only once that hive is installed there.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
-//!   `WorkerBee::raise(egg)`, then feeds the prompt text on `cell.feed`.
+//!   `Worker::raise(egg)`, then feeds the prompt text on `cell.feed`.
 //! - **Chunks out**: each event from `cell.mmm` becomes a
 //!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
 //! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
@@ -70,7 +70,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
 use hum_mcp::protocol::ToolDef;
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
+use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, Worker};
 use tokio::sync::mpsc;
 
 use hum_identity::enter_as;
@@ -81,14 +81,14 @@ fn default_socket_path() -> PathBuf {
 }
 
 #[derive(Debug, Clone)]
-pub struct HiveAdvert {
+pub struct WorkerAdvert {
     pub hive: String,
     pub version: String,
     pub models: Vec<String>,
     pub source: Option<String>,
 }
 
-pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAdvert) -> Result<()> {
+pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdvert) -> Result<()> {
     let path = default_socket_path();
     let mut ever_connected = false;
     let mut consecutive_fails = 0u32;
@@ -116,10 +116,10 @@ pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAd
     }
 }
 
-async fn dial_and_serve<W: WorkerBee + 'static>(
+async fn dial_and_serve<W: Worker + 'static>(
     path: &Path,
     worker: Arc<W>,
-    advert: &HiveAdvert,
+    advert: &WorkerAdvert,
 ) -> Result<()> {
     info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
@@ -313,7 +313,7 @@ fn is_preflight_error(v: &Value) -> bool {
         && m.get("is_error").and_then(Value::as_bool).unwrap_or(false)
 }
 
-async fn attempt_spawn<W: WorkerBee + 'static>(
+async fn attempt_spawn<W: Worker + 'static>(
     worker: &Arc<W>,
     spec: Egg,
     content: &str,
@@ -337,7 +337,7 @@ async fn attempt_spawn<W: WorkerBee + 'static>(
     }
 }
 
-async fn handle_prompt<W: WorkerBee + 'static>(
+async fn handle_prompt<W: Worker + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,

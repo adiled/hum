@@ -79,7 +79,7 @@ pub fn list() -> Result<()> {
         let hid = Hid::from_hex(id).ok()?;
         nestled
             .iter()
-            .find(|m| Hid::from_hex(&text(m, "hid")).is_ok_and(|h| h.same_key(&hid)))
+            .find(|m| Hid::from_hex(&text(m, "hid")).is_ok_and(|h| h == hid))
     };
 
     for (id, entry) in &entered {

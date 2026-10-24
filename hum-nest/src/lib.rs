@@ -1,4 +1,4 @@
-//! hum's hive-side kernel. The worker contract ([`WorkerBee`], [`Egg`],
+//! hum's hive-side kernel. The worker contract ([`Worker`], [`Egg`],
 //! [`Cell`], [`Propensity`], [`Pollen`], tone encoders), the process
 //! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
 //! sampling / [`limits`] rlimits), and the wire-semantics loops that
@@ -61,7 +61,7 @@ pub mod suspicion_regex;
 
 pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
 pub use hum_mcp::protocol::{ToolDef, ToolResult};
-pub use serve::{serve_worker, HiveAdvert};
+pub use serve::{serve_worker, WorkerAdvert};
 pub use suspicion_regex::RegexClassifier;
 
 #[derive(Debug, Clone)]
@@ -164,7 +164,7 @@ impl Classifier for NoopClassifier {
 }
 
 #[async_trait]
-pub trait WorkerBee: Send + Sync {
+pub trait Worker: Send + Sync {
     fn ephemeral(&self) -> bool;
     fn propensity(&self) -> Propensity {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }

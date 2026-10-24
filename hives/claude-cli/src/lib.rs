@@ -1,4 +1,4 @@
-//! claude-cli — the pipe-mode WorkerBee for claude.
+//! claude-cli — the pipe-mode Worker for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
 //! Takes a [`hum_nest::Egg`], builds the CLI invocation, runs the
@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
-use hum_nest::{Propensity, Cell, Egg, WorkerBee};
+use hum_nest::{Propensity, Cell, Egg, Worker};
 
 pub struct ClaudeCliWorker;
 
@@ -107,7 +107,7 @@ pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
 }
 
 #[async_trait]
-impl WorkerBee for ClaudeCliWorker {
+impl Worker for ClaudeCliWorker {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
