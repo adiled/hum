@@ -1,6 +1,7 @@
 # thrum.mk: what a C bee's Makefile includes to build against the thrum
 # client. It finds itself, asks pkg-config for libsodium and cJSON, and
-# knows how to build $(THRUM_LIB).
+# knows how to build $(THRUM_LIB). Including it leaves the includer's
+# default goal alone.
 #
 #   include ../../thrum-clients/c/thrum.mk
 #
@@ -8,6 +9,7 @@
 #   	$(CC) $(CFLAGS) $(THRUM_CFLAGS) -o $@ main.c $(THRUM_LIBS)
 
 THRUM_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+THRUM_INCLUDER_GOAL := $(.DEFAULT_GOAL)
 THRUM_BUILD ?= $(THRUM_DIR)/out
 THRUM_DEPS := libsodium libcjson
 PKG_CONFIG ?= pkg-config
@@ -39,3 +41,5 @@ $(THRUM_BUILD)/thrum/%.o: $(THRUM_DIR)/thrum/%.c $(THRUM_HDR)
 $(THRUM_LIB): $(THRUM_OBJ)
 	@mkdir -p $(dir $@)
 	$(AR) rcs $@ $^
+
+.DEFAULT_GOAL := $(THRUM_INCLUDER_GOAL)

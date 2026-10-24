@@ -3,7 +3,7 @@
  * The same algorithms as thrum-core/src/{prims,wane}.rs and the helpers
  * the TS, Python and Go clients are generated with:
  *
- *   thrum_sigil(sid, nest)     12 hex chars of sha256("nest:sid")
+ *   thrum_sigil(sid)           12 hex chars of sha256("sigil:<sid>")
  *   thrum_rid(out)             52-char Crockford base32 HumId, ms-prefixed
  *   thrum_humid_encode(b, out) the encoder under it, bit for bit
  *   thrum_dusk_in / is_dusk    expiry stamps on a tone
@@ -40,7 +40,7 @@ int64_t thrum_now_ms(void);
 int64_t thrum_dusk_in(int64_t ms);
 bool thrum_is_dusk(const cJSON *tone);
 
-void thrum_sigil(const char *sid, const char *nest, char out[THRUM_SIGIL_LEN]);
+void thrum_sigil(const char *sid, char out[THRUM_SIGIL_LEN]);
 
 void thrum_humid_encode(const uint8_t bytes[32], char out[THRUM_RID_LEN]);
 void thrum_rid(char out[THRUM_RID_LEN]);

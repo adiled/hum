@@ -71,7 +71,7 @@ nestles, and answers every prompt with its own text.
 | `thrum_is_valid_chi`, `thrum_is_valid_pulse` | membership checks, generated |
 | `THRUM_VIEWS`, `THRUM_ENVELOPE` | every chi's body fields and the envelope's, generated |
 | `thrum_tone_undeclared`, `thrum_key_is_declared` | the declared-key check humd runs |
-| `thrum_sigil(sid, nest)` | 12-char content hash |
+| `thrum_sigil(sid)` | 12-char session hash, the same on every humd |
 | `thrum_rid`, `thrum_humid_encode`, `thrum_is_valid_rid` | canonical HumId correlation ids |
 | `thrum_dusk_in`, `thrum_is_dusk` | expiry helpers |
 | `thrum_wane_*` | Lamport counter per sigil, thread-safe |

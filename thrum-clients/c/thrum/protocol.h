@@ -33,7 +33,7 @@ typedef struct {
     size_t count;
 } thrum_view;
 
-static const thrum_field THRUM_FIELDS_HELLO_BODY[14] = {
+static const thrum_field THRUM_FIELDS_HELLO_BODY[15] = {
     {"protoVersion", THRUM_FIELD_STRING, false},
     {"hive", THRUM_FIELD_STRING, false},
     {"roles", THRUM_FIELD_ARRAY, true},
@@ -47,7 +47,13 @@ static const thrum_field THRUM_FIELDS_HELLO_BODY[14] = {
     {"provides", THRUM_FIELD_ARRAY, true},
     {"chis", THRUM_FIELD_ARRAY, true},
     {"propensity", THRUM_FIELD_ANY, true},
+    {"headroom", THRUM_FIELD_OBJECT, true},
     {"source", THRUM_FIELD_STRING, true},
+};
+
+static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
+    {"freeSlots", THRUM_FIELD_UINT, false},
+    {"totalSlots", THRUM_FIELD_UINT, false},
 };
 
 static const thrum_field THRUM_FIELDS_PROMPT_BODY[9] = {
@@ -123,9 +129,10 @@ static const thrum_field THRUM_FIELDS_TOOL_META_BODY[3] = {
     {"metadata", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_PULSE_BODY[2] = {
+static const thrum_field THRUM_FIELDS_PULSE_BODY[3] = {
     {"kind", THRUM_FIELD_STRING, false},
     {"pid", THRUM_FIELD_INT, true},
+    {"headroom", THRUM_FIELD_OBJECT, true},
 };
 
 static const thrum_field THRUM_FIELDS_PERMISSION_ASK_BODY[4] = {
@@ -248,7 +255,7 @@ static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 #define THRUM_VIEW_COUNT 34
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
-    {"hello", THRUM_FIELDS_HELLO_BODY, 14},
+    {"hello", THRUM_FIELDS_HELLO_BODY, 15},
     {"prompt", THRUM_FIELDS_PROMPT_BODY, 9},
     {"breath", THRUM_FIELDS_BREATH_BODY, 2},
     {"chunk", THRUM_FIELDS_CHUNK_BODY, 4},
@@ -259,7 +266,7 @@ static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"tool-result", THRUM_FIELDS_TOOL_RESULT_BODY, 6},
     {"tool-info", THRUM_FIELDS_TOOL_INFO_BODY, 4},
     {"tool-meta", THRUM_FIELDS_TOOL_META_BODY, 3},
-    {"pulse", THRUM_FIELDS_PULSE_BODY, 2},
+    {"pulse", THRUM_FIELDS_PULSE_BODY, 3},
     {"permission-ask", THRUM_FIELDS_PERMISSION_ASK_BODY, 4},
     {"release-permit", THRUM_FIELDS_RELEASE_PERMIT_BODY, 3},
     {"echo", THRUM_FIELDS_ECHO_BODY, 2},

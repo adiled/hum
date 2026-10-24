@@ -18,6 +18,7 @@
 #define RUNTIME_INFO_BASENAME "runtime.json"
 #define THRUM_SOCK_BASENAME "thrum.sock"
 #define RUNTIME_INFO_MAX (1u << 20)
+#define SIGIL_DOMAIN "sigil:"
 
 static const char CROCKFORD[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -115,13 +116,12 @@ bool thrum_is_dusk(const cJSON *tone) {
     return (double)thrum_now_ms() > dusk->valuedouble;
 }
 
-void thrum_sigil(const char *sid, const char *nest, char out[THRUM_SIGIL_LEN]) {
+void thrum_sigil(const char *sid, char out[THRUM_SIGIL_LEN]) {
     crypto_hash_sha256_state state;
     unsigned char hash[crypto_hash_sha256_BYTES];
 
     crypto_hash_sha256_init(&state);
-    crypto_hash_sha256_update(&state, (const unsigned char *)nest, strlen(nest));
-    crypto_hash_sha256_update(&state, (const unsigned char *)":", 1);
+    crypto_hash_sha256_update(&state, (const unsigned char *)SIGIL_DOMAIN, strlen(SIGIL_DOMAIN));
     crypto_hash_sha256_update(&state, (const unsigned char *)sid, strlen(sid));
     crypto_hash_sha256_final(&state, hash);
     sodium_bin2hex(out, THRUM_SIGIL_LEN, hash, 6);

@@ -41,7 +41,7 @@
 #define THRUM_CHI_ERROR "error"
 // nest spawned, claude session id known
 #define THRUM_CHI_SESSION_READY "session-ready"
-// process lifecycle event
+// cell lifecycle event and headroom
 #define THRUM_CHI_PULSE "pulse"
 // mid-stream permission needed
 #define THRUM_CHI_PERMISSION_ASK "permission-ask"

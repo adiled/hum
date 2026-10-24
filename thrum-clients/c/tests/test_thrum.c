@@ -384,10 +384,10 @@ static void a_rid_is_52_crockford_and_garbage_is_not(void) {
 
 static void the_sigil_matches_thrum_core(void) {
     char out[THRUM_SIGIL_LEN];
-    thrum_sigil("abc", "claude", out);
-    CHECK_STR(out, "2ce06946efc0");
-    thrum_sigil("sess-1", "nest-a", out);
-    CHECK_STR(out, "afc65fe81bc3");
+    thrum_sigil("abc", out);
+    CHECK_STR(out, "b1138fecc2ca");
+    thrum_sigil("sess-1", out);
+    CHECK_STR(out, "78c96ae05428");
 }
 
 static void the_registry_is_the_generated_one(void) {
