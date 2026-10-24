@@ -47,18 +47,18 @@ darwin:
 		echo "dwarfstar links ds4's Metal engine, which needs macOS; make check builds the rest anywhere" >&2; \
 		exit 1; }
 
-$(BIN): $(BUILD)/main.o $(BUILD)/models.o $(BUILD)/shaders.o $(BUILD)/ds4_bridge.o $(DS4_OBJ) $(THRUM_LIB) | darwin
+$(BIN): $(BUILD)/main.o $(BUILD)/models.o $(BUILD)/gpu.o $(BUILD)/shaders.o $(BUILD)/ds4_bridge.o $(DS4_OBJ) $(THRUM_LIB) | darwin
 	$(CC) -o $@ $(filter %.o,$^) $(THRUM_LIBS) $(DS4_LDLIBS)
 	@rm -rf $(BUILD)/metal && cp -R $(DS4_DIR)/metal $(BUILD)/metal
 	@echo "built $@"
 
 check: $(STUB)
 
-$(STUB): $(BUILD)/main.o $(BUILD)/models.o $(BUILD)/stub/ds4_stub.o $(THRUM_LIB)
+$(STUB): $(BUILD)/main.o $(BUILD)/models.o $(BUILD)/gpu.o $(BUILD)/stub/ds4_stub.o $(THRUM_LIB)
 	$(CC) -o $@ $(filter %.o,$^) $(THRUM_LIBS)
 	@echo "built $@"
 
-$(BUILD)/main.o $(BUILD)/models.o $(BUILD)/shaders.o: $(BUILD)/%.o: src/%.c $(BEE_HDR)
+$(BUILD)/main.o $(BUILD)/models.o $(BUILD)/gpu.o $(BUILD)/shaders.o: $(BUILD)/%.o: src/%.c $(BEE_HDR)
 	@mkdir -p $(dir $@)
 	$(CC) $(BEE_CFLAGS) $(THRUM_CFLAGS) -c -o $@ $<
 

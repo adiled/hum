@@ -6,20 +6,38 @@
  * tokens, and the tokens come back as text_delta chunks and a finish. No
  * HTTP and no subprocess in between.
  *
+ * A unit of the hive's Orchfile pins its bee to one model, so every model
+ * is its own bee with its own key, ids and headroom; without a pin the bee
+ * serves every model under DWARFSTAR_DIR. All of a hive's bees share one
+ * GPU (gpu.h): a bee takes it before loading its model, gives it back
+ * after DWARFSTAR_IDLE_MS idle or when another model's bee wants it, and
+ * claims one slot of headroom only while the GPU is its own or free, so a
+ * peer routes to the model that can start now. A local prompt for a model
+ * whose bee lacks the GPU still runs: it waits for the handoff.
+ *
  * The engine runs one turn at a time, so prompts queue and one thread
- * takes them in order while the main thread reads the socket. A cancel
- * stops its sid's turn in flight and drops its sid's queued turns. The bee
- * is stateless: every prompt carries what it needs, and the engine's
- * session reuses whatever of it the KV cache already holds. A chunk always
- * carries whole UTF-8 characters, even when a token ends inside one.
+ * takes them in order and tends the GPU between them, while the main
+ * thread reads the socket. A cancel stops its sid's turn, waiting or in
+ * flight, and drops its sid's queued turns. The bee is stateless: every
+ * prompt carries what it needs, and the engine's session reuses whatever
+ * of it the KV cache already holds. A chunk always carries whole UTF-8
+ * characters, even when a token ends inside one.
  *
  * Environment:
+ *   DWARFSTAR_MODEL        pin to this GGUF, absolute or under DWARFSTAR_DIR
+ *   DWARFSTAR_MODELS       the ids a pinned bee answers to (default: by name)
+ *   DWARFSTAR_LABEL        the label the bee enters as (default main)
  *   DWARFSTAR_DIR          where the GGUFs live (default ~/ds4)
  *   DWARFSTAR_CTX          context size in tokens (default 32768)
  *   DWARFSTAR_MAX_TOKENS   cap on one turn (default 4096)
  *   DWARFSTAR_TEMPERATURE  sampling temperature (default ds4's)
+ *   DWARFSTAR_THREADS      engine CPU threads (default ds4's)
+ *   DWARFSTAR_SSD_STREAMING  1 to stream experts from SSD
+ *   DWARFSTAR_IDLE_MS      give the GPU back after this long idle (default 300000)
+ *   DWARFSTAR_WAIT_MS      how long a turn waits for the GPU (default 300000)
+ *   DWARFSTAR_GPU_LOCK     the hive-wide GPU lock
+ *                          (default $XDG_STATE_HOME/hum/hives/dwarfstar/gpu.lock)
  *   DWARFSTAR_METAL_DIR    the .metal kernels (default metal/ beside the bee)
- *   DWARFSTAR_LABEL        the label the bee enters as (default main)
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -27,11 +45,14 @@
 #define _DARWIN_C_SOURCE
 #endif
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -41,6 +62,7 @@
 #include <thrum/thrum.h>
 
 #include "ds4_bridge.h"
+#include "gpu.h"
 #include "models.h"
 #include "shaders.h"
 
@@ -48,6 +70,8 @@
 #define VERSION "0.33.1"
 #define SOURCE "https://github.com/adiled/hum/tree/main/hives/dwarfstar"
 #define WIRE "dwarfstar/core"
+#define TICK_MS 500
+#define YIELD_AFTER_MS 60000
 
 struct turn {
     char *sid;
@@ -68,10 +92,12 @@ struct stream {
 
 static thrum_client *g_client;
 static ds4_bridge *g_bridge;
+static dwarfstar_gpu *g_gpu;
 static ds4_models g_models;
-static int g_ctx = 32768;
 static int g_max_tokens = 4096;
 static float g_temperature = -1.0f;
+static int64_t g_idle_ms = 300000;
+static int64_t g_wait_ms = 300000;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_ready = PTHREAD_COND_INITIALIZER;
@@ -79,6 +105,9 @@ static struct turn *g_head;
 static struct turn *g_tail;
 static const char *g_current_sid;
 static bool g_closing;
+
+static int g_free_slots = -1;
+static int64_t g_last_turn_ms;
 
 static const char *str_of(const cJSON *tone, const char *key) {
     const cJSON *value = cJSON_GetObjectItemCaseSensitive(tone, key);
@@ -115,6 +144,26 @@ static void send_tone(cJSON *tone) {
         fprintf(stderr, "dwarfstar: %s\n", thrum_error());
     }
     cJSON_Delete(tone);
+}
+
+static cJSON *headroom_of(int free_slots) {
+    cJSON *headroom = cJSON_CreateObject();
+    if (!headroom) return NULL;
+    cJSON_AddNumberToObject(headroom, "freeSlots", free_slots);
+    cJSON_AddNumberToObject(headroom, "totalSlots", 1);
+    return headroom;
+}
+
+static void claim(int free_slots, const char *kind) {
+    cJSON *tone;
+    bool changed = free_slots != g_free_slots;
+    g_free_slots = free_slots;
+    if (!changed && strcmp(kind, THRUM_PULSE_CELL_IDLE) == 0) return;
+    tone = thrum_tone_new(THRUM_CHI_PULSE, NULL, NULL);
+    if (!tone) return;
+    cJSON_AddStringToObject(tone, "kind", kind);
+    cJSON_AddItemToObject(tone, "headroom", headroom_of(free_slots));
+    send_tone(tone);
 }
 
 static void send_error(const struct turn *t, const char *code, const char *message) {
@@ -198,13 +247,61 @@ static void on_piece(void *user, const char *text, size_t len) {
     s->len -= ready;
 }
 
+static bool turn_stopped(void *user) {
+    bool closing;
+    (void)user;
+    pthread_mutex_lock(&g_lock);
+    closing = g_closing;
+    pthread_mutex_unlock(&g_lock);
+    return closing || ds4_bridge_cancelled(g_bridge);
+}
+
+static int free_slots_now(void) {
+    return gpu_probe(g_gpu) == GPU_OTHER ? 0 : 1;
+}
+
+static void give_back_gpu(void) {
+    ds4_bridge_unload(g_bridge);
+    gpu_release(g_gpu);
+    claim(free_slots_now(), THRUM_PULSE_CELL_EVICTED);
+}
+
+static int take_gpu(const struct turn *t) {
+    char err[512] = "";
+    int rc;
+
+    if (ds4_bridge_ready(g_bridge, t->model_path)) return 0;
+    rc = gpu_acquire(g_gpu, g_wait_ms, turn_stopped, NULL, err, sizeof err);
+    if (rc == 1) {
+        send_finish(t, "cancelled", 0, NULL);
+        return -1;
+    }
+    if (rc != 0) {
+        send_error(t, "gpu_busy", err);
+        send_finish(t, "error", 1, NULL);
+        return -1;
+    }
+    if (ds4_bridge_load(g_bridge, t->model_path, err, sizeof err) != 0) {
+        gpu_release(g_gpu);
+        claim(free_slots_now(), THRUM_PULSE_CELL_DIED);
+        send_error(t, "engine_unavailable", err);
+        send_finish(t, "error", 1, NULL);
+        return -1;
+    }
+    fprintf(stderr, "dwarfstar: loaded %s\n", t->model_path);
+    claim(1, THRUM_PULSE_CELL_SPAWNED);
+    return 0;
+}
+
 static void run_turn(const struct turn *t) {
     struct stream s = {t, NULL, 0, 0};
     ds4_turn result;
     char err[512];
-    int rc = ds4_bridge_generate(g_bridge, t->model_path, t->system, t->messages, t->count,
-                                 g_temperature, g_max_tokens, on_piece, &s, &result, err,
-                                 sizeof err);
+    int rc;
+
+    if (take_gpu(t) != 0) return;
+    rc = ds4_bridge_generate(g_bridge, t->system, t->messages, t->count, g_temperature,
+                             g_max_tokens, on_piece, &s, &result, err, sizeof err);
     free(s.held);
     if (rc != 0) {
         send_error(t, "generation_failed", err[0] ? err : "the engine failed");
@@ -214,15 +311,54 @@ static void run_turn(const struct turn *t) {
     send_finish(t, result.finish, 0, &result);
 }
 
+static void tend_gpu(bool after_turn) {
+    int64_t want_age;
+    bool queued;
+
+    if (!ds4_bridge_loaded(g_bridge)) {
+        claim(free_slots_now(), THRUM_PULSE_CELL_IDLE);
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    queued = g_head != NULL;
+    pthread_mutex_unlock(&g_lock);
+    want_age = gpu_oldest_want_ms(g_gpu);
+    if (!queued && (want_age >= 0 || thrum_now_ms() - g_last_turn_ms >= g_idle_ms)) {
+        fprintf(stderr, "dwarfstar: giving the GPU back (%s)\n",
+                want_age >= 0 ? "another model wants it" : "idle");
+        give_back_gpu();
+    } else if (after_turn && want_age >= YIELD_AFTER_MS) {
+        fprintf(stderr, "dwarfstar: giving the GPU back after a turn (a want waited %llds)\n",
+                (long long)(want_age / 1000));
+        give_back_gpu();
+    }
+}
+
+static struct timespec tick_from_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += (long)TICK_MS * 1000000L;
+    ts.tv_sec += ts.tv_nsec / 1000000000L;
+    ts.tv_nsec %= 1000000000L;
+    return ts;
+}
+
 static void *take_turns(void *arg) {
     (void)arg;
     for (;;) {
         struct turn *t;
         pthread_mutex_lock(&g_lock);
-        while (!g_head && !g_closing) pthread_cond_wait(&g_ready, &g_lock);
+        while (!g_head && !g_closing) {
+            struct timespec until = tick_from_now();
+            if (pthread_cond_timedwait(&g_ready, &g_lock, &until) == ETIMEDOUT) {
+                pthread_mutex_unlock(&g_lock);
+                tend_gpu(false);
+                pthread_mutex_lock(&g_lock);
+            }
+        }
         if (g_closing) {
             pthread_mutex_unlock(&g_lock);
-            return NULL;
+            break;
         }
         t = g_head;
         g_head = t->next;
@@ -236,8 +372,13 @@ static void *take_turns(void *arg) {
         pthread_mutex_lock(&g_lock);
         g_current_sid = NULL;
         pthread_mutex_unlock(&g_lock);
+        g_last_turn_ms = thrum_now_ms();
         free_turn(t);
+        tend_gpu(true);
     }
+    ds4_bridge_unload(g_bridge);
+    gpu_release(g_gpu);
+    return NULL;
 }
 
 static int add_message(struct turn *t, const char *role, const char *text) {
@@ -303,7 +444,7 @@ static void on_prompt(const cJSON *tone) {
     t->rid = dup_of(str_of(tone, "rid"));
     if (!path) {
         char why[256];
-        snprintf(why, sizeof why, "no DwarfStar model on this machine answers to %s",
+        snprintf(why, sizeof why, "no DwarfStar model of this bee answers to %s",
                  model ? model : "the default");
         send_error(t, "no_such_model", why);
         free_turn(t);
@@ -401,10 +542,10 @@ static int metal_dir(char *out, size_t cap) {
 static cJSON *hello_for(void) {
     static const char *const roles[] = {"worker"};
     static const char *const chis[] = {THRUM_CHI_HELLO, THRUM_CHI_PROMPT, THRUM_CHI_CANCEL,
-                                       THRUM_CHI_CHUNK, THRUM_CHI_FINISH, THRUM_CHI_ERROR};
+                                       THRUM_CHI_CHUNK, THRUM_CHI_FINISH, THRUM_CHI_ERROR,
+                                       THRUM_CHI_PULSE};
     cJSON *hello = cJSON_CreateObject();
     cJSON *propensity;
-    cJSON *headroom;
 
     if (!hello) return NULL;
     cJSON_AddStringToObject(hello, "hive", HIVE);
@@ -417,9 +558,8 @@ static cJSON *hello_for(void) {
     cJSON_AddStringToObject(propensity, "statefulness", "stateless");
     cJSON_AddStringToObject(propensity, "richness", "lean");
     cJSON_AddStringToObject(propensity, "wire", WIRE);
-    headroom = cJSON_AddObjectToObject(hello, "headroom");
-    cJSON_AddNumberToObject(headroom, "freeSlots", 1);
-    cJSON_AddNumberToObject(headroom, "totalSlots", 1);
+    g_free_slots = free_slots_now();
+    cJSON_AddItemToObject(hello, "headroom", headroom_of(g_free_slots));
     cJSON_AddStringToObject(hello, "source", SOURCE);
     return hello;
 }
@@ -439,18 +579,59 @@ static int nestle(const char *label) {
     rc = thrum_client_hello(g_client, &bee, hello, NULL);
     cJSON_Delete(hello);
     if (rc == 0) {
-        fprintf(stderr, "dwarfstar: nestled as %s with %d model%s\n", bee.id, g_models.count,
-                g_models.count == 1 ? "" : "s");
+        fprintf(stderr, "dwarfstar: %s nestled as %s with %d model%s\n", label, bee.id,
+                g_models.count, g_models.count == 1 ? "" : "s");
     }
     thrum_bee_forget(&bee);
     return rc;
 }
 
+static void resolve(const char *dir, const char *path, char *out, size_t cap) {
+    if (path[0] == '/') {
+        snprintf(out, cap, "%s", path);
+    } else {
+        snprintf(out, cap, "%s/%s", dir, path);
+    }
+}
+
+static int find_models(const char *dir) {
+    const char *pinned = env_of("DWARFSTAR_MODEL");
+    char path[1024];
+
+    if (!pinned) {
+        if (ds4_models_scan(&g_models, dir) <= 0) {
+            fprintf(stderr, "dwarfstar: no DwarfStar models under %s; set DWARFSTAR_DIR\n", dir);
+        }
+        return 0;
+    }
+    resolve(dir, pinned, path, sizeof path);
+    if (ds4_models_pin(&g_models, path, env_of("DWARFSTAR_MODELS")) <= 0) {
+        fprintf(stderr, "dwarfstar: no model at %s to serve; this unit stays down\n", path);
+        return 1;
+    }
+    return 0;
+}
+
+static int gpu_lock_path(char *out, size_t cap) {
+    const char *env = env_of("DWARFSTAR_GPU_LOCK");
+    char state[1024];
+    if (env) {
+        snprintf(out, cap, "%s", env);
+        return 0;
+    }
+    if (thrum_state_dir(state, sizeof state) != 0) return -1;
+    snprintf(out, cap, "%s/hives/%s/gpu.lock", state, HIVE);
+    return 0;
+}
+
 int main(void) {
     const char *label = env_of("DWARFSTAR_LABEL") ? env_of("DWARFSTAR_LABEL") : "main";
+    ds4_bridge_options options = {32768, 0, false};
     const char *env;
     char dir[1024];
     char kernels[2048] = "";
+    char lock[1100];
+    char err[512] = "cannot find the state directory";
     pthread_t worker;
     int rc;
 
@@ -459,18 +640,24 @@ int main(void) {
     } else {
         snprintf(dir, sizeof dir, "%s/ds4", env_of("HOME") ? env_of("HOME") : ".");
     }
-    if ((env = env_of("DWARFSTAR_CTX"))) g_ctx = atoi(env);
+    if ((env = env_of("DWARFSTAR_CTX"))) options.ctx_size = atoi(env);
+    if ((env = env_of("DWARFSTAR_THREADS"))) options.threads = atoi(env);
+    if ((env = env_of("DWARFSTAR_SSD_STREAMING"))) options.ssd_streaming = strcmp(env, "0") != 0;
     if ((env = env_of("DWARFSTAR_MAX_TOKENS"))) g_max_tokens = atoi(env);
     if ((env = env_of("DWARFSTAR_TEMPERATURE"))) g_temperature = (float)atof(env);
+    if ((env = env_of("DWARFSTAR_IDLE_MS"))) g_idle_ms = atoll(env);
+    if ((env = env_of("DWARFSTAR_WAIT_MS"))) g_wait_ms = atoll(env);
 
+    if (find_models(dir) != 0) return 0;
     if (metal_dir(kernels, sizeof kernels) != 0 || dwarfstar_shaders_point_at(kernels) != 0) {
         fprintf(stderr, "dwarfstar: the Metal kernels are not under %s\n", kernels);
         return 1;
     }
-    if (ds4_models_scan(&g_models, dir) <= 0) {
-        fprintf(stderr, "dwarfstar: no DwarfStar models under %s; set DWARFSTAR_DIR\n", dir);
+    if (gpu_lock_path(lock, sizeof lock) != 0 || !(g_gpu = gpu_open(lock, err, sizeof err))) {
+        fprintf(stderr, "dwarfstar: %s\n", err);
+        return 1;
     }
-    g_bridge = ds4_bridge_new(g_ctx);
+    g_bridge = ds4_bridge_new(&options);
     if (!g_bridge) {
         fprintf(stderr, "dwarfstar: the engine bridge could not start\n");
         return 1;
@@ -479,8 +666,10 @@ int main(void) {
         fprintf(stderr, "dwarfstar: %s\n", thrum_error());
         thrum_client_free(g_client);
         ds4_bridge_free(g_bridge);
+        gpu_close(g_gpu);
         return 1;
     }
+    g_last_turn_ms = thrum_now_ms();
     if (pthread_create(&worker, NULL, take_turns, NULL) != 0) {
         fprintf(stderr, "dwarfstar: could not start the turn thread\n");
         return 1;
@@ -504,5 +693,6 @@ int main(void) {
     }
     thrum_client_free(g_client);
     ds4_bridge_free(g_bridge);
+    gpu_close(g_gpu);
     return rc < 0 ? 1 : 0;
 }

@@ -146,6 +146,41 @@ int ds4_models_scan(ds4_models *models, const char *dir) {
     return models->count;
 }
 
+int ds4_models_pin(ds4_models *models, const char *path, const char *ids) {
+    char resolved[PATH_MAX];
+    const char *name;
+    const char *family;
+    struct stat st;
+
+    memset(models, 0, sizeof *models);
+    if (!path || !path[0] || stat(path, &st) != 0) return -1;
+    snprintf(models->default_path, sizeof models->default_path, "%s", path);
+    if (ids && ids[0]) {
+        const char *at = ids;
+        while (*at) {
+            size_t n = strcspn(at, ",");
+            char id[128];
+            if (n > 0 && n < sizeof id) {
+                memcpy(id, at, n);
+                id[n] = '\0';
+                add(models, id, path);
+            }
+            at += n + (at[n] == ',' ? 1 : 0);
+        }
+        return models->count;
+    }
+    name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+    family = family_of(name);
+    if (!family && realpath(path, resolved)) {
+        name = strrchr(resolved, '/') ? strrchr(resolved, '/') + 1 : resolved;
+        family = family_of(name);
+    }
+    if (!family) return 0;
+    add(models, family, path);
+    add_quantised(models, family, name, path);
+    return models->count;
+}
+
 const char *ds4_models_path(const ds4_models *models, const char *id) {
     int i;
     if (!id || !id[0]) {

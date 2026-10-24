@@ -1,4 +1,4 @@
-/* dwarfstar bridge: one resident engine, one long-lived session, and the
+/* dwarfstar bridge: the engine, its one long-lived session, and the
  * generation loop. See ds4_bridge.h.
  */
 
@@ -9,13 +9,16 @@
 
 #include "ds4_bridge.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdatomic.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <sodium.h>
 
@@ -23,13 +26,14 @@
 
 #define GGUF_MAGIC "GGUF"
 #define GGUF_MIN_BYTES 32
+#define DS4_DEFAULT_LOCK "/tmp/ds4.lock"
 #define SEED_IF_ZERO UINT64_C(0x9e3779b97f4a7c15)
 
 struct ds4_bridge {
+    ds4_bridge_options options;
     char path[1024];
     ds4_engine *engine;
     ds4_session *session;
-    int ctx_size;
     atomic_int cancelled;
 };
 
@@ -37,10 +41,10 @@ static bool session_cancelled(void *user) {
     return atomic_load(&((ds4_bridge *)user)->cancelled) != 0;
 }
 
-ds4_bridge *ds4_bridge_new(int ctx_size) {
+ds4_bridge *ds4_bridge_new(const ds4_bridge_options *options) {
     ds4_bridge *bridge = (ds4_bridge *)calloc(1, sizeof *bridge);
     if (!bridge) return NULL;
-    bridge->ctx_size = ctx_size;
+    bridge->options = *options;
     atomic_init(&bridge->cancelled, 0);
     if (sodium_init() < 0) {
         free(bridge);
@@ -49,7 +53,7 @@ ds4_bridge *ds4_bridge_new(int ctx_size) {
     return bridge;
 }
 
-static void unload(ds4_bridge *bridge) {
+void ds4_bridge_unload(ds4_bridge *bridge) {
     if (bridge->session) ds4_session_free(bridge->session);
     if (bridge->engine) ds4_engine_close(bridge->engine);
     bridge->session = NULL;
@@ -59,8 +63,16 @@ static void unload(ds4_bridge *bridge) {
 
 void ds4_bridge_free(ds4_bridge *bridge) {
     if (!bridge) return;
-    unload(bridge);
+    ds4_bridge_unload(bridge);
     free(bridge);
+}
+
+bool ds4_bridge_loaded(const ds4_bridge *bridge) {
+    return bridge->engine != NULL;
+}
+
+bool ds4_bridge_ready(const ds4_bridge *bridge, const char *model_path) {
+    return bridge->engine && strcmp(bridge->path, model_path) == 0;
 }
 
 void ds4_bridge_arm(ds4_bridge *bridge) {
@@ -69,6 +81,10 @@ void ds4_bridge_arm(ds4_bridge *bridge) {
 
 void ds4_bridge_cancel(ds4_bridge *bridge) {
     if (bridge) atomic_store(&bridge->cancelled, 1);
+}
+
+bool ds4_bridge_cancelled(ds4_bridge *bridge) {
+    return atomic_load(&bridge->cancelled) != 0;
 }
 
 static int is_gguf(const char *path, char *err, size_t errlen) {
@@ -99,32 +115,59 @@ static int is_gguf(const char *path, char *err, size_t errlen) {
     return 0;
 }
 
-static int load(ds4_bridge *bridge, const char *model_path, char *err, size_t errlen) {
+static int ds4_lock_is_free(char *err, size_t errlen) {
+    const char *path = getenv("DS4_LOCK_FILE");
+    char owner[32] = "";
+    ssize_t n;
+    int fd;
+
+    if (!path || !path[0]) path = DS4_DEFAULT_LOCK;
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) return 0;
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+        flock(fd, LOCK_UN);
+        close(fd);
+        return 0;
+    }
+    n = pread(fd, owner, sizeof owner - 1, 0);
+    close(fd);
+    owner[n > 0 ? n : 0] = '\0';
+    owner[strcspn(owner, "\n")] = '\0';
+    snprintf(err, errlen, "another ds4 process%s%s%s holds %s", owner[0] ? " (pid " : "", owner,
+             owner[0] ? ")" : "", path);
+    return -1;
+}
+
+int ds4_bridge_load(ds4_bridge *bridge, const char *model_path, char *err, size_t errlen) {
     ds4_engine_options opt;
 
-    if (bridge->engine && strcmp(bridge->path, model_path) == 0) return 0;
+    if (ds4_bridge_ready(bridge, model_path)) return 0;
     if (strlen(model_path) >= sizeof bridge->path) {
         snprintf(err, errlen, "model path is too long: %s", model_path);
         return -1;
     }
     if (is_gguf(model_path, err, errlen) != 0) return -1;
-    unload(bridge);
+    ds4_bridge_unload(bridge);
+    if (ds4_lock_is_free(err, errlen) != 0) return -1;
 
     memset(&opt, 0, sizeof opt);
     opt.model_path = model_path;
     opt.backend = DS4_BACKEND_METAL;
-    opt.context_size = bridge->ctx_size;
-    opt.placement_ctx_hint = bridge->ctx_size;
+    opt.context_size = bridge->options.ctx_size;
+    opt.placement_ctx_hint = bridge->options.ctx_size;
+    opt.n_threads = bridge->options.threads;
+    opt.ssd_streaming = bridge->options.ssd_streaming;
     if (ds4_engine_open(&bridge->engine, &opt) != 0 || !bridge->engine) {
         bridge->engine = NULL;
         snprintf(err, errlen, "ds4 could not open %s", model_path);
         return -1;
     }
-    if (ds4_session_create(&bridge->session, bridge->engine, bridge->ctx_size) != 0 ||
+    if (ds4_session_create(&bridge->session, bridge->engine, bridge->options.ctx_size) != 0 ||
         !bridge->session) {
         bridge->session = NULL;
-        unload(bridge);
-        snprintf(err, errlen, "ds4 could not create a session of %d tokens", bridge->ctx_size);
+        ds4_bridge_unload(bridge);
+        snprintf(err, errlen, "ds4 could not create a session of %d tokens",
+                 bridge->options.ctx_size);
         return -1;
     }
     ds4_session_set_cancel(bridge->session, session_cancelled, bridge);
@@ -154,10 +197,9 @@ static uint64_t seed(void) {
     return rng ? rng : SEED_IF_ZERO;
 }
 
-int ds4_bridge_generate(ds4_bridge *bridge, const char *model_path, const char *system,
-                        const ds4_message *messages, size_t count, float temperature,
-                        int max_tokens, ds4_piece_fn on_piece, void *user, ds4_turn *turn,
-                        char *err, size_t errlen) {
+int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
+                        size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
+                        void *user, ds4_turn *turn, char *err, size_t errlen) {
     ds4_tokens tokens;
     uint64_t rng = seed();
     int rc;
@@ -166,11 +208,14 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *model_path, const char *
     turn->tokens_out = 0;
     turn->finish = "stop";
     err[0] = '\0';
+    if (!bridge->engine) {
+        snprintf(err, errlen, "no model is loaded");
+        return -1;
+    }
     if (count == 0) {
         snprintf(err, errlen, "the prompt carried no text");
         return -1;
     }
-    if (load(bridge, model_path, err, errlen) != 0) return -1;
     if (temperature < 0) temperature = DS4_DEFAULT_TEMPERATURE;
 
     memset(&tokens, 0, sizeof tokens);
