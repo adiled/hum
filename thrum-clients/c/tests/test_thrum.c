@@ -959,6 +959,160 @@ static void dusk_is_past_or_not(void) {
     cJSON_Delete(none);
 }
 
+typedef struct {
+    char path[600];
+    const char *mode;
+    int listen_fd;
+    int delay_listen_ms;
+    int connections;
+    int hellos;
+    int verified;
+} humd_restarting;
+
+static void *humd_restarts(void *arg) {
+    humd_restarting *h = arg;
+    int i;
+    if (h->delay_listen_ms) {
+        usleep((useconds_t)h->delay_listen_ms * 1000);
+        h->listen_fd = listen_at(h->path);
+    }
+    for (i = 0; i < 2; i++) {
+        line_reader r = {0};
+        char *line;
+        char why[256];
+        char rid[128] = "";
+        r.fd = accept(h->listen_fd, NULL, NULL);
+        h->connections++;
+        send_text(r.fd, "{\"chi\":\"breath\",\"from\":\"daemon\",\"sessions\":[]}\n");
+        line = read_line(&r);
+        if (line) {
+            cJSON *hello = cJSON_Parse(line);
+            snprintf(rid, sizeof rid, "%s", str_of(hello, "rid") ? str_of(hello, "rid") : "");
+            cJSON_Delete(hello);
+            h->hellos++;
+            if (verify_hello(line, why, sizeof why) == 0) h->verified++;
+            send_echo(r.fd, rid, NULL);
+            if (strcmp(h->mode, "refuse") == 0) {
+                send_echo(r.fd, rid, "bee has not entered under this hive");
+            } else {
+                send_text(r.fd, "{\"chi\":\"breath\",\"from\":\"daemon\",\"sessions\":{}}\n");
+            }
+        }
+        free(line);
+        if (strcmp(h->mode, "restart") == 0 && i == 0) {
+            send_text(r.fd, "{\"chi\":\"prompt\",\"rid\":\"q\",\"sid\":\"s\",\"text\":\"hi\"}\n");
+            free(r.buf);
+            close(r.fd);
+            continue;
+        }
+        drain_until_closed(&r);
+        free(r.buf);
+        close(r.fd);
+        break;
+    }
+    return NULL;
+}
+
+typedef struct {
+    thrum_client *client;
+    int stop_after;
+    int nestled;
+    int lost;
+    int prompts;
+} serve_tally;
+
+static cJSON *serve_hello(void *user) {
+    (void)user;
+    return a_hello();
+}
+
+static void serve_nestled(void *user) {
+    serve_tally *t = user;
+    if (++t->nestled == t->stop_after) thrum_client_stop(t->client);
+}
+
+static void serve_lost(void *user, const char *why) {
+    (void)why;
+    ((serve_tally *)user)->lost++;
+}
+
+static void serve_prompts(const cJSON *tone, void *user) {
+    if (str_of(tone, "chi") && strcmp(str_of(tone, "chi"), "prompt") == 0) {
+        ((serve_tally *)user)->prompts++;
+    }
+}
+
+static int serve_against(humd_restarting *h, serve_tally *t) {
+    pthread_t humd;
+    unsigned char seed[32];
+    thrum_bee bee;
+    thrum_serve_hooks hooks;
+    int rc;
+
+    rfc_seed(seed);
+    thrum_bee_from_seed(seed, &bee);
+    if (!h->delay_listen_ms) h->listen_fd = listen_at(h->path);
+    else unlink(h->path);
+    pthread_create(&humd, NULL, humd_restarts, h);
+    t->client = thrum_client_new(h->path);
+    thrum_client_on_any(t->client, serve_prompts, t);
+    hooks.hello = serve_hello;
+    hooks.nestled = serve_nestled;
+    hooks.lost = serve_lost;
+    hooks.user = t;
+    rc = thrum_client_serve(t->client, &bee, &hooks);
+    thrum_client_free(t->client);
+    pthread_join(humd, NULL);
+    close(h->listen_fd);
+    return rc;
+}
+
+static void a_bee_outlives_a_humd_restart(void) {
+    humd_restarting h = {0};
+    serve_tally t = {0};
+    int rc;
+    path_in(h.path, sizeof h.path, "restart.sock");
+    h.mode = "restart";
+    t.stop_after = 2;
+    rc = serve_against(&h, &t);
+    CHECK(rc == 0);
+    CHECK(h.connections == 2);
+    CHECK(h.hellos == 2);
+    CHECK(h.verified == 2);
+    CHECK(t.nestled == 2);
+    CHECK(t.lost == 1);
+    CHECK(t.prompts == 1);
+}
+
+static void a_bee_waits_for_humd(void) {
+    humd_restarting h = {0};
+    serve_tally t = {0};
+    int rc;
+    path_in(h.path, sizeof h.path, "late.sock");
+    h.mode = "once";
+    h.delay_listen_ms = 400;
+    t.stop_after = 1;
+    rc = serve_against(&h, &t);
+    CHECK(rc == 0);
+    CHECK(t.lost >= 1);
+    CHECK(t.nestled == 1);
+    CHECK(h.verified == 1);
+}
+
+static void a_refused_bee_stops_serving(void) {
+    humd_restarting h = {0};
+    serve_tally t = {0};
+    int rc;
+    path_in(h.path, sizeof h.path, "refused.sock");
+    h.mode = "refuse";
+    t.stop_after = 99;
+    rc = serve_against(&h, &t);
+    CHECK(rc == -1);
+    CHECK_HAS(thrum_error(), "hello refused: bee has not entered under this hive");
+    CHECK(t.nestled == 0);
+    CHECK(h.connections == 1);
+}
+
 int main(int argc, char **argv) {
     const char *golden = argc > 1 ? argv[1] : "../../thrum-core/tests/fixtures/golden.ndjson";
     const char *tmp = getenv("TMPDIR");
@@ -988,6 +1142,9 @@ int main(int argc, char **argv) {
     a_refused_hello_says_why();
     a_refusal_after_admission_ends_the_run();
     tones_go_to_their_sid_or_the_wildcard();
+    a_bee_outlives_a_humd_restart();
+    a_bee_waits_for_humd();
+    a_refused_bee_stops_serving();
     the_wane_counts_per_sigil();
     dusk_is_past_or_not();
 

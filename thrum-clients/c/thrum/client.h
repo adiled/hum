@@ -23,6 +23,13 @@
  * thrum_error(). thrum_client_hello waits ten seconds for a verdict and
  * thrum_client_hello_within as long as it is told. thrum_client_shutdown
  * wakes a blocked run loop from another thread.
+ *
+ * humd restarts, and a bee outlives it. thrum_client_serve keeps a bee
+ * nestled: it connects, sends the fresh hello its hook makes, signed,
+ * runs, and when humd closes the socket or is not there yet, reconnects
+ * with backoff (250 ms, doubling to 30 s). It returns 0 once
+ * thrum_client_stop is called from anywhere, and -1 when a hello is
+ * refused, which is final; a bee should then exit non-zero.
  */
 
 #ifndef THRUM_CLIENT_H
@@ -57,6 +64,16 @@ int thrum_client_on(thrum_client *client, const char *sid, thrum_handler fn, voi
 void thrum_client_off(thrum_client *client, const char *sid);
 void thrum_client_on_any(thrum_client *client, thrum_handler fn, void *user);
 int thrum_client_run(thrum_client *client);
+
+typedef struct {
+    cJSON *(*hello)(void *user);
+    void (*nestled)(void *user);
+    void (*lost)(void *user, const char *why);
+    void *user;
+} thrum_serve_hooks;
+
+int thrum_client_serve(thrum_client *client, const thrum_bee *bee, const thrum_serve_hooks *hooks);
+void thrum_client_stop(thrum_client *client);
 
 int thrum_client_hello(thrum_client *client, const thrum_bee *bee, cJSON *hello, cJSON **breath);
 int thrum_client_hello_within(thrum_client *client, const thrum_bee *bee, cJSON *hello,

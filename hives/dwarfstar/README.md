@@ -85,6 +85,8 @@ as their engine is loaded:
 - A turn ends in `finish` with `stop`, `length` (`DWARFSTAR_MAX_TOKENS`
   or the context is full), `cancelled`, or `error` after an `error` tone.
 - Chunks carry whole UTF-8 characters, even when a token ends inside one.
+- The bee outlives humd: when humd restarts, it reconnects and nestles
+  again with its model still loaded, dropping the turns the old humd gave.
 - The bee is stateless: a prompt's `text`, or its `content` petals, are
   the conversation. Petals with roles become chat turns.
 

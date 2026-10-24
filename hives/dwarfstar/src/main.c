@@ -15,6 +15,11 @@
  * peer routes to the model that can start now. A local prompt for a model
  * whose bee lacks the GPU still runs: it waits for the handoff.
  *
+ * The bee outlives humd: when humd restarts, the bee reconnects with
+ * backoff and says a freshly signed hello, keeping its model loaded, and
+ * drops the turns the gone humd gave it. Only a refused hello ends it,
+ * non-zero, for its unit to restart.
+ *
  * The engine runs one turn at a time, so prompts queue and one thread
  * takes them in order and tends the GPU between them, while the main
  * thread reads the socket. A cancel stops its sid's turn, waiting or in
@@ -49,6 +54,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,7 +114,9 @@ static struct turn *g_tail;
 static const char *g_current_sid;
 static bool g_closing;
 
-static int g_free_slots = -1;
+static atomic_int g_free_slots = -1;
+static thrum_bee g_bee;
+static const char *g_label = "main";
 static int64_t g_last_turn_ms;
 
 static const char *str_of(const cJSON *tone, const char *key) {
@@ -158,8 +166,8 @@ static cJSON *headroom_of(int free_slots) {
 
 static void claim(int free_slots, const char *kind) {
     cJSON *tone;
-    bool changed = free_slots != g_free_slots;
-    g_free_slots = free_slots;
+    bool changed = free_slots != atomic_load(&g_free_slots);
+    atomic_store(&g_free_slots, free_slots);
     if (!changed && strcmp(kind, THRUM_PULSE_CELL_IDLE) == 0) return;
     tone = thrum_tone_new(THRUM_CHI_PULSE, NULL, NULL);
     if (!tone) return;
@@ -563,32 +571,37 @@ static cJSON *hello_for(void) {
     cJSON_AddStringToObject(propensity, "statefulness", "stateless");
     cJSON_AddStringToObject(propensity, "richness", "lean");
     cJSON_AddStringToObject(propensity, "wire", WIRE);
-    g_free_slots = free_slots_now();
-    cJSON_AddItemToObject(hello, "headroom", headroom_of(g_free_slots));
+    cJSON_AddItemToObject(hello, "headroom", headroom_of(atomic_load(&g_free_slots)));
     cJSON_AddStringToObject(hello, "source", SOURCE);
     return hello;
 }
 
-static int nestle(const char *label) {
-    thrum_bee bee;
-    cJSON *hello;
-    int rc;
+static cJSON *hello_hook(void *user) {
+    (void)user;
+    return hello_for();
+}
 
-    if (thrum_bee_enter_as(HIVE, label, &bee) != 0) return -1;
-    g_client = thrum_client_new(NULL);
-    if (!g_client || thrum_client_connect(g_client) != 0) {
-        thrum_bee_forget(&bee);
-        return -1;
+static void nestled_hook(void *user) {
+    (void)user;
+    fprintf(stderr, "dwarfstar: %s nestled as %s with %d model%s\n", g_label, g_bee.id,
+            g_models.count, g_models.count == 1 ? "" : "s");
+}
+
+static void lost_hook(void *user, const char *why) {
+    struct turn *dropped;
+    (void)user;
+    pthread_mutex_lock(&g_lock);
+    if (g_current_sid) ds4_bridge_cancel(g_bridge);
+    dropped = g_head;
+    g_head = NULL;
+    g_tail = NULL;
+    pthread_mutex_unlock(&g_lock);
+    while (dropped) {
+        struct turn *t = dropped;
+        dropped = t->next;
+        free_turn(t);
     }
-    hello = hello_for();
-    rc = thrum_client_hello(g_client, &bee, hello, NULL);
-    cJSON_Delete(hello);
-    if (rc == 0) {
-        fprintf(stderr, "dwarfstar: %s nestled as %s with %d model%s\n", label, bee.id,
-                g_models.count, g_models.count == 1 ? "" : "s");
-    }
-    thrum_bee_forget(&bee);
-    return rc;
+    fprintf(stderr, "dwarfstar: waiting for humd (%s)\n", why);
 }
 
 static void resolve(const char *dir, const char *path, char *out, size_t cap) {
@@ -667,13 +680,14 @@ int main(void) {
         fprintf(stderr, "dwarfstar: the engine bridge could not start\n");
         return 1;
     }
-    if (nestle(label) != 0) {
+    g_label = label;
+    if (thrum_bee_enter_as(HIVE, label, &g_bee) != 0 || !(g_client = thrum_client_new(NULL))) {
         fprintf(stderr, "dwarfstar: %s\n", thrum_error());
-        thrum_client_free(g_client);
         ds4_bridge_free(g_bridge);
         gpu_close(g_gpu);
         return 1;
     }
+    atomic_store(&g_free_slots, free_slots_now());
     g_last_turn_ms = thrum_now_ms();
     if (pthread_create(&worker, NULL, take_turns, NULL) != 0) {
         fprintf(stderr, "dwarfstar: could not start the turn thread\n");
@@ -681,7 +695,10 @@ int main(void) {
     }
 
     thrum_client_on_any(g_client, on_tone, NULL);
-    rc = thrum_client_run(g_client);
+    {
+        thrum_serve_hooks hooks = {hello_hook, nestled_hook, lost_hook, NULL};
+        rc = thrum_client_serve(g_client, &g_bee, &hooks);
+    }
     if (rc < 0) fprintf(stderr, "dwarfstar: %s\n", thrum_error());
 
     pthread_mutex_lock(&g_lock);
@@ -699,5 +716,6 @@ int main(void) {
     thrum_client_free(g_client);
     ds4_bridge_free(g_bridge);
     gpu_close(g_gpu);
+    thrum_bee_forget(&g_bee);
     return rc < 0 ? 1 : 0;
 }
