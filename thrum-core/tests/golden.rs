@@ -64,6 +64,7 @@ fn golden() -> Vec<Value> {
             provides: Some(vec!["env".into(), "token".into()]),
             chis: None,
             propensity: None,
+            headroom: None,
             source: Some("cli".into()),
         }
     );

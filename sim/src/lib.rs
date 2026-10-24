@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -15,27 +15,12 @@ use serde_json::Value;
 use thrum_core::WaneTracker;
 use tokio::sync::{mpsc, oneshot};
 
-const CAPACITY_UNLIMITED: usize = usize::MAX;
-
-const SIM_NEST_KIND: &str = "claude-repl";
-
 pub const SIM_HIVES: [&str; 3] = ["claude-cli", "claude-repl", "humfs"];
 
-fn sim_caps(humd: &SimHumd) -> PeerCapabilities {
-    let cap = humd.capacity.load(Ordering::SeqCst);
+fn sim_caps(_humd: &SimHumd) -> PeerCapabilities {
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.to_string(),
-        nests: vec![SIM_NEST_KIND.to_string()],
-        free_slots: (cap != CAPACITY_UNLIMITED).then_some(cap),
         ..Default::default()
-    }
-}
-
-fn local_capacity(max_concurrent: usize) -> humd::LocalCapacity {
-    match max_concurrent {
-        0 => humd::LocalCapacity::OverflowAlways,
-        CAPACITY_UNLIMITED => humd::LocalCapacity::Unlimited,
-        n => humd::LocalCapacity::Slots(n),
     }
 }
 
@@ -48,7 +33,6 @@ pub struct SimHumd {
     out_queues: Mutex<HashMap<String, mpsc::Receiver<Value>>>,
     sid_mailboxes: Mutex<HashMap<String, mpsc::UnboundedReceiver<Value>>>,
     sid_senders: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
-    capacity: AtomicUsize,
     pub waneman: Arc<WaneTracker>,
     pub key: Option<Arc<HumdKey>>,
     pub hives: humd::InstalledHives,
@@ -71,7 +55,6 @@ impl SimHumd {
 
 pub struct Sim {
     humds: RwLock<HashMap<Hid, Arc<SimHumd>>>,
-    pending_capacities: RwLock<HashMap<Hid, usize>>,
     links: RwLock<HashMap<(Hid, Hid), Link>>,
 }
 
@@ -120,17 +103,8 @@ impl Sim {
     pub fn new() -> Self {
         Self {
             humds: RwLock::new(HashMap::new()),
-            pending_capacities: RwLock::new(HashMap::new()),
             links: RwLock::new(HashMap::new()),
         }
-    }
-
-    pub fn set_capacity(&self, humd: Hid, max_concurrent: usize) {
-        if let Some(h) = self.humds.read().get(&humd).cloned() {
-            h.capacity.store(max_concurrent, Ordering::SeqCst);
-            return;
-        }
-        self.pending_capacities.write().insert(humd, max_concurrent);
     }
 
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
@@ -177,13 +151,6 @@ impl Sim {
             .expect("write revocation list");
         }
 
-        let initial_capacity = self
-            .pending_capacities
-            .write()
-            .remove(&id)
-            .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity = local_capacity(initial_capacity);
-
         let waneman = Arc::new(WaneTracker::new());
         let hives = humd::InstalledHives::in_memory(SIM_HIVES);
         let bees = humd::EnteredBees::in_memory();
@@ -201,7 +168,6 @@ impl Sim {
             ensemble: Some(ensemble.clone()),
             revoked_path: revoked_path.clone(),
             bind_mcp: false,
-            capacity,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
@@ -225,7 +191,6 @@ impl Sim {
             out_queues: Mutex::new(HashMap::new()),
             sid_mailboxes: Mutex::new(HashMap::new()),
             sid_senders: Mutex::new(HashMap::new()),
-            capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: None,
             hives,
@@ -301,13 +266,6 @@ impl Sim {
         let _ = std::fs::create_dir_all(&tmp);
         let comb_path = tmp.join(hum_paths::COMB_BASENAME);
 
-        let initial_capacity = self
-            .pending_capacities
-            .write()
-            .remove(&id)
-            .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity = local_capacity(initial_capacity);
-
         let waneman = Arc::new(WaneTracker::new());
         let hives = humd::InstalledHives::in_memory(SIM_HIVES);
         let bees = humd::EnteredBees::in_memory();
@@ -325,7 +283,6 @@ impl Sim {
             ensemble: Some(ensemble.clone()),
             revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
             bind_mcp: false,
-            capacity,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
@@ -349,7 +306,6 @@ impl Sim {
             out_queues: Mutex::new(HashMap::new()),
             sid_mailboxes: Mutex::new(HashMap::new()),
             sid_senders: Mutex::new(HashMap::new()),
-            capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: Some(Arc::new(key)),
             hives,
@@ -608,6 +564,16 @@ impl Sim {
     }
 
     pub async fn attach_mock_worker(&self, humd: Hid, models: Vec<String>) -> Result<String> {
+        self.attach_mock_worker_claiming(humd, models, None, "HELLO").await
+    }
+
+    pub async fn attach_mock_worker_claiming(
+        &self,
+        humd: Hid,
+        models: Vec<String>,
+        headroom: Option<(u32, u32)>,
+        reply: &str,
+    ) -> Result<String> {
         let h = self
             .humds
             .read()
@@ -622,7 +588,7 @@ impl Sim {
         }
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        let hello = h.signed_hello(serde_json::json!({
+        let mut hello = serde_json::json!({
             "chi": "hello",
             "roles": ["worker"],
             "hive": "claude-repl",
@@ -630,10 +596,15 @@ impl Sim {
             "protoVersion": thrum_core::THRUM_VERSION,
             "models": models,
             "chis": ["hello", "prompt", "chunk", "finish"],
-        }));
+        });
+        if let Some((free, total)) = headroom {
+            hello["headroom"] = serde_json::json!({"freeSlots": free, "totalSlots": total});
+        }
+        let hello = h.signed_hello(hello);
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
+        let reply = reply.to_string();
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
                 let chi = tone
@@ -654,7 +625,7 @@ impl Sim {
                 }
                 let frames = vec![
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":&reply}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
                 ];

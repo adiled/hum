@@ -39,7 +39,7 @@ class Chi:
     ERROR: str = "error"
     # nest spawned, claude session id known
     SESSION_READY: str = "session-ready"
-    # process lifecycle event
+    # cell lifecycle event and headroom
     PULSE: str = "pulse"
     # mid-stream permission needed
     PERMISSION_ASK: str = "permission-ask"

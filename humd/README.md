@@ -1,6 +1,6 @@
 ---
 title: "humd"
-description: "The hum daemon. One per machine install. Holds the nest, owns the thrum socket, joins the ensemble. Built as a binary for production and as a library so simulators and tests can spawn humds in-process."
+description: "The hum daemon. One per machine install. A coordination node: owns the thrum socket, admits bees, routes between them, joins the ensemble. Built as a binary for production and as a library so simulators and tests can spawn humds in-process."
 ---
 
 # humd
@@ -9,11 +9,11 @@ description: "The hum daemon. One per machine install. Holds the nest, owns the 
 
 A **humd** is the single process every other piece of hum talks to: bees
 hello in over the thrum socket, peer humds dial in over the ensemble
-transports, the OS hands it a state directory and a runtime directory,
-and it owns one **nest** for the lifetime of the process. Everything
-mesh-shaped (routing, gossip, capacity advertise) happens here.
-Everything LLM-shaped (worker bees, cells, prompts) happens in the
-nest this daemon hosts.
+transports, and the OS hands it a state directory and a runtime
+directory. It is a coordination node: everything mesh-shaped (admission,
+routing, gossip) happens here, and nothing LLM-shaped does. Cells live in
+the nests of the hives that host them, and a worker's claimed headroom
+is how humd knows where a prompt can go.
 
 The crate ships two entry points off the same code:
 
@@ -24,7 +24,7 @@ The crate ships two entry points off the same code:
 
 The same `run` function backs both. Tests and simulators never
 duplicate the wiring; they hand in a [`DaemonConfig`] with the bits
-they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
+they want to swap (`thrum_override`, `ensemble`, `hives`, `bees`,
 `waneman`, etc.).
 
 ## Boot order
@@ -116,7 +116,8 @@ metrics on `humd.metricsAddr`. Embedders override the bits they need:
 | `thrum_override` | sim, to bypass socket binding |
 | `ensemble` | sim, to install pre-wired `InMemoryEndpoint` peers |
 | `bind_mcp` | sim, to skip the HTTP MCP listener |
-| `capacity_override` | sim, to force `Some(0)` for overflow tests |
+| `hives` | sim, to install hives in memory |
+| `bees` | sim, to enter bees in memory |
 | `waneman` | sim, to share a `WaneTracker` across humds |
 | `humd_key` | tests, to spawn ephemeral identities |
 | `bootstrap_peers` | tests, to inject specific `peers.json` rows |

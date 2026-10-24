@@ -1,7 +1,7 @@
 //! hum.json loader (0.3).
 //!
-//! Namespaced daemon policy: `humd` / `fs` / `nest`. Missing sections
-//! fill with defaults. Validity is defined by `hum.schema.json`
+//! Namespaced daemon policy: `humd` / `fs`. Missing sections fill with
+//! defaults. Validity is defined by `hum.schema.json`
 //! ([`SCHEMA`]); [`validate_or_exit`] gates daemon startup on it, so an
 //! invalid config is fatal rather than silently coerced.
 //!
@@ -17,7 +17,9 @@
 //! [`RETIRED`]. A daemon that dies because the file carries a key it has
 //! moved on from turns every upgrade into an outage, so a retired key is
 //! dropped on sight instead of failing validation. A key that was never
-//! known is still a violation.
+//! known is still a violation. humd hosts no cells, so the whole `nest`
+//! section is retired: a hive that hosts cells keeps their limits in its
+//! own config.
 
 use std::path::{Path, PathBuf};
 
@@ -117,25 +119,6 @@ impl std::fmt::Display for FsDenial {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NestSection {
-    #[serde(default = "defaults::max_active_cells", rename = "maxActiveCells")]
-    pub max_active_cells: u32,
-    #[serde(default = "defaults::cell_idle_prune_threshold_ms", rename = "cellIdlePruneThresholdMs")]
-    pub cell_idle_prune_threshold_ms: u64,
-    #[serde(default = "defaults::default_hive")]
-    pub default: String,
-}
-
-impl Default for NestSection {
-    fn default() -> Self {
-        Self {
-            max_active_cells: defaults::max_active_cells(),
-            cell_idle_prune_threshold_ms: defaults::cell_idle_prune_threshold_ms(),
-            default: defaults::default_hive(),
-        }
-    }
-}
 
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,8 +127,6 @@ pub struct HumConfig {
     pub humd: HumdSection,
     #[serde(default)]
     pub fs: FsSection,
-    #[serde(default)]
-    pub nest: NestSection,
 }
 
 
@@ -201,9 +182,17 @@ pub fn load() -> HumConfig {
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
 pub const RETIRED: &[(&str, &str)] = &[("humd", "driftRetentionDays")];
+pub const RETIRED_SECTIONS: &[&str] = &["nest"];
 
 pub fn drop_retired(instance: &mut serde_json::Value) -> Vec<String> {
     let mut dropped = Vec::new();
+    if let Some(obj) = instance.as_object_mut() {
+        for section in RETIRED_SECTIONS {
+            if obj.remove(*section).is_some() {
+                dropped.push((*section).to_string());
+            }
+        }
+    }
     for (section, key) in RETIRED {
         let Some(obj) = instance.get_mut(*section).and_then(|s| s.as_object_mut()) else {
             continue;
@@ -298,15 +287,6 @@ mod defaults {
     pub(crate) fn iroh_port() -> u16 {
         41641
     }
-    pub(crate) fn max_active_cells() -> u32 {
-        4
-    }
-    pub(crate) fn cell_idle_prune_threshold_ms() -> u64 {
-        300_000
-    }
-    pub(crate) fn default_hive() -> String {
-        "claude-repl".into()
-    }
     pub(crate) fn denied() -> Vec<PathBuf> {
         vec![
             PathBuf::from("~/.ssh"),
@@ -324,20 +304,19 @@ mod tests {
     #[test]
     fn empty_yields_defaults() {
         let cfg: HumConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.nest.max_active_cells, 4);
-        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, 300_000);
-        assert_eq!(cfg.nest.default, "claude-repl");
         assert_eq!(cfg.humd.permission_dusk_ms, 60_000);
     }
 
     #[test]
-    fn nest_section_partial_takes_defaults() {
-        let cfg: HumConfig =
-            serde_json::from_str(r#"{"nest": {"maxActiveCells": 8, "default": "claude-cli"}}"#).unwrap();
-        assert_eq!(cfg.nest.max_active_cells, 8);
-        assert_eq!(cfg.nest.default, "claude-cli");
-        let default_threshold = HumConfig::default().nest.cell_idle_prune_threshold_ms;
-        assert_eq!(cfg.nest.cell_idle_prune_threshold_ms, default_threshold);
+    fn a_config_from_a_humd_that_hosted_cells_still_loads() {
+        let old = r#"{
+            "humd": { "permissionDuskMs": 60000 },
+            "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
+        }"#;
+        assert!(validate(old).is_ok(), "a retired nest section must not fail validation: {:?}", validate(old));
+        let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
+        assert_eq!(drop_retired(&mut v), ["nest"]);
+        assert!(v.get("nest").is_none());
     }
 
     #[test]
@@ -345,8 +324,7 @@ mod tests {
         let ok = r#"{
             "$schema": "https://adiled.github.io/hum/hum.schema.json",
             "humd": { "permissionDuskMs": 60000 },
-            "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] },
-            "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
+            "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] }
         }"#;
         assert!(validate(ok).is_ok(), "canonical config should validate: {:?}", validate(ok));
     }
@@ -354,7 +332,6 @@ mod tests {
     #[test]
     fn schema_rejects_legacy_hives_block() {
         let bad = r#"{
-            "nest": { "default": "claude-cli" },
             "hives": { "claude-cli": { "bin": "claude", "flags": [], "model": "opus" } }
         }"#;
         assert!(validate(bad).is_err(), "legacy hives block must fail schema validation");

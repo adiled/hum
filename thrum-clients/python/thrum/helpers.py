@@ -14,14 +14,12 @@ import time
 from typing import Any, Mapping
 
 
-def sigil(sid: str, nest: str) -> str:
-    """Deterministic 12-char identity for a (nest, sid) pair.
+def sigil(sid: str) -> str:
+    """Deterministic 12-char identity for a session.
 
-    Returns lowercase hex of the first 6 sha256 bytes of `nest:sid`.
-    Required-`nest`, no fallback — the protocol layer must not know
-    about specific nest kinds.
+    Returns lowercase hex of the first 6 sha256 bytes of `sigil:<sid>`.
     """
-    h = hashlib.sha256(f"{nest}:{sid}".encode("utf-8")).digest()
+    h = hashlib.sha256(f"sigil:{sid}".encode("utf-8")).digest()
     return h[:6].hex()
 
 

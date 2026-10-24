@@ -121,15 +121,14 @@ ensure_hum_config() {
   cat > "$CFG" <<JSON
 {
   "\$schema": "https://adiled.github.io/hum/hum.schema.json",
-  "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 },
+  "humd": { "permissionDuskMs": 60000 },
   "fs": {
     "roots": [
       { "path": "~/code", "mode": "rw" },
       { "path": "/tmp", "mode": "rw" }
     ],
     "denied": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/hum"]
-  },
-  "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "openai-server" }
+  }
 }
 JSON
   log "wrote default hum.json at $CFG"

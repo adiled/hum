@@ -53,22 +53,24 @@ pub fn protocol_spec(views_rs: &Path, envelope_rs: &Path, lib_rs: &Path) -> Resu
         .ok_or_else(|| anyhow!("THRUM_VERSION not found in {}", lib_rs.display()))?;
 
     let mut types = Vec::new();
-    for path in [views_rs, envelope_rs] {
+    let every_view: fn(&str) -> bool = |_| true;
+    let the_envelope: fn(&str) -> bool = |name| name == "Envelope";
+    for (path, keep) in [(views_rs, every_view), (envelope_rs, the_envelope)] {
         let src = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        for st in structs_in(&src)? {
+        for st in structs_in(&src, keep)? {
             types.push(st);
         }
     }
     Ok(ProtocolSpec { version, types })
 }
 
-fn structs_in(src: &str) -> Result<Vec<TypeSpec>> {
+fn structs_in(src: &str, keep: fn(&str) -> bool) -> Result<Vec<TypeSpec>> {
     let file = syn::parse_file(src).map_err(|e| anyhow::anyhow!("syn parse: {e}"))?;
     let mut out = Vec::new();
     for item in file.items {
         let Item::Struct(s) = item else { continue };
         let name = s.ident.to_string();
-        if name != "Envelope" && name != "DroneLoad" && !name.ends_with("Body") {
+        if !keep(&name) {
             continue;
         }
         out.push(type_spec(s));
@@ -524,7 +526,7 @@ mod tests {
                 pub load: Option<BTreeMap<String, u64>>,
             }
         "#;
-        let ts = structs_in(src).unwrap();
+        let ts = structs_in(src, |_| true).unwrap();
         assert_eq!(ts.len(), 1);
         let f = &ts[0].fields;
         assert_eq!(f.len(), 4);

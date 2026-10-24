@@ -42,7 +42,7 @@ const (
     ChiError Chi = "error"
     // nest spawned, claude session id known
     ChiSessionReady Chi = "session-ready"
-    // process lifecycle event
+    // cell lifecycle event and headroom
     ChiPulse Chi = "pulse"
     // mid-stream permission needed
     ChiPermissionAsk Chi = "permission-ask"

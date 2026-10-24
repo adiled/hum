@@ -85,7 +85,7 @@ func main() {
 | `PulseKind` | `pulse.kind` enum |
 | `ThrumVersion` | "0.8.0" today |
 | `AllChi`, `IsValidChi(s)` | membership checks |
-| `Sigil(sid, nest)` | 12-char content hash |
+| `Sigil(sid)` | 12-char content hash |
 | `Rid()` | monotonic correlation id |
 | `DuskIn(ms)`, `IsDusk(t)` | expiry helpers |
 | `WaneTracker` | Lamport clock per sigil |

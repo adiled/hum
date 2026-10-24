@@ -9,7 +9,7 @@ description: "how to build a hive, install it on a humd, and the bees that humd 
 
 ## The vocabulary, once
 
-A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A humd is a coordination node: it admits bees, routes between them and gossips with its peers, and hosts no cells. A **nest** is the cells a hive hosts, which it turns on by using [`hum-nest`](../hum-nest). A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
 A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees, signing them in one key each, and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
 
@@ -96,6 +96,16 @@ On connect, send `chi:"hello"` with these fields.
 > Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. The reference implementations all sign the same way. In Rust, `hum_identity::enter_as(hive, "main")?.sign_hello(&mut hello)`, or `hum_nest::serve_worker` / `serve_forager`, which do it for you. In TypeScript see `enter` and `signedAs` in [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `signedAs` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
 
 Once the hello is accepted you are nestled.
+
+### 2b. Host cells, if you do
+
+A worker that runs its own model processes (cells) uses `hum_nest::serve_worker`, and its nest's limits are your hive's to set, in the `nest` section of `~/.config/hum/hives/<hive>.json`:
+
+```json
+{ "nest": { "maxCells": 8, "idleMs": 300000, "bounds": { "rssBytes": 2147483648, "fdCount": 1024 } } }
+```
+
+`maxCells` caps live cells (least recently used is evicted first), `idleMs` evicts a cell left idle, and `bounds` caps each cell's memory, file descriptors, CPU and wall clock (enforced on Linux). Leave the section out for the defaults: 8 cells, five idle minutes, no bounds. The worker claims its `headroom` (`freeSlots`, `totalSlots`) on its hello and on a `chi:"pulse"` each time a cell is spawned, evicted or dies, and humd routes prompts to workers with room. A worker that hosts cells some other way claims its headroom the same way.
 
 ### 3. Translate, or transport
 

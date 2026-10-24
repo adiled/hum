@@ -19,10 +19,10 @@ import (
 )
 
 // Sigil returns the 12-char content-addressable identifier for a
-// (nest, sid) pair: lowercase hex of the first 6 sha256 bytes of
-// "nest:sid". Stable across reconnects.
-func Sigil(sid, nest string) string {
-	h := sha256.Sum256([]byte(nest + ":" + sid))
+// session: lowercase hex of the first 6 sha256 bytes of "sigil:<sid>".
+// Stable across reconnects.
+func Sigil(sid string) string {
+	h := sha256.Sum256([]byte("sigil:" + sid))
 	return hex.EncodeToString(h[:6])
 }
 

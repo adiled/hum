@@ -15,14 +15,14 @@ across repos.
 
 ## What's in it
 
-- `Chi` — every wire-known message kind, kebab-case on serde. Bump
+- `Chi`: every wire-known message kind, kebab-case on serde. Bump
   `THRUM_VERSION` whenever you add a variant.
-- `THRUM_VERSION` — the version string handed back in every `hello`.
-- `WaneTracker` — Lamport-clock per sigil for drift detection +
+- `THRUM_VERSION`: the version string handed back in every `hello`.
+- `WaneTracker`: Lamport-clock per sigil for drift detection +
   partition reconciliation.
-- `Tone` — the loose JSON envelope every chi rides inside.
-- `sigil(nest, sid)` — content-addressable handle for an inference
-  context.
+- `Tone`: the loose JSON envelope every chi rides inside.
+- `sigil(sid)`: content-addressable handle for a session, the same
+  on every humd.
 
 ## Build a bee
 

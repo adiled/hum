@@ -23,7 +23,13 @@ type HelloBody struct {
 	Provides []string `json:"provides,omitempty"`
 	Chis []string `json:"chis,omitempty"`
 	Propensity json.RawMessage `json:"propensity,omitempty"`
+	Headroom *Headroom `json:"headroom,omitempty"`
 	Source *string `json:"source,omitempty"`
+}
+
+type Headroom struct {
+	FreeSlots uint64 `json:"freeSlots"`
+	TotalSlots uint64 `json:"totalSlots"`
 }
 
 type PromptBody struct {
@@ -102,6 +108,7 @@ type ToolMetaBody struct {
 type PulseBody struct {
 	Kind string `json:"kind"`
 	Pid *int64 `json:"pid,omitempty"`
+	Headroom *Headroom `json:"headroom,omitempty"`
 }
 
 type PermissionAskBody struct {

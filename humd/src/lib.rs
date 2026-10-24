@@ -30,14 +30,6 @@ pub use peers::{PeerConfig, peers_path};
 
 type Observers = Arc<RwLock<HashMap<String, Vec<Hid>>>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LocalCapacity {
-    #[default]
-    Unlimited,
-    OverflowAlways,
-    Slots(usize),
-}
-
 pub struct DaemonConfig {
     pub thrum_path: PathBuf,
     pub http_path: PathBuf,
@@ -52,7 +44,6 @@ pub struct DaemonConfig {
     pub ensemble: Option<Arc<Ensemble>>,
     pub revoked_path: PathBuf,
     pub bind_mcp: bool,
-    pub capacity: LocalCapacity,
     pub waneman: Option<Arc<WaneTracker>>,
     pub humd_key: Option<Arc<HumdKey>>,
     pub bootstrap_peers: Vec<PeerConfig>,
@@ -100,7 +91,6 @@ impl DaemonConfig {
             ensemble: None,
             revoked_path: hum_paths::revoked_bees(),
             bind_mcp: true,
-            capacity: LocalCapacity::default(),
             waneman: None,
             humd_key,
             bootstrap_peers,
@@ -192,7 +182,7 @@ where
     let mut peer_reach: Vec<String> = Vec::new();
     let mut supervisor: Option<supervisor::Supervisor> = None;
     if let (Some(ens), Some(key)) = (&ensemble_opt, &cfg.humd_key) {
-        let my_caps = my_capabilities(&cfg);
+        let my_caps = my_capabilities();
         let mut iroh_transport: Option<Arc<ensemble::IrohTransport>> = None;
         let mut reached_by_iroh: Vec<String> = Vec::new();
 
@@ -276,7 +266,6 @@ where
         None => (Thrum::new(), true),
     };
     let observers: Observers = Arc::new(RwLock::new(HashMap::new()));
-    let nest_kind = cfg.hum_cfg.nest.default.clone();
     let manifests: Manifests = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let remote_bees: RemoteBees = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     if let Some(thehum) = thehum_handle.as_ref() {
@@ -358,8 +347,6 @@ where
         waneman: waneman.clone(),
         ensemble: ensemble_for_sink.clone(),
         observers: observers.clone(),
-        capacity: cfg.capacity,
-        nest_kind: nest_kind.clone(),
         manifests: manifests.clone(),
         remote_bees: remote_bees.clone(),
         bees_snapshot_path: bees_snapshot_path(),
@@ -558,8 +545,6 @@ struct HumdSink {
     waneman: Arc<WaneTracker>,
     ensemble: Option<Arc<Ensemble>>,
     observers: Observers,
-    capacity: LocalCapacity,
-    nest_kind: String,
     manifests: Manifests,
     remote_bees: RemoteBees,
     bees_snapshot_path: std::path::PathBuf,
@@ -627,20 +612,42 @@ impl HumdSink {
         let live: std::collections::BTreeSet<String> =
             ens.peers().iter().map(|h| h.to_hex()).collect();
         let table = self.remote_bees.read();
-        let mut found: Vec<String> = table
+        let mut found: Vec<(u32, String)> = table
             .iter()
-            .filter(|(humd, bees)| {
-                live.contains(&humd.to_hex())
-                    && bees.values().any(|m| {
+            .filter(|(humd, _)| live.contains(&humd.to_hex()))
+            .filter_map(|(humd, bees)| {
+                bees.values()
+                    .filter(|m| {
                         m.plays("worker")
                             && m.models.iter().any(|x| x == model)
                             && self.hives.recognises(&m.hive)
+                            && !m.is_full()
                     })
+                    .map(|m| m.free_slots())
+                    .max()
+                    .map(|free| (free, humd.to_hex()))
             })
-            .map(|(humd, _)| humd.to_hex())
             .collect();
-        found.sort();
-        Hid::from_hex(found.first()?).ok()
+        found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        Hid::from_hex(&found.first()?.1).ok()
+    }
+
+    async fn claim_headroom(&self, client_id: &str, headroom: ensemble::headroom::CellHeadroom) {
+        let changed = {
+            let mut m = self.manifests.write();
+            let Some(man) = m.get_mut(client_id) else {
+                return;
+            };
+            let was_full = man.is_full();
+            man.headroom = Some(headroom);
+            (was_full != man.is_full()).then(|| man.clone())
+        };
+        if let Some(manifest) = changed {
+            self.snapshot_bees();
+            if let Some(ens) = &self.ensemble {
+                ens.bee_advertise(manifest).await;
+            }
+        }
     }
 
     fn snapshot_bees(&self) {
@@ -762,6 +769,12 @@ impl ToneSink for HumdSink {
             }
         }
 
+        if matches!(chi, Some(Chi::Pulse))
+            && let Some(headroom) = hives::headroom_of(&tone)
+        {
+            self.claim_headroom(client_id, headroom).await;
+        }
+
         if !matches!(chi, Some(Chi::Hello)) {
             let is_worker = self
                 .manifests
@@ -782,7 +795,7 @@ impl ToneSink for HumdSink {
                     .map(str::to_string);
                 if !sid.is_empty() {
                     self.thrum
-                        .claim_sigil(client_id, thrum_core::sigil(&sid, &self.nest_kind));
+                        .claim_sigil(client_id, thrum_core::sigil(&sid));
                     self.thrum.claim_sigil(client_id, &sid);
                 }
                 if let Some(tn) = tool_name.as_ref() {
@@ -822,7 +835,7 @@ impl ToneSink for HumdSink {
                     if !sid_for_lookup.is_empty() {
                         self.thrum.claim_sigil(
                             client_id,
-                            thrum_core::sigil(&sid_for_lookup, &self.nest_kind),
+                            thrum_core::sigil(&sid_for_lookup),
                         );
                         self.thrum.claim_sigil(client_id, &sid_for_lookup);
                     }
@@ -934,7 +947,7 @@ impl ToneSink for HumdSink {
                         }
                     }
                     self.thrum
-                        .thrum_broadcast(&sid, &self.nest_kind, tone.clone());
+                        .thrum_broadcast(&sid, tone.clone());
                     return;
                 }
             }
@@ -946,7 +959,7 @@ impl ToneSink for HumdSink {
             && !sid.is_empty()
         {
             self.thrum
-                .claim_sigil(client_id, thrum_core::sigil(sid, &self.nest_kind));
+                .claim_sigil(client_id, thrum_core::sigil(sid));
             self.thrum.claim_sigil(client_id, sid.to_string());
             let hear_only = tone
                 .get("hearOnly")
@@ -983,7 +996,7 @@ impl ToneSink for HumdSink {
                 let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
                 if let Some(sid) = sid_opt {
                     trace!(client_id, %chi_str, %sid, "thrum.recv.peer-reply.forward");
-                    self.thrum.thrum_broadcast(&sid, &self.nest_kind, tone);
+                    self.thrum.thrum_broadcast(&sid, tone);
                     return;
                 }
             }
@@ -1154,6 +1167,7 @@ impl ToneSink for HumdSink {
                     manifest.bind = bind;
                     manifest.roles = roles.clone();
                     manifest.models = models.clone();
+                    manifest.headroom = hives::headroom_of(&tone);
                     manifest.hid = signed_hid;
                     manifest.hid_verified = signed_hid.is_some();
                     if let Some(hid) = manifest.hid
@@ -1257,33 +1271,6 @@ impl ToneSink for HumdSink {
                     warn!(client_id, "prompt.no-sid");
                     return;
                 }
-                if client_id != "ensemble"
-                    && self.capacity == LocalCapacity::OverflowAlways
-                    && let Some(ensemble) = &self.ensemble
-                {
-                    let target = pick_overflow_peer(ensemble, &self.nest_kind);
-                    if let Some(peer) = target {
-                        self.thrum
-                            .claim_sigil(client_id, thrum_core::sigil(&sid, &self.nest_kind));
-                        self.thrum.claim_sigil(client_id, &sid);
-                        if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
-                            self.thrum
-                                .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
-                        }
-                        let mut forward = tone.clone();
-                        if let Some(obj) = forward.as_object_mut() {
-                            obj.insert("to".into(), Value::String(peer.to_hex()));
-                            obj.insert("from".into(), Value::String(ensemble.me().to_hex()));
-                        }
-                        trace!(sid, peer = %peer.short(), "overflow.route");
-                        if let Err(e) = ensemble.route(forward).await {
-                            warn!(sid, err = %e, "overflow.route.failed");
-                        }
-                        return;
-                    } else {
-                        warn!(sid, "overflow.no-route");
-                    }
-                }
                 let model = tone
                     .get("modelId")
                     .and_then(Value::as_str)
@@ -1339,7 +1326,7 @@ impl ToneSink for HumdSink {
                         .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                 }
                 self.thrum
-                    .claim_sigil(client_id, thrum_core::sigil(&sid, &self.nest_kind));
+                    .claim_sigil(client_id, thrum_core::sigil(&sid));
                 self.thrum.claim_sigil(client_id, &sid);
                 let origin = if client_id == "ensemble" {
                     tone.get("from")
@@ -1356,26 +1343,29 @@ impl ToneSink for HumdSink {
                 };
                 trace!(sid, model, ?origin, "thrum.recv.prompt");
 
-                let worker_client = {
+                let (with_room, full) = {
                     let mut to_prune: Vec<String> = Vec::new();
                     let pick = {
                         let m = self.manifests.read();
-                        let mut found: Option<String> = None;
+                        let mut with_room: Option<String> = None;
+                        let mut full: Option<String> = None;
                         let mut sorted: Vec<_> = m.iter().collect();
                         sorted.sort_by(|a, b| a.0.cmp(b.0));
                         for (cid, man) in sorted {
                             if man.plays("worker")
                                 && man.models.iter().any(|m| m == &model)
                             {
-                                if self.thrum.is_connected(cid) {
-                                    found = Some(cid.clone());
-                                    break;
-                                } else {
+                                if !self.thrum.is_connected(cid) {
                                     to_prune.push(cid.clone());
+                                } else if man.is_full() {
+                                    full.get_or_insert_with(|| cid.clone());
+                                } else {
+                                    with_room = Some(cid.clone());
+                                    break;
                                 }
                             }
                         }
-                        found
+                        (with_room, full)
                     };
                     if !to_prune.is_empty() {
                         let mut m = self.manifests.write();
@@ -1385,22 +1375,23 @@ impl ToneSink for HumdSink {
                     }
                     pick
                 };
-                let Some(worker_client) = worker_client else {
-                    if let Some(peer) = self.pick_remote_worker(&model)
-                        && let Some(ens) = self.ensemble.clone()
-                    {
-                        let mut forward = tone.clone();
-                        if let Some(obj) = forward.as_object_mut() {
-                            obj.insert("to".into(), Value::String(peer.to_hex()));
-                            obj.insert("from".into(), Value::String(ens.me().to_hex()));
-                        }
-                        trace!(sid, model, peer = %peer.short(), "prompt.forward.remote");
-                        match ens.route(forward).await {
-                            Ok(()) => return,
-                            Err(e) => warn!(sid, peer = %peer.short(), err = %e,
-                                "prompt.forward.remote.failed"),
-                        }
+                if with_room.is_none()
+                    && let Some(peer) = self.pick_remote_worker(&model)
+                    && let Some(ens) = self.ensemble.clone()
+                {
+                    let mut forward = tone.clone();
+                    if let Some(obj) = forward.as_object_mut() {
+                        obj.insert("to".into(), Value::String(peer.to_hex()));
+                        obj.insert("from".into(), Value::String(ens.me().to_hex()));
                     }
+                    trace!(sid, model, peer = %peer.short(), "prompt.forward.remote");
+                    match ens.route(forward).await {
+                        Ok(()) => return,
+                        Err(e) => warn!(sid, peer = %peer.short(), err = %e,
+                            "prompt.forward.remote.failed"),
+                    }
+                }
+                let Some(worker_client) = with_room.or(full) else {
                     warn!(
                         sid,
                         model, "prompt.no-worker — no bee on this mesh advertises this model"
@@ -1418,7 +1409,7 @@ impl ToneSink for HumdSink {
                         }
                         let _ = ens.route(out).await;
                     }
-                    self.thrum.thrum_broadcast(&sid, &self.nest_kind, err);
+                    self.thrum.thrum_broadcast(&sid, err);
                     return;
                 };
 
@@ -1560,7 +1551,7 @@ impl ToneSink for HumdSink {
                     }
                 } else {
                     self.thrum
-                        .claim_sigil(client_id, thrum_core::sigil(&sid, &self.nest_kind));
+                        .claim_sigil(client_id, thrum_core::sigil(&sid));
                     self.thrum.claim_sigil(client_id, &sid);
                     if let Some(ensemble) = &self.ensemble
                         && let Some(to) = tone.get("to").and_then(Value::as_str)
@@ -1699,7 +1690,7 @@ impl ToneSink for HumdSink {
                 }
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str).map(str::to_string) {
                     trace!(%sid, "error.broadcast.fallback");
-                    self.thrum.thrum_broadcast(&sid, &self.nest_kind, tone);
+                    self.thrum.thrum_broadcast(&sid, tone);
                 }
             }
             Some(Chi::ToolResult) => {
@@ -1798,42 +1789,13 @@ impl ToneSink for HumdSink {
     }
 }
 
-fn my_capabilities(cfg: &DaemonConfig) -> PeerCapabilities {
-    let nest_name = cfg.hum_cfg.nest.default.clone();
-    let total_slots = cfg.hum_cfg.nest.max_active_cells;
-    let headroom = ensemble::headroom::CellHeadroom::from_counts(total_slots, total_slots, None);
+fn my_capabilities() -> PeerCapabilities {
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.into(),
-        nests: vec![nest_name],
         hosts: Vec::new(),
         can_relay: false,
-        free_slots: Some(total_slots as usize),
-        headroom,
         ..Default::default()
     }
-}
-
-fn pick_overflow_peer(ensemble: &Ensemble, nest_kind: &str) -> Option<Hid> {
-    let peers = ensemble.peers();
-    let mut fallback: Option<Hid> = None;
-    for id in peers {
-        let Some(caps) = ensemble.peer_caps(&id) else {
-            continue;
-        };
-        let has_nest = caps.nests.iter().any(|n| n == nest_kind);
-        if !has_nest {
-            continue;
-        }
-        match caps.free_slots {
-            Some(n) if n > 0 => return Some(id),
-            None => return Some(id),
-            Some(0) if fallback.is_none() => {
-                fallback = Some(id);
-            }
-            _ => {}
-        }
-    }
-    fallback
 }
 
 fn parse_humd_id(s: &str) -> Option<ensemble::Hid> {

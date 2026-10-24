@@ -39,10 +39,10 @@ async fn good_signature_admits_peer() {
     assert!(admitted, "both ensembles must learn each other's caps from verified hellos");
 
     let b_caps_on_a = a.ensemble.peer_caps(&b.id).expect("b in A's registry");
-    assert!(
-        b_caps_on_a.nests.iter().any(|n| n == "claude-repl"),
-        "verified hello must surface nests in learned_caps, got {:?}",
-        b_caps_on_a.nests
+    assert_eq!(
+        b_caps_on_a.proto_version,
+        thrum_core::THRUM_VERSION,
+        "a verified hello must surface its claims in learned_caps, got {b_caps_on_a:?}"
     );
 
     assert!(a.ensemble.peers().contains(&b.id), "A's peers includes B");

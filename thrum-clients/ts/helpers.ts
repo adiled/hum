@@ -7,17 +7,12 @@
 import { createHash, randomBytes } from "crypto";
 
 /**
- * Deterministic identity for a (nest, session) pair.
- *
- * `nest` is the nest-kind namespace — "claude-cli", "claude-repl", or
- * any other future nest implementation. Required; no default — the
- * protocol layer must not know about specific kinds.
- *
- * Returns the lowercase hex of the first 6 sha256 bytes (12 chars).
+ * Deterministic identity for a session: the lowercase hex of the first
+ * 6 sha256 bytes of `sigil:<sid>` (12 chars). Stable across reconnects.
  */
-export function sigil(sid: string, nest: string): string {
+export function sigil(sid: string): string {
   return createHash("sha256")
-    .update(`${nest}:${sid}`)
+    .update(`sigil:${sid}`)
     .digest("hex")
     .slice(0, 12);
 }

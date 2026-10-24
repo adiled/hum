@@ -25,6 +25,7 @@ class HelloBody:
     provides: Optional[list[str]] = None
     chis: Optional[list[str]] = None
     propensity: Optional[Any] = None
+    headroom: Optional[Headroom] = None
     source: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
@@ -42,7 +43,19 @@ class HelloBody:
         "provides": "provides",
         "chis": "chis",
         "propensity": "propensity",
+        "headroom": "headroom",
         "source": "source",
+    }
+
+@dataclass
+class Headroom:
+    free_slots: int
+    total_slots: int
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "free_slots": "freeSlots",
+        "total_slots": "totalSlots",
     }
 
 @dataclass
@@ -205,11 +218,13 @@ class ToolMetaBody:
 class PulseBody:
     kind: str
     pid: Optional[int] = None
+    headroom: Optional[Headroom] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "kind": "kind",
         "pid": "pid",
+        "headroom": "headroom",
     }
 
 @dataclass

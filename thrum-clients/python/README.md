@@ -67,7 +67,7 @@ asyncio.run(main())
 | `PulseKind` | `pulse.kind` enum |
 | `THRUM_VERSION` | "0.8.0" today; bump rules in [WIRE.md](../../WIRE.md) |
 | `ALL_CHI`, `is_valid_chi(s)` | membership checks |
-| `sigil(sid, nest)` | 12-char content hash |
+| `sigil(sid)` | 12-char content hash |
 | `rid()` | monotonic correlation id |
 | `dusk_in(ms)`, `is_dusk(tone)` | expiry helpers |
 | `WaneTracker` | Lamport clock per sigil |

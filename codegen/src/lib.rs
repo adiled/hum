@@ -310,17 +310,12 @@ fn render_helpers() -> String {
     const BODY: &str = r#"import { createHash, randomBytes } from "crypto";
 
 /**
- * Deterministic identity for a (nest, session) pair.
- *
- * `nest` is the nest-kind namespace — "claude-cli", "claude-repl", or
- * any other future nest implementation. Required; no default — the
- * protocol layer must not know about specific kinds.
- *
- * Returns the lowercase hex of the first 6 sha256 bytes (12 chars).
+ * Deterministic identity for a session: the lowercase hex of the first
+ * 6 sha256 bytes of `sigil:<sid>` (12 chars). Stable across reconnects.
  */
-export function sigil(sid: string, nest: string): string {
+export function sigil(sid: string): string {
   return createHash("sha256")
-    .update(`${nest}:${sid}`)
+    .update(`sigil:${sid}`)
     .digest("hex")
     .slice(0, 12);
 }
@@ -539,14 +534,12 @@ import time
 from typing import Any, Mapping
 
 
-def sigil(sid: str, nest: str) -> str:
-    """Deterministic 12-char identity for a (nest, sid) pair.
+def sigil(sid: str) -> str:
+    """Deterministic 12-char identity for a session.
 
-    Returns lowercase hex of the first 6 sha256 bytes of `nest:sid`.
-    Required-`nest`, no fallback — the protocol layer must not know
-    about specific nest kinds.
+    Returns lowercase hex of the first 6 sha256 bytes of `sigil:<sid>`.
     """
-    h = hashlib.sha256(f"{nest}:{sid}".encode("utf-8")).digest()
+    h = hashlib.sha256(f"sigil:{sid}".encode("utf-8")).digest()
     return h[:6].hex()
 
 
@@ -714,10 +707,10 @@ import (
 )
 
 // Sigil returns the 12-char content-addressable identifier for a
-// (nest, sid) pair: lowercase hex of the first 6 sha256 bytes of
-// "nest:sid". Stable across reconnects.
-func Sigil(sid, nest string) string {
-	h := sha256.Sum256([]byte(nest + ":" + sid))
+// session: lowercase hex of the first 6 sha256 bytes of "sigil:<sid>".
+// Stable across reconnects.
+func Sigil(sid string) string {
+	h := sha256.Sum256([]byte("sigil:" + sid))
 	return hex.EncodeToString(h[:6])
 }
 
