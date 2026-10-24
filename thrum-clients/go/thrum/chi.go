@@ -6,7 +6,7 @@
 
 package thrum
 
-const ThrumVersion = "0.7.0"
+const ThrumVersion = "0.8.0"
 
 // Chi is the discriminator on every tone.
 type Chi string

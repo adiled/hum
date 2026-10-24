@@ -3,7 +3,7 @@
 //! Runs as its own process, handshakes with humd over thrum, accepts
 //! prompts addressed to claude models, and pipes responses back as
 //! `chi:"chunk"` tones. humd never compiles us in; we register at
-//! runtime via the `bee:["worker"]` hello.
+//! runtime through our hello.
 //!
 //! Env knobs:
 //!   HUM_THRUM_SOCK     thrum socket (default `$XDG_STATE_HOME/hum/thrum.sock`)

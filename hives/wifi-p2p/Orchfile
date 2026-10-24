@@ -1,3 +1,4 @@
-SERVICE wifi-p2p
-RUN com.hum.hive.wifip2p/.WifiP2pBeeService
-RESTART always
+# A bee of wifi-p2p lives on an Android phone, as WifiP2pBeeService.
+# Installing this hive teaches a humd the kind; the bee is entered there
+# with `hum bee enter --hive wifi-p2p`, and the id and its key are put on
+# the phone. Nothing runs on the humd's own machine.

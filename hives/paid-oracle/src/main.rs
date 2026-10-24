@@ -156,13 +156,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    // Persisted forager identity — minted once at ~/.local/state/hum/
-    // bees/paid-oracle.key, reused every boot. humd dedupes us across
-    // reconnects by this fbee_ hid; without it, each reconnect would
-    // leak a stale manifest.
-    let bee_key = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
-        .context("load/mint paid-oracle identity")?;
-    let hid = bee_key.hid.to_hex();
+    let bee = hum_identity::bee_from_env()?;
 
     let sock = UnixStream::connect(&cfg.sock_path).await
         .with_context(|| format!("connect {}", cfg.sock_path))?;
@@ -170,7 +164,9 @@ async fn main() -> Result<()> {
     let wr = Arc::new(tokio::sync::Mutex::new(wr));
     let mut lines = BufReader::new(rd).lines();
 
-    send(&wr, &hello(&cfg, &hid)).await?;
+    let mut hello = hello(&cfg);
+    bee.sign_hello(&mut hello);
+    send(&wr, &hello).await?;
     info!(hive = HIVE_NAME, "thrum.handshake.sent");
 
     while let Some(line) = lines.next_line().await? {
@@ -204,13 +200,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn hello(cfg: &Config, hid: &str) -> Value {
+fn hello(cfg: &Config) -> Value {
     json!({
         "chi": Chi::Hello,
         "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
-        "hid": hid,
-        "bee": ["forager"],
+        "roles": ["forager"],
         "hive": HIVE_NAME,
         "version": BEE_VERSION,
         "protoVersion": THRUM_VERSION,

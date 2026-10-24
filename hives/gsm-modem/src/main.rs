@@ -114,24 +114,21 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
 
-    // Persisted forager identity — humd dedupes by this fbee_ hid.
-    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
-        .map(|k| k.hid.to_hex())
-        .unwrap_or_default();
+    let bee = hum_identity::bee_from_env()?;
 
-    // Hello (per WIRE.md §Handshake).
-    let hello = json!({
+    let mut hello = json!({
         "chi": Chi::Hello,
         "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
-        "hid": hid,
-        "bee": ["forager"],
+        "roles": ["forager"],
+        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
         "protoVersion": THRUM_VERSION,
         "propensity": { "statefulness": "stateful", "richness": "lean", "wire": "gsm/at-cmd-sms" },
         "chis": ["hello", "prompt", "chunk", "finish", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/gsm-modem",
     });
+    bee.sign_hello(&mut hello);
     write_line(&mut wr, &hello).await?;
 
     // Prompt.

@@ -1,16 +1,15 @@
-//! Persistent bee identity.
+//! Persistent bee identity, and the record of who has entered.
 //!
-//! Mirrors humd's `identity.rs` but tags the resulting [`Hid`] with the
-//! bee role (worker / forager). Each bee install gets its own Ed25519
-//! keypair at `$XDG_STATE_HOME/hum/bees/<kind>.key`. The pubkey hashes
-//! to a stable role-prefixed [`Hid`] (`wbee_<hex>` / `fbee_<hex>`) that
-//! survives reconnect, restart, even daemon swap. The bee carries this
-//! hid in every `chi:"hello"` so humd's manifest registry is keyed by
-//! identity, not by transient thrum connection id.
+//! A bee is its key, and the key is filed under the id it hashes to, so
+//! nothing but the key names a bee. A hive brings a bee into being by
+//! entering it — minting a key and recording the hive it entered under —
+//! and hands the id to whatever will act as that bee, through `HUM_BEE`.
+//! Whoever can read the key is the bee; humd admits only a hello signed
+//! by an entered key, so the key file is the trust boundary.
 //!
 //! File format: raw 32-byte Ed25519 secret seed, mode 0o600, atomic
-//! write-and-rename. Same convention as humd's daemon key — the only
-//! difference is the dir + role tagging.
+//! write-and-rename — the same convention as humd's daemon key. An entry
+//! is a small JSON file beside it, carrying only public facts.
 //!
 //! This is a *leaf* crate for remote hives: it depends only on
 //! `hum-paths` (for the seed path) and its own bundled `ids` module
@@ -44,8 +43,39 @@ pub struct BeeKey {
 }
 
 impl BeeKey {
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        let signing = SigningKey::from_bytes(seed);
+        let hid = Hid::from_pubkey(HidPrefix::Bee, &signing.verifying_key().to_bytes());
+        Self { signing, hid }
+    }
+
+    pub fn generate() -> Self {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        Self::from_seed(&seed)
+    }
+
+    pub fn id(&self) -> String {
+        self.hid.to_hex()
+    }
+
     pub fn pubkey_bytes(&self) -> [u8; 32] {
         self.signing.verifying_key().to_bytes()
+    }
+
+    pub fn sign_hello(&self, hello: &mut serde_json::Value) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let sig = self.sign_socket_hello(now);
+        if let Some(obj) = hello.as_object_mut() {
+            obj.insert("hid".into(), self.id().into());
+            obj.insert("from".into(), self.id().into());
+            obj.insert("pubkey".into(), sig.pubkey.into());
+            obj.insert("signedAt".into(), sig.signed_at.into());
+            obj.insert("signature".into(), sig.signature.into());
+        }
     }
 
     pub fn sign_socket_hello(&self, signed_at_ms: i64) -> SocketSignature {
@@ -72,36 +102,131 @@ pub fn socket_hello_message(hid: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", BEE_SOCKET_DOMAIN, hid.to_hex(), signed_at_ms).into_bytes()
 }
 
-pub fn bee_key_path(kind: &str) -> PathBuf {
-    hum_paths::bee_key(kind)
+pub const BEE_ENV: &str = "HUM_BEE";
+
+pub fn bee_key_path(id: &str) -> PathBuf {
+    hum_paths::bee_key(id)
 }
 
-pub fn load_or_mint_bee_key(kind: &str, prefix: HidPrefix) -> Result<BeeKey> {
-    let path = bee_key_path(kind);
-    if path.exists() {
-        let bytes = fs::read(&path).with_context(|| format!("read bee key {}", path.display()))?;
-        if bytes.len() != 32 {
-            return Err(anyhow!(
-                "bee key at {} is {} bytes, expected 32",
-                path.display(),
-                bytes.len()
-            ));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        let signing = SigningKey::from_bytes(&arr);
-        let hid = Hid::from_pubkey(prefix, &signing.verifying_key().to_bytes());
-        trace!(path = %path.display(), %kind, hid = %hid.short(), "bee.identity.loaded");
-        return Ok(BeeKey { signing, hid });
+fn plain_id(id: &str) -> Result<()> {
+    match Hid::from_hex(id) {
+        Ok(hid) if hid.prefix.is_bee() && hum_paths::is_plain_name(id) => Ok(()),
+        _ => Err(anyhow!("{id:?} is not a bee id")),
     }
+}
 
+pub fn mint_bee_key() -> Result<BeeKey> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
-    let signing = SigningKey::from_bytes(&seed);
+    let key = BeeKey::from_seed(&seed);
+    let path = bee_key_path(&key.id());
     persist(&path, &seed)?;
-    let hid = Hid::from_pubkey(prefix, &signing.verifying_key().to_bytes());
-    info!(path = %path.display(), %kind, hid = %hid.short(), "bee.identity.minted");
-    Ok(BeeKey { signing, hid })
+    info!(path = %path.display(), hid = %key.hid.short(), "bee.identity.minted");
+    Ok(key)
+}
+
+pub fn load_bee_key(id: &str) -> Result<BeeKey> {
+    plain_id(id)?;
+    let path = bee_key_path(id);
+    let bytes = fs::read(&path).with_context(|| format!("read bee key {}", path.display()))?;
+    let seed: [u8; 32] = bytes.try_into().map_err(|b: Vec<u8>| {
+        anyhow!("bee key at {} is {} bytes, expected 32", path.display(), b.len())
+    })?;
+    let key = BeeKey::from_seed(&seed);
+    if key.id() != id {
+        return Err(anyhow!("bee key at {} is not the key of {id}", path.display()));
+    }
+    trace!(path = %path.display(), hid = %key.hid.short(), "bee.identity.loaded");
+    Ok(key)
+}
+
+pub fn bee_from_env() -> Result<BeeKey> {
+    let id = std::env::var(BEE_ENV).unwrap_or_default();
+    if id.trim().is_empty() {
+        return Err(anyhow!(
+            "{BEE_ENV} is unset: this process has not been told which bee it is. \
+             Its hive enters a bee with `hum bee enter --hive <hive>` and passes the id in {BEE_ENV}."
+        ));
+    }
+    load_bee_key(id.trim())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Entry {
+    pub hive: String,
+    pub pubkey: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exited: bool,
+}
+
+fn write_entry(id: &str, entry: &Entry) -> Result<()> {
+    let path = hum_paths::bee_entry(id);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
+    }
+    let body = serde_json::to_vec_pretty(entry)?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
+    fs::rename(&tmp, &path).with_context(|| format!("rename {}", path.display()))?;
+    Ok(())
+}
+
+pub fn enter(hive: &str, key: &BeeKey) -> Result<()> {
+    if !hum_paths::is_plain_name(hive) {
+        return Err(anyhow!("{hive:?} is not a hive name"));
+    }
+    let entry = Entry {
+        hive: hive.to_string(),
+        pubkey: hex::encode(key.pubkey_bytes()),
+        exited: false,
+    };
+    write_entry(&key.id(), &entry)?;
+    info!(hid = %key.hid.short(), hive, "bee.entered");
+    Ok(())
+}
+
+fn set_exited(id: &str, exited: bool) -> Result<bool> {
+    plain_id(id)?;
+    let Some(mut e) = entry(id) else {
+        return Err(anyhow!("{id} never entered on this humd"));
+    };
+    if e.exited == exited {
+        return Ok(false);
+    }
+    e.exited = exited;
+    write_entry(id, &e)?;
+    Ok(true)
+}
+
+pub fn exit(id: &str) -> Result<bool> {
+    set_exited(id, true)
+}
+
+pub fn reenter(id: &str) -> Result<bool> {
+    load_bee_key(id)?;
+    set_exited(id, false)
+}
+
+pub fn entry(id: &str) -> Option<Entry> {
+    plain_id(id).ok()?;
+    let bytes = fs::read(hum_paths::bee_entry(id)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn entered() -> Vec<(String, Entry)> {
+    let mut out: Vec<(String, Entry)> = fs::read_dir(hum_paths::entered_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let id = name.strip_suffix(".json")?.to_string();
+            let entry = entry(&id)?;
+            Some((id, entry))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 fn persist(path: &Path, seed: &[u8; 32]) -> Result<()> {
@@ -153,23 +278,93 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn round_trip_worker_key_then_different_kind() {
+    fn a_minted_bee_is_filed_under_its_id_and_loads_back() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
-        let first = load_or_mint_bee_key("claude-cli", HidPrefix::Wbee).expect("mint");
-        assert_eq!(first.hid.prefix, HidPrefix::Wbee);
-        let id1 = first.hid;
+        let key = mint_bee_key().expect("mint");
+        assert_eq!(key.hid.prefix, HidPrefix::Bee);
+        assert!(bee_key_path(&key.id()).ends_with(format!("hum/bees/{}.key", key.id())));
+        assert_eq!(load_bee_key(&key.id()).expect("load").hid, key.hid);
 
-        let second = load_or_mint_bee_key("claude-cli", HidPrefix::Wbee).expect("reload");
-        assert_eq!(id1, second.hid, "wbee hid stable across reloads");
-
-        let other = load_or_mint_bee_key("humfs", HidPrefix::Fbee).expect("mint");
-        assert_ne!(id1, other.hid);
-        assert_eq!(other.hid.prefix, HidPrefix::Fbee);
+        let other = mint_bee_key().expect("mint");
+        assert_ne!(key.hid, other.hid, "two bees are two keys");
 
         unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn a_key_filed_under_another_id_is_refused() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+
+        let key = mint_bee_key().expect("mint");
+        let liar = BeeKey::generate().id();
+        std::fs::copy(bee_key_path(&key.id()), bee_key_path(&liar)).unwrap();
+        assert!(load_bee_key(&liar).is_err());
+
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn an_id_that_is_a_path_or_no_bee_is_refused() {
+        assert!(load_bee_key("../humd").is_err());
+        assert!(load_bee_key("").is_err());
+        assert!(load_bee_key(&Hid::random_humd().to_hex()).is_err());
+        assert!(entry("bee_../x").is_none());
+    }
+
+    #[test]
+    fn entering_records_the_hive_and_exiting_forgets_it() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+
+        let key = mint_bee_key().expect("mint");
+        assert!(entry(&key.id()).is_none());
+        enter("claude-cli", &key).expect("enter");
+        let got = entry(&key.id()).expect("entered");
+        assert_eq!(got.hive, "claude-cli");
+        assert_eq!(got.pubkey, hex::encode(key.pubkey_bytes()));
+        assert!(!got.exited);
+        assert_eq!(entered().len(), 1);
+        assert!(exit(&key.id()).unwrap());
+        assert!(!exit(&key.id()).unwrap());
+        let gone = entry(&key.id()).expect("an exited bee is still on record");
+        assert!(gone.exited);
+        assert_eq!(gone.hive, "claude-cli");
+        assert!(reenter(&key.id()).unwrap());
+        assert!(!entry(&key.id()).unwrap().exited);
+        assert!(exit(&BeeKey::generate().id()).is_err(), "a bee that never entered cannot exit");
+
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn a_process_learns_which_bee_it_is_from_hum_bee() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
+        unsafe { std::env::remove_var(BEE_ENV) };
+        assert!(bee_from_env().is_err());
+        let key = mint_bee_key().expect("mint");
+        unsafe { std::env::set_var(BEE_ENV, key.id()) };
+        assert_eq!(bee_from_env().expect("load").hid, key.hid);
+        unsafe { std::env::remove_var(BEE_ENV) };
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn a_role_prefixed_hid_is_the_same_participant() {
+        let pubkey = [7u8; 32];
+        let now = Hid::from_pubkey(HidPrefix::Bee, &pubkey);
+        let then = Hid::from_pubkey(HidPrefix::Wbee, &pubkey);
+        assert!(now.same_key(&then));
+        assert!(!now.same_key(&Hid::from_pubkey(HidPrefix::Humd, &pubkey)));
+        assert_eq!(Hid::from_hex(&now.to_hex()).unwrap(), now);
+        assert!(now.to_hex().starts_with("bee_"));
     }
 
     #[test]
@@ -189,7 +384,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
-        let key = load_or_mint_bee_key("sig-bind", HidPrefix::Wbee).expect("mint");
+        let key = mint_bee_key().expect("mint");
         let sig = key.sign_socket_hello(1_700_000_000_000);
         let (pubkey_hex, signed_at, sig_hex) = (sig.pubkey, sig.signed_at, sig.signature);
         assert_eq!(pubkey_hex, hex::encode(key.pubkey_bytes()));
@@ -214,8 +409,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
-        let key = load_or_mint_bee_key("sig-rebind", HidPrefix::Wbee).expect("mint");
-        let other = Hid::random(HidPrefix::Wbee);
+        let key = mint_bee_key().expect("mint");
+        let other = Hid::random(HidPrefix::Bee);
 
         let sig = key.sign_socket_hello(1_700_000_000_000);
         let (signed_at, sig_hex) = (sig.signed_at, sig.signature);
@@ -240,7 +435,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
-        let key = load_or_mint_bee_key("sig-replay", HidPrefix::Wbee).expect("mint");
+        let key = mint_bee_key().expect("mint");
         let sig = key.sign_socket_hello(1_700_000_000_000);
         let (signed_at, sig_hex) = (sig.signed_at, sig.signature);
         let sig_bytes = hex::decode(&sig_hex).expect("sig hex");

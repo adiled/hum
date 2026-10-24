@@ -80,11 +80,11 @@ pub const REVOKED_BEES_BASENAME: &str = "revoked.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
-pub const ORCH_NAMESPACE: &str = "hum";
 pub const ROUTING_JSON_BASENAME: &str = "routing.json";
 pub const HIVES_SUBDIR: &str = "hives";
 pub const RECIPES_SUBDIR: &str = "recipes";
-pub const HIVE_INSTALL_SCRIPT: &str = "install";
+pub const HIVE_INSTALL_UNIT: &str = "hive-install";
+pub const RECIPE_INSTALL_SCRIPT: &str = "install";
 
 pub fn claude_session_dir(cwd_hash: &str) -> PathBuf {
     claude_data_dir().join("projects").join(cwd_hash)
@@ -133,8 +133,25 @@ pub fn bees_dir() -> PathBuf {
     state_dir().join("bees")
 }
 
-pub fn bee_key(kind: &str) -> PathBuf {
-    bees_dir().join(format!("{kind}.key"))
+pub fn bee_key(id: &str) -> PathBuf {
+    bees_dir().join(format!("{id}.key"))
+}
+
+pub fn entered_dir() -> PathBuf {
+    state_dir().join("bees.d")
+}
+
+pub fn bee_entry(id: &str) -> PathBuf {
+    entered_dir().join(format!("{id}.json"))
+}
+
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub fn bees_snapshot() -> PathBuf {
@@ -199,7 +216,7 @@ impl Revocations {
     }
 
     pub fn contains(&self, hid_hex: &str) -> bool {
-        self.revoked.iter().any(|h| h == hid_hex)
+        self.revoked.iter().any(|h| same_identity(h, hid_hex))
     }
 
     pub fn revoke(&mut self, hid: &str) -> bool {
@@ -212,8 +229,20 @@ impl Revocations {
 
     pub fn unrevoke(&mut self, hid: &str) -> bool {
         let before = self.revoked.len();
-        self.revoked.retain(|h| h != hid);
+        self.revoked.retain(|h| !same_identity(h, hid));
         self.revoked.len() != before
+    }
+}
+
+fn bee_key_hex(hid: &str) -> Option<&str> {
+    let (prefix, tail) = hid.split_once('_')?;
+    matches!(prefix, "bee" | "wbee" | "fbee").then_some(tail)
+}
+
+fn same_identity(a: &str, b: &str) -> bool {
+    match (bee_key_hex(a), bee_key_hex(b)) {
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
+        _ => a == b,
     }
 }
 
@@ -312,28 +341,16 @@ pub fn foreign_hive_cache(org: &str, repo: &str, branch: &str) -> PathBuf {
         .join(format!("{org}-{repo}-{branch}"))
 }
 
-pub fn orch_d_dir() -> PathBuf {
-    config_dir().join("orch.d")
+pub fn hives_d_dir() -> PathBuf {
+    config_dir().join("hives.d")
 }
 
-pub fn orchfile() -> PathBuf {
-    config_dir().join(ORCHFILE_BASENAME)
+pub fn hive_installation(hive: &str) -> PathBuf {
+    hives_d_dir().join(format!("{hive}.orch"))
 }
 
-pub fn orch_namespace() -> &'static str {
-    ORCH_NAMESPACE
-}
-
-pub fn orch_state_dir() -> PathBuf {
-    state_dir().join("orch")
-}
-
-pub fn orch_project_dir() -> PathBuf {
-    config_dir()
-}
-
-pub fn orchrc_path() -> PathBuf {
-    config_dir().join(".orchrc")
+pub fn hive_installed(hive: &str) -> bool {
+    is_plain_name(hive) && hive_installation(hive).is_file()
 }
 
 pub fn bee_config(kind: &str) -> PathBuf {
@@ -423,6 +440,30 @@ mod revocation_tests {
         assert!(!list.contains("wbee_dead"));
         assert!(list.contains("wbee_gone"));
         assert!(!list.unrevoke("wbee_dead"), "nothing left to remove");
+    }
+
+    #[test]
+    fn a_bee_revoked_under_its_old_role_prefix_stays_revoked() {
+        let mut list = Revocations::default();
+        list.revoke("wbee_dead");
+        assert!(list.contains("bee_dead"));
+        assert!(list.contains("fbee_dead"));
+        assert!(!list.contains("humd_dead"));
+        assert!(!list.revoke("bee_dead"), "already listed as wbee_dead");
+        assert!(list.unrevoke("bee_dead"));
+        assert!(list.revoked.is_empty());
+    }
+
+    #[test]
+    fn a_hive_installation_lives_under_hives_d() {
+        assert!(hive_installation("humfs").ends_with("hives.d/humfs.orch"));
+        assert!(is_plain_name("openai-server"));
+        assert!(is_plain_name("claude_cli.2"));
+        assert!(!is_plain_name(""));
+        assert!(!is_plain_name("../x"));
+        assert!(!is_plain_name(".hidden"));
+        assert!(!is_plain_name("a b"));
+        assert!(!hive_installed("../../etc/passwd"));
     }
 
     #[test]

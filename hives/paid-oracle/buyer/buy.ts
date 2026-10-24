@@ -22,6 +22,7 @@
 // Keys at $XDG_CONFIG_HOME/hum/paid-oracle/keys.json.
 
 import { connect } from "node:net";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -35,6 +36,26 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
+
+function signedAs(): Record<string, string | number> {
+  const id = process.env.HUM_BEE?.trim() ?? "";
+  if (!/^bee_[0-9a-f]{64}$/.test(id)) {
+    throw new Error("HUM_BEE names no bee: enter one with `hum bee enter --hive paid-oracle` and pass its id");
+  }
+  const stateDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  const seed = readFileSync(join(stateDir, "hum", "bees", `${id}.key`));
+  const priv = createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const pub = Buffer.from((createPublicKey(priv).export({ format: "jwk" }) as { x: string }).x, "base64url");
+  const hid = "bee_" + createHash("sha256").update(pub).digest("hex");
+  if (hid !== id) throw new Error(`the key filed as ${id} is not that bee's key`);
+  const signedAt = Date.now();
+  const signature = sign(null, Buffer.from(`hum-bee-socket-v1:${hid}:${signedAt}`), priv).toString("hex");
+  return { hid, from: hid, pubkey: pub.toString("hex"), signedAt, signature };
+}
 
 const baseDir = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const keysPath = join(baseDir, "hum", "paid-oracle", "keys.json");
@@ -72,11 +93,11 @@ function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body
       const hello = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: "paid-oracle-buyer",
-        bee: ["asker"],
-        hive: "paid-oracle-buyer",
+        ...signedAs(),
+        roles: ["asker"],
+        hive: "paid-oracle",
         version: "0.0.1",
-        protoVersion: "0.7.0",
+        protoVersion: "0.8.0",
         chis: ["hello", "tool-call", "tool-result", "error"],
       };
       sock.write(JSON.stringify(hello) + "\n");

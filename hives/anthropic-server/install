@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Install this hive's bee on a humd: build it, enter it, keep it running.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+hive="${HUM_HIVE:-$(basename "$here")}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/hum/hives/$hive"
+orchd="$(command -v orchd || echo "$HOME/.local/bin/orchd")"
+mkdir -p "$state"
+
+"$here/build"
+
+bee="$(cat "$state/bee" 2>/dev/null || true)"
+if [ -z "$bee" ] || ! hum bee "$bee" reenter >/dev/null 2>&1; then
+  bee="$(hum bee enter --hive "$hive")"
+  printf '%s\n' "$bee" > "$state/bee"
+fi
+
+args=(--arg "HUM_SRC=$here" --arg "HUM_BEE=$bee")
+while read -r name; do
+  if [ -n "${!name:-}" ]; then args+=(--arg "$name=${!name}"); fi
+done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_BEE -e HUM_HIVE)
+
+run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
+run fell >/dev/null 2>&1 || true
+run grow "$hive"

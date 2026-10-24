@@ -1,3 +1,11 @@
+ARG HUM_SRC=
+ARG HUM_BEE=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE gsm-modem
 RUN ${HUM_SRC}/target/release/gsm-modem
+ENV HUM_BEE=${HUM_BEE}
 RESTART always

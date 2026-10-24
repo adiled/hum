@@ -42,19 +42,14 @@ async fn bridge(
     let (reader, write_half) = thrum::connect(Path::new(&humd_sock_path())).await
         .with_context(|| format!("connect {}", humd_sock_path()))?;
 
-    // Persisted forager identity — humd dedupes us by this fbee_ hid
-    // across reconnects; without it every reconnect leaks a manifest.
-    let hid = hum_identity::load_or_mint_bee_key(HIVE_NAME, hum_identity::HidPrefix::Fbee)
-        .map(|k| k.hid.to_hex())
-        .unwrap_or_default();
+    let bee = hum_identity::bee_from_env()?;
 
-    // Send hello on connect so humd advertises us to the mesh.
-    let hello = serde_json::json!({
+    let mut hello = serde_json::json!({
         "chi": Chi::Hello,
         "rid": hum_identity::HumId::mint().to_string(),
         "from": HIVE_NAME,
-        "hid": hid,
-        "bee": ["forager"],
+        "roles": ["forager"],
+        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
         "protoVersion": THRUM_VERSION,
         "propensity": {
@@ -64,6 +59,7 @@ async fn bridge(
         },
         "source": "https://github.com/adiled/hum/tree/main/hives/grpc"
     });
+    bee.sign_hello(&mut hello);
     thrum::send_json(&write_half, &hello).await?;
 
     // gRPC → thrum

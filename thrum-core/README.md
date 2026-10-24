@@ -46,7 +46,8 @@ async fn main() -> anyhow::Result<()> {
         "chi": Chi::Hello,
         "rid": "hello-1",
         "from": "my-bee",
-        "bee": "my-bee",
+        "hive": "my-hive",
+        "roles": ["worker"],
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
         "chis": ["hello", "prompt", "chunk", "finish"],
@@ -96,7 +97,7 @@ a wire-protocol event. Bees warn on `THRUM_VERSION` mismatch.
 ## See also
 
 - `ensemble/` — the mesh of humds. Bees discover each other
-  through `bee_advertise` / `hive_discover` on the
+  through `bee_advertise` / `bee_discover` on the
   `hum/hives/announce` gossip topic.
 - [`hives/`](../hives) — reference implementations. One
   canonical catalogue; don't enumerate them here.

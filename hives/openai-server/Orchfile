@@ -1,7 +1,15 @@
+ARG HUM_SRC=
+ARG HUM_BEE=
 ARG OPENAI_API_BASE=https://api.openai.com/v1
 ARG OPENAI_API_KEY=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE openai-server
 RUN node ${HUM_SRC}/dist/index.js
+ENV HUM_BEE=${HUM_BEE}
 ENV OPENAI_API_BASE=${OPENAI_API_BASE}
 ENV OPENAI_API_KEY=${OPENAI_API_KEY}
 RESTART always

@@ -1,21 +1,21 @@
 //! Bee advertise/discover end-to-end over the gossip layer.
 //!
-//! Three humds in a line (A — B — C). A advertises a `market-maker`
-//! bee; C calls `hive_discover("market-maker")` and must
+//! Three humds in a line (A — B — C). A advertises a bee of the `market-maker`
+//! hive; C calls `bee_discover("market-maker")` and must
 //! receive `(A's Hid, manifest)` within a short timeout. Then A
-//! retracts; via the raw `hive_announcements()` stream, C must
+//! retracts; via the raw `bee_announcements()` stream, C must
 //! see a `Retract` envelope.
 
 use std::time::Duration;
 
 use ensemble::{
-    hives::{HiveAnnounce, HiveManifest, Propensity},
+    bees::{BeeAnnounce, BeeManifest, Propensity},
     Ensemble, HumdKey, InMemoryEndpoint, PeerCapabilities,
 };
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn advertise_percolates_and_discover_filters_by_name() {
+async fn advertise_percolates_and_discover_filters_by_hive() {
     let a_key = HumdKey::generate();
     let b_key = HumdKey::generate();
     let c_key = HumdKey::generate();
@@ -40,38 +40,38 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     ens_b.install(b_to_c, caps.clone(), &b_key);
     ens_c.install(c_to_b, caps.clone(), &c_key);
 
-    let mut discover = ens_c.hive_discover("market-maker");
-    let mut raw = ens_c.hive_announcements();
+    let mut discover = ens_c.bee_discover("market-maker");
+    let mut raw = ens_c.bee_announcements();
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     ens_a
-        .hive_advertise(HiveManifest::new("openai-server", "0.2.0", "0.7.0"))
+        .bee_advertise(BeeManifest::new("openai-server", "0.2.0", "0.7.0"))
         .await;
 
-    let manifest = HiveManifest::new("market-maker", "0.1.0", "0.7.0")
+    let manifest = BeeManifest::new("market-maker", "0.1.0", "0.7.0")
         .with_propensity(Propensity {
             statefulness: Some("stateless".into()),
             richness: Some("medium".into()),
             wire: Some("custom/mm-v0".into()),
         })
         .with_chis(["hello", "gossip-publish", "tool-call", "tool-result"]);
-    ens_a.hive_advertise(manifest.clone()).await;
+    ens_a.bee_advertise(manifest.clone()).await;
 
     let (got_id, got_manifest) = timeout(Duration::from_millis(300), discover.recv())
         .await
         .expect("C did not receive bee-advertise within 300ms")
         .expect("discover channel closed");
     assert_eq!(got_id, a_id, "advertise came from the wrong humd");
-    assert_eq!(got_manifest.name, "market-maker");
+    assert_eq!(got_manifest.hive, "market-maker");
     assert_eq!(got_manifest.version, "0.1.0");
     assert_eq!(got_manifest.chis.len(), 4);
 
-    ens_a.hive_retract("market-maker").await;
+    ens_a.bee_retract("market-maker").await;
     let env = timeout(Duration::from_millis(300), async {
         loop {
             let v = raw.recv().await.expect("raw channel closed");
-            if matches!(v, HiveAnnounce::Retract { .. }) {
+            if matches!(v, BeeAnnounce::Retract { .. }) {
                 return v;
             }
         }
@@ -80,7 +80,7 @@ async fn advertise_percolates_and_discover_filters_by_name() {
     .expect("C did not see retract within 300ms");
 
     match env {
-        HiveAnnounce::Retract { humd_id, name } => {
+        BeeAnnounce::Retract { humd_id, name } => {
             assert_eq!(humd_id, a_id.to_hex());
             assert_eq!(name, "market-maker");
         }

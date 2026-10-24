@@ -1,4 +1,37 @@
-# Migrating from clwnd (v0.24.x) → hum 0.3
+# Migrating
+
+## thrum 0.8: hives are installed, bees are entered and sign in
+
+A humd now understands a bee only through a hive installed on it, and a
+bee is a key its hive entered, proven on every hello by a signature. hum
+starts no process: what runs is each hive's own doing.
+
+**Operators.** After upgrading, reinstall the hives whose bees you run.
+Each bundled hive's `hive-install` builds, enters its bee and keeps it
+running under orchd itself:
+
+```bash
+hum hive claude-cli install
+hum bee --list
+```
+
+`hum bee <name> enter` and `hum nest` are gone; `hum bee enter --hive
+<hive>` now signs a new bee in and prints its id, and `hum bee <id>
+exit|reenter` signs it out and back. Bees started by an older hum under
+hum's own orchd namespace are not stopped by the upgrade — `orchd fell`
+them once. A humd that routes to bees on other humds needs their hives
+installed too. `hum comb` reports per hive (`hive:<name>:…`); combs
+written as `bee:<name>:…` are folded in on load.
+
+**Bee authors.** Send `hive` (required) and `roles` (formerly `bee`),
+and sign every hello: `hid`, `pubkey`, `signedAt`, and an ed25519
+`signature` over `hum-bee-socket-v1:<hid>:<signedAt>` by the key filed at
+`bees/<hid>.key`. Your hive tells you your id, conventionally in
+`HUM_BEE`. An unsigned hello, or one from a key never entered under the
+hive it names, is refused. Keys minted under the old per-hive names are
+not carried over; each bee is entered afresh.
+
+## From clwnd (v0.24.x) → hum 0.3
 
 > _the old `clwnd` opencode plugin world is gone. this is the map from what you had to what's now._
 

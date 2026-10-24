@@ -91,7 +91,7 @@ func TestGoldenSpotChecks(t *testing.T) {
 			if err := json.Unmarshal(blob, &h); err != nil {
 				t.Fatal(err)
 			}
-			if h.ProtoVersion != "0.7.0" || h.Bee != "claude-cli" {
+			if h.ProtoVersion != "0.8.0" || h.Hive != "claude-cli" || len(h.Roles) != 1 || h.Roles[0] != "worker" {
 				t.Fatalf("hello mismatch: %+v", h)
 			}
 		case ChiToolResult:

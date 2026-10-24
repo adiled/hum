@@ -272,7 +272,7 @@ fn wane_set_pins_value() {
 
 #[test]
 fn thrum_version_is_pinned() {
-    assert_eq!(THRUM_VERSION, "0.7.0");
+    assert_eq!(THRUM_VERSION, "0.8.0");
 }
 
 

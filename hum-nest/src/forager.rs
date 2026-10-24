@@ -8,8 +8,7 @@
 //!
 //! Wire contract:
 //!
-//! - **Hello**: announce as `bee:["forager"]`, advertise `tools` (the
-//!   list of toolNames this forager owns) + `hive` (kind).
+//! - **Hello**: announce the hive it belongs to and the tools it owns.
 //! - **Tool-call in**: humd routes `chi:"tool-call"` tones whose
 //!   `toolName` matches one of the advertised tools. The forager
 //!   passes the tool args to its [`ToolDispatcher`] and emits
@@ -28,12 +27,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use hum_identity::HidPrefix;
+
 use hum_mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 
-use hum_identity::load_or_mint_bee_key;
+use hum_identity::bee_from_env;
 
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync + 'static {
@@ -69,8 +68,8 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Fbee)
-        .with_context(|| format!("load/mint fbee key for hive {}", advert.hive))?;
+    let bee_key = bee_from_env()
+        .with_context(|| format!("which bee of {} is this process?", advert.hive))?;
 
     let defs = dispatcher.tool_defs();
     let tool_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -80,11 +79,9 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "inputSchema": d.input_schema,
     })).collect();
 
-    let hello = json!({
+    let mut hello = json!({
         "chi": "hello",
-        "bee": ["forager"],
-        "hid": bee_key.hid.to_hex(),
-        "from": bee_key.hid.to_hex(),
+        "roles": ["forager"],
         "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -94,6 +91,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
     });
+    bee_key.sign_hello(&mut hello);
     hum_thrum::send_json(&write_half, &hello).await?;
     info!(
         hive = %advert.hive,

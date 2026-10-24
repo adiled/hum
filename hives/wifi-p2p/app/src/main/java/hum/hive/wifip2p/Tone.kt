@@ -12,7 +12,7 @@ import java.time.Instant
 // Mirrors thrum-core/src/chi.rs (the Rust source of truth).
 // Wire values are kebab-case.
 
-const val THRUM_VERSION = "0.7.0"
+const val THRUM_VERSION = "0.8.0"
 const val HIVE_NAME = "wifi-p2p"
 
 object Chi {

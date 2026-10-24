@@ -44,7 +44,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         ],
         "chis":["hello","tool-call","tool-result"],
     });
-    humd.thrum.inject_tone(&forager_cid, forager_hello).await;
+    humd.thrum.inject_tone(&forager_cid, humd.signed_hello(forager_hello)).await;
 
     let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
@@ -54,7 +54,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         "models":["claude-opus-4-7"],
         "chis":["hello","prompt","chunk","tool-call","finish"],
     });
-    humd.thrum.inject_tone(&worker_cid, hello).await;
+    humd.thrum.inject_tone(&worker_cid, humd.signed_hello(hello)).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     sim.nestler_send(humd.id, json!({

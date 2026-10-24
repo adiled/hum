@@ -1,8 +1,8 @@
 import { createConnection, type Socket } from "node:net";
-import { beeHid } from "./identity";
+import { signedAs } from "./identity";
 import pkg from "../package.json";
 
-export const THRUM_VERSION = "0.7.0";
+export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "openai-server";
 export const BEE_VERSION = pkg.version;
 export const BEE_ROLE = "forager";
@@ -72,9 +72,8 @@ export class ThrumClient {
       const hello: Tone = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        from: HIVE_NAME,
-        hid: beeHid(HIVE_NAME, "fbee"),
-        bee: BEE_ROLES,
+        ...signedAs(),
+        roles: BEE_ROLES,
         hive: HIVE_NAME,
         version: BEE_VERSION,
         provides: BEE_PROVIDES,

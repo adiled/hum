@@ -13,7 +13,7 @@ server in front of hum's local thrum socket: any tool or client that
 speaks OpenAI wire can drive a hum daemon without knowing thrum
 exists. The **worker** half accepts `chi:"prompt"` tones humd routes
 to this bee by advertised model, calls the upstream OpenAI API, and
-streams the reply back. The hive is a hybrid bee (`bee:["forager","worker"]`)
+streams the reply back. Its bee claims both roles (`roles:["forager","worker"]`)
 — it both speaks OpenAI wire to hum's clients AND consumes OpenAI's
 API for hum's daemons.
 

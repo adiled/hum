@@ -64,7 +64,7 @@ async fn a_scoped_client_does_not_receive_an_undeclared_chi() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
-        .inject_tone(&cid, base_hello(Some(&["prompt"])))
+        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt"]))))
         .await;
     humd.thrum
         .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
@@ -86,7 +86,7 @@ async fn a_scoped_client_receives_a_declared_chi() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
-        .inject_tone(&cid, base_hello(Some(&["prompt", "chunk"])))
+        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt", "chunk"]))))
         .await;
 
     humd.thrum
@@ -108,7 +108,7 @@ async fn a_client_that_declared_nothing_still_receives_everything() {
 
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
-    humd.thrum.inject_tone(&cid, base_hello(None)).await;
+    humd.thrum.inject_tone(&cid, humd.signed_hello(base_hello(None))).await;
 
     humd.thrum
         .inject_tone("ensemble", peer_reply("chunk", "sess-1"))

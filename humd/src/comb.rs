@@ -4,14 +4,15 @@
 //! accumulates for the life of the install. Two families live in it.
 //!
 //! **Activity** — what crossed the kernel, by chi: `chi:finish`,
-//! `chi:tool-call`, and `bee:claude-cli:chi:finish` for the same count
-//! scoped to one hive kind. The scoped counts cover the work chis — a
+//! `chi:tool-call`, and `hive:claude-cli:chi:finish` for the same count
+//! scoped to the hive of the bee that did the work. The scoped counts
+//! cover the work chis — a
 //! turn finished, a tool was called, a tool answered, something went
 //! wrong — because those are the ones that name what was done.
 //!
 //! **Nectar** — what was consumed, by metric: `nectar:in`, `nectar:out`,
-//! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a bee
-//! as `bee:claude-cli:nectar:in`. Nectar is the kernel's raw intake —
+//! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a hive
+//! as `hive:claude-cli:nectar:in`. Nectar is the kernel's raw intake —
 //! tokens in, tokens out, cache reads and writes. A hive may name its
 //! tokens any of the ways the wilds do: `input_tokens` and `prompt_tokens`
 //! are the same measure, and so are their output counterparts. What the
@@ -26,6 +27,10 @@
 //!
 //! Nothing is measured that was not measured: a hive that reports no
 //! usage is measured as having used nothing.
+//!
+//! The scope is the hive, not the bee: bees come and go and rename
+//! themselves, while the kind is what an operator asks about. Older
+//! combs wrote the same scope as `bee:<hive>:`.
 //!
 //! Persisted at `${XDG_RUNTIME_DIR}/hum/comb.json`, write-through every
 //! `comb_persist_interval`.
@@ -79,16 +84,23 @@ pub fn chi_key(chi: &str) -> String {
     format!("chi:{chi}")
 }
 
-pub fn bee_chi_key(bee: &str, chi: &str) -> String {
-    format!("bee:{bee}:chi:{chi}")
+pub fn hive_chi_key(hive: &str, chi: &str) -> String {
+    format!("hive:{hive}:chi:{chi}")
 }
 
 pub fn nectar_key(metric: &str) -> String {
     format!("nectar:{metric}")
 }
 
-pub fn bee_nectar_key(bee: &str, metric: &str) -> String {
-    format!("bee:{bee}:nectar:{metric}")
+pub fn hive_nectar_key(hive: &str, metric: &str) -> String {
+    format!("hive:{hive}:nectar:{metric}")
+}
+
+fn rescoped(key: String) -> String {
+    match key.strip_prefix("bee:") {
+        Some(rest) => format!("hive:{rest}"),
+        None => key,
+    }
 }
 
 pub fn usage_of(usage: Option<&Value>) -> Vec<(&'static str, u64)> {
@@ -119,7 +131,7 @@ impl Comb {
         })
     }
 
-    pub fn record(&self, chi: &str, bee: Option<&str>, usage: Option<&Value>) {
+    pub fn record(&self, chi: &str, hive: Option<&str>, usage: Option<&Value>) {
         self.incr(&chi_key(chi));
         let tokens = if chi == "finish" {
             usage_of(usage)
@@ -129,14 +141,14 @@ impl Comb {
         for (metric, n) in &tokens {
             self.incr_by(&nectar_key(metric), *n);
         }
-        let Some(bee) = bee else {
+        let Some(hive) = hive else {
             return;
         };
         if WORK_CHIS.contains(&chi) {
-            self.incr(&bee_chi_key(bee, chi));
+            self.incr(&hive_chi_key(hive, chi));
         }
         for (metric, n) in &tokens {
-            self.incr_by(&bee_nectar_key(bee, metric), *n);
+            self.incr_by(&hive_nectar_key(hive, metric), *n);
         }
     }
 
@@ -147,14 +159,14 @@ impl Comb {
                 Ok(raw) => {
                     let mut out = HashMap::with_capacity(raw.len());
                     for (k, v) in raw {
-                        if let Some(n) = v.as_u64() {
-                            out.insert(k, n);
-                        } else if let Some(f) = v.as_f64()
-                            && f.is_finite()
-                            && f >= 0.0
-                        {
-                            out.insert(k, f as u64);
-                        }
+                        let n = match v.as_u64() {
+                            Some(n) => n,
+                            None => match v.as_f64() {
+                                Some(f) if f.is_finite() && f >= 0.0 => f as u64,
+                                _ => continue,
+                            },
+                        };
+                        *out.entry(rescoped(k)).or_insert(0) += n;
                     }
                     trace!(target: "comb", "comb.loaded keys={}", out.len());
                     out
@@ -243,15 +255,15 @@ mod tests {
     }
 
     #[test]
-    fn record_attributes_work_to_the_bee() {
+    fn record_attributes_work_to_the_hive() {
         let c = Comb::new();
         c.record("finish", Some("claude-cli"), None);
         c.record("tool-call", Some("claude-cli"), None);
         c.record("chunk", Some("claude-cli"), None);
         let snap = c.snapshot();
-        assert_eq!(snap.get("bee:claude-cli:chi:finish"), Some(&1));
-        assert_eq!(snap.get("bee:claude-cli:chi:tool-call"), Some(&1));
-        assert_eq!(snap.get("bee:claude-cli:chi:chunk"), None);
+        assert_eq!(snap.get("hive:claude-cli:chi:finish"), Some(&1));
+        assert_eq!(snap.get("hive:claude-cli:chi:tool-call"), Some(&1));
+        assert_eq!(snap.get("hive:claude-cli:chi:chunk"), None);
     }
 
     #[test]
@@ -267,8 +279,8 @@ mod tests {
         assert_eq!(snap.get("nectar:in"), Some(&1200));
         assert_eq!(snap.get("nectar:out"), Some(&34));
         assert_eq!(snap.get("nectar:cacheRead"), Some(&900));
-        assert_eq!(snap.get("bee:claude-cli:nectar:in"), Some(&1200));
-        assert_eq!(snap.get("bee:claude-cli:nectar:out"), Some(&34));
+        assert_eq!(snap.get("hive:claude-cli:nectar:in"), Some(&1200));
+        assert_eq!(snap.get("hive:claude-cli:nectar:out"), Some(&34));
     }
 
     #[test]
@@ -299,10 +311,25 @@ mod tests {
         assert_eq!(snap.get("chi:finish"), Some(&1));
         assert_eq!(snap.get("nectar:in"), Some(&7));
         assert_eq!(
-            snap.keys().filter(|k| k.starts_with("bee:")).count(),
+            snap.keys().filter(|k| k.starts_with("hive:")).count(),
             0,
-            "a tone with no bee must not be attributed to one"
+            "a tone with no bee here must not be attributed to a hive"
         );
+    }
+
+    #[test]
+    fn a_comb_scoped_by_bee_loads_scoped_by_hive() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("comb.json");
+        std::fs::write(
+            &path,
+            r#"{"bee:claude-cli:chi:finish":3,"hive:claude-cli:chi:finish":2,"chi:finish":5}"#,
+        )
+        .unwrap();
+        let snap = Comb::load(&path).snapshot();
+        assert_eq!(snap.get("hive:claude-cli:chi:finish"), Some(&5));
+        assert_eq!(snap.get("bee:claude-cli:chi:finish"), None);
+        assert_eq!(snap.get("chi:finish"), Some(&5));
     }
 
     #[test]

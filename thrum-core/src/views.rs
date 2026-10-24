@@ -8,6 +8,11 @@
 //! Optional fields are also `skip_serializing_if` so absent fields are
 //! absent from the wire, mirroring how builders construct tones.
 //!
+//! A hello names the `hive` the bee belongs to and the `roles` it
+//! claims, and proves the bee is its `hid` by a signature from the key
+//! that hashes to it. Older bees said `bee` for their roles; humd still
+//! reads it.
+//!
 //! Each `*Body` struct is the body of exactly one chi, named after it.
 //! `DroneLoad` is the nested payload of a `drone` tone rather than a
 //! chi of its own.
@@ -21,14 +26,29 @@ use serde_json::Value;
 pub struct HelloBody {
     #[serde(rename = "protoVersion")]
     pub proto_version: String,
-    pub bee: String,
-    pub version: String,
+    pub hive: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hid: Option<String>,
+    pub roles: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub hid: String,
+    pub pubkey: String,
+    #[serde(rename = "signedAt")]
+    pub signed_at: i64,
+    pub signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "toolNames")]
     pub tool_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provides: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chis: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propensity: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }

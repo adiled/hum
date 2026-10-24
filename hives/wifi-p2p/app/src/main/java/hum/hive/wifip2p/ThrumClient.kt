@@ -50,7 +50,7 @@ class ThrumClient(
     }
 
     private suspend fun attemptConnect() {
-        val hid = IdentityStore.getHid(dataDir)
+        val proof = IdentityStore.signedAs(dataDir)
         val mode = resolveMode()
 
         try {
@@ -66,10 +66,9 @@ class ThrumClient(
             val hello = Tone(
                 chi = Chi.HELLO,
                 rid = "hello-${System.currentTimeMillis().toString(36)}",
-                from = HIVE_NAME,
-                body = mapOf(
-                    "hid" to hid,
-                    "bee" to listOf("forager"),
+                from = proof["hid"] as String,
+                body = proof + mapOf(
+                    "roles" to listOf("forager"),
                     "hive" to HIVE_NAME,
                     "version" to BEE_VERSION,
                     "protoVersion" to THRUM_VERSION,

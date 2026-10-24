@@ -96,12 +96,17 @@ gradle build
 # produces app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## Install (via hum managed service)
+## Install
 
-If humd and orchd are running on the Android device (Termux):
+Teach the humd the bee will land on its kind, enter the bee there, and
+put its id and key in the app's data dir:
 
 ```bash
-hum hive install ./hives/wifi-p2p
+hum hive ./hives/wifi-p2p install
+id=$(hum bee enter --hive wifi-p2p)
+adb push "${XDG_STATE_HOME:-$HOME/.local/state}/hum/bees/$id.key" /data/local/tmp/
+# then, as the app: <dataDir>/hum/bee holds "$id",
+#                   <dataDir>/hum/bees/$id.key holds the key
 ```
 
 Or sideload the APK and start the service manually:

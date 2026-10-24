@@ -60,7 +60,9 @@ class GoldenWireTest(unittest.TestCase):
         hello = p.from_wire(
             p.HelloBody, {k: v for k, v in tones["hello"].items() if k not in ENV_KEYS}
         )
-        self.assertEqual(hello.proto_version, "0.7.0")
+        self.assertEqual(hello.proto_version, "0.8.0")
+        self.assertEqual(hello.hive, "claude-cli")
+        self.assertEqual(hello.roles, ["worker"])
         self.assertEqual(hello.tool_names, ["Read", "Bash"])
         chunk = p.from_wire(
             p.ChunkBody, {k: v for k, v in tones["chunk"].items() if k not in ENV_KEYS}

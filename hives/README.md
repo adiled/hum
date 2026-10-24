@@ -1,17 +1,17 @@
 ---
 title: "hives"
-description: "how to build a hive, the kind a bee is commissioned from, and run its bees on a humd via thrum"
+description: "how to build a hive, install it on a humd, and the bees that humd then understands"
 ---
 
 # hives
 
-> _A hive is a kind. A bee is a running instance of it. This page is both the catalogue of reference hives and the guide to building your own._
+> _A hive is a kind. A bee is a participant, understood through its hive. This page is both the catalogue of reference hives and the guide to building your own._
 
 ## The vocabulary, once
 
-A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`. It does not run on its own; it is a typology plus a binary. A **bee** is the running instance a hive commissions. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can be both. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key — a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
-A bee is just a process that handshakes with a humd over thrum. The handshake is the registration. Once it completes, humd knows the bee exists, what `chi` it speaks, and how to route to it. humd never links a hive in at build time; bees attach at runtime, in any language.
+A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees — signs them in, one key each — and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
 
 ## Catalogue
 
@@ -29,7 +29,7 @@ A bee is just a process that handshakes with a humd over thrum. The handshake is
 | [`twilio-sms`](twilio-sms) | forager | `twilio-sms` | Twilio Messaging webhook |
 | [`gsm-modem`](gsm-modem) | forager | `gsm-modem` | GSM AT-command serial SMS |
 | [`bp7`](bp7) | forager | `bp7-forager` | Bundle Protocol v7 (DTN) |
-| [`common`](common) | library | n/a | `serve_worker` / `serve_forager` plus identity |
+| [`hum-nest`](../hum-nest) | library | n/a | `serve_worker` / `serve_forager` plus identity |
 
 Listing here is editorial, reserved for exemplars the maintainers keep. Your hive works the moment it handshakes a humd, whether or not it lives in this repo.
 
@@ -47,9 +47,31 @@ A forager picks a contract that already exists in the wild and hides the rest of
 
 ## Build a hive
 
+### 0. Be a hive
+
+Put an `Orchfile` at the root of your hive's directory. That is what makes it a hive, and the directory's name is the hive's name. hum recognises one unit in it, `hive-install`, and nothing else. `hum hive <ref> install` records the hive on the humd and then runs that unit in the foreground, with `HUM_SRC` set to your directory, `HUM_HIVE` to your hive's name, and `hum` on its `PATH`; if the unit fails, the hive is not installed.
+
+What the unit does is yours: build, fetch a model, enter bees, start processes and keep them alive with whatever supervisor you like. The bundled hives use one small `install` script each that builds, enters a bee (`hum bee enter --hive $HUM_HIVE`, reusing it on reinstall), and runs their process under [orchd](https://github.com/adiled/orchd) in their own namespace with the bee's id in `HUM_BEE`. Every other unit in the Orchfile is only what your own tooling makes of it.
+
+```
+ARG HUM_SRC=
+ARG HUM_BEE=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
+SERVICE my-hive
+RUN ${HUM_SRC}/target/release/my-bee
+ENV HUM_BEE=${HUM_BEE}
+RESTART always
+```
+
+A hive whose bees live elsewhere (a phone, another machine) can have an Orchfile with no units at all; installing it still teaches the humd the kind, and its bees are entered on the humd they land on.
+
 ### 1. Speak thrum
 
-Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `nest_common::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.
+Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `hum_nest::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.
 
 ### 2. Handshake, the hello contract
 
@@ -57,9 +79,9 @@ On connect, send `chi:"hello"` with these fields.
 
 | field | meaning |
 |---|---|
-| `bee` | role array: `["worker"]`, `["forager"]`, or both |
-| `hive` | your kind name, for example `"openai-server"` |
-| `hid` | stable key-derived identity, described below, and mandatory |
+| `hive` | the hive you belong to, for example `"openai-server"`; it must be installed on the humd you land on |
+| `roles` | what you claim to do: `["worker"]`, `["forager"]`, both, or a role of your own |
+| `hid`, `pubkey`, `signedAt`, `signature` | who you are, proven: the id your hive entered you as, and a signature by its key (below); mandatory |
 | `models` | model ids a worker serves; foragers may omit it |
 | `tools` | tool defs a forager exposes, each `{name, description, inputSchema}` |
 | `provides` | capability tags such as `["fs"]` or `["session"]` |
@@ -67,15 +89,15 @@ On connect, send `chi:"hello"` with these fields.
 | `chis` | the chi values you speak; advisory |
 | `source` | URL to your hive's repo; informational, for humans only |
 
-> ### The hid is mandatory and must be a real, stable Hid
+> ### A bee signs its hello with the key its hive entered
 >
-> The format is `fbee_<hex>` for a forager or `wbee_<hex>` for a worker, where the hex is `sha256(ed25519 public key)` derived from a persisted key. It must never be an invented string. The thrum `client_id` is per-connection and changes on every reconnect, so humd dedupes a bee across reconnects by its hid.
+> Your hive enters you with `hum bee enter --hive <hive>`, which mints an ed25519 key, files it at `$XDG_STATE_HOME/hum/bees/<id>.key` (a raw 32-byte seed), records you as entered under the hive, and prints your id: `bee_<hex>`, the sha256 of your public key. Your hive hands that id to whatever acts as you, conventionally in `HUM_BEE`.
 >
-> If the hid is missing, or if it does not parse as a canonical Hid, humd cannot dedupe and every reconnect leaks a fresh manifest. Your tool count then multiplies, growing by the number of tools on every reconnect, until humd restarts. humd warns about this with `bee.hid.missing` and `bee.hid.invalid`, and it also prunes a bee's manifest on disconnect, but a valid hid is still required for correct identity.
+> On every hello, load the key filed under your id and send `hid` (your id), `pubkey` (hex), `signedAt` (unix ms) and `signature` (hex ed25519 over `hum-bee-socket-v1:<hid>:<signedAt>`). humd admits the hello only if the signature verifies, `signedAt` is fresh, the id is entered and not exited, and it entered under the `hive` you name. `hum bee <id> exit` signs you out — humd refuses your next hello — and `reenter` signs you back in.
 >
-> Persist the key at `$XDG_STATE_HOME/hum/bees/<kind>.key` as a raw 32-byte ed25519 seed and reuse it on every boot. The reference implementations all produce a byte-identical hid. In Rust use `nest_common::load_or_mint_bee_key` from [`common`](common). In TypeScript see [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `beeHid` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
+> Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. The reference implementations all sign the same way. In Rust, `hum_identity::bee_from_env()?.sign_hello(&mut hello)`, or `hum_nest::serve_worker` / `serve_forager`, which do it for you. In TypeScript see [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `signedAs` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
 
-Once the hello is accepted you are registered, and nothing else is required for single-machine use.
+Once the hello is accepted you are nestled.
 
 ### 3. Translate, or transport
 
@@ -103,26 +125,29 @@ A lean bee drops the tones it cannot express, while a rich one forwards everythi
 
 There are three deployment shapes, and the protocol is identical across all of them.
 
-In **local dev** you run `cargo run -p humd` and then launch your bee binary. Both sides resolve the same socket path, so there is no install and no service.
+In **local dev** you run `cargo run -p humd`, install your hive, enter a bee, and launch your binary with `HUM_BEE` set. Both sides resolve the same socket path, so there is no service.
 
-In the **ensemble**, a bee on one machine reaches a humd on another over the ensemble transport. The remote humd sees the same hello and routes normally. A `peers.json` with one bootstrap entry turns this on. Nothing installs on the remote humd's disk, and the `source` URL stays purely informational.
+Whatever the shape, the humd a bee lands on must have its hive installed and the bee entered there. `hum hive <ref> install` records the hive at `~/.config/hum/hives.d/<hive>.orch` and runs its `hive-install` unit. hum starts nothing itself; whatever runs is the hive's doing.
 
-As a **managed service** you keep a bee alive across reboots. Ship an `Orchfile` at your hive root declaring the SERVICE + RUN + RESTART (see any bundled hive for a template). `hum hive install <target>` resolves the target, builds the binary (Cargo / pnpm / Go / `build` script — detected from the marker file present), copies the Orchfile into `~/.config/hum/orch.d/`, and asks [orchd](https://github.com/adiled/orchd) to bring the bee up as a user systemd unit (Linux) or launchd agent (macOS). orchd is the supervisor; from there the CLI drives it.
+In the **ensemble**, a bee nestled on one humd is gossiped to others. A humd routes to a remote bee only when it has that bee's hive installed too, so it knows the kind it is handing work to; it need not have entered any bee of it. A `peers.json` with one bootstrap entry turns the ensemble on, and the `source` URL stays purely informational.
+
+As a **managed service** your hive keeps its processes alive itself. The bundled hives do it with orchd, which the hum installer puts on the machine for any hive to use; nothing in hum calls it.
 
 ```
-hum hive --list                   # catalogue: installer, configured, running
-hum hive <name|path|url> install   # build a hive and register its bee
-hum bee  --list                   # every bee with hid, role, models, tools, source, state
-hum bee  <name|id> enter           # start a stopped bee
-hum bee  <name|id> exit            # stop it, preserving state
-hum bee  <name|id> reenter         # graceful restart with the same identity
+hum hive --list                     # the catalogue, what is installed, bees entered under each
+hum hive <name|path|url> install    # teach this humd the hive; runs its hive-install
+hum hive <name|path|url> uninstall  # forget it (what the hive started is its own to stop)
+hum bee  --list                     # bees entered here, and which have nestled
+hum bee  enter --hive <hive>        # mint a bee and sign it in; prints its id
+hum bee  <id> exit                  # sign it out; humd refuses its next hello
+hum bee  <id> reenter               # sign it back in
 ```
 
-`hum bee reenter` is the supported replacement for `pkill`, because it restarts through orchd and the bee keeps its persisted identity. `hum hive install` accepts the same dialect a bee advertises in its `source`: a bundled name, a local path, or a `github.com/<org>/<repo>/tree/<branch>/<path>` URL. Our own repo resolves to the local checkout, and a foreign one is shallow-cloned. The target must contain an `Orchfile`.
+`hum hive install` accepts the same dialect a bee advertises in its `source`: a bundled name, a local path, or a `github.com/<org>/<repo>/tree/<branch>/<path>` URL. Our own repo resolves to the local checkout, and a foreign one is shallow-cloned. The target must contain an `Orchfile`.
 
 ## Discovery, optional
 
-For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, and peer humds find you through `ensemble.hive_discover("<kind>")`. See [`ensemble/README.md`](../ensemble/README.md). For a censorship-resistant alternative to gossip, publish your manifest hash to a `HumdRegistry`, as described in [`contracts/`](../contracts/). Both are opt-in, and a solo humd needs neither.
+For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, and peer humds find bees of your hive through `ensemble.bee_discover("<hive>")`. See [`ensemble/README.md`](../ensemble/README.md). For a censorship-resistant alternative to gossip, publish your manifest hash to a `HumdRegistry`, as described in [`contracts/`](../contracts/). Both are opt-in, and a solo humd needs neither.
 
 ## Versioning
 
@@ -132,4 +157,4 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 - [`nest/`](../nest) defines `WorkerBee`, `Cell`, `SpawnSpec`, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `nest::lifecycle`.
 - [WIRE.md](../WIRE.md) explains what the wire sees of nests and cells.
-- [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, bee, worker, forager, nestler, and nestled.
+- [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, hive installation, bee, worker, forager, nestler, and nestled.

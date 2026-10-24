@@ -1,7 +1,6 @@
 //! ollama-worker — standalone worker-bee process.
 //!
-//! Registers with humd as `bee:["worker"]`, advertises models from
-//! `OLLAMA_WORKER_MODELS`, and routes prompts to Ollama's API.
+//! Serves the models in `OLLAMA_WORKER_MODELS` through Ollama's API.
 //!
 //! Environment:
 //!   OLLAMA_WORKER_URL      — Ollama API base URL (default: http://127.0.0.1:11434)

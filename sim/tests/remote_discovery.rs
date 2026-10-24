@@ -19,7 +19,7 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
         .thrum
         .inject_tone(
             &worker_cid,
-            serde_json::json!({
+            server.signed_hello(serde_json::json!({
                 "chi": "hello",
                 "bee": ["worker"],
                 "hive": "claude-cli",
@@ -27,7 +27,7 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
                 "chis": ["hello", "prompt", "chunk", "finish"],
-            }),
+            })),
         )
         .await;
 
@@ -104,7 +104,7 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
         .thrum
         .inject_tone(
             &worker_cid,
-            serde_json::json!({
+            server.signed_hello(serde_json::json!({
                 "chi": "hello",
                 "bee": ["worker"],
                 "hive": "claude-cli",
@@ -112,7 +112,7 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
                 "chis": ["hello", "prompt", "chunk", "finish"],
-            }),
+            })),
         )
         .await;
 

@@ -63,8 +63,10 @@ bridge, gossip relay) so future chi extensions are backward-compatible.
 The first tone a nestler sends after `connect()` MUST be `chi:"hello"`.
 **This tone is the registration**: the humd that receives it now knows
 your bee exists, what chi values you speak, and can route tones
-to you. Nothing else is required for a single-machine bee. The
-ensemble layer (peer humds, gossip) and the on-chain layer
+to you — provided the hive your hello names is installed on that humd
+(`hum hive <ref> install`) and the hello is signed by a key that hive
+entered (`hum bee enter --hive <hive>`). A humd understands a bee only
+through its hive, and knows it only by its key. The ensemble layer (peer humds, gossip) and the on-chain layer
 (`HumdRegistry`) are additive opt-ins on top.
 
 The handshake doesn't distinguish where the bytes came from. A hello
@@ -80,8 +82,12 @@ single protocol.
 {
   "chi": "hello",
   "rid": "hello-1",
-  "from": "<bee-name>",
-  "bee": "<bee-name>",
+  "hive": "<the hive you belong to>",
+  "roles": ["worker"],
+  "hid": "bee_<sha256 of your ed25519 pubkey>",
+  "pubkey": "<hex ed25519 public key>",
+  "signedAt": 1700000000000,
+  "signature": "<hex ed25519 over hum-bee-socket-v1:<hid>:<signedAt>>",
   "version": "<your bee's semver>",
   "protoVersion": "<THRUM_VERSION you target>",
   "propensity": {
@@ -94,19 +100,28 @@ single protocol.
 }
 ```
 
-- `bee`, `protoVersion` — **required**.
+- `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature` —
+  **required**. The signature proves the hello comes from the entered
+  key the `hid` names (see [hives/README.md](hives/README.md)).
+- `roles` is what the bee claims to do — `worker`, `forager`, both, or
+  a role of its own. It is a claim, not identity. Older bees sent it
+  as `bee`; humd still reads that.
 - `chis` (note: plural) is the list of chi values this bee speaks
   and expects to receive. **Distinct from `chi`** at the top level —
   `chi` is the discriminator (this tone IS a hello); `chis` is the
   vocabulary (these are the tones this bee knows). One word per
   concept; never reuse `chi` for a list.
 - All other fields — optional but **strongly recommended**: humd uses
-  them to build a `HiveManifest` and gossip it to the rest of the
+  them to build a `BeeManifest` and gossip it to the rest of the
   ensemble on the `hum/hives/announce` topic.
 - humd replies with `chi:"breath"` — a snapshot of any state relevant
   to this nestler (today: `{}`; reserved for future state sync).
 - A hello with **no** `protoVersion` is **refused**: the bee is not
   registered, not announced to the ensemble, and the connection is closed.
+- A hello naming **no** hive, or a hive **not installed** on this humd,
+  is refused the same way. So is one that is **unsigned**, whose
+  signature fails or is stale, or whose key was never entered under that
+  hive or has exited.
 - A `protoVersion` whose **major** differs from humd's is **refused** the
   same way.
 - A `protoVersion` that differs only in minor or patch is admitted, with a
@@ -169,7 +184,7 @@ If you want to add a new kind of compute to the mesh, you ship a
 the mesh discovers via the existing capability gossip; peers route
 prompts your way. The wire stays exactly the same.
 
-## Chi registry (THRUM_VERSION 0.7.0)
+## Chi registry (THRUM_VERSION 0.8.0)
 
 This section is the wire contract. `thrum-core/src/chi.rs` mirrors it as
 the Rust enum, and `codegen` emits the TypeScript, Python, and Go
@@ -189,7 +204,7 @@ with no description here has none in the clients either.
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `hello` | `bee`, `protoVersion`, optional `version`/`propensity`/`chi`/`source` | first frame after connect — announce self | announce self — protoVersion, bee, version |
+| `hello` | `hive`, `protoVersion`, optional `roles`/`hid`/`version`/`propensity`/`chis`/`source` | first frame after connect — announce self | announce self — protoVersion, bee, version |
 | `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn | start a turn — content, system, tools |
 | `cancel` | `sid` | interrupt the current turn for this sid | interrupt mid-turn |
 | `cleanup` | `sid` | drop daemon state for this session | session deleted, drop daemon state |
@@ -416,6 +431,7 @@ Reference: [`thrum-core`](../thrum-core),
 
 | THRUM_VERSION | what changed |
 |---|---|
+| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_` |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |

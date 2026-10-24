@@ -4,8 +4,8 @@
 //! Mirrors the forager-bee client pattern: the worker process owns its own
 //! lifecycle, humd is just a router. The wire contract:
 //!
-//! - **Hello**: announce as `bee:["worker"]`, advertise `models` +
-//!   `propensity`. humd registers `{model_id → client_id}` mappings.
+//! - **Hello**: announce the hive it belongs to and the models it serves.
+//!   humd routes to it only once that hive is installed there.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
 //!   `WorkerBee::raise(egg)`, then feeds the prompt text on `cell.feed`.
@@ -69,12 +69,11 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
-use hum_identity::HidPrefix;
 use hum_mcp::protocol::ToolDef;
 use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
-use hum_identity::load_or_mint_bee_key;
+use hum_identity::bee_from_env;
 use hum_mcp::{spawn_local_mcp, McpBridge};
 
 fn default_socket_path() -> PathBuf {
@@ -125,19 +124,17 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Wbee)
-        .with_context(|| format!("load/mint wbee key for hive {}", advert.hive))?;
+    let bee_key = bee_from_env()
+        .with_context(|| format!("which bee of {} is this process?", advert.hive))?;
 
     let propensity_str = match worker.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
         crate::Propensity::StatelessPerCall => "stateless_per_call",
         crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
-    let hello = json!({
+    let mut hello = json!({
         "chi": "hello",
-        "bee": ["worker"],
-        "hid": bee_key.hid.to_hex(),
-        "from": bee_key.hid.to_hex(),
+        "roles": ["worker"],
         "hive": &advert.hive,
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -146,6 +143,7 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
         "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call"],
         "source": advert.source.clone().unwrap_or_default(),
     });
+    bee_key.sign_hello(&mut hello);
     hum_thrum::send_json(&write_half, &hello).await?;
     info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
 

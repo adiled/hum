@@ -106,16 +106,14 @@ else
   echo "                  Add provider.hum manually — see MIGRATING.md."
 fi
 
-# Step 5 — (re)register the claude-cli worker bee. humd is a router; it
-# can't serve any model without at least one worker registered via thrum.
-# Each hive's installer appends itself to hum.json humnest.bees and
-# bounces humnest, so we just invoke them in the target user's shell.
-echo "[opencode] (re)registering claude-cli bee with humnest …"
-su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/claude-cli && ./install" >/dev/null
+# Step 5 — install the claude-cli hive, which enters and runs its worker
+# bee. humd is a router; it can't serve any model without a worker nestled.
+echo "[opencode] installing claude-cli …"
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME hum hive claude-cli install" >/dev/null
 
-# Step 6 — (re)register the openai-server bee.
-echo "[opencode] (re)registering openai-server bee with humnest …"
-su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME cd ~/.local/share/hum/src/hives/openai-server && ./install" >/dev/null
+# Step 6 — install the openai-server hive, which enters and runs its bee.
+echo "[opencode] installing openai-server …"
+su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME hum hive openai-server install" >/dev/null
 
 # Health check — ask humctl about humnest, and list its bees via the
 # control socket if humctl status doesn't say it all.

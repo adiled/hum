@@ -24,4 +24,4 @@ pub use prims::{dusk_in, echo_for, is_dusk, now_ms, rid, sigil};
 pub use views::*;
 pub use wane::WaneTracker;
 
-pub const THRUM_VERSION: &str = "0.7.0";
+pub const THRUM_VERSION: &str = "0.8.0";

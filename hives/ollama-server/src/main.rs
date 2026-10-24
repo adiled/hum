@@ -208,7 +208,8 @@ async fn open_prompt(
     hello.insert("chi".into(), json!(Chi::Hello));
     hello.insert("rid".into(), Value::String(hum_identity::HumId::mint().to_string()));
     hello.insert("from".into(), Value::String(HIVE_NAME.into()));
-    hello.insert("bee".into(), Value::String(HIVE_NAME.into()));
+    hello.insert("hive".into(), Value::String(HIVE_NAME.into()));
+    hello.insert("roles".into(), json!(["forager"]));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
     hello.insert("protoVersion".into(), Value::String(THRUM_VERSION.into()));
     hello.insert(
@@ -234,7 +235,9 @@ async fn open_prompt(
             }),
         );
     }
-    write_line(&mut wr, &Value::Object(hello)).await?;
+    let mut hello = Value::Object(hello);
+    hum_identity::bee_from_env()?.sign_hello(&mut hello);
+    write_line(&mut wr, &hello).await?;
 
     let mut prompt = serde_json::Map::new();
     prompt.insert("chi".into(), json!(Chi::Prompt));

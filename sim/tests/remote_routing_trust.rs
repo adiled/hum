@@ -19,7 +19,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
         .thrum
         .inject_tone(
             &worker_cid,
-            serde_json::json!({
+            server.signed_hello(serde_json::json!({
                 "chi": "hello",
                 "bee": ["worker"],
                 "hive": "claude-cli",
@@ -27,7 +27,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
                 "chis": ["hello", "prompt", "chunk", "finish"],
-            }),
+            })),
         )
         .await;
 
@@ -89,7 +89,7 @@ async fn opting_in_restores_discovery_routing() {
         .thrum
         .inject_tone(
             &worker_cid,
-            serde_json::json!({
+            server.signed_hello(serde_json::json!({
                 "chi": "hello",
                 "bee": ["worker"],
                 "hive": "claude-cli",
@@ -97,7 +97,7 @@ async fn opting_in_restores_discovery_routing() {
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
                 "chis": ["hello", "prompt", "chunk", "finish"],
-            }),
+            })),
         )
         .await;
 

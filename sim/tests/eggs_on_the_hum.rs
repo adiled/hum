@@ -47,7 +47,7 @@ async fn eggs_on_the_hum() {
         "models": ["claude-opus-4-7"],
         "chis": ["hello", "prompt", "chunk", "tool-call", "finish"],
     });
-    server.thrum.inject_tone(&worker_cid, worker_hello).await;
+    server.thrum.inject_tone(&worker_cid, server.signed_hello(worker_hello)).await;
 
     let worker_cid_for_pump = worker_cid.clone();
     let server_thrum_for_pump = server_thrum.clone();

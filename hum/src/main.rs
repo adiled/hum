@@ -5,13 +5,14 @@
 //!   hum status             daemon + config + service state
 //!   hum logs               tail journalctl (Linux) / launchd logs (macOS)
 //!   hum doctor             one-shot full diagnostic dump (run this first)
-//!   hum hive --list        list hive kinds (catalogue / configured / running)
-//!   hum hive <ref> install build a hive + register its bee
-//!   hum bee --list         list bees + state
-//!   hum bee <id> VERB      enter a bee (exit/reenter: not supported yet)
-//!   hum nest               list orchd-managed bees (delegates to `orchd survey`)
-//!   hum config             show the paths + the orchd config hum writes
-//!   hum comb [bee]         show the comb — lifetime measures
+//!   hum hive --list          the hives in the catalogue and installed here
+//!   hum hive <ref> install   teach this humd a hive (runs its hive-install)
+//!   hum hive <ref> uninstall forget a hive
+//!   hum bee --list           the bees entered here, and which have nestled
+//!   hum bee enter --hive <h> sign a new bee in under a hive; prints its id
+//!   hum bee <id> exit        sign it out (reenter signs it back in)
+//!   hum config               show the paths hum keeps
+//!   hum comb [hive]          show the comb — lifetime measures
 //!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
 //!                          (status | tail | range | verify | replay)
@@ -20,14 +21,18 @@
 //!   hum version            print version
 //!   hum help               print this surface
 //!
-//! A hive ref is the same dialect a bee advertises as its `source`: a
-//! bundled name, a local path, or a github tree URL. Our own repo maps
-//! to the local checkout; a foreign repo is shallow-cloned to a cache.
+//! A bee is a participant and a hive is its kind; `hives` and `bees`
+//! hold what that means here. A hive ref is the same dialect a bee
+//! advertises as its `source`: a bundled name, a local path, or a github
+//! tree URL. Our own repo maps to the local checkout; a foreign repo is
+//! shallow-cloned to a cache.
 //!
 //! Live peer state lives in the running daemon, which has no
 //! admin-tone RPC yet — `hum ensemble` reads the on-disk files.
 
-mod orch;
+mod bees;
+mod hives;
+mod orchfile;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,54 +64,59 @@ enum Cmd {
     },
     #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + worker logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
     Doctor,
-    #[command(about = "Hive kinds — the source a bee is commissioned from.")]
-    #[command(long_about = "Hive kinds — the source a bee is commissioned from.
+    #[command(about = "Hives — the kinds this humd understands.")]
+    #[command(long_about = "Hives — the kinds this humd understands.
 
-  hum hive --list           catalogue + configured + registered + running
-  hum hive <ref> install    build the hive, register the kind, enter a bee of it
+  hum hive --list             the catalogue, and what is installed here
+  hum hive <ref> install      teach this humd the hive
+  hum hive <ref> uninstall    forget it
 
-  hum bee <kind> enter     start a bee of a kind that is already registered
-
-A hive is a kind; a bee is a participant. Installing registers the kind
-here — the spec of a bee of that kind — and enters a bee of it.
-Entering is a separate act: a node can know a kind and route a prompt to
-a bee of it on another node without running one itself.
+A directory with an Orchfile is a hive. Installing one runs its
+`hive-install` unit, if it has one, and from then on this humd
+understands bees the hive enters. What the hive runs, and how, is the
+hive's own business; hum starts nothing.
 
 <ref> is a bundled name, a local path, or the source URL a bee
-advertises (github tree URL of a hives/<kind> dir).")]
+advertises (github tree URL of a hives/<hive> dir).")]
     #[command(verbatim_doc_comment)]
     Hive {
         #[arg(help = "Hive ref (name | path | source URL). Omit with --list")]
         target: Option<String>,
-        #[arg(help = "Action on the hive: `install` | `register`")]
+        #[arg(help = "Action on the hive: `install` | `uninstall`")]
         action: Option<String>,
         #[arg(help = "List the hive catalogue")]
         #[arg(long)]
         list: bool,
     },
-    #[command(about = "Bees — the running instances of a hive.")]
-    #[command(long_about = "Bees — the running instances of a hive.
+    #[command(about = "Bees — the participants this humd hears from.")]
+    #[command(long_about = "Bees — the participants this humd hears from.
 
-  hum bee --list                  list bees + state
-  hum bee <name|id> enter         start a stopped bee
-  hum bee <name|id> exit          not supported yet (orchd has no per-service stop)
-  hum bee <name|id> reenter       not supported yet (orchd has no per-service stop)")]
+A bee is a key. A hive enters one under itself, hands its id to whatever
+will act as that bee (through HUM_BEE), and that process signs its hello
+with the key. humd admits only a signed hello from an entered bee whose
+hive is installed. hum starts no process.
+
+  hum bee --list               bees entered here, and which have nestled
+  hum bee enter --hive <hive>  mint a bee and sign it in; prints its id
+  hum bee <id> exit            sign it out; humd refuses its next hello
+  hum bee <id> reenter         sign it back in")]
     #[command(verbatim_doc_comment)]
     Bee {
-        #[arg(help = "Bee name or id (hive name accepted, e.g. \"claude-cli\")")]
+        #[arg(help = "`enter`, or the id of an entered bee")]
         target: Option<String>,
-        #[arg(help = "Lifecycle verb: enter | exit | reenter")]
+        #[arg(help = "Verb for a bee id: exit | reenter")]
         verb: Option<String>,
+        #[arg(help = "The hive to enter a bee under")]
+        #[arg(long)]
+        hive: Option<String>,
         #[arg(help = "List bees")]
         #[arg(long)]
         list: bool,
     },
-    #[command(about = "List orchd-managed bees (delegates to `orchd survey`)")]
-    Nest,
     #[command(about = "Show the comb — lifetime measures of what crossed the kernel")]
     Comb {
-        #[arg(help = "Hive kind to report on (default: every bee)")]
-        bee: Option<String>,
+        #[arg(help = "Hive to report on (default: every hive)")]
+        hive: Option<String>,
     },
     #[command(about = "List available recipes (recipes/*) or run one")]
     Recipes {
@@ -140,7 +150,7 @@ advertises (github tree URL of a hives/<kind> dir).")]
         #[command(subcommand)]
         verb: Option<EnsembleVerb>,
     },
-    #[command(about = "Show the hum paths and the orchd config hum writes (the .orchrc and the base Orchfile)")]
+    #[command(about = "Show the hum paths and the hives installed here")]
     Config,
     #[command(about = "Stop the service and remove the humd binary. State preserved")]
     Uninstall,
@@ -223,9 +233,8 @@ fn main() -> Result<()> {
         Some(Cmd::Logs { lines }) => logs(lines),
         Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
-        Some(Cmd::Bee { target, verb, list }) => bee(target, verb, list),
-        Some(Cmd::Nest) => nest(),
-        Some(Cmd::Comb { bee }) => comb(bee),
+        Some(Cmd::Bee { target, verb, hive, list }) => bee(target, verb, hive, list),
+        Some(Cmd::Comb { hive }) => comb(hive),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Ensemble { verb }) => ensemble(verb),
@@ -305,7 +314,7 @@ fn probe_thrum(sock: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("connect refused ({e}) — stale socket, humd crashed"))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
     s.set_write_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"hum-doctor-probe\",\"bee\":[\"worker\"]}\n")?;
+    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"hum-doctor-probe\"}\n")?;
     let mut buf = [0u8; 256];
     match s.read(&mut buf) {
         Ok(0) => anyhow::bail!("socket closed without breath"),
@@ -587,9 +596,19 @@ fn doctor() -> Result<()> {
                 let p = e.path();
                 if p.extension().and_then(|x| x.to_str()) == Some("key") {
                     any = true;
-                    let kind = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    let bee = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                     let sz = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                    println!("  {kind}: {}", if sz == 32 { "✓ 32-byte ed25519 seed".to_string() } else { format!("✗ {sz} bytes (expected 32 — corrupt key)") });
+                    match hum_identity::load_bee_key(&bee) {
+                        Ok(key) => {
+                            let state = match hum_identity::entry(&bee) {
+                                Some(e) if e.exited => format!("exited from {}", e.hive),
+                                Some(e) => format!("entered under {}", e.hive),
+                                None => "never entered".to_string(),
+                            };
+                            println!("  {}: ✓ {state}", key.hid.short());
+                        }
+                        Err(e) => println!("  {bee}: ✗ {sz} bytes — {e}"),
+                    }
                 }
             }
             if !any { println!("  (none yet)"); }
@@ -615,27 +634,6 @@ fn doctor() -> Result<()> {
         Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
     }
 
-    match orch::version() {
-        Some(v) => {
-            let min_ok = orch::version_at_least(&v, orch::MIN_VERSION);
-            let max_ok = orch::version_at_least(orch::MAX_VERSION, &v);
-            let missing = orch::missing_subcommands();
-            let mark = if min_ok && max_ok && missing.is_empty() { "✓" } else { "✗" };
-            println!("  orchd:      {mark} {v} (pin {}..={})", orch::MIN_VERSION, orch::MAX_VERSION);
-            if !min_ok {
-                println!("      version below {} — run ./install to upgrade", orch::MIN_VERSION);
-            }
-            if !max_ok {
-                println!("      version above {} — hum pins it exactly; run ./install to pin it back", orch::MAX_VERSION);
-            }
-            if !missing.is_empty() {
-                println!("      missing subcommand(s): {} — hum calls grow/survey/fell/logs", missing.join(", "));
-            }
-        }
-        None => println!("  orchd:      ✗ NOT FOUND (run ./install to build it)"),
-    }
-    println!("  orch state: {}", hum_paths::orch_state_dir().display());
-
     println!("\n[claude binary]");
     let claude = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
     match Command::new(&claude).arg("--version").output() {
@@ -644,11 +642,10 @@ fn doctor() -> Result<()> {
     }
 
     println!("\n[bees]");
-    let _ = bee_list_full(&orch_catalog());
+    let _ = bees::list();
 
     println!("\n[recent humd + worker logs — warnings/errors]");
     print_recent_logs("hum", 60);
-    print_recent_logs("hum-claude-cli-worker", 60);
 
     println!("\n{bar}");
     println!("If a bee shows 0 tokens / silent finish, look for `worker.result.error`");
@@ -685,314 +682,65 @@ fn hive(target: Option<String>, action: Option<String>, list: bool) -> Result<()
     }
     let ref_ = target.unwrap();
     match action.as_deref() {
-        Some("install") => hive_install(&ref_),
-        Some(act) => anyhow::bail!("unknown hive action '{act}' for '{ref_}' (try: install)"),
+        Some("install") => hives::install(&ref_),
+        Some("uninstall") => hives::uninstall(&ref_),
+        Some(act) => anyhow::bail!("unknown hive action '{act}' for '{ref_}' (try: install | uninstall)"),
         None => anyhow::bail!("hum hive {ref_} <action> — try: hum hive {ref_} install"),
     }
 }
 
 fn hive_list() -> Result<()> {
-    use std::collections::BTreeMap;
-    let root = repo_root_or_install_dir();
-    let hives_dir = root.join(hum_paths::HIVES_SUBDIR);
-    let mut kinds: BTreeMap<String, (bool, Option<String>, bool)> = BTreeMap::new();
-    if let Ok(entries) = std::fs::read_dir(&hives_dir) {
-        for e in entries.flatten() {
-            if e.path().is_dir() && e.path().join(hum_paths::HIVE_INSTALL_SCRIPT).exists() {
-                kinds.entry(e.file_name().to_string_lossy().to_string()).or_default().0 = true;
-            }
-        }
-    }
-    let hum_json = hum_paths::hum_json();
-    let mut default_kind = String::new();
-    if let Ok(raw) = std::fs::read_to_string(&hum_json) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            default_kind = v.get("nest").and_then(|n| n.get("default"))
-                .and_then(|d| d.as_str()).unwrap_or("").to_string();
-            if let Some(obj) = v.get("hives").and_then(|h| h.as_object()) {
-                for (k, cfg) in obj {
-                    kinds.entry(k.clone()).or_default().1 =
-                        cfg.get("defaultModel").and_then(|m| m.as_str()).map(str::to_string);
-                }
-            }
-        }
-    }
-    for kind in orch_catalog() {
-        kinds.entry(kind).or_default().2 = true;
-    }
-    if kinds.is_empty() {
-        println!("no hives found (looked in {})", hives_dir.display());
+    let catalogue = hives::catalogue();
+    let installed = hives::installed();
+    let mut all: Vec<String> = catalogue.iter().chain(installed.iter()).cloned().collect();
+    all.sort();
+    all.dedup();
+    if all.is_empty() {
+        println!("no hives found (catalogue: {})", hives::catalogue_dir().display());
         return Ok(());
     }
-    println!("Hive kinds (catalogue: {}):\n", hives_dir.display());
-    println!(
-        "  {:<18} {:<10} {:<20} {:<12} {}",
-        "KIND", "INSTALLER", "CONFIGURED", "REGISTERED", "RUNNING"
-    );
-    for (kind, (installer, model, running)) in &kinds {
-        let configured = match (model, kind == &default_kind) {
-            (Some(m), true)  => format!("{m} (default)"),
-            (Some(m), false) => m.clone(),
-            (None, true)     => "(default)".to_string(),
-            (None, false)    => "—".to_string(),
-        };
-        let registered = orch::overlay_path(kind).exists();
-        println!("  {:<18} {:<10} {:<20} {:<12} {}",
-            kind,
-            if *installer { "✓" } else { "—" },
-            configured,
-            if registered { "✓" } else { "—" },
-            if *running { "✓" } else { "—" });
+    let nest_default = hum_paths::config::load().nest.default;
+    println!("Hives (catalogue: {}):\n", hives::catalogue_dir().display());
+    let entered = hum_identity::entered();
+    println!("  {:<18} {:<10} {:<10} {}", "HIVE", "CATALOGUE", "INSTALLED", "BEES ENTERED");
+    for hive in &all {
+        let here = installed.contains(hive);
+        let count = entered.iter().filter(|(_, e)| &e.hive == hive && !e.exited).count();
+        let raises = if count == 0 { String::new() } else { count.to_string() };
+        let marker = if hive == &nest_default { "  (nest default)" } else { "" };
+        println!(
+            "  {:<18} {:<10} {:<10} {}{marker}",
+            hive,
+            if catalogue.contains(hive) { "✓" } else { "—" },
+            if here { "✓" } else { "—" },
+            if raises.is_empty() { "—" } else { raises.as_str() },
+        );
     }
-    println!("\nbuild one: hum hive <name|path|source-url> install   |   bees: hum bee --list");
+    println!("\ninstall one: hum hive <name|path|source-url> install   |   bees: hum bee --list");
     Ok(())
 }
 
-fn hive_install(reference: &str) -> Result<()> {
-    let kind = hive_register(reference)?;
-    let overlay = orch::overlay_path(&kind);
-    let services = orch::services_in(&overlay)?;
-    match services.iter().find(|s| *s == &kind) {
-        Some(default) => {
-            let _ = orch::unload(default);
-            enter_bee(default)?;
-        }
-        None => {
-            for service in &services {
-                println!("  hum bee {service} enter");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn hive_register(reference: &str) -> Result<String> {
-    let dir = resolve_hive_dir(reference)?;
-    let orchfile = dir.join(hum_paths::ORCHFILE_BASENAME);
-    if !orchfile.exists() {
-        anyhow::bail!("no Orchfile at {}", orchfile.display());
-    }
-    let body = std::fs::read_to_string(&orchfile)?;
-    let kind = hive_kind(&dir)?;
-
-    build_hive(&dir, &kind)?;
-
-    orch::ensure_config()?;
-
-    let dest = orch::overlay_path(&kind);
-    std::fs::create_dir_all(hum_paths::orch_d_dir())?;
-    std::fs::write(&dest, with_source(&body, &dir))?;
-    println!("registered {kind} ({})", dest.display());
-
-    let overrides = orch::env_overrides(&orch::decl_args(&body));
-    let mut map = std::collections::HashMap::new();
-    for (k, v) in &overrides {
-        map.insert(k.clone(), v.clone());
-    }
-    let (base, overlay) = orch::base_and_overlay(&kind)?;
-    let parsed = orch::parse(
-        &[
-            (hum_paths::orchfile().display().to_string(), base),
-            (dest.display().to_string(), overlay),
-        ],
-        &map,
-    )?;
-    for svc in &parsed.services {
-        if !belongs_to_kind(&svc.name, &kind) {
-            anyhow::bail!(
-                "service {} is not a bee of {kind} — name it {kind} or {kind}-<archetype>",
-                svc.name
-            );
-        }
-        println!("  {} → {}", svc.name, svc.run_command.as_deref().unwrap_or(""));
-    }
-    if parsed.services.is_empty() {
-        anyhow::bail!("no SERVICE directive in {}", orchfile.display());
-    }
-
-    Ok(kind)
-}
-
-fn hive_kind(dir: &Path) -> Result<String> {
-    dir.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .filter(|n| !n.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("cannot name a kind after {}", dir.display()))
-}
-
-fn belongs_to_kind(service: &str, kind: &str) -> bool {
-    service == kind || service.starts_with(&format!("{kind}-"))
-}
-
-fn build_hive(dir: &Path, kind: &str) -> Result<()> {
-    let script = dir.join("build");
-    if !script.is_file() {
-        anyhow::bail!("no build script in {}", dir.display());
-    }
-    println!("building {kind} ({}) ...", script.display());
-    let s = Command::new("bash").arg(&script).current_dir(dir).status()?;
-    if !s.success() {
-        anyhow::bail!("build script failed: {}", script.display());
-    }
-    Ok(())
-}
-
-fn with_source(body: &str, dir: &Path) -> String {
-    let arg = format!("ARG HUM_SRC={}", dir.display());
-    let mut out = String::new();
-    let mut replaced = false;
-    for line in body.lines() {
-        if line.trim_start().starts_with("ARG HUM_SRC=") {
-            if !replaced {
-                out.push_str(&arg);
-                out.push('\n');
-                replaced = true;
-            }
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !replaced {
-        out.insert_str(0, &format!("{arg}\n"));
-    }
-    out
-}
-
-fn resolve_hive_dir(reference: &str) -> Result<PathBuf> {
-    if let Some(rest) = reference.strip_prefix("https://github.com/") {
-        let parts: Vec<&str> = rest.splitn(5, '/').collect();
-        if parts.len() == 5 && parts[2] == "tree" {
-            let (org, repo, branch, sub) = (parts[0], parts[1], parts[3], parts[4]);
-            if org == "adiled" && repo == "hum" {
-                return Ok(repo_root_or_install_dir().join(sub));
-            }
-            let cache = hum_paths::foreign_hive_cache(org, repo, branch);
-            if !cache.exists() {
-                std::fs::create_dir_all(cache.parent().unwrap()).ok();
-                let url = format!("https://github.com/{org}/{repo}");
-                println!("cloning {url} @ {branch} ...");
-                let ok = Command::new("git")
-                    .args(["clone", "--depth", "1", "--branch", branch, &url])
-                    .arg(&cache).status().map(|s| s.success()).unwrap_or(false);
-                if !ok { anyhow::bail!("git clone failed: {url}"); }
-            }
-            return Ok(cache.join(sub));
-        }
-        anyhow::bail!("unrecognized github source URL (want .../tree/<branch>/<path>): {reference}");
-    }
-    let p = PathBuf::from(reference);
-    if p.is_dir() { return Ok(p); }
-    let bundled = repo_root_or_install_dir().join(hum_paths::HIVES_SUBDIR).join(reference);
-    if bundled.exists() { return Ok(bundled); }
-    anyhow::bail!("can't resolve hive '{reference}' (not a bundled name, path, or github source URL)");
-}
-
-fn bee_service_state(kind: &str, survey: &BTreeMap<String, orch::Bee>) -> String {
-    match survey.get(kind) {
-        Some(b) if b.running() => "in nest (service running)".to_string(),
-        Some(_) => match orch::job(kind) {
-            Some(j) if j.running() => "in nest (service running)".to_string(),
-            Some(j) => match j.last_exit {
-                Some(code) if code != 0 => format!("⚠ crash-looping (exit {code})"),
-                Some(_) => "in nest (service stopped)".to_string(),
-                None => "in nest (service stopped?)".to_string(),
-            },
-            None => "in nest (service stopped?)".to_string(),
-        },
-        None => "installed, not handshaked".to_string(),
-    }
-}
-
-fn bee_list_full(installed: &[String]) -> Result<()> {
-    let snap_path = hum_paths::bees_snapshot();
-    let live: Vec<serde_json::Value> = std::fs::read_to_string(&snap_path).ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.as_object().map(|o| o.values().cloned().collect()))
-        .unwrap_or_default();
-
-    if live.is_empty() && installed.is_empty() {
-        println!("no bees connected and no bee services installed.");
-        println!("build one: hum hive <name|path|source-url> install");
-        return Ok(());
-    }
-
-    let (survey, survey_err) = match orch::survey() {
-        Ok(m) => (m, None),
-        Err(e) => (BTreeMap::new(), Some(e.to_string())),
-    };
-
-    let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let arr = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
-
-    let mut matched_kinds: Vec<String> = Vec::new();
-    for m in &live {
-        let hive = s(m, "name");
-        let kind = installed.iter()
-            .find(|k| *k == &hive || hive.starts_with(&format!("{k}-")))
-            .cloned();
-        if let Some(k) = &kind { matched_kinds.push(k.clone()); }
-
-        let role = arr(m, "bee").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>().join("+");
-        let models = arr(m, "models").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
-        let tools: Vec<String> = arr(m, "tools").iter().map(|t| s(t, "name")).filter(|x| !x.is_empty()).collect();
-        let provides = arr(m, "provides").iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
-        let wire = m.get("propensity").map(|p| s(p, "wire")).unwrap_or_default();
-        let state = match &kind {
-            Some(k) => bee_service_state(k, &survey),
-            None => "in nest (unmanaged)".to_string(),
-        };
-
-        println!("● {hive}  —  {state}");
-        let hid = s(m, "hid");
-        if !hid.is_empty() { println!("    hid:      {}", hid); }
-        if !role.is_empty()     { println!("    role:     {role}"); }
-        if !models.is_empty()   { println!("    models:   {}", models.join(", ")); }
-        if !tools.is_empty()    { println!("    tools:    {} ({})", tools.len(), tools.join(", ")); }
-        if !provides.is_empty() { println!("    provides: {}", provides.join(", ")); }
-        if !wire.is_empty()     { println!("    wire:     {wire}"); }
-        let version = s(m, "version");
-        if !version.is_empty()  { println!("    version:  {version}"); }
-        let source = s(m, "source");
-        if !source.is_empty()   { println!("    source:   {source}"); }
-        println!();
-    }
-
-    for kind in installed {
-        if matched_kinds.contains(kind) { continue; }
-        println!("● {kind}  —  {}", bee_service_state(kind, &survey));
-        println!();
-    }
-
-    if let Some(e) = survey_err {
-        println!("(orchd survey unavailable: {e})");
-        println!();
-    }
-
-    println!("verbs: hum bee <id> enter | exit | reenter   (id `all` for every bee)");
-    Ok(())
-}
-
-fn bee(target: Option<String>, verb: Option<String>, list: bool) -> Result<()> {
-    let installed = orch_catalog();
-
+fn bee(target: Option<String>, verb: Option<String>, hive: Option<String>, list: bool) -> Result<()> {
     if list || (target.is_none() && verb.is_none()) {
-        return bee_list_full(&installed);
+        return bees::list();
     }
-
-    let (target, verb) = match (target, verb) {
-        (Some(t), Some(v)) => (t, v),
-        (Some(t), None) => anyhow::bail!("hum bee {t} <verb> — enter | exit | reenter"),
-        _ => anyhow::bail!("hum bee <id> <verb>, or hum bee --list"),
-    };
-    if !orch_route_verb(&target, &verb)? {
-        anyhow::bail!("no bee matching '{target}'. bees: {}",
-            if installed.is_empty() { "(none)".into() } else { installed.join(", ") });
+    match (target.as_deref(), verb, hive) {
+        (Some("enter"), None, Some(h)) => bees::enter(&h),
+        (Some("enter"), None, None) => anyhow::bail!("hum bee enter --hive <hive>"),
+        (Some(id), Some(v), None) => bees::act(id, &v),
+        (Some(id), None, _) => anyhow::bail!("hum bee {id} <verb> — exit | reenter"),
+        _ => anyhow::bail!("hum bee enter --hive <hive>, hum bee <id> exit|reenter, or hum bee --list"),
     }
-    Ok(())
 }
 
-fn comb(bee: Option<String>) -> Result<()> {
+fn comb_key(key: &str) -> std::borrow::Cow<'_, str> {
+    match key.strip_prefix("bee:") {
+        Some(rest) => format!("hive:{rest}").into(),
+        None => key.into(),
+    }
+}
+
+fn comb(hive: Option<String>) -> Result<()> {
     let path = hum_paths::comb();
     if !path.exists() {
         println!("no comb.json yet ({})", path.display());
@@ -1000,24 +748,27 @@ fn comb(bee: Option<String>) -> Result<()> {
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("read {}", path.display()))?;
-    let counters: serde_json::Map<String, serde_json::Value> =
+    let raw_counters: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    let mut counters: BTreeMap<String, u64> = BTreeMap::new();
+    for (k, v) in &raw_counters {
+        if let Some(n) = v.as_u64() {
+            *counters.entry(comb_key(k).into_owned()).or_insert(0) += n;
+        }
+    }
 
-    if let Some(kind) = bee {
-        let prefix = format!("bee:{kind}:");
+    if let Some(hive) = hive {
+        let prefix = format!("hive:{hive}:");
         let mut rows: Vec<(String, u64)> = counters
             .iter()
-            .filter_map(|(k, v)| {
-                let rest = k.strip_prefix(prefix.as_str())?;
-                Some((rest.to_string(), v.as_u64()?))
-            })
+            .filter_map(|(k, n)| Some((k.strip_prefix(prefix.as_str())?.to_string(), *n)))
             .collect();
         if rows.is_empty() {
-            println!("no measures for {kind}");
+            println!("no measures for {hive}");
             return Ok(());
         }
         rows.sort();
-        println!("comb — {kind}");
+        println!("comb — {hive}");
         let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         for (metric, n) in &rows {
             println!("  {metric:<width$}  {n:>12}", width = width);
@@ -1027,16 +778,16 @@ fn comb(bee: Option<String>) -> Result<()> {
 
     let mut activity: Vec<(&str, u64)> = Vec::new();
     let mut nectar: Vec<(&str, u64)> = Vec::new();
-    let mut by_bee: std::collections::BTreeMap<String, Vec<(String, u64)>> = Default::default();
+    let mut by_hive: BTreeMap<String, Vec<(String, u64)>> = Default::default();
 
-    for (key, value) in &counters {
-        let Some(n) = value.as_u64() else { continue };
-        if let Some(rest) = key.strip_prefix("bee:") {
-            let Some((kind, rest)) = rest.split_once(':') else {
+    for (key, n) in &counters {
+        let n = *n;
+        if let Some(rest) = key.strip_prefix("hive:") {
+            let Some((hive, rest)) = rest.split_once(':') else {
                 continue;
             };
-            by_bee
-                .entry(kind.to_string())
+            by_hive
+                .entry(hive.to_string())
                 .or_default()
                 .push((rest.to_string(), n));
             continue;
@@ -1048,7 +799,7 @@ fn comb(bee: Option<String>) -> Result<()> {
         }
     }
 
-    if activity.is_empty() && nectar.is_empty() && by_bee.is_empty() {
+    if activity.is_empty() && nectar.is_empty() && by_hive.is_empty() {
         println!("the comb is empty — nothing has crossed the kernel yet");
         return Ok(());
     }
@@ -1071,10 +822,10 @@ fn comb(bee: Option<String>) -> Result<()> {
             println!("    {metric:<width$}  {n:>12}", width = width);
         }
     }
-    if !by_bee.is_empty() {
-        println!("\n  by bee");
-        for (kind, rows) in &mut by_bee {
-            println!("    {kind}");
+    if !by_hive.is_empty() {
+        println!("\n  by hive");
+        for (hive, rows) in &mut by_hive {
+            println!("    {hive}");
             rows.sort();
             let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
             for (metric, n) in rows.iter() {
@@ -1105,7 +856,7 @@ fn recipes(name: Option<String>) -> Result<()> {
             println!("Run one with: hum recipes <name>");
         }
         Some(n) => {
-            let install = recipes_dir.join(&n).join(hum_paths::HIVE_INSTALL_SCRIPT);
+            let install = recipes_dir.join(&n).join(hum_paths::RECIPE_INSTALL_SCRIPT);
             if !install.exists() {
                 anyhow::bail!("recipes/{n}/install not found");
             }
@@ -1115,7 +866,7 @@ fn recipes(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn repo_root_or_install_dir() -> PathBuf {
+pub(crate) fn repo_root_or_install_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         let mut p = exe.clone();
         while let Some(parent) = p.parent() {
@@ -1134,80 +885,16 @@ fn repo_root_or_install_dir() -> PathBuf {
 
 
 
-fn orch_catalog() -> Vec<String> {
-    let mut out = Vec::new();
-    for path in orch::overlays() {
-        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
-        for line in raw.lines() {
-            if let Some(name) = line.trim().strip_prefix("SERVICE ") {
-                out.push(name.trim().to_string());
-            }
-        }
-    }
-    out
-}
-
-fn nest() -> Result<()> {
-    orch::ensure_config()?;
-    let out = orch::with_overlays(orch::cmd(), &orch::overlays())
-        .arg("survey")
-        .output()
-        .map_err(|e| anyhow::anyhow!("orchd not found: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        anyhow::bail!("orchd survey failed: {err}");
-    }
-    print!("{}", String::from_utf8_lossy(&out.stdout));
-    Ok(())
-}
-
-fn orch_route_verb(kind: &str, verb: &str) -> Result<bool> {
-    if !orch_catalog().iter().any(|k| k == kind) {
-        return Ok(false);
-    }
-    match verb {
-        "enter" => {
-            enter_bee(kind)?;
-        }
-        "exit" | "reenter" => {
-            anyhow::bail!(
-                "per-bee `{verb}` is not supported yet — orchd exposes no per-service stop. \
-                 `orchd fell` tears the whole grove down; per-bee stop arrives with orchd's `tend`."
-            );
-        }
-        other => anyhow::bail!("unknown verb '{other}' (enter | exit | reenter)"),
-    }
-    Ok(true)
-}
-
-fn enter_bee(service: &str) -> Result<()> {
-    orch::ensure_config()?;
-    let overlay = match orch::overlay_path(service) {
-        p if p.exists() => p,
-        _ => orch::overlay_for_service(service)?,
-    };
-    orch::grow(service, &overlay)?;
-    println!("  ✓ entered {service} (orchd)");
-    Ok(())
-}
-
 fn config() -> Result<()> {
-    orch::ensure_config()?;
     println!("[paths]");
     println!("  config dir:   {}", hum_paths::config_dir().display());
     println!("  state dir:    {}", hum_paths::state_dir().display());
-    println!("  orch project: {}", hum_paths::orch_project_dir().display());
-    println!("  orch state:   {}", hum_paths::orch_state_dir().display());
-    println!("  orchrc:       {}", hum_paths::orchrc_path().display());
-    println!("  base file:    {}", hum_paths::orchfile().display());
-    println!("  overlays:     {}", hum_paths::orch_d_dir().display());
-    println!("\n[.orchrc]");
-    print!("{}", std::fs::read_to_string(hum_paths::orchrc_path()).unwrap_or_default());
-    println!("\n[base Orchfile]");
-    print!("{}", std::fs::read_to_string(hum_paths::orchfile()).unwrap_or_default());
-    println!("\n[registered hives]");
-    for kind in orch_catalog() {
-        println!("  {kind}");
+    println!("  hives:        {}", hum_paths::hives_d_dir().display());
+    println!("  bee keys:     {}", hum_paths::bees_dir().display());
+    println!("  entered bees: {}", hum_paths::entered_dir().display());
+    println!("\n[installed hives]");
+    for hive in hives::installed() {
+        println!("  {hive}");
     }
     Ok(())
 }

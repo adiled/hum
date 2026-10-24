@@ -45,28 +45,46 @@ like the thing — readers and writers share the same mental model.
 ## Ensemble
 
 - **ensemble** — the mesh of cooperating humds.
-- **hive** — the *kind*. A typology slot. Doesn't run; doesn't send anything.
-  The conformance an actor must match to be allowed to commission bees.
+- **hive** — the *kind*. A directory with an `Orchfile` is a hive, and
+  that is the whole test; what it takes to be a bee of it is the hive's
+  own business. A hive doesn't run and doesn't send anything.
   `claude-cli` is a hive; `openai-server` is a hive; `market-maker` is a hive.
-- **bee** — the *instance*. A running participant commissioned by a hive.
-  Each bee declares its kinds on `chi:"hello"` via `bee: ["worker"]`,
-  `bee: ["forager"]`, or both (hybrid bees are allowed).
+- **hive installation** — teaching a humd a kind (`hum hive <ref> install`).
+  It records the hive on that humd and runs the hive's `hive-install`
+  unit, if it has one; everything else the hive runs is its own business.
+  A humd understands a bee only through a hive installed there, and never
+  routes to a remote bee of a kind it was never taught.
+- **bee** — a *participant*. A bee is a key: its `hid` is
+  `bee_<sha256(pubkey)>`, filed at `bees/<hid>.key`. Whatever signs a
+  hello with that key is the bee — a process its hive started, a runtime
+  hosting many bees, a service on a phone. The hello names the `hive` it
+  belongs to and the `roles` it claims:
   - **worker** — produces compute. Implements the `WorkerBee` trait
     (or its non-Rust equivalent) — accepts `chi:"prompt"` for advertised
     models and emits `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"`.
   - **forager** — translates outside wire ↔ thrum. Implements
     `ForagerBee` — wraps an HTTP / gRPC / stdio surface into thrum tones.
+
+  A role is a claim, never part of who the bee is; a bee may claim both,
+  or a role a future hive invents. (`bee: [...]` is how older bees named
+  their roles; it is still read.)
+- **entering** — a hive signing a bee in (`hum bee enter --hive <hive>`):
+  minting its key and recording it under the hive. humd admits only a
+  hello signed by an entered key, under the hive it entered. **Exiting**
+  signs the bee out (humd refuses its next hello); **reentering** signs it
+  back in. Entering starts no process — that is the hive's to do.
 - **nestler** — a bee's lifecycle phase: handshaking, awaiting the
-  breath that accepts `chi:"hello"`. Verb-state of the same instance.
+  breath that accepts `chi:"hello"`. Verb-state of the same participant.
 - **nestled** — a bee's lifecycle phase: post-handshake, registered,
   has a nestledId. The bee keeps asking — `chi:"prompt"`, `chi:"cancel"`,
   `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
   `chi:"curate"` — for the rest of the connection.
 
-The vocabulary stacks as: **hive** = kind; **bee** = the running
-instance of that kind; **nestler** and **nestled** = states of that
-same bee. Nestler arrives, nestled inhabits — same actor, two phases.
-A nestled bee shares the nest with the cells that live there.
+The vocabulary stacks as: **hive** = kind, installed on a humd; **bee** =
+a participant the humd understands through its hive; **nestler** and
+**nestled** = states of that same bee. Nestler arrives, nestled inhabits —
+same actor, two phases. A nestled bee shares the nest with the cells that
+live there.
 
 ## Observation
 
@@ -76,7 +94,7 @@ A nestled bee shares the nest with the cells that live there.
 
 - **comb** — the kernel's ledger of what crossed it. Lifetime counters: tone
   counts per chi (`chi:finish`), and **nectar** — the raw intake, tokens in
-  and out, cache reads and writes — per bee (`bee:claude-cli:nectar:in`).
+  and out, cache reads and writes — per hive (`hive:claude-cli:nectar:in`).
   Only the kernel writes the comb, so the measure is observed rather than
   self-reported. What the kernel *produces* is honey, and that side belongs
   to whoever earns it.

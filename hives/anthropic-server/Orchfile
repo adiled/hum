@@ -1,3 +1,11 @@
+ARG HUM_SRC=
+ARG HUM_BEE=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE anthropic-server
 RUN node ${HUM_SRC}/dist/index.js
+ENV HUM_BEE=${HUM_BEE}
 RESTART always

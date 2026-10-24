@@ -1,6 +1,6 @@
 //! humctl — humd operator. Bootstrap registers humd as a user service; humctl
-//! drives it after that. Bee supervision lives in orchd; use `hum bee` /
-//! `hum hive` to talk to it.
+//! drives it after that. Bees are their hives' to run; `hum hive` and
+//! `hum bee` install hives and sign bees in.
 
 use std::process::{Command, ExitCode};
 
@@ -162,7 +162,7 @@ fn health() -> Result<()> {
         UnixStream::connect(&sock).with_context(|| format!("connect {}", sock.display()))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
     s.set_write_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"humctl-health\",\"bee\":[\"worker\"]}\n")?;
+    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"humctl-health\"}\n")?;
     let mut buf = [0u8; 256];
     match s.read(&mut buf) {
         Ok(0) => bail!("socket closed without breath"),

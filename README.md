@@ -17,8 +17,8 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 
 it is all composed of biodiverse primitives, not an outcome of conventional linguistics, following are some nouns
 
-- **hive** the kind, a typology a bee conforms to
-- **bee** the instance, a running participant a hive commissions
+- **hive** the kind; a directory with an Orchfile, installed on a humd so the humd can understand bees of it
+- **bee** a participant, anything that lands on a humd and says hello; it is its own key, and is understood through its hive
 - **nestler** a bee mid-handshake, awaiting the breath that accepts its hello
 - **nestled** a nestler once registered into the nest
 - **nest** where nestled bees gather, inside humd
