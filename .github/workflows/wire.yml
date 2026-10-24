@@ -24,6 +24,8 @@ jobs:
         run: cargo run -p codegen -- --check
       - name: The kernel speaks in code
         run: python3 tools/speech.py
+      - name: The kernel writes where hum-paths says
+        run: python3 tools/paths.py
       - name: Codegen unit tests
         run: cargo test -p codegen --lib
       - name: Golden fixture round-trips through views

@@ -72,7 +72,7 @@ function checkAuth(req: IncomingMessage): boolean {
   return scheme === "Bearer" && token === API_KEY;
 }
 
-const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/openai-server";
+const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/hives/openai-server";
 const AUDIT_LOG = join(STATE_DIR, "audit.log");
 const USAGE_PATH = join(STATE_DIR, "usage.json");
 const USAGE_TMP_PATH = `${USAGE_PATH}.tmp`;

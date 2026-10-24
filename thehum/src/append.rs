@@ -78,9 +78,7 @@ fn write_line(path: &Path, line: &str, fsync: bool) -> Result<()> {
 
 fn persist_seq(dir: &Path, seq: Seq) -> Result<()> {
     let final_path = hum_paths::thehum_seq_file(dir);
-    let tmp = final_path.with_extension("bin.tmp");
-    std::fs::write(&tmp, seq.to_le_bytes())?;
-    std::fs::rename(&tmp, &final_path).context("rename seq.bin")?;
+    hum_paths::write_atomic(&final_path, &seq.to_le_bytes()).context("write seq.bin")?;
     Ok(())
 }
 

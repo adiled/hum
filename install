@@ -43,8 +43,6 @@ HUM_SRC="$HUM_DATA/src"
 
 ORCHD_MIN_VERSION="0.4.0"
 ORCHD_MAX_VERSION="0.4.0"
-ORCHD_NAMESPACE="hum"
-ORCHD_STATE="$HUM_STATE/orch"
 
 EDGE=0
 declare -a REST=()
@@ -340,10 +338,9 @@ show_status() {
     Linux)  systemctl --user status humd --no-pager 2>&1 | head -6 || true ;;
     Darwin) launchctl print "gui/$(id -u)/humd" 2>&1 | head -6 || true ;;
   esac
-  if [ -x "$ORCHD_BIN" ]; then
+  if [ -x "$HUM_CLI_BIN" ]; then
     echo "--- bees ---"
-    "$ORCHD_BIN" --orchfile "$HUM_CONFIG/Orchfile" --user --namespace "$ORCHD_NAMESPACE" \
-      --state-dir "$ORCHD_STATE" survey 2>&1 || true
+    "$HUM_CLI_BIN" bee --list 2>&1 || true
   fi
 }
 

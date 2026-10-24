@@ -197,11 +197,9 @@ impl Comb {
             std::fs::create_dir_all(dir)?;
         }
         let snap = self.snapshot();
-        let tmp = path.with_extension("json.tmp");
         let bytes =
             serde_json::to_vec(&snap).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, path)?;
+        hum_paths::write_atomic(path, &bytes)?;
         trace!(target: "comb", "comb.saved keys={} bytes={}", snap.len(), bytes.len());
         Ok(())
     }

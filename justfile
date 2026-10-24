@@ -60,9 +60,15 @@ fmt-file file:
 speech:
     python3 tools/speech.py
 
+# The kernel writes only where hum-paths says: no sibling temp files, no
+# hand-built roots. While humd runs, its guard moves anything else to the
+# root's tmp/.
+paths:
+    python3 tools/paths.py
+
 # Clippy over the crates CI gates on. Same scope, same flags as
 # .github/workflows/wire.yml — if this passes, CI passes.
-lint: speech
+lint: speech paths
     cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
 
 # Clippy over everything. The daemon and the drone still carry dead

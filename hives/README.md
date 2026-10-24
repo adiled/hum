@@ -67,6 +67,8 @@ RESTART always
 
 A hive whose bees live elsewhere (a phone, another machine) can have an Orchfile with no units at all; installing it still teaches the humd the kind, and its bees are entered on the humd they land on.
 
+A hive keeps its state in `$XDG_STATE_HOME/hum/hives/<hive>/` and its config in `$XDG_CONFIG_HOME/hum/hives/<hive>.json`; anything else it writes under a hum root is moved to that root's `tmp/` while humd runs.
+
 ### 1. Speak thrum
 
 Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `hum_nest::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.

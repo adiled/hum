@@ -19,7 +19,7 @@
 //   - Testnet ETH for gas (Base Sepolia faucet)
 //   - Testnet USDC for the quote (Circle USDC faucet)
 //
-// Keys at $XDG_CONFIG_HOME/hum/paid-oracle/keys.json.
+// Keys at $XDG_STATE_HOME/hum/hives/paid-oracle/keys.json.
 
 import { connect } from "node:net";
 import { execFileSync } from "node:child_process";
@@ -56,8 +56,8 @@ function signedAs(): Record<string, string | number> {
   return { hid, from: hid, pubkey: pub.toString("hex"), signedAt, signature };
 }
 
-const baseDir = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-const keysPath = join(baseDir, "hum", "paid-oracle", "keys.json");
+const baseDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+const keysPath = join(baseDir, "hum", "hives", "paid-oracle", "keys.json");
 const keys = JSON.parse(readFileSync(keysPath, "utf-8")) as {
   receiver: { address: `0x${string}`; private_key: `0x${string}` };
   buyer: { address: `0x${string}`; private_key: `0x${string}` };

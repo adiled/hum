@@ -45,9 +45,7 @@ pub fn save(ensemble: &Ensemble, path: &Path) -> io::Result<()> {
     };
     let bytes =
         serde_json::to_vec(&disk).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, path)?;
+    hum_paths::write_atomic(path, &bytes)?;
     Ok(())
 }
 
