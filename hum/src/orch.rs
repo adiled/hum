@@ -11,7 +11,7 @@
 //! Orchfile that declares the shared variables, and every hive's
 //! Orchfile is an overlay on it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -144,17 +144,6 @@ pub fn decl_args(text: &str) -> std::collections::HashMap<String, String> {
     }
 }
 
-pub fn declared_args(text: &str) -> Vec<String> {
-    match the_orch::parser::parse_raw(text, 0) {
-        Ok(raw) => {
-            let mut names: Vec<String> = raw.args.keys().cloned().collect();
-            names.sort();
-            names
-        }
-        Err(_) => Vec::new(),
-    }
-}
-
 pub fn env_overrides(declared: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
     declared
         .iter()
@@ -203,8 +192,7 @@ pub fn grow(service: &str, overlay: &Path) -> Result<()> {
     let base = std::fs::read_to_string(hum_paths::orchfile())
         .with_context(|| format!("read {}", hum_paths::orchfile().display()))?;
     let mut args = decl_args(&overlay_body);
-    let base_args = decl_args(&std::fs::read_to_string(hum_paths::orchfile())
-        .with_context(|| format!("read {}", hum_paths::orchfile().display()))?);
+    let base_args = decl_args(&base);
     for (k, v) in base_args {
         args.entry(k).or_insert(v);
     }
