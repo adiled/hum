@@ -1,4 +1,5 @@
-import type { ThrumClient, Tone } from "./thrum.ts";
+import type { Bee, Outgoing } from "../../../thrum-clients/ts/index.ts";
+import type { Tone } from "./requester.ts";
 
 const API_BASE = process.env.OPENAI_API_BASE
   ?? "https://api.openai.com/v1";
@@ -38,12 +39,12 @@ interface Session {
 }
 
 export class OpenAIWorker {
-  private thrum: ThrumClient;
+  private thrum: Bee;
   private sessions = new Map<string, Session>();
   private static readonly MAX_SESSIONS = 32;
   private discovered: string[] = [];
 
-  constructor(thrum: ThrumClient) {
+  constructor(thrum: Bee) {
     this.thrum = thrum;
   }
 
@@ -213,7 +214,7 @@ export class OpenAIWorker {
           callId,
           toolName: tc.name,
           args: tc.args,
-        } as Tone);
+        } as Outgoing);
       }
       sess.messages.push({
         role: "assistant",
@@ -252,7 +253,7 @@ export class OpenAIWorker {
       sid,
       chunkType,
       ...payload,
-    } as Tone);
+    } as Outgoing);
   }
 
   private finish(sid: string, reason: string, inputTokens: number, outputTokens: number): void {
@@ -261,7 +262,7 @@ export class OpenAIWorker {
       sid,
       finishReason: reason,
       usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
-    } as Tone);
+    } as Outgoing);
   }
 
   cancel(msg: Tone): void {
@@ -279,6 +280,6 @@ export class OpenAIWorker {
       code,
       subtype: "error",
       message,
-    } as Tone);
+    } as Outgoing);
   }
 }

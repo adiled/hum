@@ -139,6 +139,8 @@ impl Sim {
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
         let comb_path = tmp.join(hum_paths::COMB_BASENAME);
+        let _ = std::fs::remove_file(tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME));
+        let _ = std::fs::remove_file(tmp.join(hum_paths::ADVISORIES_BASENAME));
         let revoked_path = tmp.join(hum_paths::REVOKED_BEES_BASENAME);
         let _ = std::fs::remove_file(&revoked_path);
         if !revoked.is_empty() {
@@ -167,6 +169,8 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             revoked_path: revoked_path.clone(),
+            bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
+            advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
             bind_mcp: false,
             waneman: Some(waneman.clone()),
             humd_key: None,
@@ -265,6 +269,8 @@ impl Sim {
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
         let comb_path = tmp.join(hum_paths::COMB_BASENAME);
+        let _ = std::fs::remove_file(tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME));
+        let _ = std::fs::remove_file(tmp.join(hum_paths::ADVISORIES_BASENAME));
 
         let waneman = Arc::new(WaneTracker::new());
         let hives = humd::InstalledHives::in_memory(SIM_HIVES);
@@ -282,6 +288,8 @@ impl Sim {
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
             revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
+            bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
+            advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
             bind_mcp: false,
             waneman: Some(waneman.clone()),
             humd_key: None,

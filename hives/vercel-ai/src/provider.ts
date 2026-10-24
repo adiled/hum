@@ -25,8 +25,6 @@ export interface HumProviderConfig {
   /** Working directory humd uses for fs-backed tools (JSONL transcripts,
    *  hum fs MCP). Omit for pure inference. */
   cwd?: string;
-  /** Override the thrum socket path. Defaults to $XDG_RUNTIME_DIR/hum/hum.sock.thrum. */
-  thrumPath?: string;
 }
 
 function emptyUsage(): LanguageModelV3Usage {
@@ -121,12 +119,12 @@ export class HumModel implements LanguageModelV3 {
 
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) {
-            thrum.send({ chi: "cancel", sid, reason: "client-abort" });
+            thrum.send({ chi: "cancel", sid });
             close();
             return;
           }
           opts.abortSignal.addEventListener("abort", () => {
-            thrum.send({ chi: "cancel", sid, reason: "client-abort" });
+            thrum.send({ chi: "cancel", sid });
             close();
           });
         }
@@ -144,7 +142,7 @@ export class HumModel implements LanguageModelV3 {
 
       cancel: () => {
         thrum.off(sid);
-        thrum.send({ chi: "cancel", sid, reason: "client-cancel" });
+        thrum.send({ chi: "cancel", sid });
       },
     });
 

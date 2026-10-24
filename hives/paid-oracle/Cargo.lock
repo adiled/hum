@@ -190,11 +190,11 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "regex",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -640,8 +640,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "hum-identity"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -649,6 +648,7 @@ dependencies = [
  "hum-paths",
  "rand 0.8.8",
  "serde",
+ "serde_json",
  "sha2",
  "tracing",
  "uuid",
@@ -656,12 +656,26 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "jsonschema",
  "serde",
  "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "hum-thrum"
+version = "0.33.1"
+dependencies = [
+ "anyhow",
+ "hum-identity",
+ "hum-paths",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "thrum-core",
+ "tokio",
  "tracing",
 ]
 
@@ -1143,6 +1157,7 @@ dependencies = [
  "hex",
  "hum-identity",
  "hum-paths",
+ "hum-thrum",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
@@ -1968,8 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "codegen",
  "hex",

@@ -6,7 +6,7 @@
 // Manual regen: `cargo run -p codegen`.
 
 export type { ChiKind } from "./chi.ts";
-import type { Chi } from "./chi.ts";
+import type { ChiKind } from "./chi.ts";
 
 export interface HelloBody {
   protoVersion: string;
@@ -24,6 +24,7 @@ export interface HelloBody {
   propensity?: unknown;
   headroom?: Headroom;
   source?: string;
+  bind?: unknown;
 }
 
 export interface Headroom {
@@ -36,11 +37,13 @@ export interface PromptBody {
   cwd?: string;
   systemPrompt?: string;
   text?: string;
-  content?: unknown[];
+  content?: string;
   tools?: unknown[];
   foragerTools?: unknown[];
   provided?: string[];
   disallowedTools?: string[];
+  allowedTools?: string[];
+  resume?: string;
 }
 
 export interface BreathBody {
@@ -224,7 +227,7 @@ export interface PetalCellBody {
 }
 
 export interface Envelope {
-  chi: Chi;
+  chi: ChiKind;
   rid: string;
   from?: string;
   to?: string;

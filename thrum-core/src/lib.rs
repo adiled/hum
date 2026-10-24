@@ -19,7 +19,7 @@ mod spec;
 mod views;
 mod wane;
 
-pub use chi::{Chi, PulseKind};
+pub use chi::{AdvisoryCode, Chi, PulseKind, is_chi};
 pub use envelope::{Envelope, Tone};
 pub use prims::{dusk_in, echo_for, is_dusk, now_ms, rid, sigil};
 pub use views::*;

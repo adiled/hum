@@ -33,7 +33,7 @@ typedef struct {
     size_t count;
 } thrum_view;
 
-static const thrum_field THRUM_FIELDS_HELLO_BODY[15] = {
+static const thrum_field THRUM_FIELDS_HELLO_BODY[16] = {
     {"protoVersion", THRUM_FIELD_STRING, false},
     {"hive", THRUM_FIELD_STRING, false},
     {"roles", THRUM_FIELD_ARRAY, true},
@@ -49,6 +49,7 @@ static const thrum_field THRUM_FIELDS_HELLO_BODY[15] = {
     {"propensity", THRUM_FIELD_ANY, true},
     {"headroom", THRUM_FIELD_OBJECT, true},
     {"source", THRUM_FIELD_STRING, true},
+    {"bind", THRUM_FIELD_ANY, true},
 };
 
 static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
@@ -56,16 +57,18 @@ static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
     {"totalSlots", THRUM_FIELD_UINT, false},
 };
 
-static const thrum_field THRUM_FIELDS_PROMPT_BODY[9] = {
+static const thrum_field THRUM_FIELDS_PROMPT_BODY[11] = {
     {"modelId", THRUM_FIELD_STRING, true},
     {"cwd", THRUM_FIELD_STRING, true},
     {"systemPrompt", THRUM_FIELD_STRING, true},
     {"text", THRUM_FIELD_STRING, true},
-    {"content", THRUM_FIELD_ARRAY, true},
+    {"content", THRUM_FIELD_STRING, true},
     {"tools", THRUM_FIELD_ARRAY, true},
     {"foragerTools", THRUM_FIELD_ARRAY, true},
     {"provided", THRUM_FIELD_ARRAY, true},
     {"disallowedTools", THRUM_FIELD_ARRAY, true},
+    {"allowedTools", THRUM_FIELD_ARRAY, true},
+    {"resume", THRUM_FIELD_STRING, true},
 };
 
 static const thrum_field THRUM_FIELDS_BREATH_BODY[2] = {
@@ -255,8 +258,8 @@ static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 #define THRUM_VIEW_COUNT 34
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
-    {"hello", THRUM_FIELDS_HELLO_BODY, 15},
-    {"prompt", THRUM_FIELDS_PROMPT_BODY, 9},
+    {"hello", THRUM_FIELDS_HELLO_BODY, 16},
+    {"prompt", THRUM_FIELDS_PROMPT_BODY, 11},
     {"breath", THRUM_FIELDS_BREATH_BODY, 2},
     {"chunk", THRUM_FIELDS_CHUNK_BODY, 4},
     {"finish", THRUM_FIELDS_FINISH_BODY, 4},

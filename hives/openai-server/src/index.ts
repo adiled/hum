@@ -3,8 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { HIVE_NAME, ThrumClient } from "./thrum.ts";
-import { enter } from "./identity.ts";
+import { Bee, Chi, type Hello } from "../../../thrum-clients/ts/index.ts";
+import { BEE_VERSION, HIVE_NAME, Requester, SOURCE } from "./requester.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
 import { OpenAIWorker } from "./openai.ts";
@@ -330,10 +330,19 @@ function injectJsonMode(
   return systemPrompt ? `${systemPrompt}\n\n${hint}` : hint;
 }
 
-const thrum = new ThrumClient();
+const mainHello: Hello = {
+  roles: ["forager", "worker"],
+  provides: ["session"],
+  version: BEE_VERSION,
+  propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
+  chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
+  source: SOURCE,
+};
+const thrum = new Bee({ hive: HIVE_NAME, as: "main", hello: mainHello });
 
 const REQUESTER_IDLE_MS = 10 * 60_000;
-const requesters = new Map<string, ThrumClient>();
+const REQUESTER_READY_MS = 10_000;
+const requesters = new Map<string, Requester>();
 
 function bearerOf(req: IncomingMessage): string {
   const auth = req.headers["authorization"];
@@ -347,20 +356,30 @@ function requesterLabel(req: IncomingMessage, tenant: string, user: string | und
   return `requester-${fingerprint.slice(0, 32)}`;
 }
 
-function requester(req: IncomingMessage, tenant: string, user: string | undefined): ThrumClient {
+// Attachments and sampling are this hive's, not the thrum's: they ride
+// in the envelope's ext under the hive's name, where a worker that knows
+// this hive can find them and every other bee leaves them be.
+function hiveExt(attachments: unknown[], sampling: Record<string, unknown>): { ext?: Record<string, Record<string, unknown>> } {
+  const mine: Record<string, unknown> = {};
+  if (attachments.length > 0) mine.attachments = attachments;
+  if (Object.keys(sampling).length > 0) mine.sampling = sampling;
+  return Object.keys(mine).length > 0 ? { ext: { [HIVE_NAME]: mine } } : {};
+}
+
+async function requester(req: IncomingMessage, tenant: string, user: string | undefined): Promise<Requester> {
   const label = requesterLabel(req, tenant, user);
   let rq = requesters.get(label);
   if (!rq) {
-    enter(HIVE_NAME, label);
-    rq = new ThrumClient({ label, roles: ["asker"] });
-    requesters.set(label, rq);
-    const born = rq;
-    rq.connect().catch((e) => {
-      console.error(`[thrum] ${label} cannot connect:`, e);
+    const born = new Requester(label);
+    requesters.set(label, born);
+    born.bee.closed().catch((e) => {
+      console.error(`[thrum] ${label}:`, e);
       if (requesters.get(label) === born) requesters.delete(label);
     });
+    rq = born;
   }
   rq.lastUsed = Date.now();
+  await rq.ready(REQUESTER_READY_MS);
   return rq;
 }
 
@@ -428,8 +447,8 @@ async function start(): Promise<void> {
         stream_options?: { include_usage?: boolean };
       };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
-      let rq: ThrumClient;
-      try { rq = requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot enter this requester as a bee: ${e}`); }
+      let rq: Requester;
+      try { rq = await requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot reach humd as this requester: ${e}`); }
       const messages = body.messages ?? [];
       if (messages.length === 0) return bad(res, "messages required");
 
@@ -586,13 +605,11 @@ async function start(): Promise<void> {
         rq.send({
           chi: "prompt",
           sid,
-          hive: "openai-server",
           modelId: model,
           content: userPrompt,
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(tools ? { tools } : {}),
-          ...(attachments.length > 0 ? { attachments } : {}),
-          ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
+          ...hiveExt(attachments, sampling),
         });
       }
       return;
@@ -641,8 +658,8 @@ async function start(): Promise<void> {
         response_format?: { type: string; json_schema?: unknown };
       };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
-      let rq: ThrumClient;
-      try { rq = requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot enter this requester as a bee: ${e}`); }
+      let rq: Requester;
+      try { rq = await requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot reach humd as this requester: ${e}`); }
       if (!body.input) return bad(res, "input required");
 
       const stream = body.stream === true;
@@ -1153,14 +1170,12 @@ async function start(): Promise<void> {
       rq.send({
         chi: "prompt",
         sid,
-        hive: "openai-server",
         modelId: model,
         content: userText,
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(tools ? { tools } : {}),
         ...(Array.isArray(body.allowed_tools) && body.allowed_tools.length > 0 ? { allowedTools: body.allowed_tools } : {}),
-        ...(respAttachments.length > 0 ? { attachments: respAttachments } : {}),
-        ...(Object.keys(sampling).length > 0 ? { sampling } : {}),
+        ...hiveExt(respAttachments, sampling),
         ...(resume ? { resume } : {}),
       });
       return;
@@ -1196,19 +1211,23 @@ async function start(): Promise<void> {
   const openaiWorker = new OpenAIWorker(thrum);
   await openaiWorker.discover();
   MODEL_IDS = openaiWorker.models();
-  thrum.setModels(MODEL_IDS);
+  mainHello.models = MODEL_IDS;
+  mainHello.bind = { host: actualHost, port: actualPort, scheme: "http" };
 
-  await thrum.connect({ host: actualHost, port: actualPort, scheme: "http" });
-  console.log(`[hum-openai-server] connected to thrum`);
-  thrum.onChi("prompt", (msg) => {
-    const sid = (msg.sid as string) ?? "";
-    if (sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
+  thrum.on(Chi.prompt, (msg) => {
+    if (msg.sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
   });
-  thrum.onChi("tool-result", (msg) => {
+  thrum.on(Chi.toolResult, (msg) => {
     openaiWorker.handleToolResult(msg).catch(e => console.error("[worker] tool-result failed:", e));
   });
-  thrum.onChi("cancel", (msg) => {
+  thrum.on(Chi.cancel, (msg) => {
     openaiWorker.cancel(msg);
+  });
+  await thrum.start();
+  console.log(`[hum-openai-server] nestled as ${thrum.id}`);
+  thrum.closed().catch((e) => {
+    console.error("[hum-openai-server] the main bee ended:", e);
+    process.exit(1);
   });
 }
 

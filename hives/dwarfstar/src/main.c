@@ -1,8 +1,8 @@
 /* dwarfstar-bee: the DwarfStar engine as a hum worker.
  *
- * The bee enters itself under the dwarfstar hive, signs its hello through
- * the thrum C client, and answers prompts from the engine linked into this
- * process: a prompt tone becomes a chat prompt, the chat prompt becomes
+ * The bee reaches humd through the thrum C client, which runs
+ * `hum bee link` for it, and answers prompts from the engine linked into
+ * this process: a prompt tone becomes a chat prompt, the chat prompt becomes
  * tokens, and the tokens come back as text_delta chunks and a finish. No
  * HTTP and no subprocess in between.
  *
@@ -15,14 +15,14 @@
  * peer routes to the model that can start now. A local prompt for a model
  * whose bee lacks the GPU still runs: it waits for the handoff.
  *
- * The bee outlives humd: when humd restarts, the bee reconnects with
- * backoff and says a freshly signed hello, keeping its model loaded, and
- * drops the turns the gone humd gave it. Only a refused hello ends it,
- * non-zero, for its unit to restart.
+ * The bee outlives humd: when humd restarts, the link reconnects and the
+ * bee keeps its model loaded and drops the turns the gone humd gave it.
+ * Only a refusal, or the link ending, ends the bee, non-zero, for its
+ * unit to restart.
  *
  * The engine runs one turn at a time, so prompts queue and one thread
- * takes them in order and tends the GPU between them, while the main
- * thread reads the socket. A cancel stops its sid's turn, waiting or in
+ * takes them in order and tends the GPU between them, while the client's
+ * thread reads the link. A cancel stops its sid's turn, waiting or in
  * flight, and drops its sid's queued turns. The bee is stateless: every
  * prompt carries what it needs, as a content string (the way hum-nest
  * reads it and openai-server sends it), else text, else content petals,
@@ -42,8 +42,8 @@
  *   DWARFSTAR_SSD_STREAMING  1 to stream experts from SSD
  *   DWARFSTAR_IDLE_MS      give the GPU back after this long idle (default 300000)
  *   DWARFSTAR_WAIT_MS      how long a turn waits for the GPU (default 300000)
- *   DWARFSTAR_GPU_LOCK     the hive-wide GPU lock
- *                          (default $XDG_STATE_HOME/hum/hives/dwarfstar/gpu.lock)
+ *   DWARFSTAR_GPU_LOCK     the hive-wide GPU lock; the Orchfile puts it in
+ *                          the hive's state, ${HUM_HIVE_STATE}/gpu.lock
  *   DWARFSTAR_METAL_DIR    the .metal kernels (default metal/ beside the bee)
  */
 
@@ -98,7 +98,7 @@ struct stream {
     size_t cap;
 };
 
-static thrum_client *g_client;
+static thrum_bee *g_bee;
 static ds4_bridge *g_bridge;
 static dwarfstar_gpu *g_gpu;
 static ds4_models g_models;
@@ -115,7 +115,6 @@ static const char *g_current_sid;
 static bool g_closing;
 
 static atomic_int g_free_slots = -1;
-static thrum_bee g_bee;
 static const char *g_label = "main";
 static int64_t g_last_turn_ms;
 
@@ -131,6 +130,21 @@ static char *dup_of(const char *text) {
 static const char *env_of(const char *name) {
     const char *value = getenv(name);
     return value && value[0] ? value : NULL;
+}
+
+static int64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static cJSON *tone_new(const char *chi, const char *rid, const char *sid) {
+    cJSON *tone = cJSON_CreateObject();
+    if (!tone) return NULL;
+    cJSON_AddStringToObject(tone, "chi", chi);
+    if (rid) cJSON_AddStringToObject(tone, "rid", rid);
+    if (sid) cJSON_AddStringToObject(tone, "sid", sid);
+    return tone;
 }
 
 static void free_turn(struct turn *t) {
@@ -150,8 +164,8 @@ static void free_turn(struct turn *t) {
 
 static void send_tone(cJSON *tone) {
     if (!tone) return;
-    if (thrum_client_send(g_client, tone) != 0) {
-        fprintf(stderr, "dwarfstar: %s\n", thrum_error());
+    if (thrum_bee_send(g_bee, tone) != 0) {
+        fprintf(stderr, "dwarfstar: the link is gone; a tone was not sent\n");
     }
     cJSON_Delete(tone);
 }
@@ -169,7 +183,7 @@ static void claim(int free_slots, const char *kind) {
     bool changed = free_slots != atomic_load(&g_free_slots);
     atomic_store(&g_free_slots, free_slots);
     if (!changed && strcmp(kind, THRUM_PULSE_CELL_IDLE) == 0) return;
-    tone = thrum_tone_new(THRUM_CHI_PULSE, NULL, NULL);
+    tone = tone_new(THRUM_CHI_PULSE, NULL, NULL);
     if (!tone) return;
     cJSON_AddStringToObject(tone, "kind", kind);
     cJSON_AddItemToObject(tone, "headroom", headroom_of(free_slots));
@@ -177,7 +191,7 @@ static void claim(int free_slots, const char *kind) {
 }
 
 static void send_error(const struct turn *t, const char *code, const char *message) {
-    cJSON *tone = thrum_tone_new(THRUM_CHI_ERROR, t->rid, t->sid);
+    cJSON *tone = tone_new(THRUM_CHI_ERROR, t->rid, t->sid);
     if (!tone) return;
     cJSON_AddStringToObject(tone, "code", code);
     cJSON_AddStringToObject(tone, "message", message);
@@ -186,7 +200,7 @@ static void send_error(const struct turn *t, const char *code, const char *messa
 
 static void send_finish(const struct turn *t, const char *reason, int exit_code,
                         const ds4_turn *result) {
-    cJSON *tone = thrum_tone_new(THRUM_CHI_FINISH, t->rid, t->sid);
+    cJSON *tone = tone_new(THRUM_CHI_FINISH, t->rid, t->sid);
     cJSON *usage;
     if (!tone) return;
     cJSON_AddStringToObject(tone, "finishReason", reason);
@@ -200,7 +214,7 @@ static void send_finish(const struct turn *t, const char *reason, int exit_code,
 }
 
 static void send_chunk(const struct turn *t, const char *text, size_t len) {
-    cJSON *tone = thrum_tone_new(THRUM_CHI_CHUNK, t->rid, t->sid);
+    cJSON *tone = tone_new(THRUM_CHI_CHUNK, t->rid, t->sid);
     char *delta = (char *)malloc(len + 1);
     if (!tone || !delta) {
         cJSON_Delete(tone);
@@ -333,7 +347,7 @@ static void tend_gpu(bool after_turn) {
     queued = g_head != NULL;
     pthread_mutex_unlock(&g_lock);
     want_age = gpu_oldest_want_ms(g_gpu);
-    if (!queued && (want_age >= 0 || thrum_now_ms() - g_last_turn_ms >= g_idle_ms)) {
+    if (!queued && (want_age >= 0 || now_ms() - g_last_turn_ms >= g_idle_ms)) {
         fprintf(stderr, "dwarfstar: giving the GPU back (%s)\n",
                 want_age >= 0 ? "another model wants it" : "idle");
         give_back_gpu();
@@ -382,7 +396,7 @@ static void *take_turns(void *arg) {
         pthread_mutex_lock(&g_lock);
         g_current_sid = NULL;
         pthread_mutex_unlock(&g_lock);
-        g_last_turn_ms = thrum_now_ms();
+        g_last_turn_ms = now_ms();
         free_turn(t);
         tend_gpu(true);
     }
@@ -513,8 +527,9 @@ static void on_cancel(const cJSON *tone) {
     }
 }
 
-static void on_tone(const cJSON *tone, void *user) {
+static void on_tone(thrum_bee *bee, const cJSON *tone, void *user) {
     const char *chi = str_of(tone, "chi");
+    (void)bee;
     (void)user;
     if (!chi) return;
     if (strcmp(chi, THRUM_CHI_PROMPT) == 0) {
@@ -561,7 +576,6 @@ static cJSON *hello_for(void) {
     cJSON *propensity;
 
     if (!hello) return NULL;
-    cJSON_AddStringToObject(hello, "hive", HIVE);
     cJSON_AddItemToObject(hello, "roles", cJSON_CreateStringArray(roles, 1));
     cJSON_AddStringToObject(hello, "version", VERSION);
     cJSON_AddItemToObject(hello, "models", ds4_models_ids(&g_models));
@@ -576,19 +590,15 @@ static cJSON *hello_for(void) {
     return hello;
 }
 
-static cJSON *hello_hook(void *user) {
+static void on_nestled(thrum_bee *bee, void *user) {
     (void)user;
-    return hello_for();
-}
-
-static void nestled_hook(void *user) {
-    (void)user;
-    fprintf(stderr, "dwarfstar: %s nestled as %s with %d model%s\n", g_label, g_bee.id,
+    fprintf(stderr, "dwarfstar: %s nestled as %s with %d model%s\n", g_label, thrum_bee_id(bee),
             g_models.count, g_models.count == 1 ? "" : "s");
 }
 
-static void lost_hook(void *user, const char *why) {
+static void on_lost(thrum_bee *bee, void *user) {
     struct turn *dropped;
+    (void)bee;
     (void)user;
     pthread_mutex_lock(&g_lock);
     if (g_current_sid) ds4_bridge_cancel(g_bridge);
@@ -601,7 +611,7 @@ static void lost_hook(void *user, const char *why) {
         dropped = t->next;
         free_turn(t);
     }
-    fprintf(stderr, "dwarfstar: waiting for humd (%s)\n", why);
+    fprintf(stderr, "dwarfstar: humd went away; its turns are dropped and the link is dialing again\n");
 }
 
 static void resolve(const char *dir, const char *path, char *out, size_t cap) {
@@ -632,13 +642,8 @@ static int find_models(const char *dir) {
 
 static int gpu_lock_path(char *out, size_t cap) {
     const char *env = env_of("DWARFSTAR_GPU_LOCK");
-    char state[1024];
-    if (env) {
-        snprintf(out, cap, "%s", env);
-        return 0;
-    }
-    if (thrum_state_dir(state, sizeof state) != 0) return -1;
-    snprintf(out, cap, "%s/hives/%s/gpu.lock", state, HIVE);
+    if (!env) return -1;
+    snprintf(out, cap, "%s", env);
     return 0;
 }
 
@@ -649,7 +654,7 @@ int main(void) {
     char dir[1024];
     char kernels[2048] = "";
     char lock[1100];
-    char err[512] = "cannot find the state directory";
+    char err[512] = "DWARFSTAR_GPU_LOCK is unset; the Orchfile sets it under ${HUM_HIVE_STATE}";
     pthread_t worker;
     int rc;
 
@@ -681,25 +686,31 @@ int main(void) {
         return 1;
     }
     g_label = label;
-    if (thrum_bee_enter_as(HIVE, label, &g_bee) != 0 || !(g_client = thrum_client_new(NULL))) {
-        fprintf(stderr, "dwarfstar: %s\n", thrum_error());
+    atomic_store(&g_free_slots, free_slots_now());
+    {
+        cJSON *hello = hello_for();
+        thrum_options opts = {.hive = HIVE, .as = label, .hello = hello};
+        g_bee = thrum_bee_new(&opts);
+        cJSON_Delete(hello);
+    }
+    if (!g_bee) {
+        fprintf(stderr, "dwarfstar: out of memory for the thrum client\n");
         ds4_bridge_free(g_bridge);
         gpu_close(g_gpu);
         return 1;
     }
-    atomic_store(&g_free_slots, free_slots_now());
-    g_last_turn_ms = thrum_now_ms();
+    thrum_bee_on_any(g_bee, on_tone, NULL);
+    thrum_bee_on_nestled(g_bee, on_nestled, NULL);
+    thrum_bee_on_lost(g_bee, on_lost, NULL);
+    g_last_turn_ms = now_ms();
     if (pthread_create(&worker, NULL, take_turns, NULL) != 0) {
         fprintf(stderr, "dwarfstar: could not start the turn thread\n");
         return 1;
     }
 
-    thrum_client_on_any(g_client, on_tone, NULL);
-    {
-        thrum_serve_hooks hooks = {hello_hook, nestled_hook, lost_hook, NULL};
-        rc = thrum_client_serve(g_client, &g_bee, &hooks);
-    }
-    if (rc < 0) fprintf(stderr, "dwarfstar: %s\n", thrum_error());
+    rc = thrum_bee_start(g_bee);
+    if (rc == 0) rc = thrum_bee_wait(g_bee);
+    if (rc != THRUM_LINK_CLOSED) fprintf(stderr, "dwarfstar: %s\n", thrum_bee_error(g_bee));
 
     pthread_mutex_lock(&g_lock);
     g_closing = true;
@@ -713,9 +724,8 @@ int main(void) {
         g_head = t->next;
         free_turn(t);
     }
-    thrum_client_free(g_client);
+    thrum_bee_free(g_bee);
     ds4_bridge_free(g_bridge);
     gpu_close(g_gpu);
-    thrum_bee_forget(&g_bee);
-    return rc < 0 ? 1 : 0;
+    return rc == THRUM_LINK_REFUSED ? 3 : rc == THRUM_LINK_CLOSED ? 0 : 1;
 }

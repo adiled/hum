@@ -22,7 +22,7 @@ else is moved to that root's `tmp/`.
 
 | root | resolves to | holds |
 |---|---|---|
-| state | `$XDG_STATE_HOME/hum` | `humd.key`, `thrum.sock`, `runtime.json`, `routing.json`, `bees.json`, `revoked.json`, `bees/`, `bees.d/`, `thehum/`, `hives/<hive>/` |
+| state | `$XDG_STATE_HOME/hum` | `humd.key`, `thrum.sock`, `runtime.json`, `routing.json`, `bees.json`, `revoked.json`, `advisories.json`, `bees/`, `bees.d/`, `thehum/`, `hives/<hive>/` |
 | config | `$XDG_CONFIG_HOME/hum` | `hum.json`, `peers.json`, `hives.d/`, `hives/<hive>.json` |
 | data | `$XDG_DATA_HOME/hum` | `src/` |
 | cache | `$XDG_CACHE_HOME/hum` | `hives/` |

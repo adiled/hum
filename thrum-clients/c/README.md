@@ -1,156 +1,51 @@
 ---
 title: "thrum (C)"
-description: "the C reference client for the thrum wire, over libsodium and cJSON"
+description: "the thrum client for a bee written in C"
 ---
 
 # thrum (C)
 
-> _the thrum wire from C, with the primitives imported, not rewritten_
+> _the thrum client for a bee written in C_
 
-C reference client for **thrum**, the NDJSON socket between humd and
-bees. Same wire as Rust (`thrum-core`), TypeScript, Python and Go; same
-algorithms; one source of truth.
-
-C has no JSON and no crypto in its standard library, so this client
-imports both instead of carrying its own: **libsodium** for Ed25519,
-SHA-256 and randomness, **cJSON** for parsing and writing tones. Nothing
-is vendored and no primitive is hand-rolled.
-
-## Install the dependencies
+A C bee reaches humd through hum's own client. A `thrum_bee` runs
+`hum bee link`, which enters the bee, signs its hello, reads humd's
+verdict, reconnects when humd restarts, and checks every tone against the
+thrum. Every language gets that same client, so a C bee behaves exactly
+as a Rust, TS, Python or Go one. It links only cJSON:
 
 ```sh
-brew install pkgconf libsodium cjson                         # macOS
-sudo apt-get install pkg-config libsodium-dev libcjson-dev   # Debian, Ubuntu
+brew install pkgconf cjson                         # macOS
+sudo apt-get install pkg-config libcjson-dev       # Debian, Ubuntu
 ```
-
-```sh
-make          # out/libthrum.a, the tests, the example bee
-make test     # golden fixture, Rust identity vectors, socket client
-```
-
-## Using it from a hive
-
-A C bee's Makefile includes `thrum.mk`, which finds the client, asks
-pkg-config for the two libraries, and knows how to build the archive:
-
-```make
-include ../../thrum-clients/c/thrum.mk
-
-out/my-bee: src/main.c $(THRUM_LIB)
-	$(CC) $(CFLAGS) $(THRUM_CFLAGS) -o $@ src/main.c $(THRUM_LIBS)
-```
-
-## Quickstart
 
 ```c
-#include <thrum/thrum.h>
+static void on_prompt(thrum_bee *bee, const cJSON *tone, void *user) {
+    /* build a chunk and a finish for the tone's sid, then thrum_bee_send each */
+}
 
-thrum_bee bee;
-if (thrum_bee_enter_as("my-hive", "main", &bee) != 0) die(thrum_error());
-
-thrum_client *c = thrum_client_new(NULL);            /* the default socket */
-if (thrum_client_connect(c) != 0) die(thrum_error());
-
-cJSON *hello = cJSON_CreateObject();
-cJSON_AddStringToObject(hello, "hive", "my-hive");
-cJSON_AddItemToObject(hello, "roles", cJSON_CreateStringArray((const char *[]){"worker"}, 1));
-if (thrum_client_hello(c, &bee, hello, NULL) != 0) die(thrum_error());
-
-thrum_client_on_any(c, on_tone, c);                  /* or thrum_client_on(c, sid, ...) */
-if (thrum_client_run(c) < 0) die(thrum_error());
+thrum_options opts = {.hive = "my-hive", .as = "main", .hello = hello};
+thrum_bee *bee = thrum_bee_new(&opts);
+thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, NULL);
+if (thrum_bee_start(bee) != 0) fprintf(stderr, "%s\n", thrum_bee_error(bee));
+int how = thrum_bee_wait(bee);
+thrum_bee_free(bee);
 ```
 
-`examples/echo_bee.c` is a whole worker in about a hundred lines: it enters,
-nestles, and answers every prompt with its own text.
-
-## What you get
-
-| symbol | what |
+| | |
 |---|---|
-| `THRUM_VERSION`, `THRUM_CHI_*`, `THRUM_PULSE_*` | the registry, generated |
-| `thrum_is_valid_chi`, `thrum_is_valid_pulse` | membership checks, generated |
-| `THRUM_VIEWS`, `THRUM_ENVELOPE` | every chi's body fields and the envelope's, generated |
-| `thrum_tone_undeclared`, `thrum_key_is_declared` | the declared-key check humd runs |
-| `thrum_sigil(sid)` | 12-char session hash, the same on every humd |
-| `thrum_rid`, `thrum_humid_encode`, `thrum_is_valid_rid` | canonical HumId correlation ids |
-| `thrum_dusk_in`, `thrum_is_dusk` | expiry helpers |
-| `thrum_wane_*` | Lamport counter per sigil, thread-safe |
-| `thrum_default_socket_path` | `HUM_THRUM_SOCK` > `HUM_SOCKET` > `runtime.json` > `$XDG_STATE_HOME/hum/thrum.sock` |
-| `thrum_bee_enter_as`, `thrum_bee_load`, `thrum_bee_sign_hello` | the bee's identity |
-| `thrum_client_*` | Unix-socket client: sid dispatch, locked sends, the hello verdict |
-| `thrum_client_serve`, `thrum_client_stop` | stay nestled across humd restarts: reconnect with backoff, a fresh signed hello each time |
-| `thrum_tone_new(chi, rid, sid)` | an envelope to add a body to |
+| `thrum_bee_new(&opts)` | a bee's client; nothing runs until `thrum_bee_start` |
+| `thrum_bee_on`, `thrum_bee_on_sid`, `thrum_bee_off_sid`, `thrum_bee_on_any` | a tone goes to its sid's handler, else its chi's, else the any handler |
+| `thrum_bee_on_nestled`, `thrum_bee_on_lost`, `thrum_bee_on_advisory` | humd admitted the bee; humd went away; something to fix |
+| `thrum_bee_start` | returns once humd admits the bee (0), or `THRUM_LINK_REFUSED`, or `THRUM_LINK_FAILED` |
+| `thrum_bee_send`, `thrum_bee_hello` | send a tone, given a rid if it has none; change the hello |
+| `thrum_bee_close`, `thrum_bee_wait` | close the link; how the link ended |
 
-Functions that can fail return -1 and leave the reason in
-`thrum_error()`, which is per thread.
+`hum` is found at `$HUM_CLI`, else on `PATH`, else `~/.local/bin/hum`. A
+bee's Makefile includes `thrum.mk` for the flags and `$(THRUM_LIB)`.
 
-## Identity
-
-A bee is a key its hive entered. `thrum_bee_enter_as(hive, label, &bee)`
-runs `hum bee enter --hive <hive> --as <label>`, the same bee every time
-for one hive and label, so entering has one implementation. It then
-loads the 32-byte seed filed at `$XDG_STATE_HOME/hum/bees/<id>.key` and
-refuses a key that is not that id's. The id is `bee_` and the hex
-SHA-256 of the public key.
-
-`thrum_bee_sign_hello` adds `hid`, `from`, `pubkey`, `signedAt` and
-`signature`, an Ed25519 signature over
-
-```
-hum-bee-socket-v1:<hid>:<signedAt>
-```
-
-with one timestamp for both the field and the signed bytes. The tests
-check the id and the signature byte for byte against what
-`hum_identity::BeeKey` produces for the RFC 8032 test seed.
-
-## The hello's verdict
-
-humd acks every tone that carries a `rid` with `chi:"echo"`, `ok:true`
-as soon as it is delivered. The hello is admitted by the `breath` that
-follows its own ack, and refused by an `echo` with `ok:false` and an
-`error` under its `rid`. The `breath` humd sends on connect comes before
-the ack and decides nothing. `thrum_client_hello` waits ten seconds for
-a verdict, `thrum_client_hello_within` as long as it is told.
-
-A refusal can arrive after admission (a revoked bee is refused after its
-breath), so `thrum_client_run` returns -1 when one does, with the reason
-in `thrum_error()`. humd does not close a refused socket today, and
-without this a refused bee would wait forever.
-
-## Generated and written
-
-| file | |
-|---|---|
-| `thrum/chi.h` | the registry: generated by `cargo run -p codegen` |
-| `thrum/protocol.h` | the views: generated |
-| `thrum/helpers.c` | sigil, rid, dusk, wane, socket path: written, over libsodium and cJSON |
-| `thrum/identity.c` | entering, the filed key, the signed hello: written, over libsodium |
-| `thrum/client.c` | the socket loop: written |
-| `thrum/spec.c` | the declared-key check over the generated views: written |
-
-Codegen emits only what is read from the Rust source. The helpers are
-library calls, so they live here rather than as C inside the generator.
-`thrum-core`'s build script refreshes the generated pair on every cargo
-build, and CI fails if the checked-in copies differ.
-
-## Tests
-
-`make test` runs `tests/test_thrum.c` against
-`thrum-core/tests/fixtures/golden.ndjson`. A thread plays humd over a
-real Unix socket: it replays the fixture in seven-byte pieces among junk
-lines, verifies the hello's signature with libsodium on its own, replays
-humd's admit, refuse, revoke, hang-up and silent hellos, and reads eight
-threads' concurrent sends line by line. It passes under AddressSanitizer,
-UBSan and ThreadSanitizer:
-
-```sh
-make THRUM_BUILD=out/tsan THRUM_CC_FLAGS="-std=c11 -O1 -g -fsanitize=thread" test
-```
-
-## See also
-
-- [WIRE.md](../../WIRE.md): the language-neutral protocol spec.
-- [`thrum-clients/go`](../go), [`thrum-clients/python`](../python),
-  [`thrum-clients/ts`](../ts): the other reference clients.
-- [`codegen`](../../codegen): where `chi.h` and `protocol.h` come from.
+Every source under `thrum/` is generated by `cargo run -p codegen`:
+`chi.h` and `protocol.h` from thrum-core, `link.h`, `link.c` and
+`thrum.h` from `codegen/templates/c` with the link's constants from
+hum-thrum. `make test` checks the views against thrum-core's golden
+tones, and `examples/echo_bee.c` is the bee the conformance run
+(`cargo test -p hum --test conform`) drives in every language.

@@ -86,6 +86,7 @@ pub const HUMD_KEY_BASENAME: &str = "humd.key";
 pub const BEES_SNAPSHOT_BASENAME: &str = "bees.json";
 pub const RUNTIME_INFO_BASENAME: &str = "runtime.json";
 pub const REVOKED_BEES_BASENAME: &str = "revoked.json";
+pub const ADVISORIES_BASENAME: &str = "advisories.json";
 pub const HUM_JSON_BASENAME: &str = "hum.json";
 pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
@@ -173,6 +174,10 @@ pub fn runtime_info() -> PathBuf {
 
 pub fn revoked_bees() -> PathBuf {
     state_dir().join(REVOKED_BEES_BASENAME)
+}
+
+pub fn advisories() -> PathBuf {
+    state_dir().join(ADVISORIES_BASENAME)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

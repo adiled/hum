@@ -27,6 +27,7 @@ class HelloBody:
     propensity: Optional[Any] = None
     headroom: Optional[Headroom] = None
     source: Optional[str] = None
+    bind: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -45,6 +46,7 @@ class HelloBody:
         "propensity": "propensity",
         "headroom": "headroom",
         "source": "source",
+        "bind": "bind",
     }
 
 @dataclass
@@ -64,11 +66,13 @@ class PromptBody:
     cwd: Optional[str] = None
     system_prompt: Optional[str] = None
     text: Optional[str] = None
-    content: Optional[list[Any]] = None
+    content: Optional[str] = None
     tools: Optional[list[Any]] = None
     forager_tools: Optional[list[Any]] = None
     provided: Optional[list[str]] = None
     disallowed_tools: Optional[list[str]] = None
+    allowed_tools: Optional[list[str]] = None
+    resume: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -81,6 +85,8 @@ class PromptBody:
         "forager_tools": "foragerTools",
         "provided": "provided",
         "disallowed_tools": "disallowedTools",
+        "allowed_tools": "allowedTools",
+        "resume": "resume",
     }
 
 @dataclass

@@ -232,7 +232,7 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
     ));
     s.push_str("export type { ChiKind } from \"./chi.ts\";\n");
-    s.push_str("import type { Chi } from \"./chi.ts\";\n\n");
+    s.push_str("import type { ChiKind } from \"./chi.ts\";\n\n");
 
     for t in &spec.types {
         s.push_str(&format!("export interface {} {{\n", t.name));
@@ -285,6 +285,7 @@ fn ts_repr(r: &Repr) -> String {
         Repr::Json => "unknown".into(),
         Repr::Map(inner) => format!("Record<string, {}>", ts_repr(inner)),
         Repr::Arr(inner) => format!("{}[]", ts_repr(inner)),
+        Repr::Ref(name) if name == "Chi" => "ChiKind".into(),
         Repr::Ref(name) => name.clone(),
     }
 }

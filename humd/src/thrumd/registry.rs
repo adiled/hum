@@ -5,13 +5,18 @@
 //! declared nothing accepts every chi. That is the only answer available
 //! to every bee written before the field existed, and narrowing it would
 //! be a wire break.
+//!
+//! Closing a [`Reach`] ends its connection: the reader stops, what was
+//! already queued for the client (a refusal, say) is written, and the
+//! socket closes. Taking a client out of the registry alone would leave
+//! its socket open and its tones still read.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 pub type ClientId = String;
 
@@ -23,6 +28,7 @@ pub struct Reach {
     audit: Arc<super::audit::Audit>,
     sigils: Mutex<HashSet<String>>,
     chis: Mutex<HashSet<String>>,
+    closing: Notify,
 }
 
 impl Reach {
@@ -42,6 +48,7 @@ impl Reach {
                 audit,
                 sigils: Mutex::new(HashSet::new()),
                 chis: Mutex::new(HashSet::new()),
+                closing: Notify::new(),
             },
             rx,
         )
@@ -50,6 +57,14 @@ impl Reach {
     pub fn send(&self, tone: Value) -> Result<(), mpsc::error::TrySendError<Value>> {
         self.audit.sent(&self.client_id, &tone);
         self.tx.try_send(tone)
+    }
+
+    pub fn close(&self) {
+        self.closing.notify_one();
+    }
+
+    pub async fn closed(&self) {
+        self.closing.notified().await;
     }
 
     pub fn add_sigil(&self, sigil: String) {

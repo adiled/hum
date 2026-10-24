@@ -1,102 +1,139 @@
-/* echo_bee: the smallest C worker bee.
+/* An echo bee: it answers every prompt with its own text. It is the
+ * smallest whole bee in C, and the conformance run drives it the same
+ * way it drives the echo bee in every other language.
  *
- * It enters as <label> under <hive> through the hum CLI, signs its hello,
- * and answers every prompt with its own text as one text_delta chunk and
- * a finish. The hive must be installed on the humd it dials.
+ *   ECHO_HIVE (echo-c), ECHO_AS (main), ECHO_MODEL (echo-c)
  *
- *   echo_bee <hive> [label]
+ * It prints what happens to it, one line each: nestled, lost,
+ * advisory <code>, then closed, refused <why> or failed <why>. A prompt
+ * whose text is "stray" is answered with a key the thrum does not
+ * declare; one whose text is "follow" has the bee follow its session and
+ * print sid <chi> for the next tone of it. Closing its stdin closes the
+ * bee.
  */
 
-#define _POSIX_C_SOURCE 200809L
-
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <thrum/thrum.h>
 
+static void say(const char *what, const char *detail) {
+    printf("%s%s%s\n", what, detail ? " " : "", detail ? detail : "");
+    fflush(stdout);
+}
+
+static const char *env_or(const char *key, const char *fallback) {
+    const char *v = getenv(key);
+    return v && v[0] ? v : fallback;
+}
+
 static const char *string_of(const cJSON *tone, const char *key) {
-    const cJSON *value = cJSON_GetObjectItemCaseSensitive(tone, key);
-    return cJSON_IsString(value) ? value->valuestring : NULL;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(tone, key);
+    return cJSON_IsString(v) ? v->valuestring : "";
 }
 
-static cJSON *reply(const cJSON *prompt, const char *chi) {
-    const char *rid = string_of(prompt, "rid");
-    return thrum_tone_new(chi, rid, string_of(prompt, "sid"));
+static void on_followed(thrum_bee *bee, const cJSON *tone, void *user) {
+    (void)user;
+    say("sid", string_of(tone, "chi"));
+    thrum_bee_off_sid(bee, string_of(tone, "sid"));
 }
 
-static void answer(thrum_client *client, const cJSON *prompt) {
-    const char *text = string_of(prompt, "text");
-    cJSON *chunk = reply(prompt, THRUM_CHI_CHUNK);
-    cJSON *finish = reply(prompt, THRUM_CHI_FINISH);
+static void on_prompt(thrum_bee *bee, const cJSON *tone, void *user) {
+    (void)user;
+    const char *text = string_of(tone, "text");
+    const char *sid = string_of(tone, "sid");
+    if (strcmp(text, "follow") == 0) thrum_bee_on_sid(bee, sid, on_followed, NULL);
+    size_t n = strlen(text) + 8;
+    char *delta = malloc(n);
+    if (!delta) return;
+    snprintf(delta, n, "echo: %s", text);
 
-    if (chunk && finish) {
-        cJSON_AddStringToObject(chunk, "chunkType", "text_delta");
-        cJSON_AddStringToObject(chunk, "delta", text ? text : "");
-        cJSON_AddStringToObject(finish, "finishReason", "stop");
-        if (thrum_client_send(client, chunk) != 0 || thrum_client_send(client, finish) != 0) {
-            fprintf(stderr, "echo_bee: %s\n", thrum_error());
-        }
-    }
+    cJSON *chunk = cJSON_CreateObject();
+    cJSON_AddStringToObject(chunk, "chi", THRUM_CHI_CHUNK);
+    cJSON_AddStringToObject(chunk, "sid", sid);
+    cJSON_AddStringToObject(chunk, "chunkType", "text_delta");
+    cJSON_AddStringToObject(chunk, "delta", delta);
+    if (strcmp(text, "stray") == 0) cJSON_AddTrueToObject(chunk, "stray");
+    thrum_bee_send(bee, chunk);
     cJSON_Delete(chunk);
+    free(delta);
+
+    cJSON *finish = cJSON_CreateObject();
+    cJSON_AddStringToObject(finish, "chi", THRUM_CHI_FINISH);
+    cJSON_AddStringToObject(finish, "sid", sid);
+    cJSON_AddStringToObject(finish, "finishReason", "stop");
+    thrum_bee_send(bee, finish);
     cJSON_Delete(finish);
 }
 
-static void on_tone(const cJSON *tone, void *user) {
-    const char *chi = string_of(tone, "chi");
-    if (chi && strcmp(chi, THRUM_CHI_PROMPT) == 0) answer((thrum_client *)user, tone);
+static void on_nestled(thrum_bee *bee, void *user) {
+    (void)bee;
+    (void)user;
+    say("nestled", NULL);
 }
 
-static cJSON *hello_for(const char *hive) {
-    static const char *const chis[] = {THRUM_CHI_HELLO, THRUM_CHI_PROMPT, THRUM_CHI_CHUNK,
-                                       THRUM_CHI_FINISH};
-    static const char *const roles[] = {"worker"};
-    static const char *const models[] = {"echo"};
+static void on_lost(thrum_bee *bee, void *user) {
+    (void)bee;
+    (void)user;
+    say("lost", NULL);
+}
+
+static void on_advisory(thrum_bee *bee, const thrum_advisory *advisory, void *user) {
+    (void)bee;
+    (void)user;
+    say("advisory", advisory->code);
+}
+
+static void *close_on_eof(void *arg) {
+    char buf[256];
+    while (read(STDIN_FILENO, buf, sizeof buf) > 0) {
+    }
+    thrum_bee_close(arg);
+    return NULL;
+}
+
+static int report(thrum_bee *bee, int how) {
+    if (how == THRUM_LINK_CLOSED) {
+        say("closed", NULL);
+        return 0;
+    }
+    say(how == THRUM_LINK_REFUSED ? "refused" : "failed", thrum_bee_error(bee));
+    return how;
+}
+
+int main(void) {
+    const char *model = env_or("ECHO_MODEL", "echo-c");
     cJSON *hello = cJSON_CreateObject();
-    cJSON *propensity = cJSON_AddObjectToObject(hello, "propensity");
+    cJSON *roles = cJSON_AddArrayToObject(hello, "roles");
+    cJSON_AddItemToArray(roles, cJSON_CreateString("worker"));
+    cJSON_AddStringToObject(hello, "version", "1.0.0");
+    cJSON *models = cJSON_AddArrayToObject(hello, "models");
+    cJSON_AddItemToArray(models, cJSON_CreateString(model));
+    cJSON *headroom = cJSON_AddObjectToObject(hello, "headroom");
+    cJSON_AddNumberToObject(headroom, "freeSlots", 1);
+    cJSON_AddNumberToObject(headroom, "totalSlots", 1);
 
-    cJSON_AddStringToObject(hello, "hive", hive);
-    cJSON_AddItemToObject(hello, "roles", cJSON_CreateStringArray(roles, 1));
-    cJSON_AddStringToObject(hello, "version", "0.1.0");
-    cJSON_AddItemToObject(hello, "chis", cJSON_CreateStringArray(chis, 4));
-    cJSON_AddItemToObject(hello, "models", cJSON_CreateStringArray(models, 1));
-    cJSON_AddStringToObject(propensity, "statefulness", "stateless");
-    cJSON_AddStringToObject(propensity, "richness", "lean");
-    cJSON_AddStringToObject(propensity, "wire", "echo");
-    return hello;
-}
-
-int main(int argc, char **argv) {
-    const char *hive = argc > 1 ? argv[1] : "echo";
-    const char *label = argc > 2 ? argv[2] : "main";
-    thrum_bee bee;
-    thrum_client *client;
-    cJSON *hello;
-    int rc;
-
-    if (thrum_bee_enter_as(hive, label, &bee) != 0) {
-        fprintf(stderr, "echo_bee: %s\n", thrum_error());
-        return 1;
-    }
-    client = thrum_client_new(NULL);
-    if (!client || thrum_client_connect(client) != 0) {
-        fprintf(stderr, "echo_bee: %s\n", thrum_error());
-        thrum_client_free(client);
-        return 1;
-    }
-    hello = hello_for(hive);
-    rc = thrum_client_hello(client, &bee, hello, NULL);
+    thrum_options opts = {
+        .hive = env_or("ECHO_HIVE", "echo-c"),
+        .as = env_or("ECHO_AS", "main"),
+        .hello = hello,
+    };
+    thrum_bee *bee = thrum_bee_new(&opts);
     cJSON_Delete(hello);
-    thrum_bee_forget(&bee);
-    if (rc != 0) {
-        fprintf(stderr, "echo_bee: %s\n", thrum_error());
-        thrum_client_free(client);
-        return 1;
-    }
-    fprintf(stderr, "echo_bee: nestled under %s on %s\n", hive, thrum_client_socket_path(client));
+    if (!bee) return 1;
+    thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, NULL);
+    thrum_bee_on_nestled(bee, on_nestled, NULL);
+    thrum_bee_on_lost(bee, on_lost, NULL);
+    thrum_bee_on_advisory(bee, on_advisory, NULL);
 
-    thrum_client_on_any(client, on_tone, client);
-    rc = thrum_client_run(client);
-    if (rc < 0) fprintf(stderr, "echo_bee: %s\n", thrum_error());
-    thrum_client_free(client);
-    return rc < 0 ? 1 : 0;
+    pthread_t eof;
+    pthread_create(&eof, NULL, close_on_eof, bee);
+    pthread_detach(eof);
+
+    int started = thrum_bee_start(bee);
+    if (started != 0) return report(bee, started);
+    return report(bee, thrum_bee_wait(bee));
 }

@@ -15,14 +15,12 @@
 //! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
 //!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
 //!
-//! Reconnect is built in — humd restarts don't strand workers; they
-//! re-handshake.
-//!
-//! Connection cycling is normal: launchd and systemd start the worker
-//! and humd in parallel, so the first dials lose the race until humd
-//! binds the socket. That is not a warning. The log only escalates to
-//! WARN once a bee that has *never* connected keeps failing past a
-//! grace window, so a clean boot stays quiet.
+//! The connection is hum-thrum's: the worker links its `main` bee and
+//! reads events. A humd that goes away takes the worker's cells with it,
+//! since their sessions went with that humd; the client dials again,
+//! quietly while humd is still booting, and the worker carries on. A
+//! refused bee ends `serve_worker` with the refusal, so the process exits
+//! non-zero and its supervisor decides.
 //!
 //! A prompt's model comes from its `modelId`, else the first model the
 //! worker advertises (`CLAUDE_MODELS` leads with the install default),
@@ -58,7 +56,6 @@
 //! forwarded to claude over stdin rather than dropped.
 
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -67,18 +64,15 @@ use lru::LruCache;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 use hum_mcp::protocol::ToolDef;
 use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, NestConfig, Worker};
 use tokio::sync::mpsc;
 
-use hum_identity::enter_as;
+use hum_thrum::{Bee, Event, Options, Refused};
 use hum_mcp::{spawn_local_mcp, McpBridge};
 
-fn default_socket_path() -> PathBuf {
-    hum_paths::thrum_sock_resolved()
-}
 
 #[derive(Debug, Clone)]
 pub struct WorkerAdvert {
@@ -89,74 +83,31 @@ pub struct WorkerAdvert {
 }
 
 pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdvert) -> Result<()> {
-    let path = default_socket_path();
-    let mut ever_connected = false;
-    let mut consecutive_fails = 0u32;
-    loop {
-        match dial_and_serve(&path, worker.clone(), &advert).await {
-            Ok(()) => {
-                ever_connected = true;
-                consecutive_fails = 0;
-                trace!("serve_worker: clean exit, reconnecting");
-            }
-            Err(e) => {
-                consecutive_fails += 1;
-                if ever_connected {
-                    info!(err = %e, "serve_worker: thrum dropped, reconnecting");
-                } else if consecutive_fails >= 8 {
-                    warn!(err = %e, attempts = consecutive_fails,
-                        "serve_worker: still cannot reach humd — check it is running and HUM_THRUM_SOCK matches");
-                } else {
-                    debug!(err = %e, "serve_worker: waiting for humd socket");
-                }
-            }
-        }
-        let jitter = rand::random::<f32>() * 0.75;
-        tokio::time::sleep(std::time::Duration::from_secs_f32(2.0 + jitter)).await;
-    }
-}
-
-async fn dial_and_serve<W: Worker + 'static>(
-    path: &Path,
-    worker: Arc<W>,
-    advert: &WorkerAdvert,
-) -> Result<()> {
-    info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
-    let (reader, write_half) = hum_thrum::connect(path).await?;
-
-    let bee_key = enter_as(&advert.hive, "main")
-        .with_context(|| format!("enter the main bee of {}", advert.hive))?;
     let nest = Arc::new(NestConfig::for_hive(&advert.hive));
-
     let propensity_str = match worker.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
         crate::Propensity::StatelessPerCall => "stateless_per_call",
         crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
-    let mut hello = json!({
-        "chi": "hello",
+    let hello = json!({
         "roles": ["worker"],
-        "hive": &advert.hive,
         "version": &advert.version,
-        "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
         "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call", "pulse"],
         "headroom": nest.headroom(0),
         "source": advert.source.clone().unwrap_or_default(),
     });
-    bee_key.sign_hello(&mut hello);
-    hum_thrum::send_json(&write_half, &hello).await?;
-    info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
+    info!(hive = %advert.hive, models = ?advert.models, "worker.linking");
+    let mut bee = Bee::link(Options::new(&advert.hive, "main").hello(hello))
+        .await
+        .with_context(|| format!("link the main bee of {}", advert.hive))?;
+    info!(hive = %advert.hive, bee = %bee.id(), models = ?advert.models, "worker.nestled");
+    let write_half = bee.sender();
 
     let write_for_bridge = write_half.clone();
     let bridge = McpBridge::new(Arc::new(move |tone: Value| {
-        let write_half = write_for_bridge.clone();
-        tokio::spawn(async move {
-            if let Err(e) = hum_thrum::send_json(&write_half, &tone).await {
-                warn!(err = %e, "mcp.bridge.tool-call.write.failed");
-            }
-        });
+        write_for_bridge.send(tone);
     }));
     let mcp_addr = spawn_local_mcp(bridge.clone()).await
         .context("spawn local mcp bridge")?;
@@ -168,7 +119,16 @@ async fn dial_and_serve<W: Worker + 'static>(
 
     let sid_cwd: Arc<Mutex<LruCache<String, String>>> = Arc::new(Mutex::new(LruCache::new(pool)));
 
-    hum_thrum::read_tones(reader, |tone| {
+    while let Some(event) = bee.next().await {
+        let tone = match event {
+            Event::Tone(tone) => tone,
+            Event::Lost => {
+                cells.lock().await.clear();
+                continue;
+            }
+            Event::Nestled | Event::Advisory(_) => continue,
+            Event::Refused(why) => return Err(Refused(why).into()),
+        };
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
 
@@ -276,7 +236,8 @@ async fn dial_and_serve<W: Worker + 'static>(
                 trace!(chi = other, "worker.unknown.chi");
             }
         }
-    }).await
+    }
+    Ok(())
 }
 
 struct CellBundle {
@@ -305,19 +266,16 @@ fn parse_tool_def(v: &Value) -> Option<ToolDef> {
 }
 
 async fn pulse(
-    write_half: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    write_half: &hum_thrum::Sender,
     kind: &str,
     headroom: Value,
 ) {
     let tone = json!({
         "chi": "pulse",
-        "rid": hum_identity::HumId::mint().to_string(),
         "kind": kind,
         "headroom": headroom,
     });
-    if let Err(e) = hum_thrum::send_json(write_half, &tone).await {
-        trace!(err = %e, kind, "worker.pulse.write.failed");
-    }
+    write_half.send(tone);
 }
 
 fn is_preflight_error(v: &Value) -> bool {
@@ -354,7 +312,7 @@ async fn attempt_spawn<W: Worker + 'static>(
 
 async fn handle_prompt<W: Worker + 'static>(
     worker: Arc<W>,
-    write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    write_half: hum_thrum::Sender,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
     nest: Arc<NestConfig>,
     hive: String,
@@ -520,7 +478,7 @@ async fn handle_prompt<W: Worker + 'static>(
                 "finishReason": if exit_code == 0 { "stop" } else { "error" },
                 "exitCode": exit_code,
             });
-            let _ = hum_thrum::send_json(&write_for_cleanup, &finish).await;
+            write_for_cleanup.send(finish);
         }
         let live = {
             let mut g = cells_for_cleanup.lock().await;
@@ -544,7 +502,7 @@ fn now_ms() -> u64 {
 struct WireListener {
     sid: String,
     hive: String,
-    write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    write_half: hum_thrum::Sender,
     finish_sent: Arc<AtomicBool>,
     tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
     last_touched: Arc<AtomicU64>,
@@ -552,7 +510,7 @@ struct WireListener {
 
 impl WireListener {
     async fn send(&self, tone: Value) {
-        let _ = hum_thrum::send_json(&self.write_half, &tone).await;
+        self.write_half.send(tone);
     }
 
     async fn forward_raw(&self, value: Value) {

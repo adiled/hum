@@ -8,9 +8,10 @@
 //! so manual invocation should rarely be needed. Output locations live
 //! in `codegen::paths` — never hand-write them here.
 //!
-//! A target is the files it owns. C owns only what is read from the
-//! Rust source, the registry and the views; its helpers are library
-//! calls and live with the client.
+//! A target is the files it owns: the registry and the views read from
+//! thrum-core, and the client itself, each language's template from
+//! `codegen/templates/` with the link's constants read from hum-thrum.
+//! Every source file of every client is generated.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -54,8 +55,17 @@ fn run() -> Result<()> {
     )
     .context("parse protocol spec")?;
 
+    let link = codegen::link::link_spec(
+        &paths::link_rs(),
+        &paths::core_rs(),
+        &paths::chi_rs(),
+        &paths::lib_rs(),
+        &paths::wire_md(),
+    )
+    .context("parse link spec")?;
+
     for t in &targets {
-        run_target(t, &spec, &proto, check)?;
+        run_target(t, &spec, &proto, &link, check)?;
     }
     Ok(())
 }
@@ -64,19 +74,34 @@ fn outputs<'a>(
     target: &str,
     spec: &'a ChiSpec,
     proto: &'a codegen::protocol::ProtocolSpec,
+    link: &'a codegen::link::LinkSpec,
+) -> Result<Vec<(PathBuf, Emit<'a>)>> {
+    let target = if target == "py" { "python" } else { target };
+    let mut out = registry(target, spec, proto)?;
+    for client in paths::CLIENTS.iter().filter(|c| c.target == target) {
+        out.push((
+            client.output_path(),
+            Box::new(move |p| codegen::link::emit_client(link, client, p)),
+        ));
+    }
+    Ok(out)
+}
+
+fn registry<'a>(
+    target: &str,
+    spec: &'a ChiSpec,
+    proto: &'a codegen::protocol::ProtocolSpec,
 ) -> Result<Vec<(PathBuf, Emit<'a>)>> {
     Ok(match target {
         "ts" => vec![
             (paths::ts_chi(), Box::new(|p| codegen::emit_ts(spec, p))),
-            (paths::ts_helpers(), Box::new(codegen::emit_helpers)),
             (
                 paths::ts_protocol(),
                 Box::new(|p| codegen::protocol::emit_protocol_ts(proto, p)),
             ),
         ],
-        "python" | "py" => vec![
+        "python" => vec![
             (paths::py_chi(), Box::new(|p| codegen::emit_py(spec, p))),
-            (paths::py_helpers(), Box::new(codegen::emit_py_helpers)),
             (
                 paths::py_protocol(),
                 Box::new(|p| codegen::protocol::emit_protocol_py(proto, p)),
@@ -84,7 +109,6 @@ fn outputs<'a>(
         ],
         "go" => vec![
             (paths::go_chi(), Box::new(|p| codegen::emit_go(spec, p))),
-            (paths::go_helpers(), Box::new(codegen::emit_go_helpers)),
             (
                 paths::go_protocol(),
                 Box::new(|p| codegen::protocol::emit_protocol_go(proto, p)),
@@ -105,9 +129,10 @@ fn run_target(
     target: &str,
     spec: &ChiSpec,
     proto: &codegen::protocol::ProtocolSpec,
+    link: &codegen::link::LinkSpec,
     check: bool,
 ) -> Result<()> {
-    let outputs = outputs(target, spec, proto)?;
+    let outputs = outputs(target, spec, proto, link)?;
     let names = outputs
         .iter()
         .map(|(out, _)| out.display().to_string())

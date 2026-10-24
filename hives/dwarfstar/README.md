@@ -20,7 +20,7 @@ back: the engine's session, KV cache and token stream are the bee's own.
 ## Install
 
 ```sh
-brew install pkgconf libsodium cjson
+brew install pkgconf cjson
 DWARFSTAR_DIR=~/ds4 hum hive ./hives/dwarfstar install
 ```
 

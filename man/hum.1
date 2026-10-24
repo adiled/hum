@@ -71,13 +71,19 @@ the bee; humd admits only a signed hello from an entered bee whose hive is
 installed. hum starts no process.
 .RS
 .B hum bee \-\-list
-Bees entered here, and which have nestled.
+Bees entered here, which have nestled, and what humd advised each.
 .br
 .B hum bee enter \-\-hive \fIhive\fR [\-\-as \fIlabel\fR]
 Sign a bee in under the hive and print its id. With a label, the same
 hive and label are always the same bee, so a process enters itself each
 time it starts and a runtime can hold one bee per label; without one,
 every call mints a new bee.
+.br
+.B hum bee link \-\-hive \fIhive\fR \-\-as \fIlabel\fR
+Be that bee's client on stdio: enter it, sign its hello, keep it
+nestled through humd restarts, and pass its tones over two pipes, one
+JSON object per line. A bee's thrum client in TS, Python, Go or C runs
+this for it; WIRE.md says what the lines are.
 .br
 .B hum bee \fIid\fR exit
 Sign the bee out; humd refuses its next hello.
@@ -215,6 +221,10 @@ for their own processes, as the bundled hives do.
 .TP
 .B HUM_BIN
 Path to the humd binary; overrides the default resolved location.
+.TP
+.B HUM_CLI
+Path to the hum binary a bee's thrum client runs as its link; otherwise
+\fBhum\fR on \fBPATH\fR, then \fB~/.local/bin/hum\fR.
 .TP
 .B HUM_THRUM_SOCK
 Path to the thrum socket. Overrides the default, for both the daemon

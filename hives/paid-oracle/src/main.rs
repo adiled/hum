@@ -26,9 +26,8 @@ use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use thrum_core::{Chi, THRUM_VERSION};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use hum_thrum::{Bee, Event, Options, Refused, Sender};
+use thrum_core::Chi;
 use tracing::{info, warn};
 
 const HIVE_NAME: &str = "paid-oracle";
@@ -45,7 +44,6 @@ enum PayKind {
 
 #[derive(Debug, Clone)]
 struct Config {
-    sock_path: String,
     pay_to: String,
     rpc_url: String,
     chain: String,
@@ -74,7 +72,6 @@ impl Config {
                 PayKind::Erc20 => 6,
             });
         Ok(Self {
-            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             pay_to: std::env::var("PAID_ORACLE_PAY_TO")
                 .context("PAID_ORACLE_PAY_TO (your EVM address) is required")?,
             rpc_url: std::env::var("PAID_ORACLE_RPC")
@@ -128,29 +125,17 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello(&cfg)))
+        .await
+        .context("link the paid-oracle bee")?;
+    info!(hive = HIVE_NAME, bee = %bee.id(), "thrum.nestled");
+    let wr = bee.sender();
 
-    let sock = UnixStream::connect(&cfg.sock_path).await
-        .with_context(|| format!("connect {}", cfg.sock_path))?;
-    let (rd, wr) = sock.into_split();
-    let wr = Arc::new(tokio::sync::Mutex::new(wr));
-    let mut lines = BufReader::new(rd).lines();
-
-    let mut hello = hello(&cfg);
-    bee.sign_hello(&mut hello);
-    send(&wr, &hello).await?;
-    info!(hive = HIVE_NAME, "thrum.handshake.sent");
-
-    while let Some(line) = lines.next_line().await? {
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "thrum.parse");
-                continue;
-            }
+    while let Some(event) = bee.next().await {
+        let tone = match event {
+            Event::Tone(tone) => tone,
+            Event::Refused(why) => return Err(Refused(why).into()),
+            Event::Nestled | Event::Lost | Event::Advisory(_) => continue,
         };
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         match chi {
@@ -174,13 +159,8 @@ async fn main() -> Result<()> {
 
 fn hello(cfg: &Config) -> Value {
     json!({
-        "chi": Chi::Hello,
-        "rid": hum_identity::HumId::mint().to_string(),
-        "from": HIVE_NAME,
         "roles": ["forager"],
-        "hive": HIVE_NAME,
         "version": BEE_VERSION,
-        "protoVersion": THRUM_VERSION,
         "provides": [CAPABILITY],
         "tools": [
             {
@@ -210,7 +190,7 @@ fn hello(cfg: &Config) -> Value {
         },
         "chis": ["hello", "tool-call", "tool-result", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/paid-oracle",
-        "x402": {
+        "ext": { "paid-oracle": { "x402": {
             "chain": cfg.chain,
             "pay_to": cfg.pay_to,
             "usdc_contract": cfg.usdc_contract,
@@ -220,15 +200,12 @@ fn hello(cfg: &Config) -> Value {
                 PayKind::Erc20 => "erc20",
             },
             "price_atomic_usdc": cfg.quote_atomic().to_string(),
-        }
+        } } }
     })
 }
 
-async fn send(wr: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>, tone: &Value) -> Result<()> {
-    let mut buf = serde_json::to_string(tone)?;
-    buf.push('\n');
-    let mut g = wr.lock().await;
-    g.write_all(buf.as_bytes()).await?;
+async fn send(wr: &Sender, tone: &Value) -> Result<()> {
+    wr.send(tone.clone());
     Ok(())
 }
 
@@ -236,7 +213,7 @@ async fn handle_tool_call(
     cfg: &Config,
     state: &Arc<State>,
     http: &reqwest::Client,
-    wr: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    wr: &Sender,
     tone: Value,
 ) -> Result<()> {
     let name = tone.get("name").and_then(Value::as_str).unwrap_or("");
@@ -326,7 +303,7 @@ async fn handle_tool_call(
 }
 
 async fn reply_error(
-    wr: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    wr: &Sender,
     rid: &str,
     sid: &str,
     to: &str,

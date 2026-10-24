@@ -11,6 +11,7 @@ use thrum_core::{Chi, WaneTracker};
 use thrumd::{Thrum, Tone, ToneSink, serve_with_hook as thrum_serve_with_hook};
 use tracing::{error, info, trace, warn};
 
+pub mod advise;
 mod comb;
 mod drone;
 pub mod entered;
@@ -44,6 +45,8 @@ pub struct DaemonConfig {
     pub thrum_override: Option<Thrum>,
     pub ensemble: Option<Arc<Ensemble>>,
     pub revoked_path: PathBuf,
+    pub bees_snapshot_path: PathBuf,
+    pub advisories_path: PathBuf,
     pub bind_mcp: bool,
     pub waneman: Option<Arc<WaneTracker>>,
     pub humd_key: Option<Arc<HumdKey>>,
@@ -91,6 +94,8 @@ impl DaemonConfig {
             thrum_override: None,
             ensemble: None,
             revoked_path: hum_paths::revoked_bees(),
+            bees_snapshot_path: hum_paths::bees_snapshot(),
+            advisories_path: hum_paths::advisories(),
             bind_mcp: true,
             waneman: None,
             humd_key,
@@ -108,6 +113,11 @@ where
     F: std::future::Future<Output = ()> + Send,
 {
     hum_paths::init();
+    let advisories = Arc::new(advise::Advisories::load(
+        cfg.advisories_path.clone(),
+        thrum_core::now_ms(),
+    ));
+    advisories.expect(last_seen(&cfg.bees_snapshot_path));
 
     info!(
         thrum = %cfg.thrum_path.display(),
@@ -350,7 +360,8 @@ where
         observers: observers.clone(),
         manifests: manifests.clone(),
         remote_bees: remote_bees.clone(),
-        bees_snapshot_path: bees_snapshot_path(),
+        bees_snapshot_path: cfg.bees_snapshot_path.clone(),
+        advisories: advisories.clone(),
         sid_origins: sid_origins.clone(),
         tool_routes,
         sid_fs: sid_fs.clone(),
@@ -365,6 +376,13 @@ where
         bees: cfg.bees.clone(),
     });
     thrum.set_sink(sink);
+    {
+        let advisories = advisories.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(advise::RETURN_GRACE).await;
+            advisories.unreturned(thrum_core::now_ms());
+        });
+    }
     if let Some(mut seen) = discovery {
         let remote = remote_bees.clone();
         tokio::spawn(async move {
@@ -549,6 +567,7 @@ struct HumdSink {
     manifests: Manifests,
     remote_bees: RemoteBees,
     bees_snapshot_path: std::path::PathBuf,
+    advisories: Arc<advise::Advisories>,
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     tool_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
     sid_fs: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
@@ -596,8 +615,21 @@ fn bee_key(manifest: &ensemble::BeeManifest) -> String {
         .unwrap_or_else(|| manifest.hive.clone())
 }
 
-fn bees_snapshot_path() -> std::path::PathBuf {
-    hum_paths::bees_snapshot()
+fn last_seen(path: &std::path::Path) -> HashMap<String, String> {
+    let Some(Value::Object(snapshot)) = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+    else {
+        return HashMap::new();
+    };
+    snapshot
+        .values()
+        .filter_map(|m| {
+            let hid = m.get("hid").and_then(Value::as_str)?;
+            let hive = m.get("hive").and_then(Value::as_str)?;
+            Some((hid.to_string(), hive.to_string()))
+        })
+        .collect()
 }
 
 impl HumdSink {
@@ -651,6 +683,74 @@ impl HumdSink {
         }
     }
 
+    fn advise(&self, client_id: &str, entries: Vec<advise::Entry>) {
+        for entry in entries {
+            self.thrum.thrum_to(client_id, advise::tone(&entry));
+        }
+    }
+
+    fn undeclared_entry(&self, bee: &str, hive: &str, tone: &Value) -> Option<advise::Entry> {
+        let (chi, keys) = thrum_core::undeclared(tone)?;
+        let chi = serde_json::to_value(chi)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let message = format!(
+            "{chi} carries {}, which the thrum does not declare for it",
+            keys.join(", ")
+        );
+        let mut fields = serde_json::Map::new();
+        fields.insert("chi".into(), Value::String(chi));
+        fields.insert("keys".into(), serde_json::json!(keys));
+        self.advisories.note(
+            bee,
+            hive,
+            thrum_core::AdvisoryCode::UndeclaredKey,
+            message,
+            fields,
+            thrum_core::now_ms(),
+        )
+    }
+
+    fn advise_on_wire(&self, client_id: &str, tone: &Value) {
+        let bee = self
+            .manifests
+            .read()
+            .get(client_id)
+            .and_then(|m| Some((m.hid?.to_hex(), m.hive.clone())));
+        let Some((bee, hive)) = bee else { return };
+        if let Some(entry) = self.undeclared_entry(&bee, &hive, tone) {
+            self.advise(client_id, vec![entry]);
+        }
+    }
+
+    fn advise_on_hello(&self, client_id: &str, bee: &str, hive: &str, hello: &Value) {
+        let now = thrum_core::now_ms();
+        let mut entries = self.advisories.hello(bee, hive, now);
+        if let Some(declared) = hello.get("protoVersion").and_then(Value::as_str)
+            && thrumd::proto_verdict(declared, thrum_core::THRUM_VERSION)
+                == thrumd::ProtoVerdict::SameMajor
+        {
+            let mut fields = serde_json::Map::new();
+            fields.insert("declared".into(), Value::String(declared.to_string()));
+            fields.insert("current".into(), Value::String(thrum_core::THRUM_VERSION.to_string()));
+            let message = format!(
+                "speaks thrum {declared} to a humd on {}; rebuild the hive against this hum",
+                thrum_core::THRUM_VERSION
+            );
+            entries.extend(self.advisories.note(
+                bee,
+                hive,
+                thrum_core::AdvisoryCode::ProtoDrift,
+                message,
+                fields,
+                now,
+            ));
+        }
+        entries.extend(self.undeclared_entry(bee, hive, hello));
+        self.advise(client_id, entries);
+    }
+
     fn snapshot_bees(&self) {
         let json = {
             let m = self.manifests.read();
@@ -685,6 +785,9 @@ impl ToneSink for HumdSink {
             .get("chi")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok());
+        if !matches!(chi, Some(Chi::Hello)) {
+            self.advise_on_wire(client_id, &tone);
+        }
 
         let bee = if comb::WORK_CHIS.contains(&chi_str) {
             self.manifests
@@ -1077,6 +1180,11 @@ impl ToneSink for HumdSink {
                     None
                 } else {
                     let refusal = match ensemble::parse_socket_identity(&tone) {
+                        ensemble::SocketIdentity::Verified(hid)
+                            if self.revoked.is_revoked(&hid.to_hex()) =>
+                        {
+                            Err("bee identity revoked")
+                        }
                         ensemble::SocketIdentity::Verified(hid) if self.bees.admits(&hid, &hive) => {
                             Ok(hid)
                         }
@@ -1164,19 +1272,6 @@ impl ToneSink for HumdSink {
                     manifest.headroom = hives::headroom_of(&tone);
                     manifest.hid = signed_hid;
                     manifest.hid_verified = signed_hid.is_some();
-                    if let Some(hid) = manifest.hid
-                        && self.revoked.is_revoked(&hid.to_hex())
-                    {
-                        error!(client_id, hid = %hid.short(),
-                                "bee.revoked — hid is on the operator's revocation list. \
-                                 Not registered, not announced.");
-                        self.thrum.thrum_to(
-                            client_id,
-                            thrumd::echo_tone(&rid, false, Some("bee identity revoked")),
-                        );
-                        self.thrum.thrum_close(client_id);
-                        return;
-                    }
                     if let Some(arr) = tone.get("tools").and_then(Value::as_array) {
                         manifest.tools = arr
                             .iter()
@@ -1242,6 +1337,9 @@ impl ToneSink for HumdSink {
                         self.snapshot_bees();
                         if roles.iter().any(|r| r == "worker") {
                             info!(client_id, ?models, "worker.registered");
+                        }
+                        if let Some(hid) = manifest.hid {
+                            self.advise_on_hello(client_id, &hid.to_hex(), &manifest.hive, &tone);
                         }
                     }
 

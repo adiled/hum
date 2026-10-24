@@ -6,9 +6,10 @@ license = "MIT"
 description = "RFC 9171 Bundle Protocol v7 forager hive — interplanetary store-and-forward bridge to hum."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

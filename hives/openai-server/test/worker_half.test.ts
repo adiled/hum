@@ -58,6 +58,7 @@ async function startFakeHumd(): Promise<{
   const server: Server = createNetServer((sock) => {
     active = sock;
     let buf = "";
+    sock.write(JSON.stringify({ chi: "breath", sessions: [] }) + "\n");
     sock.on("data", (chunk) => {
       buf += chunk.toString();
       let nl: number;
@@ -67,7 +68,12 @@ async function startFakeHumd(): Promise<{
         if (!line) continue;
         try {
           const tone = JSON.parse(line) as Tone;
-          if (tone.chi === "hello") { helloResolve(tone); continue; }
+          if (tone.chi === "hello") {
+            sock.write(JSON.stringify({ chi: "echo", rid: tone.rid, ok: true }) + "\n");
+            sock.write(JSON.stringify({ chi: "breath", sessions: {} }) + "\n");
+            helloResolve(tone);
+            continue;
+          }
           capturedReplies.push(tone);
         } catch {}
       }

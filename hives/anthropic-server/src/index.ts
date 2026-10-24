@@ -15,7 +15,51 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ThrumClient } from "./thrum.ts";
+import { Bee, type Hello, type Outgoing } from "../../../thrum-clients/ts/index.ts";
+import pkg from "../package.json";
+
+const HIVE_NAME = "anthropic-server";
+
+type Tone = Record<string, unknown>;
+type SidHandler = (tone: Tone) => void;
+
+// The hive is one bee. It announces where its HTTP surface listens, and
+// every request asks through it under a session of its own. When humd
+// goes away mid-turn, every open session hears an error and its response
+// ends; a request that arrives while humd is away is turned away.
+const hello: Hello = {
+  roles: ["forager"],
+  provides: ["session"],
+  version: pkg.version,
+  propensity: { statefulness: "convention-stateful", richness: "medium", wire: "anthropic/messages" },
+  chis: ["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"],
+  source: "https://github.com/adiled/hum/tree/main/hives/anthropic-server",
+};
+const bee = new Bee({ hive: HIVE_NAME, as: "main", hello });
+const sessions = new Map<string, SidHandler>();
+let nestled = false;
+bee.onNestled(() => {
+  nestled = true;
+});
+bee.onLost(() => {
+  nestled = false;
+  for (const [sid, fn] of [...sessions]) fn({ chi: "error", sid, message: "humd went away mid-turn" });
+});
+
+const client = {
+  on(sid: string, fn: SidHandler): void {
+    sessions.set(sid, fn);
+    bee.onSid(sid, fn);
+  },
+  off(sid: string): void {
+    sessions.delete(sid);
+    bee.offSid(sid);
+  },
+  send(tone: Outgoing): void {
+    bee.send(tone);
+  },
+};
+type Client = typeof client;
 
 interface HiveConfig {
   host?: string;
@@ -282,8 +326,7 @@ async function handleMessages(req: IncomingMessage, res: ServerResponse, tenant:
   const toolReturns = trailingToolResults(body.messages);
   audit({ endpoint: "messages", tenant, model: body.model, sid, stream });
 
-  const client = new ThrumClient();
-  await client.connect();
+  if (!nestled) return bad(res, 503, "humd is away; try again shortly");
 
   // Open a fresh prompt OR continue with tool results. Anthropic
   // convention-stateful: each request is a fresh sid; tool_result
@@ -295,7 +338,7 @@ async function handleMessages(req: IncomingMessage, res: ServerResponse, tenant:
         rid: `tr-${ret.tool_use_id}`,
         sid,
         callId: ret.tool_use_id,
-        result: { content: ret.result },
+        result: ret.result,
       });
     }
   }
@@ -316,7 +359,7 @@ async function handleMessages(req: IncomingMessage, res: ServerResponse, tenant:
 }
 
 async function handleNonStream(
-  client: ThrumClient,
+  client: Client,
   res: ServerResponse,
   sid: string,
   messageId: string,
@@ -367,7 +410,7 @@ async function handleNonStream(
 }
 
 async function handleStream(
-  client: ThrumClient,
+  client: Client,
   res: ServerResponse,
   sid: string,
   messageId: string,
@@ -491,15 +534,12 @@ async function start(): Promise<void> {
   const boundHost = typeof addr === "object" && addr !== null ? addr.address : HOST;
   const boundPort = typeof addr === "object" && addr !== null ? addr.port : PORT;
 
-  // Persistent startup-level client announces the bee with its
-  // actual bound address. Per-request handlers use their own short-
-  // lived clients.
-  const bee = new ThrumClient();
-  try {
-    await bee.connect({ host: boundHost, port: boundPort, scheme: "http" });
-  } catch (e) {
-    console.warn(`anthropic-server: thrum announce failed: ${(e as Error).message}`);
-  }
+  hello.bind = { host: boundHost, port: boundPort, scheme: "http" };
+  await bee.start();
+  bee.closed().catch((e) => {
+    console.error("anthropic-server: the bee ended:", e);
+    process.exit(1);
+  });
 
   console.log(`anthropic-server listening on http://${boundHost}:${boundPort}`);
 }

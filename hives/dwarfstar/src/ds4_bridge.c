@@ -18,9 +18,11 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
-
-#include <sodium.h>
+#if defined(__APPLE__)
+#include <sys/random.h>
+#endif
 
 #include "ds4.h"
 
@@ -46,10 +48,6 @@ ds4_bridge *ds4_bridge_new(const ds4_bridge_options *options) {
     if (!bridge) return NULL;
     bridge->options = *options;
     atomic_init(&bridge->cancelled, 0);
-    if (sodium_init() < 0) {
-        free(bridge);
-        return NULL;
-    }
     return bridge;
 }
 
@@ -193,7 +191,7 @@ static void encode(ds4_engine *engine, const char *system, const ds4_message *me
 
 static uint64_t seed(void) {
     uint64_t rng = 0;
-    randombytes_buf(&rng, sizeof rng);
+    if (getentropy(&rng, sizeof rng) != 0) rng = (uint64_t)time(NULL) ^ (uint64_t)getpid();
     return rng ? rng : SEED_IF_ZERO;
 }
 

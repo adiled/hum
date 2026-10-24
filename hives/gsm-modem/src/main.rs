@@ -30,9 +30,9 @@ use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use thrum_core::{Chi, THRUM_VERSION};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use hum_thrum::{Bee, Event, Options};
+use thrum_core::Chi;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::{Decoder, FramedRead};
@@ -49,7 +49,6 @@ struct Config {
     model: String,
     system: String,
     reply_limit: usize,
-    sock_path: String,
 }
 
 impl Config {
@@ -68,7 +67,6 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1500),
-            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
         }
     }
 }
@@ -107,48 +105,31 @@ struct IncomingSms {
 async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<SerialStream>>) -> Result<()> {
     let sid = sigil_for_phone(&sms.from);
 
-    let sock = UnixStream::connect(&cfg.sock_path)
-        .await
-        .with_context(|| format!("connect {}", cfg.sock_path))?;
-    let (rd, mut wr) = sock.into_split();
-    let mut lines = BufReader::new(rd).lines();
-
-    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
-
-    let mut hello = json!({
-        "chi": Chi::Hello,
-        "rid": hum_identity::HumId::mint().to_string(),
-        "from": HIVE_NAME,
+    let hello = json!({
         "roles": ["forager"],
-        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
-        "protoVersion": THRUM_VERSION,
         "propensity": { "statefulness": "stateful", "richness": "lean", "wire": "gsm/at-cmd-sms" },
         "chis": ["hello", "prompt", "chunk", "finish", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/gsm-modem",
     });
-    bee.sign_hello(&mut hello);
-    write_line(&mut wr, &hello).await?;
-
-    let prompt = json!({
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+        .await
+        .context("link the gsm-modem bee")?;
+    bee.send(json!({
         "chi": Chi::Prompt,
-        "rid": hum_identity::HumId::mint().to_string(),
         "sid": sid,
         "text": sms.body,
         "modelId": cfg.model,
         "systemPrompt": cfg.system,
         "ext": { "gsm-modem": { "from": sms.from } },
-    });
-    write_line(&mut wr, &prompt).await?;
+    }));
 
     let mut collected = String::new();
-    while let Some(line) = lines.next_line().await? {
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
+    while let Some(event) = bee.next().await {
+        let tone = match event {
+            Event::Tone(tone) => tone,
+            Event::Lost | Event::Refused(_) => break,
+            Event::Nestled | Event::Advisory(_) => continue,
         };
         if tone.get("sid").and_then(Value::as_str) != Some(sid.as_str()) {
             continue;
@@ -167,6 +148,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
             _ => {}
         }
     }
+    bee.close();
 
     let mut reply = collected.trim().to_string();
     if reply.is_empty() {
@@ -178,13 +160,6 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     }
 
     send_sms(&writer, &sms.from, &reply).await?;
-    Ok(())
-}
-
-async fn write_line(wr: &mut tokio::net::unix::OwnedWriteHalf, tone: &Value) -> Result<()> {
-    let mut buf = serde_json::to_string(tone)?;
-    buf.push('\n');
-    wr.write_all(buf.as_bytes()).await?;
     Ok(())
 }
 

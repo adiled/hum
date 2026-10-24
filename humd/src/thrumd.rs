@@ -199,7 +199,11 @@ impl Thrum {
     }
 
     pub fn thrum_close(&self, client_id: &str) {
-        self.inner.clients.write().remove(client_id);
+        let mut reg = self.inner.clients.write();
+        if let Some(reach) = reg.get(client_id) {
+            reach.close();
+        }
+        reg.remove(client_id);
     }
 
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {

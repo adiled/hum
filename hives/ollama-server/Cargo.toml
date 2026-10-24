@@ -6,9 +6,10 @@ license = "MIT"
 description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower = "0.5"

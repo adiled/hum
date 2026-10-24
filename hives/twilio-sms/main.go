@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
@@ -29,11 +28,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	thrum "github.com/adiled/hum/thrum-clients/go/thrum"
@@ -91,54 +89,43 @@ func twimlReply(body string) []byte {
 	return append([]byte(xml.Header), out...)
 }
 
-func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (string, error) {
-	client := thrum.NewClient("")
-	if err := client.Connect(ctx); err != nil {
-		return "", fmt.Errorf("thrum.connect: %w", err)
-	}
-	defer client.Close()
+// smsBee is the hive's one bee. Every SMS asks through it under the
+// sender's session, followed by sid; humd being away turns an SMS away
+// at once rather than at Twilio's deadline.
+type smsBee struct {
+	*thrum.Bee
+	up atomic.Bool
+}
 
+func newSmsBee() *smsBee {
+	b := &smsBee{Bee: thrum.NewBee(thrum.Options{
+		Hive: "twilio-sms",
+		As:   "main",
+		Hello: map[string]any{
+			"roles":   []string{"forager"},
+			"version": beeVersion,
+			"propensity": map[string]any{
+				"statefulness": "stateful",
+				"richness":     "lean",
+				"wire":         "twilio/sms-webhook",
+			},
+			"chis":   []string{"hello", "prompt", "chunk", "finish", "error"},
+			"source": "https://github.com/adiled/hum/tree/main/hives/twilio-sms",
+		},
+	})}
+	b.OnNestled(func() { b.up.Store(true) })
+	b.OnLost(func() { b.up.Store(false) })
+	return b
+}
+
+func runPrompt(ctx context.Context, bee *smsBee, cfg config, from, body, messageSid string) (string, error) {
+	if !bee.up.Load() {
+		return "", errors.New("humd is away")
+	}
 	sid := sidFor(from)
 	rid := "sms-" + messageSid
 	if rid == "sms-" {
 		rid = "sms-" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-	}
-
-	hello, err := signedAs()
-	if err != nil {
-		return "", fmt.Errorf("thrum.hello: %w", err)
-	}
-	for k, v := range (thrum.Tone{
-		"chi":          string(thrum.ChiHello),
-		"rid":          "hello-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"roles":        []string{"forager"},
-		"hive":         "twilio-sms",
-		"version":      beeVersion,
-		"protoVersion": thrum.ThrumVersion,
-		"propensity": map[string]any{
-			"statefulness": "stateful",
-			"richness":     "lean",
-			"wire":         "twilio/sms-webhook",
-		},
-		"chis":   []string{"hello", "prompt", "chunk", "finish", "error"},
-		"source": "https://github.com/adiled/hum/tree/main/hives/twilio-sms",
-	}) {
-		hello[k] = v
-	}
-	if err := client.Send(hello); err != nil {
-		return "", fmt.Errorf("thrum.hello: %w", err)
-	}
-
-	if err := client.Send(thrum.Tone{
-		"chi":          string(thrum.ChiPrompt),
-		"rid":          rid,
-		"sid":          sid,
-		"text":         body,
-		"modelId":      cfg.model,
-		"systemPrompt": cfg.system,
-		"ext":          map[string]any{"twilio-sms": map[string]any{"from": from}},
-	}); err != nil {
-		return "", fmt.Errorf("thrum.prompt: %w", err)
 	}
 
 	var (
@@ -146,7 +133,7 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		mu   sync.Mutex
 		done = make(chan struct{}, 1)
 	)
-	client.On(sid, func(tone thrum.Tone) {
+	bee.OnSid(sid, func(tone thrum.Tone) {
 		chi, _ := tone["chi"].(string)
 		switch chi {
 		case "chunk":
@@ -170,19 +157,26 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 		}
 	})
 
+	defer bee.OffSid(sid)
+	if err := bee.Send(thrum.Tone{
+		"chi":          thrum.ChiPrompt,
+		"rid":          rid,
+		"sid":          sid,
+		"text":         body,
+		"modelId":      cfg.model,
+		"systemPrompt": cfg.system,
+		"ext":          map[string]any{"twilio-sms": map[string]any{"from": from}},
+	}); err != nil {
+		return "", fmt.Errorf("thrum.prompt: %w", err)
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, 14*time.Second)
 	defer cancel()
-	runErrCh := make(chan error, 1)
-	go func() { runErrCh <- client.Run(runCtx) }()
-
 	select {
 	case <-done:
 	case <-runCtx.Done():
 		return "", errors.New("twilio inline deadline (~15s) reached before chi:finish")
 	}
-
-	cancel()
-	<-runErrCh
 
 	mu.Lock()
 	reply := strings.TrimSpace(buf.String())
@@ -196,7 +190,7 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 	return reply, nil
 }
 
-func handleSms(cfg config) http.HandlerFunc {
+func handleSms(cfg config, bee *smsBee) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -230,7 +224,7 @@ func handleSms(cfg config) http.HandlerFunc {
 			return
 		}
 
-		reply, err := runPrompt(r.Context(), cfg, from, body, messageSid)
+		reply, err := runPrompt(r.Context(), bee, cfg, from, body, messageSid)
 		if err != nil {
 			log.Printf("twilio-sms: runPrompt error from=%s err=%v", from, err)
 			reply = "(internal error)"
@@ -286,61 +280,20 @@ func pctDecode(s string) (string, error) {
 	return string(out), nil
 }
 
-func humBin() string {
-	if p, err := exec.LookPath("hum"); err == nil {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "bin", "hum")
-}
-
-func signedAs() (thrum.Tone, error) {
-	out, err := exec.Command(humBin(), "bee", "enter", "--hive", "twilio-sms", "--as", "main").Output()
-	if err != nil {
-		return nil, fmt.Errorf("hum bee enter: %w", err)
-	}
-	id := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(id, "bee_") || len(id) != 68 || strings.ContainsAny(id, "/\\.") {
-		return nil, fmt.Errorf("hum bee enter answered %q, not a bee id", id)
-	}
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		base = filepath.Join(home, ".local", "state")
-	}
-	seed, err := os.ReadFile(filepath.Join(base, "hum", "bees", id+".key"))
-	if err != nil {
-		return nil, err
-	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("bee key for %s is %d bytes, expected %d", id, len(seed), ed25519.SeedSize)
-	}
-	priv := ed25519.NewKeyFromSeed(seed)
-	pub := priv.Public().(ed25519.PublicKey)
-	sum := sha256.Sum256(pub)
-	hid := "bee_" + hex.EncodeToString(sum[:])
-	if hid != id {
-		return nil, fmt.Errorf("the key filed as %s is not that bee's key", id)
-	}
-	signedAt := time.Now().UnixMilli()
-	sig := ed25519.Sign(priv, []byte("hum-bee-socket-v1:"+hid+":"+strconv.FormatInt(signedAt, 10)))
-	return thrum.Tone{
-		"hid":       hid,
-		"from":      hid,
-		"pubkey":    hex.EncodeToString(pub),
-		"signedAt":  signedAt,
-		"signature": hex.EncodeToString(sig),
-	}, nil
-}
-
 func main() {
 	cfg := loadConfig()
+	bee := newSmsBee()
+	if err := bee.Start(context.Background()); err != nil {
+		log.Fatalf("twilio-sms: %v", err)
+	}
+	go func() {
+		if err := bee.Wait(); err != nil {
+			log.Fatalf("twilio-sms: the bee ended: %v", err)
+		}
+	}()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/sms", handleSms(cfg))
-	mux.HandleFunc("/webhook", handleSms(cfg))
+	mux.HandleFunc("/sms", handleSms(cfg, bee))
+	mux.HandleFunc("/webhook", handleSms(cfg, bee))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

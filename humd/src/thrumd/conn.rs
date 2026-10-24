@@ -12,7 +12,9 @@
 //! it understands which sid this client is responsible for.
 //!
 //! Errors and panics inside the sink are the sink's problem. This loop
-//! keeps reading either way.
+//! keeps reading either way, until the client is closed: a refused
+//! hello closes it, and then the reader stops, the refusal already
+//! queued is written, and the socket closes.
 //!
 //! The `Thrum` accessors at the bottom live here rather than in
 //! `lib.rs` to keep that surface clean.
@@ -74,7 +76,14 @@ async fn read_loop(
 ) {
     let mut lines = BufReader::new(read_half).lines();
     loop {
-        let line = match lines.next_line().await {
+        let next = tokio::select! {
+            next = lines.next_line() => next,
+            _ = reach.closed() => {
+                trace!(client_id = %short(client_id), "thrum.closed-by-humd");
+                break;
+            }
+        };
+        let line = match next {
             Ok(Some(l)) => l,
             Ok(None) => break,
             Err(e) => {

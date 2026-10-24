@@ -53,6 +53,8 @@ pub struct HelloBody {
     pub headroom: Option<Headroom>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bind: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +78,7 @@ pub struct PromptBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<Value>>,
+    pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +89,11 @@ pub struct PromptBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "disallowedTools")]
     pub disallowed_tools: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowedTools")]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

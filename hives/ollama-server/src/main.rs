@@ -24,9 +24,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use thrum_core::{Chi, THRUM_VERSION};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use hum_thrum::{Bee, Event, Options};
+use thrum_core::Chi;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -58,7 +57,6 @@ fn read_file_config() -> FileConfig {
 
 #[derive(Debug, Clone)]
 struct Config {
-    sock_path: String,
     listen: String,
     models: Vec<String>,
     bind: Option<SocketAddr>,
@@ -90,7 +88,6 @@ impl Config {
             }),
         };
         Self {
-            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
             listen: format!("{host}:{port}"),
             models,
             bind: None,
@@ -193,19 +190,9 @@ async fn open_prompt(
     system: Option<&str>,
     tools: Option<&[Value]>,
 ) -> Result<(mpsc::Receiver<Value>, tokio::task::JoinHandle<()>)> {
-    let sock = UnixStream::connect(&cfg.sock_path)
-        .await
-        .with_context(|| format!("connect {}", cfg.sock_path))?;
-    let (rd, mut wr) = sock.into_split();
-
     let mut hello = serde_json::Map::new();
-    hello.insert("chi".into(), json!(Chi::Hello));
-    hello.insert("rid".into(), Value::String(hum_identity::HumId::mint().to_string()));
-    hello.insert("from".into(), Value::String(HIVE_NAME.into()));
-    hello.insert("hive".into(), Value::String(HIVE_NAME.into()));
     hello.insert("roles".into(), json!(["forager"]));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
-    hello.insert("protoVersion".into(), Value::String(THRUM_VERSION.into()));
     hello.insert(
         "propensity".into(),
         json!({ "statefulness": "convention-stateful", "richness": "medium", "wire": "ollama/api" }),
@@ -228,9 +215,9 @@ async fn open_prompt(
             }),
         );
     }
-    let mut hello = Value::Object(hello);
-    hum_identity::enter_as(HIVE_NAME, "main")?.sign_hello(&mut hello);
-    write_line(&mut wr, &hello).await?;
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(Value::Object(hello)))
+        .await
+        .context("link the ollama-server bee")?;
 
     let mut prompt = serde_json::Map::new();
     prompt.insert("chi".into(), json!(Chi::Prompt));
@@ -244,36 +231,29 @@ async fn open_prompt(
     if let Some(t) = tools {
         prompt.insert("tools".into(), Value::Array(t.to_vec()));
     }
-    write_line(&mut wr, &Value::Object(prompt)).await?;
+    bee.send(Value::Object(prompt));
 
     let (tx, rx) = mpsc::channel::<Value>(128);
     let sid_owned = sid.to_string();
     let pump = tokio::spawn(async move {
-        let mut lines = BufReader::new(rd).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.is_empty() {
-                continue;
-            }
-            let tone: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
+        while let Some(event) = bee.next().await {
+            let tone = match event {
+                Event::Tone(tone) => tone,
+                Event::Lost => json!({"chi": "error", "sid": sid_owned, "message": "humd went away mid-turn"}),
+                Event::Refused(why) => json!({"chi": "error", "sid": sid_owned, "message": why}),
+                Event::Nestled | Event::Advisory(_) => continue,
             };
             if tone.get("sid").and_then(Value::as_str) != Some(sid_owned.as_str()) {
                 continue;
             }
-            if tx.send(tone).await.is_err() {
+            let ends = tone.get("chi").and_then(Value::as_str) == Some("error");
+            if tx.send(tone).await.is_err() || ends {
                 break;
             }
         }
+        bee.close();
     });
     Ok((rx, pump))
-}
-
-async fn write_line(wr: &mut tokio::net::unix::OwnedWriteHalf, tone: &Value) -> Result<()> {
-    let mut buf = serde_json::to_string(tone)?;
-    buf.push('\n');
-    wr.write_all(buf.as_bytes()).await?;
-    Ok(())
 }
 
 async fn chat(

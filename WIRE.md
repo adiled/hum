@@ -7,11 +7,12 @@ description: "the language-neutral protocol bees speak to humd. Implementable in
 
 > _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
-This is the **canonical wire spec**. Rust (`thrum-core`), TypeScript
-(`thrum-clients/ts`), Python (`thrum-clients/python`), Go
-(`thrum-clients/go`) and C (`thrum-clients/c`) are reference clients — they all conform to the
-rules below. If a client disagrees with this document, the document
-wins.
+This is the **canonical wire spec**. hum speaks it through one client,
+`hum-thrum`, in Rust: a Rust bee holds it in-process, and a bee in TS,
+Python, Go or C reaches it through `hum bee link` with the client
+codegen emits for its language (`thrum-clients/`). A language hum does
+not generate a client for can speak [the link](#the-link) or the wire
+itself. If a client disagrees with this document, the document wins.
 
 ## Transport
 
@@ -19,10 +20,10 @@ wins.
   separated by `\n` (`0x0A`). No CRLF, no trailing whitespace,
   no leading BOM. Lines that don't parse as JSON are dropped silently
   by humd; clients should do the same.
-- **Socket**: Unix stream socket at one of (in priority order)
-  - `$HUM_THRUM_SOCK` (explicit override)
+- **Socket**: Unix stream socket at the first of
+  - `$HUM_THRUM_SOCK` (explicit override), then `$HUM_SOCKET`
+  - the `socket` named in `$XDG_STATE_HOME/hum/runtime.json`
   - `$XDG_STATE_HOME/hum/thrum.sock`
-  - `/run/user/<uid>/hum/thrum.sock`
 - **Encoding**: UTF-8. Keys are case-sensitive, camelCase by
   convention (the wire uses `protoVersion`, `sentAt`, etc.). The
   `chi` discriminator and all chi values are **kebab-case**
@@ -42,7 +43,7 @@ Every tone is a JSON object with these top-level fields:
 | key | type | required | meaning |
 |---|---|---|---|
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
-| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. **Not a dedup key** — see [Identity](#identity). |
+| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; hum's client mints a HumId (52 Crockford base32 characters) when a bee sends none. **Not a dedup key** — see [Identity](#identity). |
 | `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
 | `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
@@ -281,6 +282,27 @@ See [`ensemble/README.md`](../ensemble/README.md).
 | `cell-died` | process exited |
 | `cell-evicted` | killed to make room |
 
+### Advisories
+
+humd refuses what it must (an unsigned hello, a bee its hive did not
+enter, a revoked key, an incompatible protocol) and advises on the rest.
+An advisory reaches the bee as a `log` tone whose `fields.advisory` is
+one of these codes, and hum's client raises some itself before a tone
+leaves the bee. humd keeps them per bee in `advisories.json` in the state
+root, and `hum doctor` lists them.
+
+| code | raised by | meaning |
+|---|---|---|
+| `undeclared-key` | client, humd | a tone carries keys the thrum does not declare for its chi |
+| `unknown-chi` | client | a tone's chi is not in the thrum |
+| `not-a-tone` | client | a line from the bee is not a JSON object with a chi, and was dropped |
+| `client-owned` | client | the bee set a hello field the client owns, and it was ignored |
+| `tone-refused` | client | humd refused a tone under a rid the client gave it |
+| `dropped-while-away` | client | tones sent while humd was away were dropped |
+| `proto-drift` | humd | the bee speaks another minor version of the thrum |
+| `reconnect-storm` | humd | the bee said hello 10 times within 10 minutes |
+| `did-not-return` | humd | the bee was nestled when humd stopped and had not come back 2 minutes after humd started |
+
 **Send deadline.** Every inter-humd send is bounded at 5s
 (`ensemble::SEND_TIMEOUT`). A peer that stops reading fills its socket
 buffer rather than closing, so the write stalls indefinitely while the
@@ -294,8 +316,8 @@ one.
 
 ## Helpers
 
-The reference clients ship three deterministic helpers. Algorithms
-are pinned by the protocol — any client implementation MUST match
+Three deterministic helpers are pinned by the protocol. `thrum-core`
+holds them, and anything else that computes them MUST match
 byte-for-byte.
 
 ### `sigil(sid)`
@@ -311,12 +333,12 @@ asker chose.
 ### `rid()`
 
 ```
-rid = base36(now_ms) + "-" + base36(counter++)
+rid = crockford_base32(now_ms[48 bits] ++ random[208 bits])   // 52 chars, a HumId
 ```
 
-Monotonic correlation id. Counter is per-process and starts at 0.
-Format-agnostic on receive — only the originator's correlation logic
-cares about the exact format.
+Correlation id, ordered by when it was minted. Format-agnostic on
+receive: only the originator's correlation logic cares about the exact
+format.
 
 ### Identity
 
@@ -327,7 +349,7 @@ are load-bearing:
   is the ack *for* an `rid`, so a receiver that deduped on `rid` would
   drop every response as a duplicate of its request.
 - `rid` is explicitly format-agnostic and per-originator, so two humds
-  can mint the same value. Reference clients mint per-session values
+  can mint the same value. Some bees mint per-session values
   (`p-<sid>`, `prompt-<sid>`) that recur across restarts.
 - A sender that means to publish the same content twice is not
   transmitting a duplicate. Repeats are ordinary for the tones gossip
@@ -419,32 +441,66 @@ turn. Timeouts: if no `tool-result` arrives within the nestler-side
 timeout, send `chi:"tool-result"` with `result.error = "timeout"` so
 the model unblocks.
 
-## Implementing a client — checklist
+## The client
 
-A clean port to a new language takes ~80 LoC. The minimum:
+A bee does not implement this wire; it uses hum's client. In Rust that
+is `hum_thrum::Bee::link`. In TS, Python, Go and C it is the client in
+`thrum-clients/<lang>`, generated from the Rust, which runs
+`hum bee link --hive <hive> --as <label>` and talks to it over two
+pipes. Either way the same Rust decides everything below, so every
+language behaves the same, and `cargo test -p hum --test conform` holds
+each of them to it against a real humd.
 
-1. Resolve the socket path: `HUM_THRUM_SOCK`, then `HUM_SOCKET`, then the
-   `socket` named in `$XDG_STATE_HOME/hum/runtime.json`, then
-   `$XDG_STATE_HOME/hum/thrum.sock`.
-2. `connect()` over a Unix stream socket. Buffer incoming bytes,
-   split on `\n`, JSON-parse each line, drop on parse error.
-3. Send `chi:"hello"` immediately after connect. Buffer subsequent
-   writes until connect resolves.
-4. Multiplex by `sid`: keep a `Map<sid, handler>` plus one catch-all
-   handler for tones without a sid (breath, echo, pulse).
-5. Serialize outbound tones with newline termination (`json.dumps(t) + "\n"`).
-6. On close: drop any pending writes, surface the disconnect to handlers.
-7. Outlive humd. humd restarts (an upgrade, a crash, a reboot), so when
-   the socket closes, reconnect with backoff (250 ms, doubling to 30 s)
-   and send a freshly signed hello. A refused hello is final. A bee that
-   does not reconnect must exit non-zero, so whatever supervises it
-   starts it again; exiting 0 reads as done.
+### The link
 
-Reference: [`thrum-core`](../thrum-core),
-[`thrum-clients/ts`](../thrum-clients/ts),
-[`thrum-clients/python`](../thrum-clients/python),
-[`thrum-clients/go`](../thrum-clients/go),
-[`thrum-clients/c`](../thrum-clients/c).
+One JSON object per line, each way. A line with a `chi` is a tone and
+passes through unchanged; a line without one is the link's own.
+
+| direction | line | meaning |
+|---|---|---|
+| link to bee | `{"link":"ready","linkVersion":1,"thrum":..,"bee":..,"hive":..,"as":..}` | first: the bee is entered; a client of another `linkVersion` stops here |
+| bee to link | `{"hello":{..}}` | first: the bee's own hello fields; the link connects once it has them |
+| link to bee | `{"link":"nestled"}` | humd admitted the bee, at start and after every reconnect |
+| link to bee | `{"link":"lost"}` | humd went away; the link is dialing again |
+| link to bee | `{"link":"advisory","code":..,"message":..,"from":..,"fields":{..}}` | something to fix ([Advisories](#advisories)) |
+| bee to link | `{"hello":{..}}` | later: a change to the hello; a null drops a field |
+| link to bee | `{"link":"refused","error":..}` | last: humd refused the bee, or its hive is not installed |
+
+The link owns the hello's `chi`, `rid`, `hive`, `protoVersion`, `hid`,
+`from`, `pubkey`, `signedAt` and `signature`, gives a tone without a
+`rid` one, and swallows humd's acknowledgements of the rids it minted.
+It exits 0 when the bee closes its stdin, 3 when the bee is refused, 2
+on a first line that is not a hello, and 1 otherwise. It ignores
+interrupts and terminations: its life is the pipe's.
+
+### Speaking the wire yourself
+
+A bee in a language hum does not generate a client for can speak the
+link, or the wire itself. The wire, as hum's client speaks it:
+
+1. Resolve the socket as [Transport](#transport) says, afresh on every
+   dial.
+2. Connect. humd breathes once (`sessions: []`) before it has heard
+   anything; that breath admits nothing.
+3. Send the hello, signed as a key the bee's hive entered, under a fresh
+   `rid`. humd acknowledges it (`echo`, `ok: true`), then gives its
+   verdict: a breath (`sessions: {}`) admits the bee, an `echo` with
+   `ok: false` under the hello's `rid` refuses it. A refusal is final,
+   even one that comes after admission. A change to the hello is a
+   fresh signed hello on the same connection: at once while nestled,
+   and the moment the bee is admitted when the change came while the
+   verdict was pending.
+4. Split incoming bytes on `\n`, parse each line, drop what does not
+   parse. Dispatch by `sid`, then by `chi`.
+5. Send tones one per line. Give every tone a `rid`. Check it against
+   the views first: humd advises on what it does not declare.
+6. Outlive humd. When the socket closes, reconnect with backoff (250 ms,
+   doubling to 30 s, with jitter) and send a freshly signed hello,
+   carrying the latest `headroom`, including any the bee claimed while
+   humd was away. Drop the rest of what the bee sends while humd is
+   away. A bee that will not reconnect must exit non-zero, so its
+   supervisor starts it again; humd advises `did-not-return` on a bee
+   that does neither.
 
 ## Version history
 
@@ -460,10 +516,9 @@ Reference: [`thrum-core`](../thrum-core),
 
 ## See also
 
-- [`thrum-core`](../thrum-core) — Rust source of truth (chi enum, helpers).
-- [`thrum-clients/ts`](../thrum-clients/ts) — TypeScript reference client.
-- [`thrum-clients/python`](../thrum-clients/python), [`thrum-clients/go`](../thrum-clients/go) — Python + Go reference clients.
-- [`thrum-clients/c`](../thrum-clients/c): the C reference client, over libsodium and cJSON.
+- [`thrum-core`](../thrum-core): the Rust source of truth (chi enum, views, helpers).
+- [`hum-thrum`](../hum-thrum): the client, sans-IO at its core, and the link.
+- [`thrum-clients`](../thrum-clients): the generated client for TS, Python, Go and C.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
 - [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

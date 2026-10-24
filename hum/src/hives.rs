@@ -171,6 +171,7 @@ fn run_install_unit(hive: &str, dir: &Path, unit: &the_orch::types::Service) -> 
         .current_dir(&workdir)
         .envs(&unit.env)
         .env("HUM_HIVE", hive)
+        .env("HUM_HIVE_STATE", hum_paths::hive_state_dir(hive))
         .env("HUM_SRC", dir)
         .env("PATH", hum_on_path())
         .status()
@@ -182,10 +183,14 @@ fn run_install_unit(hive: &str, dir: &Path, unit: &the_orch::types::Service) -> 
 }
 
 pub fn with_source(body: &str, hive: &str, dir: &Path) -> String {
-    let mut out = format!("ARG HUM_SRC={}\nARG HUM_HIVE={hive}\n", dir.display());
+    let mut out = format!(
+        "ARG HUM_SRC={}\nARG HUM_HIVE={hive}\nARG HUM_HIVE_STATE={}\n",
+        dir.display(),
+        hum_paths::hive_state_dir(hive).display()
+    );
     for line in body.lines() {
         let t = line.trim_start();
-        if t.starts_with("ARG HUM_SRC=") || t.starts_with("ARG HUM_HIVE=") {
+        if t.starts_with("ARG HUM_SRC=") || t.starts_with("ARG HUM_HIVE=") || t.starts_with("ARG HUM_HIVE_STATE=") {
             continue;
         }
         out.push_str(line);
@@ -199,11 +204,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_source_and_hive_args_are_set_once_and_first() {
+    fn the_source_hive_and_state_args_are_set_once_and_first() {
         let body = "ARG HUM_SRC=/stale\nSERVICE a\nRUN ${HUM_SRC}/a\n";
         let out = with_source(body, "a", Path::new("/somewhere/else"));
         assert!(out.starts_with("ARG HUM_SRC=/somewhere/else\nARG HUM_HIVE=a\n"));
         assert_eq!(out.matches("ARG HUM_SRC=").count(), 1);
+        let state = format!("ARG HUM_HIVE_STATE={}\n", hum_paths::hive_state_dir("a").display());
+        assert!(out.contains(&state), "the hive's state is stamped: {out}");
+        let again = with_source(&out, "a", Path::new("/somewhere/else"));
+        assert_eq!(again.matches("ARG HUM_HIVE_STATE=").count(), 1);
     }
 
     #[test]

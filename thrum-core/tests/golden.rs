@@ -66,6 +66,7 @@ fn golden() -> Vec<Value> {
             propensity: None,
             headroom: None,
             source: Some("cli".into()),
+            bind: None,
         }
     );
     push!(
@@ -80,6 +81,8 @@ fn golden() -> Vec<Value> {
             forager_tools: Some(vec![serde_json::json!({ "name": "Brave" })]),
             provided: Some(vec!["env".into()]),
             disallowed_tools: Some(vec![]),
+            allowed_tools: None,
+            resume: None,
         }
     );
     push!(

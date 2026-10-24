@@ -7,9 +7,9 @@ description: "hum by text message — Twilio SMS webhook bee"
 
 > _hum by text message — Twilio SMS webhook bee_
 
-Built in Go with the stdlib `net/http`. Imports the
-[`thrum-clients/go/thrum`](../../thrum-clients/go) reference client. The
-canonical Go bee in this repo.
+Built in Go with the stdlib `net/http`, on the Go
+[thrum client](../../thrum-clients/go). The canonical Go bee in this
+repo.
 
 A bee that turns a Twilio phone number into a hum agent. Send an
 SMS to your Twilio number → Twilio POSTs to this bee → the

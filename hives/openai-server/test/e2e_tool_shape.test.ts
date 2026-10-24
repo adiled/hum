@@ -46,6 +46,7 @@ async function startFakeHumd(): Promise<FakeHumd> {
     active = sock;
     let buf = "";
     let bee = "";
+    sock.write(JSON.stringify({ chi: "breath", sessions: [] }) + "\n");
     sock.on("data", (chunk) => {
       buf += chunk.toString();
       let nl: number;
@@ -58,6 +59,8 @@ async function startFakeHumd(): Promise<FakeHumd> {
           if (tone.chi === "hello") {
             hellos.push(tone);
             bee = String(tone.hid ?? "");
+            sock.write(JSON.stringify({ chi: "echo", rid: tone.rid, ok: true }) + "\n");
+            sock.write(JSON.stringify({ chi: "breath", sessions: {} }) + "\n");
             helloResolve(tone);
             continue;
           }

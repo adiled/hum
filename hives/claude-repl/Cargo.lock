@@ -267,11 +267,11 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "regex",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -755,8 +755,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hum-identity"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -764,6 +763,7 @@ dependencies = [
  "hum-paths",
  "rand",
  "serde",
+ "serde_json",
  "sha2",
  "tracing",
  "uuid",
@@ -771,8 +771,7 @@ dependencies = [
 
 [[package]]
 name = "hum-mcp"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -787,8 +786,7 @@ dependencies = [
 
 [[package]]
 name = "hum-nest"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -813,8 +811,7 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "jsonschema",
  "serde",
@@ -824,13 +821,13 @@ dependencies = [
 
 [[package]]
 name = "hum-thrum"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "hum-identity",
  "hum-paths",
  "rand",
+ "serde",
  "serde_json",
  "thrum-core",
  "tokio",
@@ -2128,8 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.32.0"
-source = "git+https://github.com/adiled/hum.git?branch=main#6177403f1d9aebfcf0320d995b88b227f0f36990"
+version = "0.33.1"
 dependencies = [
  "codegen",
  "hex",

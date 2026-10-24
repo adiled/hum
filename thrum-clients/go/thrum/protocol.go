@@ -25,6 +25,7 @@ type HelloBody struct {
 	Propensity json.RawMessage `json:"propensity,omitempty"`
 	Headroom *Headroom `json:"headroom,omitempty"`
 	Source *string `json:"source,omitempty"`
+	Bind json.RawMessage `json:"bind,omitempty"`
 }
 
 type Headroom struct {
@@ -37,11 +38,13 @@ type PromptBody struct {
 	Cwd *string `json:"cwd,omitempty"`
 	SystemPrompt *string `json:"systemPrompt,omitempty"`
 	Text *string `json:"text,omitempty"`
-	Content []json.RawMessage `json:"content,omitempty"`
+	Content *string `json:"content,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
 	ForagerTools []json.RawMessage `json:"foragerTools,omitempty"`
 	Provided []string `json:"provided,omitempty"`
 	DisallowedTools []string `json:"disallowedTools,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty"`
+	Resume *string `json:"resume,omitempty"`
 }
 
 type BreathBody struct {
