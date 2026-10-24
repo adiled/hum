@@ -1,11 +1,11 @@
 ---
 title: "codegen"
-description: "Source-tree generator that emits consumer SDKs (TypeScript, Python, Go) from the Rust chi registry. No drift possible: every cargo build refreshes the clients."
+description: "Source-tree generator that emits consumer SDKs (TypeScript, Python, Go, C) from the Rust chi registry. No drift possible: every cargo build refreshes the clients."
 ---
 
 # codegen
 
-> _the Rust chi registry is canonical; this crate emits its TypeScript, Python, and Go reflections so consumers in those languages cannot drift._
+> _the Rust chi registry is canonical; this crate emits its TypeScript, Python, Go and C reflections so consumers in those languages cannot drift._
 
 `thrum-core/src/chi.rs` is the only place a chi value is defined. The wire spec
 ([WIRE.md](../WIRE.md)) is the contract everybody else conforms to, and the chi
@@ -99,11 +99,16 @@ cargo build -p thrum-core
    │
    ├─ build.rs sees chi.rs changed
    ├─ calls codegen::parse(&paths::chi_rs(), &paths::lib_rs())
-   └─ calls codegen::emit_{ts,py,go} + emit_{ts,py,go}_helpers
-      writing into thrum-clients/{ts,python,go}/
+   └─ calls codegen::emit_{ts,py,go,c} + emit_{ts,py,go}_helpers
+      writing into thrum-clients/{ts,python,go,c}/
 ```
 
-The TypeScript, Python, and Go files are checked in (not gitignored). That
+The C target emits only what is read from the Rust source: the registry
+(`thrum/chi.h`) and the views (`thrum/protocol.h`). Its helpers are calls
+into libsodium and cJSON and live with the client, so codegen carries no C
+logic.
+
+The TypeScript, Python, Go and C files are checked in (not gitignored). That
 keeps consumers of those clients buildable without a Rust toolchain. CI
 drift-checks them with `cargo run -p codegen -- --check` so a missed regen
 fails the build instead of silently rotting.
@@ -131,7 +136,7 @@ To add a new client language:
 
 1. Add the path constants to `paths.rs`: `pub const FOO_CHI_REL: &str = "thrum-clients/foo/...";` plus the `foo_chi()` / `foo_helpers()` functions.
 2. Add `emit_foo(spec, out)` and `emit_foo_helpers(out)` to `lib.rs`.
-3. Add a match arm in `main.rs`'s `run_target` for the new target name.
+3. Add a match arm in `main.rs`'s `outputs` naming the files the target owns.
 4. Add the two `emit_*` calls to the loop in `thrum-core/build.rs`.
 
 After that, `cargo run -p codegen` writes the new artifacts and `--check`
@@ -153,5 +158,6 @@ gates drift on them.
   `THRUM_VERSION`.
 - [`thrum-clients/ts`](../thrum-clients/ts),
   [`thrum-clients/python`](../thrum-clients/python),
-  [`thrum-clients/go`](../thrum-clients/go): the generated reflections.
+  [`thrum-clients/go`](../thrum-clients/go),
+  [`thrum-clients/c`](../thrum-clients/c): the generated reflections.
 - [WIRE.md](../WIRE.md): the language-neutral wire spec the clients implement.
