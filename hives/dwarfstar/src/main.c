@@ -19,9 +19,11 @@
  * takes them in order and tends the GPU between them, while the main
  * thread reads the socket. A cancel stops its sid's turn, waiting or in
  * flight, and drops its sid's queued turns. The bee is stateless: every
- * prompt carries what it needs, and the engine's session reuses whatever
- * of it the KV cache already holds. A chunk always carries whole UTF-8
- * characters, even when a token ends inside one.
+ * prompt carries what it needs, as a content string (the way hum-nest
+ * reads it and openai-server sends it), else text, else content petals,
+ * and the engine's session reuses whatever of it the KV cache already
+ * holds. A chunk always carries whole UTF-8 characters, even when a token
+ * ends inside one.
  *
  * Environment:
  *   DWARFSTAR_MODEL        pin to this GGUF, absolute or under DWARFSTAR_DIR
@@ -399,6 +401,9 @@ static int read_messages(const cJSON *tone, struct turn *t) {
     char *joined = NULL;
     size_t joined_len = 0;
 
+    if (cJSON_IsString(content) && content->valuestring[0]) {
+        return add_message(t, NULL, content->valuestring);
+    }
     if (text && text[0]) return add_message(t, NULL, text);
     if (!cJSON_IsArray(content)) return -1;
 
