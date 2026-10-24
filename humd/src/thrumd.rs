@@ -120,8 +120,8 @@ impl Thrum {
         }
     }
 
-    pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
-        let sigil = thrum_core::sigil(sid, nest);
+    pub fn thrum_broadcast(&self, sid: &str, mut tone: Tone) {
+        let sigil = thrum_core::sigil(sid);
         if let Some(obj) = tone.as_object_mut() {
             obj.entry("sid").or_insert(json!(sid));
             obj.entry("sigil").or_insert(json!(sigil));

@@ -39,6 +39,8 @@ pub struct BeeManifest {
     pub tools: Vec<ToolEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headroom: Option<crate::headroom::CellHeadroom>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +90,7 @@ impl BeeManifest {
             provides: Vec::new(),
             hid: None,
             hid_verified: false,
+            headroom: None,
         }
     }
 
@@ -121,6 +124,14 @@ impl BeeManifest {
 
     pub fn plays(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.headroom.as_ref().is_some_and(|h| h.pressure.is_refusing())
+    }
+
+    pub fn free_slots(&self) -> u32 {
+        self.headroom.as_ref().map_or(u32::MAX, |h| h.free_slots)
     }
 
     pub fn with_source(mut self, source: impl Into<String>) -> Self {

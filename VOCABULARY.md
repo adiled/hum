@@ -21,15 +21,22 @@ like the thing — readers and writers share the same mental model.
 
 ## Daemon
 
-- **humd** — the daemon process. One per machine install.
-- **HumdId** — sha256 of the humd's Ed25519 public key.
-- **hum** — one conversation. Has a hum_id, lives on a humd.
-- **nest** — the *place* inside humd where bees gather and cells live.
-  Not a process. Not a model. The meeting space. One humd, one nest.
-- **cell** — one live LLM subprocess living in the nest. The compute itself —
-  what turns a `chi:"prompt"` into `chi:"chunk"` + `chi:"finish"`. Fungible:
-  spawn, kill, respawn.
-- **brood** — the state machine that walks a cell from cold to ready (PTY-only).
+- **humd**: the daemon process. One per machine install. A coordination
+  node: it admits bees, routes between them and gossips with its peers.
+  It hosts no cells.
+- **HumdId**: sha256 of the humd's Ed25519 public key.
+- **hum**: one conversation. Has a hum_id, lives on a humd.
+- **nest**: the cells a hive hosts and the limits it keeps them under. A
+  hive turns it on by using hum-nest, and the limits (`maxCells`,
+  `idleMs`, cell `bounds`) are its own, in the `nest` section of its
+  `hives/<hive>.json`. A humd hosts no nest.
+- **cell**: one live LLM subprocess in a hive's nest. The compute itself,
+  what turns a `chi:"prompt"` into `chi:"chunk"` + `chi:"finish"`.
+  Fungible: spawn, kill, respawn.
+- **headroom**: how many more cells a worker can take, which it claims on
+  its hello and on each cell pulse. humd sends a prompt to a worker with
+  room, here or on a peer.
+- **brood**: the state machine that walks a cell from cold to ready (PTY-only).
 
 ## Conversation
 

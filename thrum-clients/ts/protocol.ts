@@ -22,7 +22,13 @@ export interface HelloBody {
   provides?: string[];
   chis?: string[];
   propensity?: unknown;
+  headroom?: Headroom;
   source?: string;
+}
+
+export interface Headroom {
+  freeSlots: number;
+  totalSlots: number;
 }
 
 export interface PromptBody {
@@ -101,6 +107,7 @@ export interface ToolMetaBody {
 export interface PulseBody {
   kind: string;
   pid?: number;
+  headroom?: Headroom;
 }
 
 export interface PermissionAskBody {

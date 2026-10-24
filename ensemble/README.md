@@ -23,7 +23,7 @@ It sits in a tight three-layer stack:
 nestlers                 ← humans, agents, plugins, HTTP frontends
   │   thrum tones (JSON over NDJSON)
   ▼
-humd                     ← per-machine daemon: hums, nests, MCP, drone
+humd                     ← per-machine daemon: admission, routing, MCP, drone
   │   ensemble routing (this crate)
   ▼
 peer transport           ← InMemory · TCP · TLS · Iroh (QUIC + Noise)
@@ -101,7 +101,6 @@ async fn main() {
 
     let caps = PeerCapabilities {
         proto_version: "0.8.0".into(),
-        nests: vec!["market-maker".into()],
         ..Default::default()
     };
 

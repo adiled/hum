@@ -143,9 +143,13 @@ The bumping rules humd applies:
 
 ## The nest model
 
-A **nest** is the place inside humd where nestlers nestle and **cells**
-(live LLM subprocesses) live. The wire never sees the nest as a thing
-of its own — it only sees the chi traffic that flows through it.
+humd hosts no cells. A **nest** is the cells a hive hosts (live LLM
+subprocesses) and the limits it keeps them under, turned on with
+hum-nest. The wire never sees a nest as a thing of its own; it sees the
+chi traffic that flows through it, and the `headroom` a worker claims on
+its hello and on each `chi:"pulse"` about its cells (`freeSlots`,
+`totalSlots`). humd sends a prompt to a worker with room, local first,
+then on a peer, and to a full one only when no other can serve.
 
 Direction is sacred. Two ends of the same connection, two roles:
 
@@ -212,7 +216,7 @@ with no description here has none in the clients either.
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
+| `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
 | `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn | start a turn — content, system, tools |
 | `cancel` | `sid` | interrupt the current turn for this sid | interrupt mid-turn |
 | `cleanup` | `sid` | drop daemon state for this session | session deleted, drop daemon state |
@@ -231,7 +235,7 @@ with no description here has none in the clients either.
 | `finish` | `finishReason`, `usage`, optional `exitCode`, `subtype` | turn complete | turn complete — finishReason + usage |
 | `error` | `message`, `code`, optional `subtype`, `usage` | turn aborted / hard error | turn aborted |
 | `session-ready` | `nestId`, `model`, `tools` | nest spawned, ready for prompts | nest spawned, claude session id known |
-| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), `pid` | process lifecycle event | process lifecycle event |
+| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), optional `pid`/`headroom` | cell lifecycle event, with the worker's headroom after it | cell lifecycle event and headroom |
 | `permission-ask` | `callId`, `toolName`, `message`, `arg` | mid-stream permission needed | mid-stream permission needed |
 | `tendril-reach` | `task`, `tools` | task subagent dispatch | task subagent dispatch |
 | `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch | nestler-declared tool dispatch |
@@ -294,16 +298,15 @@ The reference clients ship three deterministic helpers. Algorithms
 are pinned by the protocol — any client implementation MUST match
 byte-for-byte.
 
-### `sigil(sid, nest)`
+### `sigil(sid)`
 
 ```
-sigil = lowercase_hex(sha256(nest + ":" + sid)[..6])      // 12 chars
+sigil = lowercase_hex(sha256("sigil:" + sid)[..6])      // 12 chars
 ```
 
-Stable identifier for a `(nest, session)` pair. Used by humd's
-WaneTracker keys and by drift detection. `nest` is the nest-kind
-namespace ("claude-cli", "claude-repl", future kinds); `sid` is the
-session id the nestler chose. No fallback — `nest` is required.
+Stable identifier for a session, the same on every humd. Used by humd's
+WaneTracker keys and by drift detection; `sid` is the session id the
+asker chose.
 
 ### `rid()`
 
@@ -439,7 +442,7 @@ Reference: [`thrum-core`](../thrum-core),
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_` |
+| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |

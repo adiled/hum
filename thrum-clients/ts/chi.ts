@@ -37,7 +37,7 @@ export const Chi = {
   error: "error",
   /** nest spawned, claude session id known */
   sessionReady: "session-ready",
-  /** process lifecycle event */
+  /** cell lifecycle event and headroom */
   pulse: "pulse",
   /** mid-stream permission needed */
   permissionAsk: "permission-ask",

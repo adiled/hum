@@ -13,6 +13,9 @@
 //! that hashes to it. Older bees said `bee` for their roles; humd still
 //! reads it.
 //!
+//! A worker that hosts cells says how many it can still take in
+//! `headroom`, on its hello and on each cell pulse; humd routes by it.
+//!
 //! Each `*Body` struct is the body of exactly one chi, named after it.
 //! `DroneLoad` is the nested payload of a `drone` tone rather than a
 //! chi of its own.
@@ -47,7 +50,17 @@ pub struct HelloBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub propensity: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub headroom: Option<Headroom>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Headroom {
+    #[serde(rename = "freeSlots")]
+    pub free_slots: u32,
+    #[serde(rename = "totalSlots")]
+    pub total_slots: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +201,8 @@ pub struct PulseBody {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headroom: Option<Headroom>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

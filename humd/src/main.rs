@@ -64,8 +64,6 @@ async fn main() -> Result<()> {
 
     let cfg = DaemonConfig::from_env();
     info!(
-        max_active_cells = cfg.hum_cfg.nest.max_active_cells,
-        default_hive = %cfg.hum_cfg.nest.default,
         fs_roots = cfg.hum_cfg.fs.roots.len(),
         "config.loaded"
     );

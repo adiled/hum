@@ -703,7 +703,6 @@ fn hive_list() -> Result<()> {
         println!("no hives found (catalogue: {})", hives::catalogue_dir().display());
         return Ok(());
     }
-    let nest_default = hum_paths::config::load().nest.default;
     println!("Hives (catalogue: {}):\n", hives::catalogue_dir().display());
     let entered = hum_identity::entered();
     println!("  {:<18} {:<10} {:<10} {}", "HIVE", "CATALOGUE", "INSTALLED", "BEES ENTERED");
@@ -711,9 +710,8 @@ fn hive_list() -> Result<()> {
         let here = installed.contains(hive);
         let count = entered.iter().filter(|(_, e)| &e.hive == hive && !e.exited).count();
         let raises = if count == 0 { String::new() } else { count.to_string() };
-        let marker = if hive == &nest_default { "  (nest default)" } else { "" };
         println!(
-            "  {:<18} {:<10} {:<10} {}{marker}",
+            "  {:<18} {:<10} {:<10} {}",
             hive,
             if catalogue.contains(hive) { "✓" } else { "—" },
             if here { "✓" } else { "—" },

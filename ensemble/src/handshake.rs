@@ -7,7 +7,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{CAPS_HANDSHAKE_DOMAIN, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, headroom, now_ms};
+use super::{CAPS_HANDSHAKE_DOMAIN, HANDSHAKE_DOMAIN, HANDSHAKE_SKEW_MS, Tone, now_ms};
 
 pub use hum_identity::{Hid, HidParseError, HidPrefix};
 
@@ -40,18 +40,14 @@ fn handshake_message(humd_id: &Hid, signed_at_ms: i64) -> Vec<u8> {
 }
 
 fn caps_message(humd_id: &Hid, caps: &PeerCapabilities, signed_at_ms: i64) -> Vec<u8> {
-    let nests = caps.nests.join(",");
     let hosts = caps.hosts.join(",");
-    let free_slots = caps.free_slots.unwrap_or(0);
     format!(
-        "{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         CAPS_HANDSHAKE_DOMAIN,
         humd_id.to_hex(),
         signed_at_ms,
-        nests,
         hosts,
-        caps.can_relay,
-        free_slots
+        caps.can_relay
     )
     .into_bytes()
 }
@@ -80,15 +76,9 @@ impl HumdAddr {
 pub struct PeerCapabilities {
     pub proto_version: String,
     #[serde(default)]
-    pub nests: Vec<String>,
-    #[serde(default)]
     pub hosts: Vec<String>,
     #[serde(default)]
     pub can_relay: bool,
-    #[serde(default)]
-    pub free_slots: Option<usize>,
-    #[serde(default)]
-    pub headroom: headroom::CellHeadroom,
     #[serde(skip)]
     pub caps_verified: bool,
 }
@@ -132,10 +122,8 @@ pub fn hello_tone_unsigned(me: &Hid, caps: &PeerCapabilities) -> Tone {
         "from": me.to_hex(),
         "humd_id": me.to_hex(),
         "proto_version": caps.proto_version,
-        "nests": caps.nests,
         "hosts": caps.hosts,
         "can_relay": caps.can_relay,
-        "free_slots": caps.free_slots,
     })
 }
 
@@ -152,10 +140,8 @@ pub fn hello_tone(me: &Hid, key: &HumdKey, caps: &PeerCapabilities) -> Tone {
         "humd_id": me.to_hex(),
         "pubkey": hex::encode(key.pubkey_bytes()),
         "proto_version": caps.proto_version,
-        "nests": caps.nests,
         "hosts": caps.hosts,
         "can_relay": caps.can_relay,
-        "free_slots": caps.free_slots,
         "signed_at": signed_at,
         "signature": hex::encode(sig.to_bytes()),
         "capsSignature": hex::encode(caps_sig.to_bytes()),
@@ -243,16 +229,6 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         );
         return None;
     }
-
-    let nests: Vec<String> = tone
-        .get("nests")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
     let hosts: Vec<String> = tone
         .get("hosts")
         .and_then(|v| v.as_array())
@@ -266,24 +242,13 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         .get("can_relay")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let free_slots = tone.get("free_slots").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_u64().map(|n| n as usize)
-        }
-    });
-    let headroom = tone
-        .get("headroom")
-        .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
-        .unwrap_or_default();
     let mut caps_verified = false;
     match tone.get("capsSignature").and_then(|v| v.as_str()) {
         None => {
             tracing::warn!(
                 target: "ensemble",
                 humd_id = %claimed_id.short(),
-                "hello.claims.unsigned — nests/hosts/can_relay/free_slots are self-declared"
+                "hello.claims.unsigned — hosts/can_relay are self-declared"
             );
         }
         Some(caps_hex) => {
@@ -300,11 +265,8 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
             let caps_signature = Signature::from_bytes(&caps_arr);
             let claims = PeerCapabilities {
                 proto_version: proto_version.clone(),
-                nests: nests.clone(),
                 hosts: hosts.clone(),
                 can_relay,
-                free_slots,
-                headroom: headroom.clone(),
                 caps_verified: false,
             };
             let caps_msg = caps_message(&claimed_id, &claims, signed_at);
@@ -324,11 +286,8 @@ pub fn parse_hello_caps(tone: &Tone) -> Option<(Hid, PeerCapabilities)> {
         claimed_id,
         PeerCapabilities {
             proto_version,
-            nests,
             hosts,
             can_relay,
-            free_slots,
-            headroom,
             caps_verified,
         },
     ))
@@ -355,15 +314,6 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
         let Ok(claimed_id) = Hid::from_hex(humd_hex) else {
             return HelloParse::Invalid;
         };
-        let nests: Vec<String> = tone
-            .get("nests")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
         let hosts: Vec<String> = tone
             .get("hosts")
             .and_then(|v| v.as_array())
@@ -377,26 +327,12 @@ pub fn parse_hello(tone: &Tone) -> HelloParse {
             .get("can_relay")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let free_slots = tone.get("free_slots").and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_u64().map(|n| n as usize)
-            }
-        });
-        let headroom = tone
-            .get("headroom")
-            .and_then(|v| serde_json::from_value::<headroom::CellHeadroom>(v.clone()).ok())
-            .unwrap_or_default();
         HelloParse::Unsigned(
             claimed_id,
             PeerCapabilities {
                 proto_version,
-                nests,
                 hosts,
                 can_relay,
-                free_slots,
-                headroom,
                 caps_verified: false,
             },
         )
@@ -502,10 +438,8 @@ mod tests {
     fn caps() -> PeerCapabilities {
         PeerCapabilities {
             proto_version: "0.7.0".into(),
-            nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: false,
-            free_slots: Some(4),
             ..Default::default()
         }
     }
@@ -545,10 +479,8 @@ mod tests {
         let id = other.hid();
         let claims = PeerCapabilities {
             proto_version: "0.7.0".into(),
-            nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: true,
-            free_slots: Some(4),
             ..Default::default()
         };
         let sig = other.0.sign(&caps_message(&id, &claims, now_ms()));

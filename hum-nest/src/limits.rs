@@ -27,6 +27,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Bounds {
     pub rss_bytes: Option<u64>,
     pub fd_count: Option<u32>,

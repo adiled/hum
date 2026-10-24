@@ -13,31 +13,17 @@ use thrum_core::{
 
 #[test]
 fn sigil_is_deterministic() {
-    let a = sigil("session-abc", "claude");
-    let b = sigil("session-abc", "claude");
-    assert_eq!(a, b, "same inputs must produce same sigil");
-}
-
-#[test]
-fn sigil_differs_by_harness() {
-    let claude = sigil("session-abc", "claude");
-    let codex = sigil("session-abc", "codex");
-    let other = sigil("session-abc", "opencode");
-    assert_ne!(claude, codex);
-    assert_ne!(claude, other);
-    assert_ne!(codex, other);
+    assert_eq!(sigil("session-abc"), sigil("session-abc"), "same session, same sigil");
 }
 
 #[test]
 fn sigil_differs_by_sid() {
-    let s1 = sigil("session-1", "claude");
-    let s2 = sigil("session-2", "claude");
-    assert_ne!(s1, s2);
+    assert_ne!(sigil("session-1"), sigil("session-2"));
 }
 
 #[test]
 fn sigil_is_12_hex_chars() {
-    let s = sigil("anything", "anywhere");
+    let s = sigil("anything");
     assert_eq!(s.len(), 12);
     assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
     assert!(s.chars().all(|c| !c.is_ascii_uppercase()));

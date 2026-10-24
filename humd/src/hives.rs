@@ -64,6 +64,15 @@ pub fn hive_of(hello: &Value) -> &str {
     hello.get("hive").and_then(Value::as_str).unwrap_or("")
 }
 
+pub fn headroom_of(tone: &Value) -> Option<ensemble::headroom::CellHeadroom> {
+    let claim: thrum_core::Headroom = serde_json::from_value(tone.get("headroom")?.clone()).ok()?;
+    Some(ensemble::headroom::CellHeadroom::from_counts(
+        claim.free_slots,
+        claim.total_slots,
+        None,
+    ))
+}
+
 pub fn roles_of(hello: &Value) -> Vec<String> {
     match hello.get("roles") {
         Some(Value::Array(arr)) => arr
@@ -98,6 +107,16 @@ mod tests {
         assert!(!hives.recognises(".humfs"));
         hives.install("../etc");
         assert!(!hives.recognises("../etc"));
+    }
+
+    #[test]
+    fn headroom_is_read_from_a_claim() {
+        let full = headroom_of(&json!({"headroom": {"freeSlots": 0, "totalSlots": 8}})).unwrap();
+        assert!(full.pressure.is_refusing());
+        let room = headroom_of(&json!({"headroom": {"freeSlots": 6, "totalSlots": 8}})).unwrap();
+        assert!(!room.pressure.is_refusing());
+        assert!(headroom_of(&json!({})).is_none());
+        assert!(headroom_of(&json!({"headroom": {"free": 1}})).is_none());
     }
 
     #[test]

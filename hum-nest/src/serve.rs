@@ -70,7 +70,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
 use hum_mcp::protocol::ToolDef;
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, Worker};
+use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, NestConfig, Worker};
 use tokio::sync::mpsc;
 
 use hum_identity::enter_as;
@@ -126,6 +126,7 @@ async fn dial_and_serve<W: Worker + 'static>(
 
     let bee_key = enter_as(&advert.hive, "main")
         .with_context(|| format!("enter the main bee of {}", advert.hive))?;
+    let nest = Arc::new(NestConfig::for_hive(&advert.hive));
 
     let propensity_str = match worker.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
@@ -140,7 +141,8 @@ async fn dial_and_serve<W: Worker + 'static>(
         "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call"],
+        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call", "pulse"],
+        "headroom": nest.headroom(0),
         "source": advert.source.clone().unwrap_or_default(),
     });
     bee_key.sign_hello(&mut hello);
@@ -161,11 +163,10 @@ async fn dial_and_serve<W: Worker + 'static>(
     let mcp_url = format!("http://{}", mcp_addr);
     info!(%mcp_url, "worker.mcp.bridge.up");
 
-    let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
+    let pool = NonZeroUsize::new(nest.max_cells()).unwrap_or(NonZeroUsize::MIN);
+    let cells: Arc<Mutex<LruCache<String, CellBundle>>> = Arc::new(Mutex::new(LruCache::new(pool)));
 
-    let sid_cwd: Arc<Mutex<LruCache<String, String>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
+    let sid_cwd: Arc<Mutex<LruCache<String, String>>> = Arc::new(Mutex::new(LruCache::new(pool)));
 
     hum_thrum::read_tones(reader, |tone| {
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
@@ -197,12 +198,13 @@ async fn dial_and_serve<W: Worker + 'static>(
                 let hive = advert.hive.clone();
                 let mcp_url = mcp_url.clone();
                 let sid_cwd = sid_cwd.clone();
+                let nest = nest.clone();
                 let sid2 = sid.clone();
                 tokio::spawn(async move {
                     if let Some(cwd) = cwd {
                         sid_cwd.lock().await.put(sid2, cwd);
                     }
-                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, nest, hive, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
@@ -302,8 +304,21 @@ fn parse_tool_def(v: &Value) -> Option<ToolDef> {
     Some(ToolDef { name, description, input_schema: schema })
 }
 
-const IDLE_TIMEOUT_MS: u64 = 300_000;
-const MAX_CELLS: usize = 8;
+async fn pulse(
+    write_half: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    kind: &str,
+    headroom: Value,
+) {
+    let tone = json!({
+        "chi": "pulse",
+        "rid": hum_identity::HumId::mint().to_string(),
+        "kind": kind,
+        "headroom": headroom,
+    });
+    if let Err(e) = hum_thrum::send_json(write_half, &tone).await {
+        trace!(err = %e, kind, "worker.pulse.write.failed");
+    }
+}
 
 fn is_preflight_error(v: &Value) -> bool {
     let m = if v.get("type").and_then(Value::as_str) == Some("stream_event") {
@@ -341,6 +356,7 @@ async fn handle_prompt<W: Worker + 'static>(
     worker: Arc<W>,
     write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+    nest: Arc<NestConfig>,
     hive: String,
     mcp_url: String,
     tone: Value,
@@ -376,21 +392,29 @@ async fn handle_prompt<W: Worker + 'static>(
         }
     }
 
-    {
+    let evicted = {
         let mut g = cells.lock().await;
-        if g.len() >= MAX_CELLS
+        let evicted = if g.len() >= nest.max_cells()
             && let Some((esid, _evicted)) = g.pop_lru()
         {
             warn!(evicted_sid = %esid, "worker.cell.evict.lru");
             metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
-        }
+            Some(g.len())
+        } else {
+            None
+        };
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
+        evicted
+    };
+    if let Some(live) = evicted {
+        pulse(&write_half, "cell-evicted", nest.headroom(live)).await;
     }
 
     let hum_sid = hum_identity::HumId::parse(&sid).unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
     let mut base = Egg::new(hum_sid, model.clone(), cwd);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);
+    base.bounds = nest.bounds.clone();
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
         base.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
@@ -444,28 +468,39 @@ async fn handle_prompt<W: Worker + 'static>(
     let cells_for_idle = cells.clone();
     let sid_for_idle = sid.clone();
     let last_for_idle = last_touched.clone();
+    let write_for_idle = write_half.clone();
+    let nest_for_idle = nest.clone();
     let idle_task = tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             let last = last_for_idle.load(Ordering::SeqCst);
             let age = now_ms().saturating_sub(last);
-            if age >= IDLE_TIMEOUT_MS {
-                let mut g = cells_for_idle.lock().await;
-                if g.pop(&sid_for_idle).is_some() {
+            if age >= nest_for_idle.idle_ms {
+                let live = {
+                    let mut g = cells_for_idle.lock().await;
+                    g.pop(&sid_for_idle).map(|_| g.len())
+                };
+                if let Some(live) = live {
                     warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
+                    pulse(&write_for_idle, "cell-evicted", nest_for_idle.headroom(live)).await;
                 }
                 return;
             }
         }
     });
 
-    cells.lock().await.put(sid.clone(), CellBundle {
-        stdin: stdin.clone(),
-        cancel: cancel.clone(),
-        finish_sent: finish_sent.clone(),
-        tool_use_blocks: tool_use_blocks.clone(),
-        last_touched: last_touched.clone(),
-    });
+    let live = {
+        let mut g = cells.lock().await;
+        g.put(sid.clone(), CellBundle {
+            stdin: stdin.clone(),
+            cancel: cancel.clone(),
+            finish_sent: finish_sent.clone(),
+            tool_use_blocks: tool_use_blocks.clone(),
+            last_touched: last_touched.clone(),
+        });
+        g.len()
+    };
+    pulse(&write_half, "cell-spawned", nest.headroom(live)).await;
 
     trace!(sid = %sid, "worker.cell.spawned");
 
@@ -473,6 +508,7 @@ async fn handle_prompt<W: Worker + 'static>(
     let write_for_cleanup = write_half.clone();
     let sid_for_cleanup = sid.clone();
     let finish_for_cleanup = finish_sent.clone();
+    let nest_for_cleanup = nest.clone();
     tokio::spawn(async move {
         let exit_code = cell.emerged.await.unwrap_or(1);
         let _ = dispatch.await;
@@ -486,7 +522,13 @@ async fn handle_prompt<W: Worker + 'static>(
             });
             let _ = hum_thrum::send_json(&write_for_cleanup, &finish).await;
         }
-        cells_for_cleanup.lock().await.pop(&sid_for_cleanup);
+        let live = {
+            let mut g = cells_for_cleanup.lock().await;
+            g.pop(&sid_for_cleanup).map(|_| g.len())
+        };
+        if let Some(live) = live {
+            pulse(&write_for_cleanup, "cell-died", nest_for_cleanup.headroom(live)).await;
+        }
         trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
     });
 

@@ -1,10 +1,8 @@
 //! Primitives — sigil, rid, dusk, echo.
 //!
-//! A sigil is the deterministic identity for a (nest, session) pair. The
-//! `nest` slot is the nest-kind namespace — "claude-cli", "claude-repl",
-//! or any other future nest implementation. It survives restarts,
-//! reconnects and forks. It is derived, not assigned: the lowercase hex
-//! of the first 6 sha256 bytes.
+//! A sigil is the deterministic identity of a session, the same on every
+//! humd. It survives restarts, reconnects and forks. It is derived, not
+//! assigned: the lowercase hex of the first 6 sha256 bytes.
 //!
 //! The echo frame is `{ chi, rid, ok, error? }` — the rest of the
 //! envelope is intentionally absent.
@@ -17,10 +15,9 @@ use sha2::{Digest, Sha256};
 use crate::chi::Chi;
 use crate::envelope::{Envelope, Tone};
 
-pub fn sigil(sid: &str, nest: &str) -> String {
+pub fn sigil(sid: &str) -> String {
     let mut h = Sha256::new();
-    h.update(nest.as_bytes());
-    h.update(b":");
+    h.update(b"sigil:");
     h.update(sid.as_bytes());
     let digest = h.finalize();
     hex::encode(&digest[..6])
@@ -59,7 +56,7 @@ mod tests {
 
     #[test]
     fn sigil_is_stable() {
-        let s = sigil("abc", "claude");
+        let s = sigil("abc");
         assert_eq!(s.len(), 12);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
     }

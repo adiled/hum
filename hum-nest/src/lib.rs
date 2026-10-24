@@ -56,11 +56,13 @@ pub mod forager;
 pub mod lifecycle;
 pub mod limits;
 pub mod metrics;
+pub mod nest;
 pub mod serve;
 pub mod suspicion_regex;
 
 pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
 pub use hum_mcp::protocol::{ToolDef, ToolResult};
+pub use nest::NestConfig;
 pub use serve::{serve_worker, WorkerAdvert};
 pub use suspicion_regex::RegexClassifier;
 

@@ -9,8 +9,8 @@
 //! Drone is **LLM-agnostic**. It knows nothing about Claude, GPT, or
 //! any specific model — context-loss pattern detection plugs in via
 //! the [`Classifier`] trait. The default [`NoopClassifier`] never
-//! flags anything; concrete classifiers live in nest-side crates
-//! (e.g. `hum-nest::RegexClassifier`).
+//! flags anything; concrete classifiers live with the hives that host
+//! cells (e.g. `hum-nest::RegexClassifier`).
 //!
 //! The verdict is what the dispatch loop branches on. `Ok` is nominal.
 //! `Resync` means wane drifted and the host should resync state.

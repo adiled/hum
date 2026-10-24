@@ -1391,14 +1391,12 @@ mod tests {
         let b_id = b_key.hid();
         let a_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
-            nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: true,
             ..Default::default()
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
-            nests: vec!["claude-repl".into()],
             hosts: vec!["bob".into()],
             can_relay: false,
             ..Default::default()
@@ -1433,12 +1431,11 @@ mod tests {
 
         let learned_b = ensemble_a.peer_caps(&b_id).expect("b registered on a");
         assert_eq!(learned_b.proto_version, "0.2.0");
-        assert_eq!(learned_b.nests, vec!["claude-repl".to_string()]);
         assert_eq!(learned_b.hosts, vec!["bob".to_string()]);
         assert!(!learned_b.can_relay);
 
         let learned_a = ensemble_b.peer_caps(&a_id).expect("a registered on b");
-        assert_eq!(learned_a.nests, vec!["claude-cli".to_string()]);
+        assert_eq!(learned_a.hosts, vec!["alice".to_string()]);
         assert!(learned_a.can_relay);
     }
 

@@ -20,8 +20,8 @@ it is all composed of biodiverse primitives, not an outcome of conventional ling
 - **hive** the kind; a directory with an Orchfile, installed on a humd so the humd can understand bees of it
 - **bee** a participant, anything that lands on a humd and says hello; it is its own key, and is understood through its hive
 - **nestler** a bee mid-handshake, awaiting the breath that accepts its hello
-- **nestled** a nestler once registered into the nest
-- **nest** where nestled bees gather, inside humd
+- **nestled** a nestler once registered on a humd
+- **nest** the cells a hive hosts and the limits it keeps them under; a hive turns it on with hum-nest, and humd itself hosts none
 - **thrum** the hum-native vibration protocol, carrying tones across a range of `chi`
 - **petal** one unit of content, be it text, image, a tool call or its result
 - **bloom** one turn of conversation, opened by a prompt and closed when it wilts
@@ -65,7 +65,7 @@ Refer to hum.schema.json
 | **Roaming inference** | ✅ (`Chi::Attach` + `wane` cursor replay) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Roaming filesystems** | ✅ (`humfs` forager hive + `hum://` URI routing) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Multi-party gamification** | ✅ (multiple nestlers per bloom via `observers[sid]` roster) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + capacity-aware overflow routing) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + headroom-aware routing to workers with room) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Zero-trust access control** | ✅ (scoped capability grants + revocation via `federation.*` error chi) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Agent-human consensus** | ✅ (`thehum` hash chain + on-chain anchoring via `HumdRegistry` contract) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 

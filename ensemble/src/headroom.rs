@@ -1,14 +1,13 @@
-//! Per-humd resource headroom — what peers learn from each other.
+//! A worker's headroom: how many more cells it can take.
 //!
-//! Defines `CellHeadroom` (free slots, pressure tier, p95 latency) and a
-//! serializable representation that lives inside `PeerCapabilities` and
-//! rides on every drone-beat gossip frame. Lets the ensemble route away
-//! from saturated humds without waiting for hard failure.
+//! A worker that hosts cells claims its headroom on its hello and on each
+//! cell pulse; humd keeps the latest claim on the bee's manifest and
+//! gossips it, so a prompt goes to a worker with room, here or on a peer.
+//! humd itself hosts no cells and claims none.
 //!
 //! Pressure is a coarse occupancy tier, not a metric dump: `Cool` under
 //! half the slots taken, `Warm` to 80%, `Hot` to 95%, `Refuse` above.
-//! `Refuse` means a peer should route a new prompt elsewhere, and humd
-//! will reject it if sent anyway.
+//! A worker at `Refuse` is passed over while another worker can serve.
 
 use serde::{Deserialize, Serialize};
 
