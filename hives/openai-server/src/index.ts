@@ -3,7 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { ThrumClient } from "./thrum.ts";
+import { HIVE_NAME, ThrumClient } from "./thrum.ts";
+import { enter } from "./identity.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
 import { OpenAIWorker } from "./openai.ts";
@@ -56,6 +57,11 @@ function unauthorized(res: ServerResponse): void {
 function bad(res: ServerResponse, msg: string): void {
   res.writeHead(400, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: { message: msg, type: "invalid_request_error" } }));
+}
+
+function unavailable(res: ServerResponse, msg: string): void {
+  res.writeHead(503, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: { message: msg, type: "service_unavailable" } }));
 }
 
 function checkAuth(req: IncomingMessage): boolean {
@@ -326,6 +332,48 @@ function injectJsonMode(
 
 const thrum = new ThrumClient();
 
+const REQUESTER_IDLE_MS = 10 * 60_000;
+const requesters = new Map<string, ThrumClient>();
+
+function bearerOf(req: IncomingMessage): string {
+  const auth = req.headers["authorization"];
+  if (typeof auth !== "string") return "";
+  const [scheme, token] = auth.split(" ");
+  return scheme === "Bearer" && token ? token : "";
+}
+
+function requesterLabel(req: IncomingMessage, tenant: string, user: string | undefined): string {
+  const fingerprint = createHash("sha256").update(`${bearerOf(req)}\0${tenant}\0${user ?? ""}`).digest("hex");
+  return `requester-${fingerprint.slice(0, 32)}`;
+}
+
+function requester(req: IncomingMessage, tenant: string, user: string | undefined): ThrumClient {
+  const label = requesterLabel(req, tenant, user);
+  let rq = requesters.get(label);
+  if (!rq) {
+    enter(HIVE_NAME, label);
+    rq = new ThrumClient({ label, roles: ["asker"] });
+    requesters.set(label, rq);
+    const born = rq;
+    rq.connect().catch((e) => {
+      console.error(`[thrum] ${label} cannot connect:`, e);
+      if (requesters.get(label) === born) requesters.delete(label);
+    });
+  }
+  rq.lastUsed = Date.now();
+  return rq;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [label, rq] of requesters) {
+    if (!rq.busy() && now - rq.lastUsed > REQUESTER_IDLE_MS) {
+      rq.close();
+      requesters.delete(label);
+    }
+  }
+}, 60_000).unref();
+
 async function start(): Promise<void> {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -380,6 +428,8 @@ async function start(): Promise<void> {
         stream_options?: { include_usage?: boolean };
       };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
+      let rq: ThrumClient;
+      try { rq = requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot enter this requester as a bee: ${e}`); }
       const messages = body.messages ?? [];
       if (messages.length === 0) return bad(res, "messages required");
 
@@ -423,13 +473,13 @@ async function start(): Promise<void> {
           "Connection": "keep-alive",
           "X-Accel-Buffering": "no",
         });
-        thrum.on(sid, (msg) => {
+        rq.on(sid, (msg) => {
           const frames = translator.ingest(msg);
           for (const f of frames) {
             if (f === "data: [DONE]\n\n") {
               res.write(f);
               res.end();
-              thrum.off(sid);
+              rq.off(sid);
               return;
             }
             const um = f.match(SSE_DATA_RE);
@@ -454,7 +504,7 @@ async function start(): Promise<void> {
         }> = [];
         let finishReason: string | null = "stop";
         let usage: Record<string, number> | undefined;
-        thrum.on(sid, (msg) => {
+        rq.on(sid, (msg) => {
           const frames = translator.ingest(msg);
           for (const f of frames) {
             if (f === "data: [DONE]\n\n") {
@@ -480,7 +530,7 @@ async function start(): Promise<void> {
               }
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(body));
-              thrum.off(sid);
+              rq.off(sid);
               return;
             }
             const m = f.match(SSE_DATA_RE);
@@ -523,17 +573,17 @@ async function start(): Promise<void> {
       }
 
       req.on("close", () => {
-        thrum.off(sid);
+        rq.off(sid);
       });
 
       const toolReturns = trailingToolReturns(messages);
       for (const tr of toolReturns) {
-        thrum.send({ chi: "tool-result", sid, callId: tr.tool_call_id, result: tr.result });
+        rq.send({ chi: "tool-result", sid, callId: tr.tool_call_id, result: tr.result });
       }
 
       const sendPrompt = hasTrailingUserAfterTool(messages) || toolReturns.length === 0;
       if (sendPrompt) {
-        thrum.send({
+        rq.send({
           chi: "prompt",
           sid,
           hive: "openai-server",
@@ -591,6 +641,8 @@ async function start(): Promise<void> {
         response_format?: { type: string; json_schema?: unknown };
       };
       try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
+      let rq: ThrumClient;
+      try { rq = requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot enter this requester as a bee: ${e}`); }
       if (!body.input) return bad(res, "input required");
 
       const stream = body.stream === true;
@@ -783,7 +835,7 @@ async function start(): Promise<void> {
           }
         };
 
-        thrum.on(sid, (msg) => {
+        rq.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
           const chunkType = msg.chunkType as string | undefined;
           const blockIdx = typeof msg.id === "number" ? (msg.id as number)
@@ -961,14 +1013,14 @@ async function start(): Promise<void> {
             } });
             res.write("data: [DONE]\n\n");
             res.end();
-            thrum.off(sid);
+            rq.off(sid);
             return;
           }
           if (chi === "error") {
             sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: (msg.message as string) ?? "unknown" } } });
             res.write("data: [DONE]\n\n");
             res.end();
-            thrum.off(sid);
+            rq.off(sid);
           }
         });
       } else {
@@ -999,7 +1051,7 @@ async function start(): Promise<void> {
             });
           }
         };
-        thrum.on(sid, (msg) => {
+        rq.on(sid, (msg) => {
           const chi = msg.chi as string | undefined;
           const chunkType = msg.chunkType as string | undefined;
           const blockIdx = typeof msg.id === "number" ? (msg.id as number)
@@ -1084,21 +1136,21 @@ async function start(): Promise<void> {
               ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
               ...(finalUsage ? { usage: finalUsage } : {}),
             }));
-            thrum.off(sid);
+            rq.off(sid);
             return;
           }
           if (chi === "error") {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: { message: (msg.message as string) ?? "unknown", type: "internal_error" } }));
-            thrum.off(sid);
+            rq.off(sid);
           }
         });
       }
 
-      req.on("close", () => { thrum.off(sid); });
+      req.on("close", () => { rq.off(sid); });
 
       const resume = sid_to_nestid.get(sid);
-      thrum.send({
+      rq.send({
         chi: "prompt",
         sid,
         hive: "openai-server",

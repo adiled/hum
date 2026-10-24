@@ -12,7 +12,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type Subprocess } from "bun";
@@ -23,6 +23,8 @@ interface FakeHumd {
   sockPath: string;
   capturedPrompts: Tone[];
   helloReceived: Promise<Tone>;
+  hellos: Tone[];
+  promptBees: string[];
   shutdown: () => Promise<void>;
 }
 
@@ -34,6 +36,8 @@ async function startFakeHumd(): Promise<FakeHumd> {
   const dir = mkdtempSync(join(tmpdir(), "hum-e2e-"));
   const sockPath = join(dir, "thrum.sock");
   const capturedPrompts: Tone[] = [];
+  const hellos: Tone[] = [];
+  const promptBees: string[] = [];
   let helloResolve!: (t: Tone) => void;
   const helloReceived = new Promise<Tone>((r) => { helloResolve = r; });
   let active: Socket | null = null;
@@ -41,6 +45,7 @@ async function startFakeHumd(): Promise<FakeHumd> {
   const server: Server = createServer((sock) => {
     active = sock;
     let buf = "";
+    let bee = "";
     sock.on("data", (chunk) => {
       buf += chunk.toString();
       let nl: number;
@@ -50,16 +55,22 @@ async function startFakeHumd(): Promise<FakeHumd> {
         if (!line) continue;
         try {
           const tone = JSON.parse(line) as Tone;
-          if (tone.chi === "hello") { helloResolve(tone); continue; }
+          if (tone.chi === "hello") {
+            hellos.push(tone);
+            bee = String(tone.hid ?? "");
+            helloResolve(tone);
+            continue;
+          }
           if (tone.chi === "prompt") {
             capturedPrompts.push(tone);
+            promptBees.push(bee);
             const sid = String(tone.sid ?? "");
             // Reply with the minimum frame set translator.ingest
             // needs to produce a completed response: an init
             // session, one text delta, then a finish.
             const frames: Tone[] = [
               { chi: "session-ready", sid, nestId: "fake-nest", model: tone.modelId, tools: [] },
-              { chi: "chunk", sid, chunkType: "text_start", id: 0 },
+              { chi: "chunk", sid, chunkType: "text_start", blockIdx: 0 },
               { chi: "chunk", sid, chunkType: "text_delta", delta: "ok" },
               { chi: "chunk", sid, chunkType: "content_block_stop", blockIdx: 0 },
               { chi: "finish", sid, finishReason: "stop", usage: { input_tokens: 1, output_tokens: 1 } },
@@ -79,6 +90,8 @@ async function startFakeHumd(): Promise<FakeHumd> {
     sockPath,
     capturedPrompts,
     helloReceived,
+    hellos,
+    promptBees,
     shutdown: async () => {
       if (active) active.destroy();
       await new Promise<void>((r) => server.close(() => r()));
@@ -106,12 +119,19 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 beforeAll(async () => {
   humd = await startFakeHumd();
+  const xdg = mkdtempSync(join(tmpdir(), "hum-e2e-xdg-"));
+  mkdirSync(join(xdg, "config", "hum", "hives.d"), { recursive: true });
+  writeFileSync(join(xdg, "config", "hum", "hives.d", "openai-server.orch"), "");
+  const humBin = join(import.meta.dir, "..", "..", "..", "target", "debug");
   server = spawn({
     cmd: ["bun", "src/index.ts"],
     cwd: import.meta.dir + "/..",
     env: {
       ...process.env,
       HUM_THRUM_SOCK: humd.sockPath,
+      XDG_CONFIG_HOME: join(xdg, "config"),
+      XDG_STATE_HOME: join(xdg, "state"),
+      PATH: `${humBin}:${process.env.PATH ?? ""}`,
       OPENAI_SERVER_PORT: String(PORT),
       OPENAI_SERVER_API_KEY: "", // disable auth
     },
@@ -189,5 +209,34 @@ describe("openai-server → humd tools wire shape", () => {
     });
     const ping = tools!.find((t) => t.name === "ping")!;
     expect(ping.inputSchema).toEqual({});
+  });
+});
+
+describe("every requester is a bee", () => {
+  async function ask(user: string): Promise<void> {
+    const r = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-opus-4-7", stream: false, user, messages: [{ role: "user", content: `hi from ${user}` }] }),
+    });
+    expect(r.status).toBe(200);
+    await r.text();
+  }
+
+  test("two requesters are two asker bees, and one requester stays one bee", async () => {
+    const before = humd.promptBees.length;
+    await ask("alice");
+    await ask("bob");
+    await ask("alice");
+    const [a1, b, a2] = humd.promptBees.slice(before);
+    const main = String((await humd.helloReceived).hid);
+    expect(a1).toMatch(/^bee_[0-9a-f]{64}$/);
+    expect(b).toMatch(/^bee_[0-9a-f]{64}$/);
+    expect(a1).not.toBe(b);
+    expect(a2).toBe(a1);
+    expect(a1).not.toBe(main);
+    const askers = humd.hellos.filter((h) => JSON.stringify(h.roles) === JSON.stringify(["asker"]));
+    expect(askers.length).toBeGreaterThanOrEqual(2);
+    for (const h of humd.hellos) expect(typeof h.signature).toBe("string");
   });
 });

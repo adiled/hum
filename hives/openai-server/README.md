@@ -5,17 +5,17 @@ description: "OpenAI-compatible HTTP surface for hum"
 
 # openai-server
 
-> _A hybrid bee: an OpenAI-compatible HTTP surface in front of hum, **and** a worker that consumes OpenAI's API for hum's daemons._
+> _An OpenAI-compatible HTTP surface in front of hum, where every requester is a bee, **and** a worker that consumes OpenAI's API for hum's daemons._
 
-One process, one hive kind, one thrum connection — but two directions.
+One process, one hive kind, many bees, two directions.
 The **forager** half puts an OpenAI-shaped `/v1/chat/completions` + `/v1/responses`
 server in front of hum's local thrum socket: any tool or client that
 speaks OpenAI wire can drive a hum daemon without knowing thrum
 exists. The **worker** half accepts `chi:"prompt"` tones humd routes
 to this bee by advertised model, calls the upstream OpenAI API, and
-streams the reply back. Its bee claims both roles (`roles:["forager","worker"]`)
-— it both speaks OpenAI wire to hum's clients AND consumes OpenAI's
-API for hum's daemons.
+streams the reply back. The process's own bee (`--as main`) claims both
+roles (`roles:["forager","worker"]`): it both speaks OpenAI wire to
+hum's clients AND consumes OpenAI's API for hum's daemons.
 
 ## Propensity
 
@@ -50,6 +50,17 @@ client                           openai-server                       humd
   │   data: [DONE]\n\n                │                                │
   │◄──────────────────────────────────┤                                │
 ```
+
+## Every requester is a bee
+
+Each HTTP requester is fingerprinted by a hash of its bearer token, its
+`X-Tenant` and the request's `user`, and entered as its own bee of this
+hive (`hum bee enter --hive openai-server --as requester-<fingerprint>`,
+role `asker`). Its requests go to humd over its own socket, signed by its
+own key, so humd sees, logs and accounts each requester apart, and
+`hum bee <id> exit` shuts one out without touching the rest. The
+fingerprint is the only trace of the token on disk. A requester's socket
+closes after ten idle minutes and reopens on its next request.
 
 ## Worker half (the inverse direction)
 

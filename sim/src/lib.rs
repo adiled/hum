@@ -75,6 +75,25 @@ pub struct Sim {
     links: RwLock<HashMap<(Hid, Hid), Link>>,
 }
 
+impl Drop for Sim {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let strays: Vec<String> = self
+            .humds
+            .read()
+            .values()
+            .flat_map(|h| h.thrum.wire_strays())
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "tones carried keys the thrum does not declare:\n  {}",
+            strays.join("\n  ")
+        );
+    }
+}
+
 #[derive(Clone)]
 struct Link {
     a: Hid,
@@ -139,6 +158,7 @@ impl Sim {
         revoked: &[&str],
     ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -273,6 +293,7 @@ impl Sim {
     pub async fn spawn_humd_with_identity(&self, key: HumdKey) -> Arc<SimHumd> {
         let id = key.hid();
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, true));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -632,7 +653,7 @@ impl Sim {
                     continue;
                 }
                 let frames = vec![
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
@@ -817,7 +838,6 @@ impl Sim {
                     "chi": "tool-result",
                     "sid": sid,
                     "callId": call_id,
-                    "toolName": tool_name,
                     "result": result,
                 });
                 thrum.inject_tone(&cid_for_pump, reply).await;
@@ -984,7 +1004,7 @@ impl Sim {
                 "rid": format!("{tag}-{i}"),
                 "to": to.to_hex(),
                 "from": from.to_hex(),
-                "mark": tag,
+                "note": tag,
             });
             self.nestler_send_ordered(from, tone).await?;
         }

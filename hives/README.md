@@ -9,9 +9,9 @@ description: "how to build a hive, install it on a humd, and the bees that humd 
 
 ## The vocabulary, once
 
-A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key — a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A **nest** is the space inside a humd where bees gather and cells live. A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
-A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees — signs them in, one key each — and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
+A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees, signing them in one key each, and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
 
 ## Catalogue
 
@@ -51,11 +51,10 @@ A forager picks a contract that already exists in the wild and hides the rest of
 
 Put an `Orchfile` at the root of your hive's directory. That is what makes it a hive, and the directory's name is the hive's name. hum recognises one unit in it, `hive-install`, and nothing else. `hum hive <ref> install` records the hive on the humd and then runs that unit in the foreground, with `HUM_SRC` set to your directory, `HUM_HIVE` to your hive's name, and `hum` on its `PATH`; if the unit fails, the hive is not installed.
 
-What the unit does is yours: build, fetch a model, enter bees, start processes and keep them alive with whatever supervisor you like. The bundled hives use one small `install` script each that builds, enters a bee (`hum bee enter --hive $HUM_HIVE`, reusing it on reinstall), and runs their process under [orchd](https://github.com/adiled/orchd) in their own namespace with the bee's id in `HUM_BEE`. Every other unit in the Orchfile is only what your own tooling makes of it.
+What the unit does is yours: build, fetch a model, start processes and keep them alive with whatever supervisor you like. The bundled hives use one small `install` script each that builds and runs their process under [orchd](https://github.com/adiled/orchd) in their own namespace; the process enters its own bee when it starts. Every other unit in the Orchfile is only what your own tooling makes of it.
 
 ```
 ARG HUM_SRC=
-ARG HUM_BEE=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -63,7 +62,6 @@ ONESHOT true
 
 SERVICE my-hive
 RUN ${HUM_SRC}/target/release/my-bee
-ENV HUM_BEE=${HUM_BEE}
 RESTART always
 ```
 
@@ -91,11 +89,11 @@ On connect, send `chi:"hello"` with these fields.
 
 > ### A bee signs its hello with the key its hive entered
 >
-> Your hive enters you with `hum bee enter --hive <hive>`, which mints an ed25519 key, files it at `$XDG_STATE_HOME/hum/bees/<id>.key` (a raw 32-byte seed), records you as entered under the hive, and prints your id: `bee_<hex>`, the sha256 of your public key. Your hive hands that id to whatever acts as you, conventionally in `HUM_BEE`.
+> A bee is entered with `hum bee enter --hive <hive> --as <label>`, which mints an ed25519 key, files it at `$XDG_STATE_HOME/hum/bees/<id>.key` (a raw 32-byte seed), records it as entered under the hive with that label, and prints its id: `bee_<hex>`, the sha256 of its public key. The same hive and label are always the same bee, so a process enters itself each time it starts (`--as main`), and a runtime that holds many bees enters each by a label of its own. openai-server labels each requester by a fingerprint of its token, tenant and `user`. Without `--as`, every call mints a new bee.
 >
-> On every hello, load the key filed under your id and send `hid` (your id), `pubkey` (hex), `signedAt` (unix ms) and `signature` (hex ed25519 over `hum-bee-socket-v1:<hid>:<signedAt>`). humd admits the hello only if the signature verifies, `signedAt` is fresh, the id is entered and not exited, and it entered under the `hive` you name. `hum bee <id> exit` signs you out — humd refuses your next hello — and `reenter` signs you back in.
+> On every hello, load the key filed under your id and send `hid` (your id), `pubkey` (hex), `signedAt` (unix ms) and `signature` (hex ed25519 over `hum-bee-socket-v1:<hid>:<signedAt>`). humd admits the hello only if the signature verifies, `signedAt` is fresh, the id is entered and not exited, and it entered under the `hive` you name. `hum bee <id> exit` signs you out, so humd refuses your next hello, and `reenter` signs you back in.
 >
-> Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. The reference implementations all sign the same way. In Rust, `hum_identity::bee_from_env()?.sign_hello(&mut hello)`, or `hum_nest::serve_worker` / `serve_forager`, which do it for you. In TypeScript see [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `signedAs` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
+> Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. The reference implementations all sign the same way. In Rust, `hum_identity::enter_as(hive, "main")?.sign_hello(&mut hello)`, or `hum_nest::serve_worker` / `serve_forager`, which do it for you. In TypeScript see `enter` and `signedAs` in [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `signedAs` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
 
 Once the hello is accepted you are nestled.
 
@@ -125,7 +123,7 @@ A lean bee drops the tones it cannot express, while a rich one forwards everythi
 
 There are three deployment shapes, and the protocol is identical across all of them.
 
-In **local dev** you run `cargo run -p humd`, install your hive, enter a bee, and launch your binary with `HUM_BEE` set. Both sides resolve the same socket path, so there is no service.
+In **local dev** you run `cargo run -p humd`, install your hive, and launch your binary; it enters its own bee. Both sides resolve the same socket path, so there is no service.
 
 Whatever the shape, the humd a bee lands on must have its hive installed and the bee entered there. `hum hive <ref> install` records the hive at `~/.config/hum/hives.d/<hive>.orch` and runs its `hive-install` unit. hum starts nothing itself; whatever runs is the hive's doing.
 
@@ -138,7 +136,7 @@ hum hive --list                     # the catalogue, what is installed, bees ent
 hum hive <name|path|url> install    # teach this humd the hive; runs its hive-install
 hum hive <name|path|url> uninstall  # forget it (what the hive started is its own to stop)
 hum bee  --list                     # bees entered here, and which have nestled
-hum bee  enter --hive <hive>        # mint a bee and sign it in; prints its id
+hum bee  enter --hive <hive> --as <label>  # sign a bee in (the same one for one label); prints its id
 hum bee  <id> exit                  # sign it out; humd refuses its next hello
 hum bee  <id> reenter               # sign it back in
 ```

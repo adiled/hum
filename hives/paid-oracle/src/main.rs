@@ -35,22 +35,8 @@ const HIVE_NAME: &str = "paid-oracle";
 const BEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const QUOTE_TOOL: &str = "quote";
 const CAPABILITY: &str = "x402:quote";
-/// Quote price in atomic USDC (6 decimals). `50_000` = $0.05.
-/// Display price in cents (0.01 USD units). Atomic amount is computed
-/// at runtime from the configured chain's USDC decimals so the same
-/// $0.05 quote works on chains where USDC has 6 decimals (Base, Eth
-/// mainnet) and on Arc where USDC is the native gas token with 18.
 const QUOTE_PRICE_CENTS: u64 = 5;
 
-/// How payment lands on-chain.
-///
-/// - `Native`: USDC is the chain's native gas token (Arc). Payment is
-///   a plain transfer where `tx.value` carries the atomic amount and
-///   `tx.to` is the recipient. The nonce must appear in `tx.input`.
-/// - `Erc20`: USDC is an ERC-20 contract (Base, Eth mainnet). The
-///   transfer hits the contract; we decode the `transfer(addr,uint)`
-///   selector + args to find recipient + amount. Nonce must appear in
-///   `tx.input` (after the standard selector + args).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PayKind {
     Native,
@@ -59,21 +45,13 @@ enum PayKind {
 
 #[derive(Debug, Clone)]
 struct Config {
-    /// thrum socket: humd's NDJSON UnixStream.
     sock_path: String,
-    /// Where on-chain payments must land. EVM address hex, 0x-prefixed.
     pay_to: String,
-    /// JSON-RPC endpoint for the chain we accept payment on.
     rpc_url: String,
-    /// Human label for the chain (returned in challenges + manifest).
     chain: String,
-    /// USDC contract address on the chain (or zero address for native).
     usdc_contract: String,
-    /// Decimals USDC uses on this chain. Base/Eth: 6. Arc: 18.
     decimals: u32,
-    /// Whether payment is a native transfer (Arc) or an ERC-20 call.
     pay_kind: PayKind,
-    /// Where to fetch underlying price from. Free / no-API-key by default.
     price_url: String,
 }
 
@@ -92,7 +70,6 @@ impl Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(match pay_kind {
-                // Arc-native USDC is 18 decimals; Base/Eth USDC ERC-20 is 6.
                 PayKind::Native => 18,
                 PayKind::Erc20 => 6,
             });
@@ -117,15 +94,12 @@ impl Config {
         })
     }
 
-    /// Atomic USDC amount for the quote at this chain's decimals.
-    /// $0.05 × 10^decimals / 100.
     fn quote_atomic(&self) -> u128 {
         let scale = 10u128.checked_pow(self.decimals).unwrap_or(u128::MAX);
         (QUOTE_PRICE_CENTS as u128).saturating_mul(scale) / 100
     }
 }
 
-/// Pending challenge: minted on the first call, consumed (or expired) on retry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Challenge {
     nonce: String,
@@ -134,8 +108,6 @@ struct Challenge {
     issued_at_ms: i64,
 }
 
-/// In-memory state. A real deploy would persist nonces to disk so an
-/// oracle restart doesn't lose replay-protection.
 #[derive(Default)]
 struct State {
     pending: Mutex<HashMap<String, Challenge>>,
@@ -156,7 +128,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    let bee = hum_identity::bee_from_env()?;
+    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
 
     let sock = UnixStream::connect(&cfg.sock_path).await
         .with_context(|| format!("connect {}", cfg.sock_path))?;
@@ -269,7 +241,7 @@ async fn handle_tool_call(
 ) -> Result<()> {
     let name = tone.get("name").and_then(Value::as_str).unwrap_or("");
     if name != QUOTE_TOOL {
-        return Ok(()); // not ours
+        return Ok(());
     }
     let rid = tone.get("rid").and_then(Value::as_str).unwrap_or("").to_string();
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
@@ -277,28 +249,23 @@ async fn handle_tool_call(
     let args = tone.get("args").cloned().unwrap_or(json!({}));
     let pair = args.get("pair").and_then(Value::as_str).unwrap_or("ETH/USDC").to_string();
 
-    // Already paid?
     if let Some(proof) = tone.get("paymentProof") {
         let tx = proof.get("txHash").and_then(Value::as_str).unwrap_or("");
         let nonce = proof.get("nonce").and_then(Value::as_str).unwrap_or("");
         if tx.is_empty() || nonce.is_empty() {
             return reply_error(wr, &rid, &sid, &from, 400, "paymentProof requires txHash + nonce").await;
         }
-        // Has this nonce been spent already?
         if state.spent.lock().contains(nonce) {
             return reply_error(wr, &rid, &sid, &from, 409, "nonce already spent").await;
         }
-        // Was this nonce ever issued?
         let challenge = state.pending.lock().get(nonce).cloned();
         let Some(_challenge) = challenge else {
             return reply_error(wr, &rid, &sid, &from, 410, "unknown or expired nonce").await;
         };
-        // Verify on-chain.
         if let Err(e) = verify_payment(http, cfg, tx, nonce).await {
             warn!(tx, nonce, error = ?e, "verify.failed");
             return reply_error(wr, &rid, &sid, &from, 402, &format!("payment unverified: {e}")).await;
         }
-        // Mark consumed + serve.
         state.spent.lock().insert(nonce.to_string());
         state.pending.lock().remove(nonce);
         let price = fetch_price(http, &cfg.price_url).await
@@ -323,7 +290,6 @@ async fn handle_tool_call(
         return Ok(());
     }
 
-    // First call — mint a challenge.
     let nonce = uuid::Uuid::new_v4().to_string();
     let challenge = Challenge {
         nonce: nonce.clone(),
@@ -381,7 +347,6 @@ async fn reply_error(
 
 async fn fetch_price(http: &reqwest::Client, url: &str) -> Result<String> {
     let v: Value = http.get(url).send().await?.json().await?;
-    // CoinGecko shape: { "ethereum": { "usd": 3850.42 } }
     let n = v.as_object()
         .and_then(|m| m.values().next())
         .and_then(|inner| inner.as_object())
@@ -391,8 +356,6 @@ async fn fetch_price(http: &reqwest::Client, url: &str) -> Result<String> {
     Ok(format!("{n}"))
 }
 
-/// JSON-RPC `eth_getTransactionByHash`. Checks: tx exists, value ≥ expected,
-/// recipient matches `pay_to`, and the nonce is present in tx input data.
 async fn verify_payment(
     http: &reqwest::Client,
     cfg: &Config,
@@ -410,12 +373,6 @@ async fn verify_payment(
         .filter(|v| !v.is_null())
         .ok_or_else(|| anyhow!("tx not found"))?;
 
-    // Two shapes:
-    //   - Native (Arc): `to` is the recipient directly; `tx.value`
-    //     carries the atomic amount. USDC is the native gas token.
-    //   - ERC-20 (Base, Eth mainnet): `to` is the USDC contract; the
-    //     `input` field encodes `transfer(address,uint256)` —
-    //     selector 0xa9059cbb + 32-byte recipient + 32-byte amount.
     let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_lowercase();
     let input = tx.get("input").and_then(Value::as_str).unwrap_or("");
     let value_hex = tx.get("value").and_then(Value::as_str).unwrap_or("0x0");
@@ -457,9 +414,6 @@ async fn verify_payment(
             paid_amount, expected
         ));
     }
-    // Nonce binding: counterparty MUST append the nonce bytes to tx.input.
-    // For ERC-20 we tolerate trailing extra data (most clients accept it);
-    // for native we look at the input field directly.
     let nonce_hex = hex::encode(nonce.as_bytes());
     if !input.to_lowercase().contains(&nonce_hex.to_lowercase()) {
         return Err(anyhow!("nonce not bound in tx input"));

@@ -73,7 +73,7 @@ use hum_mcp::protocol::ToolDef;
 use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
 use tokio::sync::mpsc;
 
-use hum_identity::bee_from_env;
+use hum_identity::enter_as;
 use hum_mcp::{spawn_local_mcp, McpBridge};
 
 fn default_socket_path() -> PathBuf {
@@ -124,8 +124,8 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    let bee_key = bee_from_env()
-        .with_context(|| format!("which bee of {} is this process?", advert.hive))?;
+    let bee_key = enter_as(&advert.hive, "main")
+        .with_context(|| format!("enter the main bee of {}", advert.hive))?;
 
     let propensity_str = match worker.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",

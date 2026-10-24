@@ -61,7 +61,6 @@ fn golden() -> Vec<Value> {
             signature: "0b".into(),
             models: None,
             tools: None,
-            tool_names: Some(vec!["Read".into(), "Bash".into()]),
             provides: Some(vec!["env".into(), "token".into()]),
             chis: None,
             propensity: None,

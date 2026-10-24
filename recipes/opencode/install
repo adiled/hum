@@ -17,7 +17,6 @@
 #   HUM_OC_CLI         opencode CLI (default: opencode); used only to
 #                      print a "now run" line at the end
 set -e
-# Repo root — this script lives at recipes/opencode/install.
 cd "$(dirname "$0")/../.."
 
 TARGET="${HUM_DEV_USER:-clwnd}"
@@ -26,7 +25,6 @@ TARGET_UID="$(id -u "$TARGET")"
 TARGET_RUNTIME="/run/user/$TARGET_UID"
 PORT="${HUM_OPENAI_PORT:-14620}"
 
-# Step 1 — bring humd + humnest up via the env-specific deploy script.
 if [ -x "./dev/deploy" ]; then
   echo "[opencode] running dev/deploy …"
   ./dev/deploy
@@ -35,8 +33,6 @@ else
   echo "                  (paradigm 0: cargo run -p humd + cargo run -p humnest from other terminals)"
 fi
 
-# Step 2 — build the openai-server bee. Each bee is a
-# standalone TS project (no root workspace).
 if command -v pnpm >/dev/null 2>&1; then
   echo "[opencode] building openai-server …"
   (cd hives/openai-server && pnpm install --silent >/dev/null 2>&1 && pnpm run build --silent)
@@ -45,9 +41,6 @@ else
   exit 1
 fi
 
-# Step 3 — seed the per-kind config. Always (re)write: the recipe owns
-# the model id-set, derived from recipes/opencode/models.json (the
-# authoritative OC-flavored catalogue).
 NESTLING_CFG="$TARGET_HOME/.config/hum/hives/openai-server.json"
 RECIPE_MODELS="./recipes/opencode/models.json"
 if [ -s "$RECIPE_MODELS" ]; then
@@ -64,14 +57,8 @@ su -l "$TARGET" -c "cat > $NESTLING_CFG" <<EOF
 }
 EOF
 
-# Step 4 — seed/patch opencode.json with the provider.hum block.
-# Strategy: if opencode.json absent, write fresh; else patch with jq
-# only when provider.hum is missing.
 OC_CFG="$TARGET_HOME/.config/opencode/opencode.json"
 su -l "$TARGET" -c "mkdir -p ~/.config/opencode"
-# OC's openai-compatible provider reads baseURL / apiKey from
-# `options`. Mirror what the AI SDK actually wants; top-level baseURL
-# alone produces "undefined/chat/completions" URL parse failures.
 RECIPE_MODELS="./recipes/opencode/models.json"
 if [ -s "$RECIPE_MODELS" ]; then
   MODELS_JSON="$(jq '[keys[]] | map({(.): {}}) | add' "$RECIPE_MODELS")"
@@ -103,20 +90,16 @@ elif command -v jq >/dev/null 2>&1; then
   "
 else
   echo "[opencode] WARN: jq missing, can't patch $OC_CFG safely."
-  echo "                  Add provider.hum manually — see MIGRATING.md."
+  echo "                  Add this as provider.hum by hand:"
+  echo "  { \"npm\": \"@ai-sdk/openai\", \"options\": { \"baseURL\": \"http://127.0.0.1:$PORT/v1\", \"apiKey\": \"hum-dev\" }, \"models\": { \"claude-opus-4-7\": {} } }"
 fi
 
-# Step 5 — install the claude-cli hive, which enters and runs its worker
-# bee. humd is a router; it can't serve any model without a worker nestled.
 echo "[opencode] installing claude-cli …"
 su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME hum hive claude-cli install" >/dev/null
 
-# Step 6 — install the openai-server hive, which enters and runs its bee.
 echo "[opencode] installing openai-server …"
 su -l "$TARGET" -c "XDG_RUNTIME_DIR=$TARGET_RUNTIME hum hive openai-server install" >/dev/null
 
-# Health check — ask humctl about humnest, and list its bees via the
-# control socket if humctl status doesn't say it all.
 HUMCTL_BIN="$TARGET_HOME/.local/bin/humctl"
 if su -l "$TARGET" -c "test -x $HUMCTL_BIN"; then
   for unit in humd humnest; do

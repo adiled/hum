@@ -80,7 +80,6 @@ fn sigil_for_phone(phone: &str) -> String {
     hex::encode(&h.finalize()[..8])
 }
 
-/// Newline-framed line decoder over the modem byte stream.
 struct LineCodec;
 impl Decoder for LineCodec {
     type Item = String;
@@ -114,7 +113,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
 
-    let bee = hum_identity::bee_from_env()?;
+    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
 
     let mut hello = json!({
         "chi": Chi::Hello,
@@ -131,7 +130,6 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     bee.sign_hello(&mut hello);
     write_line(&mut wr, &hello).await?;
 
-    // Prompt.
     let prompt = json!({
         "chi": Chi::Prompt,
         "rid": hum_identity::HumId::mint().to_string(),
@@ -143,7 +141,6 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     });
     write_line(&mut wr, &prompt).await?;
 
-    // Collect chunks until finish/error.
     let mut collected = String::new();
     while let Some(line) = lines.next_line().await? {
         if line.is_empty() {
@@ -198,7 +195,6 @@ async fn send_sms(writer: &Arc<Mutex<SerialStream>>, to: &str, body: &str) -> Re
         w.write_all(cmd.as_bytes()).await?;
         w.flush().await?;
     }
-    // Brief breath so the modem prints "> " before we send the body.
     tokio::time::sleep(Duration::from_millis(200)).await;
     {
         let mut w = writer.lock().await;
@@ -234,8 +230,6 @@ async fn main() -> Result<()> {
     let cfg = Arc::new(Config::from_env());
     info!(device = %cfg.device, baud = cfg.baud, "gsm-modem.open");
 
-    // Split serial: writes go through the shared Mutex; reads use a
-    // separate handle wrapped in FramedRead.
     let reader_port = tokio_serial::new(&cfg.device, cfg.baud)
         .open_native_async()
         .with_context(|| format!("open {}", cfg.device))?;
@@ -262,7 +256,6 @@ async fn main() -> Result<()> {
             continue;
         }
         if let Some(rest) = line.strip_prefix("+CMT:") {
-            // Format: +CMT: "<from>","","<timestamp>"
             pending_cmt = rest
                 .splitn(2, '"')
                 .nth(1)
@@ -280,7 +273,6 @@ async fn main() -> Result<()> {
                 }
             });
         }
-        // OK / ERROR / unsolicited URCs we don't react to are dropped.
     }
     Err(anyhow!("serial stream ended"))
 }

@@ -29,6 +29,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -181,7 +182,7 @@ func runPrompt(ctx context.Context, cfg config, from, body, messageSid string) (
 	}
 
 	cancel()
-	<-runErrCh // drain
+	<-runErrCh
 
 	mu.Lock()
 	reply := strings.TrimSpace(buf.String())
@@ -205,7 +206,6 @@ func handleSms(cfg config) http.HandlerFunc {
 		_ = r.Body.Close()
 
 		if err := r.ParseForm(); err != nil {
-			// Fall back to manual parse since we already consumed Body.
 			form, perr := parseForm(string(raw))
 			if perr != nil {
 				http.Error(w, "bad form", http.StatusBadRequest)
@@ -213,7 +213,6 @@ func handleSms(cfg config) http.HandlerFunc {
 			}
 			r.PostForm = form
 		}
-		// re-read into PostForm if not already populated
 		if r.PostForm == nil {
 			form, perr := parseForm(string(raw))
 			if perr != nil {
@@ -287,10 +286,22 @@ func pctDecode(s string) (string, error) {
 	return string(out), nil
 }
 
+func humBin() string {
+	if p, err := exec.LookPath("hum"); err == nil {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "bin", "hum")
+}
+
 func signedAs() (thrum.Tone, error) {
-	id := strings.TrimSpace(os.Getenv("HUM_BEE"))
+	out, err := exec.Command(humBin(), "bee", "enter", "--hive", "twilio-sms", "--as", "main").Output()
+	if err != nil {
+		return nil, fmt.Errorf("hum bee enter: %w", err)
+	}
+	id := strings.TrimSpace(string(out))
 	if !strings.HasPrefix(id, "bee_") || len(id) != 68 || strings.ContainsAny(id, "/\\.") {
-		return nil, fmt.Errorf("HUM_BEE %q names no bee: its hive enters one with `hum bee enter --hive twilio-sms`", id)
+		return nil, fmt.Errorf("hum bee enter answered %q, not a bee id", id)
 	}
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {

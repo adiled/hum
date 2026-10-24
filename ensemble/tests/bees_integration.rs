@@ -1,6 +1,6 @@
 //! Bee advertise/discover end-to-end over the gossip layer.
 //!
-//! Three humds in a line (A — B — C). A advertises a bee of the `market-maker`
+//! Three humds in a line, A to B to C. A advertises a bee of the `market-maker`
 //! hive; C calls `bee_discover("market-maker")` and must
 //! receive `(A's Hid, manifest)` within a short timeout. Then A
 //! retracts; via the raw `bee_announcements()` stream, C must

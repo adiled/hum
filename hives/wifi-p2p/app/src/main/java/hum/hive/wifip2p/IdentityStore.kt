@@ -1,3 +1,8 @@
+// The bee is entered on the humd it lands on (`hum bee enter --hive
+// wifi-p2p`); the id that prints and the key filed under it are put in
+// the app's data dir as `hum/bee` and `hum/bees/<id>.key`. Same seed
+// format and signed message as hum-identity.
+
 package hum.hive.wifip2p
 
 import java.io.File
@@ -5,15 +10,6 @@ import java.security.MessageDigest
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 
-/**
- * This bee's identity, as its hive entered it.
- *
- * The bee is entered on the humd it lands on (`hum bee enter --hive
- * wifi-p2p`); the id that prints, and the key filed under it, are
- * provisioned into the app's data dir as `hum/bee` and
- * `hum/bees/<id>.key`. Same seed format and signed message as
- * hum-identity, so humd verifies this hello like any other.
- */
 object IdentityStore {
     private const val SOCKET_DOMAIN = "hum-bee-socket-v1"
 

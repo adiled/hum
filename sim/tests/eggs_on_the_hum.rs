@@ -40,7 +40,7 @@ async fn eggs_on_the_hum() {
     let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
     let worker_hello = serde_json::json!({
         "chi": "hello",
-        "bee": ["worker"],
+        "roles": ["worker"],
         "hive": "claude-cli",
         "version": "0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -58,7 +58,7 @@ async fn eggs_on_the_hum() {
                 "prompt" => {
                     let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     for tone in [
-                        serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                        serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                         serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"reading file…"}),
                         serde_json::json!({
                             "chi":"tool-call","sid":&sid,

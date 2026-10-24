@@ -1,6 +1,6 @@
 //! Universal identity primitive for everything addressable on the hum
 //! wire: SHA-256 of an Ed25519 public key, written `<prefix>_<hex>`.
-//! Content-addressable — no registry, no central naming.
+//! Content-addressable: no registry, no central naming.
 //!
 //! The prefix tells a daemon from a participant and nothing more. A
 //! bee's role is a claim in its hello, so a worker that starts foraging

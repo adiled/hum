@@ -21,7 +21,7 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
             &worker_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -37,7 +37,7 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"remote hi"}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
                 ] {
@@ -106,7 +106,7 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
             &worker_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -122,7 +122,7 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"remote hi"}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
                 ] {

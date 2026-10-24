@@ -103,7 +103,7 @@ put its id and key in the app's data dir:
 
 ```bash
 hum hive ./hives/wifi-p2p install
-id=$(hum bee enter --hive wifi-p2p)
+id=$(hum bee enter --hive wifi-p2p --as phone)
 adb push "${XDG_STATE_HOME:-$HOME/.local/state}/hum/bees/$id.key" /data/local/tmp/
 # then, as the app: <dataDir>/hum/bee holds "$id",
 #                   <dataDir>/hum/bees/$id.key holds the key

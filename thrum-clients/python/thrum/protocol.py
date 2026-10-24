@@ -22,7 +22,6 @@ class HelloBody:
     version: Optional[str] = None
     models: Optional[list[str]] = None
     tools: Optional[list[Any]] = None
-    tool_names: Optional[list[str]] = None
     provides: Optional[list[str]] = None
     chis: Optional[list[str]] = None
     propensity: Optional[Any] = None
@@ -40,7 +39,6 @@ class HelloBody:
         "version": "version",
         "models": "models",
         "tools": "tools",
-        "tool_names": "toolNames",
         "provides": "provides",
         "chis": "chis",
         "propensity": "propensity",

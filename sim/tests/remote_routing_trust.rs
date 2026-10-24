@@ -21,7 +21,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
             &worker_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -91,7 +91,7 @@ async fn opting_in_restores_discovery_routing() {
             &worker_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -107,7 +107,7 @@ async fn opting_in_restores_discovery_routing() {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
+                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
                     serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"remote hi"}),
                     serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
                 ] {

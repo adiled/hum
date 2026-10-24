@@ -1,5 +1,4 @@
 ARG HUM_SRC=
-ARG HUM_BEE=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -7,5 +6,4 @@ ONESHOT true
 
 SERVICE paid-oracle
 RUN ${HUM_SRC}/target/release/paid-oracle
-ENV HUM_BEE=${HUM_BEE}
 RESTART always

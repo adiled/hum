@@ -1,8 +1,9 @@
-//! Bees — the participants a humd hears from.
+//! Bees: the participants a humd hears from.
 //!
-//! hum starts no bee. A hive enters one — mints its key and signs it in
-//! under the hive — and whatever the hive runs as that bee signs its
-//! hello with the key. Exiting signs it out; humd refuses its next hello.
+//! hum starts no bee. A hive enters one, minting its key and signing it
+//! in under the hive by a label of its choosing when it wants to find the
+//! same bee again, and whatever acts as that bee signs its hello with the
+//! key. Exiting signs it out; humd refuses its next hello.
 
 use anyhow::{Result, bail};
 use hum_identity::Hid;
@@ -27,12 +28,18 @@ fn texts(v: &Value, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn enter(hive: &str) -> Result<()> {
-    if !hum_paths::hive_installed(hive) {
-        bail!("{hive} is not installed on this humd — `hum hive <ref> install` first");
-    }
-    let key = hum_identity::mint_bee_key()?;
-    hum_identity::enter(hive, &key)?;
+pub fn enter(hive: &str, label: Option<&str>) -> Result<()> {
+    let key = match label {
+        Some(label) => hum_identity::enter_as(hive, label)?,
+        None => {
+            if !hum_paths::hive_installed(hive) {
+                bail!("{hive} is not installed on this humd — `hum hive <ref> install` first");
+            }
+            let key = hum_identity::mint_bee_key()?;
+            hum_identity::enter(hive, "", &key)?;
+            key
+        }
+    };
     println!("{}", key.id());
     Ok(())
 }
@@ -82,12 +89,10 @@ pub fn list() -> Result<()> {
             (false, None) => "entered, not nestled",
         };
         let mark = if state == "nestled" { "●" } else { "○" };
-        println!("{mark} {id}  —  hive {}, {state}", entry.hive);
+        let label = if entry.label.is_empty() { String::new() } else { format!(" as {}", entry.label) };
+        println!("{mark} {id}  —  hive {}{label}, {state}", entry.hive);
         if let Some(m) = nest_of(id) {
-            let mut roles = texts(m, "roles");
-            if roles.is_empty() {
-                roles = texts(m, "bee");
-            }
+            let roles = texts(m, "roles");
             if !roles.is_empty() {
                 println!("    roles:    {}", roles.join("+"));
             }
@@ -112,6 +117,6 @@ pub fn list() -> Result<()> {
     }
 
     println!("● nestled in humd   ○ entered or exited, not nestled");
-    println!("verbs: hum bee enter --hive <hive>   |   hum bee <id> exit | reenter");
+    println!("verbs: hum bee enter --hive <hive> [--as <label>]   |   hum bee <id> exit | reenter");
     Ok(())
 }

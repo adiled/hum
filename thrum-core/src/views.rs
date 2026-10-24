@@ -41,9 +41,6 @@ pub struct HelloBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "toolNames")]
-    pub tool_names: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub provides: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chis: Option<Vec<String>>,

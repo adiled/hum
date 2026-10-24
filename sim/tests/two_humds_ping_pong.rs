@@ -29,7 +29,7 @@ async fn two_humds_ping_pong() {
         "sid": "ping-sid",
         "to": a.id.to_hex(),
         "from": b.id.to_hex(),
-        "mark": "ping",
+        "note": "ping",
     });
     sim_arc
         .nestler_send(b.id, tone)

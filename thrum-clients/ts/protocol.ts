@@ -19,7 +19,6 @@ export interface HelloBody {
   signature: string;
   models?: string[];
   tools?: unknown[];
-  toolNames?: string[];
   provides?: string[];
   chis?: string[];
   propensity?: unknown;

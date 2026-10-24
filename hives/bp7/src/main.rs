@@ -144,7 +144,7 @@ async fn run_prompt(cfg: &Config, payload: &Payload) -> Result<String> {
     let (rd, mut wr) = stream.into_split();
     let mut lines = BufReader::new(rd).lines();
 
-    let bee = hum_identity::bee_from_env()?;
+    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
 
     let mut hello = json!({
         "chi": Chi::Hello,

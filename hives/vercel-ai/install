@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install this hive's bee on a humd: build it, enter it, keep it running.
+# Install this hive on a humd: build its bee and keep it running. The bee
+# enters itself under the hive when it starts.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,16 +11,10 @@ mkdir -p "$state"
 
 "$here/build"
 
-bee="$(cat "$state/bee" 2>/dev/null || true)"
-if [ -z "$bee" ] || ! hum bee "$bee" reenter >/dev/null 2>&1; then
-  bee="$(hum bee enter --hive "$hive")"
-  printf '%s\n' "$bee" > "$state/bee"
-fi
-
-args=(--arg "HUM_SRC=$here" --arg "HUM_BEE=$bee")
+args=(--arg "HUM_SRC=$here")
 while read -r name; do
   if [ -n "${!name:-}" ]; then args+=(--arg "$name=${!name}"); fi
-done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_BEE -e HUM_HIVE)
+done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_HIVE)
 
 run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
 run fell >/dev/null 2>&1 || true

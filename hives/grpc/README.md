@@ -68,7 +68,7 @@ HUM_THRUM_SOCK=/path/to/thrum.sock cargo run -p grpc-bee
 Each gRPC bidi stream opens its own thrum connection so concurrent
 clients can use overlapping sids without colliding handler state.
 On stream open, the bee sends a `chi:"hello"` to humd which
-gossips a `BeeManifest` to the rest of the ensemble — other
+gossips a `BeeManifest` to the rest of the ensemble, and other
 humds discover this bee via:
 
 ```rust

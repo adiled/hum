@@ -6,7 +6,7 @@
 //!
 //! A hive once seen is remembered and only a miss looks at disk, so a
 //! hive installed while humd runs is recognised without a restart, while
-//! forgetting one takes a restart — the bargain the revocation list makes.
+//! forgetting one takes a restart, the bargain the revocation list makes.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -65,7 +65,7 @@ pub fn hive_of(hello: &Value) -> &str {
 }
 
 pub fn roles_of(hello: &Value) -> Vec<String> {
-    match hello.get("roles").or_else(|| hello.get("bee")) {
+    match hello.get("roles") {
         Some(Value::Array(arr)) => arr
             .iter()
             .filter_map(Value::as_str)
@@ -101,11 +101,10 @@ mod tests {
     }
 
     #[test]
-    fn roles_are_read_from_roles_then_from_the_old_bee_field() {
+    fn roles_are_read_from_roles_alone() {
         assert_eq!(roles_of(&json!({"roles": ["worker", "forager"]})), ["worker", "forager"]);
-        assert_eq!(roles_of(&json!({"bee": ["forager"]})), ["forager"]);
-        assert_eq!(roles_of(&json!({"bee": "worker"})), ["worker"]);
-        assert_eq!(roles_of(&json!({"roles": ["worker"], "bee": ["forager"]})), ["worker"]);
+        assert_eq!(roles_of(&json!({"roles": "worker"})), ["worker"]);
+        assert!(roles_of(&json!({"bee": ["forager"]})).is_empty());
         assert!(roles_of(&json!({})).is_empty());
     }
 }

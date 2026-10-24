@@ -1,4 +1,4 @@
-//! Hives — the kinds a humd is taught.
+//! Hives: the kinds a humd is taught.
 //!
 //! A directory with an `Orchfile` is a hive. hum recognises one unit in
 //! it, `hive-install`, runs it at install, and leaves everything else to

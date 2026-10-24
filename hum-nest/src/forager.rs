@@ -32,7 +32,7 @@ use hum_mcp::protocol::{ToolDef, ToolResult};
 use serde_json::{json, Value};
 use tracing::{info, trace};
 
-use hum_identity::bee_from_env;
+use hum_identity::enter_as;
 
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync + 'static {
@@ -68,11 +68,10 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(socket = %path.display(), hive = %advert.hive, "forager.connecting");
     let (reader, write_half) = hum_thrum::connect(path).await?;
 
-    let bee_key = bee_from_env()
-        .with_context(|| format!("which bee of {} is this process?", advert.hive))?;
+    let bee_key = enter_as(&advert.hive, "main")
+        .with_context(|| format!("enter the main bee of {}", advert.hive))?;
 
     let defs = dispatcher.tool_defs();
-    let tool_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     let tools_value: Vec<Value> = defs.iter().map(|d| json!({
         "name": d.name,
         "description": d.description,
@@ -86,7 +85,6 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
         "version": &advert.version,
         "protoVersion": thrum_core::THRUM_VERSION,
         "tools": tools_value,
-        "toolNames": tool_names,
         "provides": &advert.provides,
         "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo"],
         "source": advert.source.clone().unwrap_or_default(),
@@ -96,7 +94,7 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
     info!(
         hive = %advert.hive,
         hid = %bee_key.hid.short(),
-        tools = ?tool_names,
+        tools = defs.len(),
         provides = ?advert.provides,
         "forager.hello.sent"
     );
@@ -110,13 +108,11 @@ async fn dial_and_serve<D: ToolDispatcher + 'static>(
                 tokio::spawn(async move {
                     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
                     let call_id = tone.get("callId").and_then(Value::as_str).unwrap_or("").to_string();
-                    let tool_name = tone.get("toolName").and_then(Value::as_str).unwrap_or("").to_string();
                     let result = dispatcher.dispatch(tone).await;
                     let body = json!({
                         "chi": "tool-result",
                         "sid": sid,
                         "callId": call_id,
-                        "toolName": tool_name,
                         "output": result.output,
                         "isError": result.is_error,
                         "title": result.title,

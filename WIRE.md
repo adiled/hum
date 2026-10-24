@@ -58,12 +58,20 @@ Beyond the envelope, **each chi defines its own body fields**. A
 Unknown body fields MUST be preserved on forwarding paths (gRPC
 bridge, gossip relay) so future chi extensions are backward-compatible.
 
+A key is **declared** when it is an envelope key or a field of its chi's
+body struct in `thrum-core/src/views.rs`; those structs are the spec
+(`thrum_core::spec`). Anything else is undeclared: no bee should send it
+and no humd may rely on it. A bee's private data goes under `ext`. humd
+checks every tone it hears and sends. In the field it logs each
+undeclared key once (`thrum.tone.undeclared`); in the simulator the test
+fails. A new key on the wire starts as a field in `views.rs`.
+
 ## Handshake
 
 The first tone a nestler sends after `connect()` MUST be `chi:"hello"`.
 **This tone is the registration**: the humd that receives it now knows
 your bee exists, what chi values you speak, and can route tones
-to you — provided the hive your hello names is installed on that humd
+to you, provided the hive your hello names is installed on that humd
 (`hum hive <ref> install`) and the hello is signed by a key that hive
 entered (`hum bee enter --hive <hive>`). A humd understands a bee only
 through its hive, and knows it only by its key. The ensemble layer (peer humds, gossip) and the on-chain layer
@@ -100,10 +108,10 @@ single protocol.
 }
 ```
 
-- `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature` —
-  **required**. The signature proves the hello comes from the entered
+- `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt` and `signature`
+  are **required**. The signature proves the hello comes from the entered
   key the `hid` names (see [hives/README.md](hives/README.md)).
-- `roles` is what the bee claims to do — `worker`, `forager`, both, or
+- `roles` is what the bee claims to do: `worker`, `forager`, both, or
   a role of its own. It is a claim, not identity. Older bees sent it
   as `bee`; humd still reads that.
 - `chis` (note: plural) is the list of chi values this bee speaks
@@ -204,7 +212,7 @@ with no description here has none in the clients either.
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `hello` | `hive`, `protoVersion`, optional `roles`/`hid`/`version`/`propensity`/`chis`/`source` | first frame after connect — announce self | announce self — protoVersion, bee, version |
+| `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
 | `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn | start a turn — content, system, tools |
 | `cancel` | `sid` | interrupt the current turn for this sid | interrupt mid-turn |
 | `cleanup` | `sid` | drop daemon state for this session | session deleted, drop daemon state |

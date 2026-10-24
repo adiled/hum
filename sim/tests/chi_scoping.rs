@@ -14,7 +14,7 @@ use sim::{Sim, SimHumd};
 fn base_hello(chis: Option<&[&str]>) -> Value {
     let mut hello = serde_json::json!({
         "chi": "hello",
-        "bee": ["worker"],
+        "roles": ["worker"],
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -30,7 +30,7 @@ fn peer_reply(chi: &str, sid: &str) -> Value {
         "chi": chi,
         "from": "ensemble",
         "sid": sid,
-        "text": "hello from the other side",
+        "delta": "hello from the other side",
     })
 }
 

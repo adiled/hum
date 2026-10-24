@@ -16,7 +16,7 @@ async fn a_hello_with_no_proto_version_is_disconnected() {
             &cid,
             humd.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.1.0",
                 "chis": ["hello", "prompt"],
@@ -47,7 +47,7 @@ async fn a_hello_from_another_major_is_disconnected() {
             &cid,
             humd.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.1.0",
                 "protoVersion": "9.0.0",
@@ -78,7 +78,7 @@ async fn a_hello_within_the_same_major_stays_connected() {
             &cid,
             humd.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "bee": ["worker"],
+                "roles": ["worker"],
                 "hive": "claude-cli",
                 "version": "0.1.0",
                 "protoVersion": "0.1.0",
@@ -145,15 +145,5 @@ async fn a_bee_of_an_installed_hive_stays_whatever_its_roles() {
             "protoVersion": thrum_core::THRUM_VERSION,
         }))
         .await
-    );
-    assert!(
-        hello_survives(serde_json::json!({
-            "chi": "hello",
-            "bee": ["worker"],
-            "hive": "claude-cli",
-            "protoVersion": thrum_core::THRUM_VERSION,
-        }))
-        .await,
-        "a bee still saying `bee` for its roles is the same bee"
     );
 }

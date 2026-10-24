@@ -20,7 +20,6 @@ type HelloBody struct {
 	Signature string `json:"signature"`
 	Models []string `json:"models,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
-	ToolNames []string `json:"toolNames,omitempty"`
 	Provides []string `json:"provides,omitempty"`
 	Chis []string `json:"chis,omitempty"`
 	Propensity json.RawMessage `json:"propensity,omitempty"`

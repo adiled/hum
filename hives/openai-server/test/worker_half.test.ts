@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type Subprocess } from "bun";
@@ -119,12 +119,19 @@ let server: Subprocess<"ignore", "pipe", "pipe">;
 async function boot(toolCallsFirstTurn: boolean) {
   openAI = await startFakeOpenAI(toolCallsFirstTurn);
   humd = await startFakeHumd();
+  const xdg = mkdtempSync(join(tmpdir(), "hum-worker-xdg-"));
+  mkdirSync(join(xdg, "config", "hum", "hives.d"), { recursive: true });
+  writeFileSync(join(xdg, "config", "hum", "hives.d", "openai-server.orch"), "");
+  const humBin = join(import.meta.dir, "..", "..", "..", "target", "debug");
   server = spawn({
     cmd: ["bun", "src/index.ts"],
     cwd: import.meta.dir + "/..",
     env: {
       ...process.env,
       HUM_THRUM_SOCK: humd.sockPath,
+      XDG_CONFIG_HOME: join(xdg, "config"),
+      XDG_STATE_HOME: join(xdg, "state"),
+      PATH: `${humBin}:${process.env.PATH ?? ""}`,
       OPENAI_SERVER_PORT: "14629",
       OPENAI_SERVER_API_KEY: "",
       OPENAI_API_BASE: `http://127.0.0.1:${openAI.port}/v1`,

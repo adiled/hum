@@ -37,6 +37,7 @@ impl EnteredBees {
                 Entry {
                     hive: hive.to_string(),
                     pubkey: hex::encode(key.pubkey_bytes()),
+                    label: String::new(),
                     exited: false,
                 },
             );
@@ -95,6 +96,7 @@ mod tests {
             Entry {
                 hive: "humfs".into(),
                 pubkey: hex::encode(other.pubkey_bytes()),
+                label: String::new(),
                 exited: false,
             },
         );

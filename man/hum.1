@@ -50,10 +50,10 @@ Manage the hives this humd understands. A directory with an Orchfile is a
 hive. A bee naming a hive that is not installed here is refused.
 .RS
 .B hum hive \-\-list
-\(em the catalogue, what is installed here, and how many bees each has entered.
+The catalogue, what is installed here, and how many bees each has entered.
 .br
 .B hum hive \fIref\fR install
-\(em record the hive on this humd, then run its \fBhive-install\fR unit, if
+Record the hive on this humd, then run its \fBhive-install\fR unit, if
 it has one, with \fBHUM_SRC\fR, \fBHUM_HIVE\fR and \fBhum\fR on its PATH; a
 failed unit takes the record back. hum starts nothing else: what the hive
 runs is its own business. \fIref\fR is a bundled name (e.g. \fBclaude-cli\fR,
@@ -61,7 +61,7 @@ runs is its own business. \fIref\fR is a bundled name (e.g. \fBclaude-cli\fR,
 advertises (a github tree URL of a \fBhives/<hive>\fR directory).
 .br
 .B hum hive \fIref\fR uninstall
-\(em forget the hive. What it started is its own to stop; a running humd
+Forget the hive. What it started is its own to stop; a running humd
 keeps understanding it until restart.
 .RE
 .TP
@@ -71,17 +71,19 @@ the bee; humd admits only a signed hello from an entered bee whose hive is
 installed. hum starts no process.
 .RS
 .B hum bee \-\-list
-\(em bees entered here, and which have nestled.
+Bees entered here, and which have nestled.
 .br
-.B hum bee enter \-\-hive \fIhive\fR
-\(em mint a bee, sign it in under the hive, and print its id. The hive
-passes the id to whatever acts as the bee, conventionally in \fBHUM_BEE\fR.
+.B hum bee enter \-\-hive \fIhive\fR [\-\-as \fIlabel\fR]
+Sign a bee in under the hive and print its id. With a label, the same
+hive and label are always the same bee, so a process enters itself each
+time it starts and a runtime can hold one bee per label; without one,
+every call mints a new bee.
 .br
 .B hum bee \fIid\fR exit
-\(em sign the bee out; humd refuses its next hello.
+Sign the bee out; humd refuses its next hello.
 .br
 .B hum bee \fIid\fR reenter
-\(em sign it back in.
+Sign it back in.
 .RE
 .TP
 .B comb [\fIhive\fR]
@@ -231,10 +233,6 @@ does not shut under you. This variable overrides that key.
 .TP
 .B HUM_MCP_PORT
 Port for humd's own MCP server. Default 29147.
-.TP
-.B HUM_BEE
-The id of the bee a process acts as, set by the hive that entered it. The
-bundled bees load the key filed under it and sign their hello with it.
 .TP
 .B CLAUDE_CLI_PATH
 Path to the claude binary the worker cells spawn. Default \fBclaude\fR on

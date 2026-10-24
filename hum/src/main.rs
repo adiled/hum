@@ -9,10 +9,10 @@
 //!   hum hive <ref> install   teach this humd a hive (runs its hive-install)
 //!   hum hive <ref> uninstall forget a hive
 //!   hum bee --list           the bees entered here, and which have nestled
-//!   hum bee enter --hive <h> sign a new bee in under a hive; prints its id
+//!   hum bee enter --hive <h> sign a bee in under a hive (--as <label>); prints its id
 //!   hum bee <id> exit        sign it out (reenter signs it back in)
 //!   hum config               show the paths hum keeps
-//!   hum comb [hive]          show the comb — lifetime measures
+//!   hum comb [hive]          show the comb: lifetime measures
 //!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
 //!                          (status | tail | range | verify | replay)
@@ -64,8 +64,8 @@ enum Cmd {
     },
     #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + worker logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
     Doctor,
-    #[command(about = "Hives — the kinds this humd understands.")]
-    #[command(long_about = "Hives — the kinds this humd understands.
+    #[command(about = "Hives: the kinds this humd understands.")]
+    #[command(long_about = "Hives: the kinds this humd understands.
 
   hum hive --list             the catalogue, and what is installed here
   hum hive <ref> install      teach this humd the hive
@@ -88,16 +88,17 @@ advertises (github tree URL of a hives/<hive> dir).")]
         #[arg(long)]
         list: bool,
     },
-    #[command(about = "Bees — the participants this humd hears from.")]
-    #[command(long_about = "Bees — the participants this humd hears from.
+    #[command(about = "Bees: the participants this humd hears from.")]
+    #[command(long_about = "Bees: the participants this humd hears from.
 
-A bee is a key. A hive enters one under itself, hands its id to whatever
-will act as that bee (through HUM_BEE), and that process signs its hello
-with the key. humd admits only a signed hello from an entered bee whose
-hive is installed. hum starts no process.
+A bee is a key. A hive enters one under itself, by a label when it wants
+the same bee back each time, and whatever acts as that bee signs its
+hello with the key. humd admits only a signed hello from an entered bee
+whose hive is installed. hum starts no process.
 
-  hum bee --list               bees entered here, and which have nestled
-  hum bee enter --hive <hive>  mint a bee and sign it in; prints its id
+  hum bee --list                            bees entered here, and which have nestled
+  hum bee enter --hive <hive> [--as <l>]    sign a bee in; prints its id
+                                            (the same bee every time for one label)
   hum bee <id> exit            sign it out; humd refuses its next hello
   hum bee <id> reenter         sign it back in")]
     #[command(verbatim_doc_comment)]
@@ -109,6 +110,9 @@ hive is installed. hum starts no process.
         #[arg(help = "The hive to enter a bee under")]
         #[arg(long)]
         hive: Option<String>,
+        #[arg(help = "The label the hive knows this bee by; the same hive and label are always the same bee")]
+        #[arg(long = "as")]
+        label: Option<String>,
         #[arg(help = "List bees")]
         #[arg(long)]
         list: bool,
@@ -233,7 +237,7 @@ fn main() -> Result<()> {
         Some(Cmd::Logs { lines }) => logs(lines),
         Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
-        Some(Cmd::Bee { target, verb, hive, list }) => bee(target, verb, hive, list),
+        Some(Cmd::Bee { target, verb, hive, label, list }) => bee(target, verb, hive, label, list),
         Some(Cmd::Comb { hive }) => comb(hive),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
@@ -720,12 +724,18 @@ fn hive_list() -> Result<()> {
     Ok(())
 }
 
-fn bee(target: Option<String>, verb: Option<String>, hive: Option<String>, list: bool) -> Result<()> {
+fn bee(
+    target: Option<String>,
+    verb: Option<String>,
+    hive: Option<String>,
+    label: Option<String>,
+    list: bool,
+) -> Result<()> {
     if list || (target.is_none() && verb.is_none()) {
         return bees::list();
     }
     match (target.as_deref(), verb, hive) {
-        (Some("enter"), None, Some(h)) => bees::enter(&h),
+        (Some("enter"), None, Some(h)) => bees::enter(&h, label.as_deref()),
         (Some("enter"), None, None) => anyhow::bail!("hum bee enter --hive <hive>"),
         (Some(id), Some(v), None) => bees::act(id, &v),
         (Some(id), None, _) => anyhow::bail!("hum bee {id} <verb> — exit | reenter"),

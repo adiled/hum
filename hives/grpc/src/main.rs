@@ -34,7 +34,6 @@ fn humd_sock_path() -> String {
     hum_paths::thrum_sock_resolved().to_string_lossy().into_owned()
 }
 
-/// One bidi stream's bridge: open a thrum connection, pump tones both ways.
 async fn bridge(
     mut incoming: Streaming<Tone>,
     out: mpsc::Sender<Result<Tone, Status>>,
@@ -42,7 +41,7 @@ async fn bridge(
     let (reader, write_half) = thrum::connect(Path::new(&humd_sock_path())).await
         .with_context(|| format!("connect {}", humd_sock_path()))?;
 
-    let bee = hum_identity::bee_from_env()?;
+    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
 
     let mut hello = serde_json::json!({
         "chi": Chi::Hello,
@@ -62,7 +61,6 @@ async fn bridge(
     bee.sign_hello(&mut hello);
     thrum::send_json(&write_half, &hello).await?;
 
-    // gRPC → thrum
     let to_thrum = tokio::spawn(async move {
         while let Some(item) = incoming.next().await {
             let wire = match item {
@@ -72,8 +70,6 @@ async fn bridge(
                     break;
                 }
             };
-            // Body is authoritative — full JSON tone. Fall back to
-            // (chi, sid, rid) if body is empty (older clients).
             let line = if !wire.body.is_empty() {
                 match String::from_utf8(wire.body.clone()) {
                     Ok(s) => s,
@@ -97,7 +93,6 @@ async fn bridge(
         }
     });
 
-    // thrum → gRPC
     thrum::read_tones(reader, |tone| {
         let out = out.clone();
         tokio::spawn(async move {

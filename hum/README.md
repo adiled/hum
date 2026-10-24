@@ -25,9 +25,9 @@ hum hive --list              # the catalogue, and what is installed here
 hum hive <ref> install       # teach this humd a hive (runs its hive-install)
 hum hive <ref> uninstall     # forget it
 hum bee --list               # bees entered here, and which have nestled
-hum bee enter --hive <hive>  # sign a new bee in; prints its id
+hum bee enter --hive <hive> [--as <label>]  # sign a bee in; prints its id
 hum bee <id> exit|reenter
-hum comb [hive]              # the comb — lifetime measures
+hum comb [hive]              # the comb: lifetime measures
 hum thehum status|tail|range|verify|replay
 hum recipes [name]           # list / run recipes
 hum uninstall                # stop + remove binary (state preserved)
@@ -85,22 +85,23 @@ Hints are wire-shaped strings: `tcp:host:port`, `iroh:<64-hex>`,
 what a remote peer pastes in.
 
 ### `hive`
-Hives — the kinds this humd understands. A directory with an
+Hives are the kinds this humd understands. A directory with an
 `Orchfile` is a hive. `hum hive --list` shows the catalogue (`hives/`),
 what is installed here, and how many bees each has entered. `hum hive
 <ref> install` resolves the ref (bundled name, local path, or github
 tree URL), records the hive at `~/.config/hum/hives.d/<hive>.orch`, and
-runs its `hive-install` unit if it declares one — with `HUM_SRC`,
+runs its `hive-install` unit if it declares one, with `HUM_SRC`,
 `HUM_HIVE`, and `hum` on its `PATH`, so the unit can enter bees and start
 whatever it runs. A failed unit takes the record back. `hum hive <ref>
 uninstall` forgets the hive; what the hive started is its own to stop.
 
 ### `bee`
-Bees — the participants humd hears from. A bee is a key its hive
-entered. `hum bee enter --hive <hive>` mints one, records it under the
-hive, and prints its id; whatever the hive runs as that bee signs its
-hello with the key (`HUM_BEE` carries the id by convention). `hum bee
-<id> exit` signs it out — humd refuses its next hello — and `reenter`
+Bees are the participants humd hears from. A bee is a key its hive
+entered. `hum bee enter --hive <hive> --as <label>` signs one in under
+the hive and prints its id: the same bee every time for one label, so a
+process can enter itself at each start and a runtime can hold one bee per
+requester. Whatever acts as the bee signs its hello with the key. `hum bee
+<id> exit` signs it out, so humd refuses its next hello, and `reenter`
 signs it back in. `hum bee --list` shows every entered bee and whether
 it has nestled. hum starts no process.
 

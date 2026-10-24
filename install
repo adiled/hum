@@ -41,11 +41,6 @@ ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
 
-# orchd — a supervisor for hives to use. Built from crates.io, pinned to an exact
-# version: the bundled hives call its verbs, so the version is
-# part of hum's contract. 0.4.0 carries the launchd status fix
-# (orchd#56), without which `orchd survey` reports running bees as
-# inactive on macOS.
 ORCHD_MIN_VERSION="0.4.0"
 ORCHD_MAX_VERSION="0.4.0"
 ORCHD_NAMESPACE="hum"
@@ -79,10 +74,6 @@ ensure_min_version() {
   else fail "$NAME ${CUR} < ${MIN} — upgrade and re-run."; fi
 }
 
-# orchd renamed its verbs (up/down/restart/status -> grow/survey/fell).
-# A version number cannot tell the two apart — both report 0.3.4 — so
-# hum checks the command surface it actually calls. Version gates catch
-# old builds; this catches a build from the wrong side of the rename.
 ensure_orchd_api() {
   local BIN="$1" HELP MISSING=""
   HELP="$("$BIN" --help 2>/dev/null || true)"
@@ -111,8 +102,6 @@ ensure_identity() {
   local KEY="$HUM_STATE/humd.key"
   if [ -s "$KEY" ]; then log "humd identity: $KEY ✓"; return 0; fi
   log "minting humd identity at $KEY"
-  # Use dd directly — works everywhere. openssl on macOS (LibreSSL)
-  # doesn't support Ed25519, and this avoids the dependency entirely.
   dd if=/dev/urandom of="$KEY" bs=32 count=1 2>/dev/null
   chmod 600 "$KEY"
 }
@@ -146,14 +135,6 @@ JSON
   log "wrote default hum.json at $CFG"
 }
 
-# Install man/hum.1 where `man hum` will find it.
-#
-# Prefers the first writable directory on the standard search path:
-# /usr/local/share/man (system-wide, needs no PATH tweak) then
-# $HOME/.local/share/man (per-user). The file goes in the man1
-# subsection, which is where `man hum` looks for a page named hum.
-# Best-effort: a man page is a nicety, and a read-only prefix must not
-# fail the install.
 install_man_page() {
   local PAGE
   for PAGE in "$(dirname "$0")/man/hum.1" "$HUM_SRC/man/hum.1"; do
@@ -170,16 +151,6 @@ install_man_page() {
   done
 }
 
-# Resolve the source tree to build from, and the ref to build.
-#
-# The script never mutates a checkout it did not create. When it is run
-# from inside a hum checkout, that checkout is the source — but only for
-# --edge, where "the source" means main HEAD. The stable channel always
-# builds the published tag from the managed clone, so a dev's working
-# tree never leaks into someone else's install.
-#
-# The resolved path goes to stdout; everything else goes to stderr, so
-# the caller can capture the path without swallowing the narration.
 prepare_src() {
   local MODE="$1" LOCAL_SRC=""
   if [ -f "$(dirname "$0")/Cargo.toml" ] && grep -q '"humd"' "$(dirname "$0")/Cargo.toml"; then
@@ -258,9 +229,6 @@ trust_remote_workers="${HUM_TRUST_REMOTE_WORKERS:-0}"
 
 write_linux_unit() {
   mkdir -p "$linux_unit_dir"
-  # Keep whatever environment the unit already carries. An install that
-  # rewrites the unit from its own environment silently unsets what the
-  # daemon was configured with — the trust flag, for one.
   local TRUST_LINE=""
   if [ -f "$linux_unit_dir/humd.service" ]; then
     TRUST_LINE="$(grep -E '^Environment=' "$linux_unit_dir/humd.service" || true)"
@@ -289,8 +257,6 @@ EOF
 
 write_darwin_unit() {
   mkdir -p "$darwin_unit_dir"
-  # Same as the systemd unit: an install keeps the environment the
-  # daemon already had, and only adds to it.
   local TRUST_XML=""
   if [ -f "$darwin_unit_dir/humd.plist" ]; then
     TRUST_XML="$(awk '/<key>EnvironmentVariables<\/key>/{f=1} f{print} /<\/dict>/{if(f){exit}}' "$darwin_unit_dir/humd.plist")"
@@ -316,9 +282,6 @@ $TRUST_XML
 EOF
   local uid; uid="$(id -u)"
   launchctl bootout "gui/$uid/humd" 2>/dev/null || true
-  # bootout returns before launchd has finished unloading the job, and a
-  # bootstrap that lands in that window fails with EIO. Wait for the job
-  # to be gone, then retry the bootstrap once for good measure.
   local i
   for i in $(seq 1 20); do
     launchctl print "gui/$uid/humd" >/dev/null 2>&1 || break
@@ -353,10 +316,6 @@ print_next_steps() {
   check_path_hint
 }
 
-# Warn loudly when ~/.local/bin isn't on $PATH. Without it,
-# `hum`/`humd`/`humctl`/`orchd` aren't reachable by bare name
-# from a fresh shell, and `hum hive <ref> install` fails late with confusing
-# errors.
 check_path_hint() {
   case ":$PATH:" in
     *":$HUM_BIN_ROOT/bin:"*) return 0 ;;

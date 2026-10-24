@@ -5,7 +5,7 @@
 // a different bee name.
 
 import { createConnection, type Socket } from "node:net";
-import { signedAs } from "./identity";
+import { enter, signedAs } from "./identity";
 import pkg from "../package.json";
 
 export const THRUM_VERSION = "0.8.0";
@@ -65,7 +65,7 @@ export class ThrumClient {
       const hello: Tone = {
         chi: "hello",
         rid: `hello-${Date.now().toString(36)}`,
-        ...signedAs(),
+        ...signedAs(enter(HIVE_NAME, "main")),
         roles: ["forager"],
         hive: HIVE_NAME,
         provides: ["session"],

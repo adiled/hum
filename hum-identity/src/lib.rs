@@ -2,13 +2,15 @@
 //!
 //! A bee is its key, and the key is filed under the id it hashes to, so
 //! nothing but the key names a bee. A hive brings a bee into being by
-//! entering it — minting a key and recording the hive it entered under —
-//! and hands the id to whatever will act as that bee, through `HUM_BEE`.
-//! Whoever can read the key is the bee; humd admits only a hello signed
-//! by an entered key, so the key file is the trust boundary.
+//! entering it: minting a key and recording the hive it entered under.
+//! A hive that keeps track of its bees by something of its own (a role,
+//! a requester's fingerprint) enters them under a label: the same hive
+//! and label are always the same bee. Whoever can read the key is the
+//! bee; humd admits only a hello signed by an entered key, so the key
+//! file is the trust boundary.
 //!
 //! File format: raw 32-byte Ed25519 secret seed, mode 0o600, atomic
-//! write-and-rename — the same convention as humd's daemon key. An entry
+//! write-and-rename, the same convention as humd's daemon key. An entry
 //! is a small JSON file beside it, carrying only public facts.
 //!
 //! This is a *leaf* crate for remote hives: it depends only on
@@ -102,8 +104,6 @@ pub fn socket_hello_message(hid: &Hid, signed_at_ms: i64) -> Vec<u8> {
     format!("{}:{}:{}", BEE_SOCKET_DOMAIN, hid.to_hex(), signed_at_ms).into_bytes()
 }
 
-pub const BEE_ENV: &str = "HUM_BEE";
-
 pub fn bee_key_path(id: &str) -> PathBuf {
     hum_paths::bee_key(id)
 }
@@ -140,21 +140,12 @@ pub fn load_bee_key(id: &str) -> Result<BeeKey> {
     Ok(key)
 }
 
-pub fn bee_from_env() -> Result<BeeKey> {
-    let id = std::env::var(BEE_ENV).unwrap_or_default();
-    if id.trim().is_empty() {
-        return Err(anyhow!(
-            "{BEE_ENV} is unset: this process has not been told which bee it is. \
-             Its hive enters a bee with `hum bee enter --hive <hive>` and passes the id in {BEE_ENV}."
-        ));
-    }
-    load_bee_key(id.trim())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     pub hive: String,
     pub pubkey: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exited: bool,
 }
@@ -171,18 +162,44 @@ fn write_entry(id: &str, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
-pub fn enter(hive: &str, key: &BeeKey) -> Result<()> {
+pub fn enter(hive: &str, label: &str, key: &BeeKey) -> Result<()> {
     if !hum_paths::is_plain_name(hive) {
         return Err(anyhow!("{hive:?} is not a hive name"));
+    }
+    if !label.is_empty() && !hum_paths::is_plain_name(label) {
+        return Err(anyhow!("{label:?} is not a plain label"));
     }
     let entry = Entry {
         hive: hive.to_string(),
         pubkey: hex::encode(key.pubkey_bytes()),
+        label: label.to_string(),
         exited: false,
     };
     write_entry(&key.id(), &entry)?;
-    info!(hid = %key.hid.short(), hive, "bee.entered");
+    info!(hid = %key.hid.short(), hive, label, "bee.entered");
     Ok(())
+}
+
+pub fn enter_as(hive: &str, label: &str) -> Result<BeeKey> {
+    if !hum_paths::hive_installed(hive) {
+        return Err(anyhow!("{hive} is not installed on this humd — `hum hive <ref> install` first"));
+    }
+    if !hum_paths::is_plain_name(label) {
+        return Err(anyhow!("{label:?} is not a plain label"));
+    }
+    if let Some((id, e)) = entered()
+        .into_iter()
+        .find(|(_, e)| e.hive == hive && e.label == label)
+    {
+        let key = load_bee_key(&id)?;
+        if e.exited {
+            set_exited(&id, false)?;
+        }
+        return Ok(key);
+    }
+    let key = mint_bee_key()?;
+    enter(hive, label, &key)?;
+    Ok(key)
 }
 
 fn set_exited(id: &str, exited: bool) -> Result<bool> {
@@ -324,7 +341,7 @@ mod tests {
 
         let key = mint_bee_key().expect("mint");
         assert!(entry(&key.id()).is_none());
-        enter("claude-cli", &key).expect("enter");
+        enter("claude-cli", "", &key).expect("enter");
         let got = entry(&key.id()).expect("entered");
         assert_eq!(got.hive, "claude-cli");
         assert_eq!(got.pubkey, hex::encode(key.pubkey_bytes()));
@@ -343,16 +360,28 @@ mod tests {
     }
 
     #[test]
-    fn a_process_learns_which_bee_it_is_from_hum_bee() {
+    fn a_hive_and_label_are_always_the_same_bee() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let tmp = TempDir::new().unwrap();
-        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
-        unsafe { std::env::remove_var(BEE_ENV) };
-        assert!(bee_from_env().is_err());
-        let key = mint_bee_key().expect("mint");
-        unsafe { std::env::set_var(BEE_ENV, key.id()) };
-        assert_eq!(bee_from_env().expect("load").hid, key.hid);
-        unsafe { std::env::remove_var(BEE_ENV) };
+        let state = TempDir::new().unwrap();
+        let config = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+
+        assert!(enter_as("sun", "main").is_err(), "an uninstalled hive enters nothing");
+        std::fs::create_dir_all(hum_paths::hives_d_dir()).unwrap();
+        std::fs::write(hum_paths::hive_installation("sun"), "").unwrap();
+
+        let first = enter_as("sun", "main").expect("enter");
+        assert_eq!(enter_as("sun", "main").unwrap().hid, first.hid);
+        assert_ne!(enter_as("sun", "requester-ab").unwrap().hid, first.hid);
+        assert_eq!(entry(&first.id()).unwrap().label, "main");
+
+        exit(&first.id()).unwrap();
+        assert_eq!(enter_as("sun", "main").unwrap().hid, first.hid, "entering again reenters");
+        assert!(!entry(&first.id()).unwrap().exited);
+        assert!(enter_as("sun", "../x").is_err());
+
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         unsafe { std::env::remove_var("XDG_STATE_HOME") };
     }
 
