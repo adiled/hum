@@ -1,9 +1,10 @@
 name: Wire protocol
 
-# views.rs is the single source of truth for every chi body and the
-# envelope, and hum-thrum is the one client. These checks keep the
-# generated clients (TS/Python/Go/C) and the golden fixture byte-locked to
-# them, and the conformance run holds every language to the same bee.
+# hum.thrum is the thrum: the envelope, every chi and its body, who sounds
+# and hears it. hum-thrum is the one client. These checks hold thrum-core's
+# Rust to the file, keep the generated clients (TS/Python/Go/C) and the
+# golden fixture byte-locked to it, and the conformance run holds every
+# language to the same bee.
 
 on:
   push:
@@ -19,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Every chi has a body view (fails the build otherwise)
+      - name: thrum-core builds, and says where its Rust strays from hum.thrum
         run: cargo build -p thrum-core
-      - name: Generated mirrors are byte-identical to views.rs
+      - name: The Rust agrees with hum.thrum, and the generated clients are byte-identical to it
         run: cargo run -p codegen -- --check
       - name: The kernel speaks in code
         run: python3 tools/speech.py

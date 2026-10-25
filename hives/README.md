@@ -120,7 +120,7 @@ An attendant lists the tools it serves in its hello's `tools`; humd hands them t
 
 ### chi cheatsheet
 
-`thrum-clients/ts/chi.ts` owns the full registry (the Rust enum at `thrum-core/src/chi.rs` is the source of truth; codegen emits the rest). Most bees pick a subset.
+`thrum-clients/ts/chi.ts` owns the full registry (`hum.thrum` at the repo root is the source; codegen emits this and the rest from it). Most bees pick a subset.
 
 | subset | chi values |
 |---|---|
@@ -161,7 +161,7 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 ## Versioning
 
-`THRUM_VERSION` is defined in `thrum-core/src/lib.rs` (the Rust source of truth) and propagates verbatim through `thrum-clients/{ts,python,go}/chi.*` via codegen on every cargo build. It is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
+`THRUM_VERSION` is the `THRUM` line of `hum.thrum`; `thrum-core/src/lib.rs` is held to it, and it propagates verbatim through `thrum-clients/{ts,python,go,c}/chi.*` via codegen on every cargo build. It is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
 
 ## See also
 

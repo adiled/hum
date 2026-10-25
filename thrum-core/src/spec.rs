@@ -82,6 +82,7 @@ pub fn body_keys(chi: Chi) -> &'static [&'static str] {
         Chi::KadFindNode => fields_of::<KadFindNodeBody>(),
         Chi::KadFindNodeResp => fields_of::<KadFindNodeRespBody>(),
         Chi::Backfill => fields_of::<BackfillBody>(),
+        Chi::BackfillEvent => fields_of::<BackfillEventBody>(),
     }
 }
 

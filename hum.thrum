@@ -1,0 +1,585 @@
+# hum.thrum — the thrum, hum's vibration protocol, in one file.
+#
+# A tone is one vibration: a chi from the range below, the body that chi
+# declares, and the envelope every tone carries. A bee sounds a tone and
+# humd carries it to whoever is tuned to hear it. Nothing here names a
+# socket, a pipe or a peer: those are media a tone travels through, each
+# bound in WIRE.md, and the tone is the same in all of them.
+#
+# One declaration per line, KEYWORD first. A DOC line documents the line
+# above it. A blank line is nothing; a line starting with # is a comment.
+#
+#   THRUM <version>                the range's version
+#   ENVELOPE                       what every tone carries
+#   CHI <name>                     one vibration in the range
+#     EMITS <party>..              who sounds it: a role, bee (any role), or humd
+#     HEARS <party>..              who it is for
+#     CARRIES ensemble             it may cross between humds
+#   SHAPE <name>                   a shape nested in a body, not a chi of its own
+#   KIND <name>                    a closed set of strings
+#     VALUE <name>                 one of them
+#   FIELD <key> <type>             a wire key and its type; a trailing ? means optional
+#   PATTERN <name>                 tones that make one figure
+#     KEY <field>                  what its tones share; the connection when absent
+#     OPEN / STEP / CLOSE <chi>..  how it opens, grows and closes
+#   ADVISORY <code>                what the thrum tells a bee to fix, without refusing it
+#     BY <client|humd>..           who raises it
+#
+# Types: string, bool, int, uint, float, any; [t] a list of t; {t} a map
+# of t keyed by string; a KIND or a SHAPE by its name; chi, a chi of this
+# range.
+#
+# For what a tone is, this file wins: thrum-core's Rust is held to it,
+# and the TS, Python, Go and C clients are emitted from it. For what a
+# party does with a tone, WIRE.md wins.
+
+THRUM 0.8.0
+
+ENVELOPE
+DOC what every tone carries, whatever its chi
+FIELD chi chi
+DOC which vibration this is
+FIELD rid string
+DOC the echo key: an echo, or a reply, carries the rid of what it answers; never a dedup key
+FIELD from string?
+DOC who sounded it: a humd's hid in hex when crossing humds, a bee's name on a local socket
+FIELD to string?
+DOC the humd it is for, in hex; absent when it stays local
+FIELD sigil string?
+DOC the 12-character hash of the sid, stable across reconnects
+FIELD sid string?
+DOC the line of blooms it belongs to; the forager picks it
+FIELD wane uint?
+DOC its place in its sigil's order: a Lamport clock, one per sigil
+FIELD sentAt int?
+DOC when it was sounded, wall-clock ms, UTC
+FIELD dusk int?
+DOC when it fades, absolute ms: a tone arriving past it is dropped before anything else is checked
+FIELD mid string?
+DOC heard at most once: a receiver that has already dispatched this mid drops the repeat
+FIELD ext {{any}}?
+DOC a bee's own data under its own key, carried untouched
+
+# The range. A chi's EMITS and HEARS are the roles' sends and receives:
+# direction is sacred, and a role keeps to it for the whole of its life.
+
+CHI hello
+DOC announce self: hive, role, signed identity
+EMITS bee
+HEARS humd
+FIELD protoVersion string
+DOC the THRUM version the bee speaks
+FIELD hive string
+DOC the hive the bee belongs to
+FIELD role role
+DOC the one job it was entered for
+FIELD builds bool?
+DOC a forager whose blooms build where it is
+FIELD version string?
+FIELD hid string
+DOC who the bee is: the hash of its key
+FIELD pubkey string
+FIELD signedAt int
+FIELD signature string
+DOC from the key that hashes to hid
+FIELD models [string]?
+DOC a nurse: the models it grows; an attendant: the models it distils a scent of
+FIELD tools [any]?
+DOC an attendant: the fixed, named tools it serves
+FIELD chis [string]?
+DOC the chi values the bee speaks
+FIELD propensity any?
+FIELD headroom headroom?
+DOC a nurse: how many more cells it can take
+FIELD source string?
+FIELD bind any?
+
+CHI prompt
+DOC open a bloom: its petals, the blooms before it, and how the cell should grow it
+EMITS forager
+HEARS nurse
+CARRIES ensemble
+FIELD modelId string?
+DOC the model to grow it
+FIELD cwd string?
+DOC where the bloom builds: hum://<humdid>/<path>
+FIELD systemPrompt string?
+FIELD text string?
+DOC the words, when the bloom is only words
+FIELD content [petal]?
+DOC the petals the bloom opens with
+FIELD tools [any]?
+DOC the tools the bloom may reach
+FIELD allowedTools [string]?
+FIELD resume string?
+FIELD temperature float?
+DOC how warm the sampling is
+FIELD prune prune?
+DOC cut the unlikely tail
+FIELD season uint?
+DOC how many tokens the bloom may grow
+FIELD frost [string]?
+DOC where the bloom stops
+FIELD seed int?
+DOC a seed, for a bloom grown again the same
+FIELD trellis any?
+DOC the shape the answer grows along: a schema, or "json"
+FIELD tendrils tendrils?
+DOC how the bloom reaches its tendrils
+FIELD sepal sepal?
+DOC how much the cell reasons first
+FIELD scion string?
+DOC the text that comes after the bloom: it grows what joins where it starts to this
+FIELD graft [bloom]?
+DOC the blooms of its sigil before it, oldest first, for a cell that did not grow them
+
+CHI cancel
+DOC stop the open bloom
+EMITS forager
+HEARS nurse
+CARRIES ensemble
+
+CHI cleanup
+DOC drop humd's state for a sigil
+EMITS forager
+HEARS nurse builder
+CARRIES ensemble
+
+CHI curate
+DOC manual compaction request
+EMITS forager
+HEARS nurse
+
+CHI scout-result
+DOC a scout came back
+EMITS forager
+HEARS nurse
+FIELD callId string?
+FIELD output any?
+
+CHI tendril-result
+DOC what a tendril grasped
+EMITS forager builder attendant
+HEARS nurse forager
+CARRIES ensemble
+FIELD callId string
+DOC the reach it answers
+FIELD output string?
+FIELD result any?
+FIELD isError bool?
+FIELD title string?
+FIELD metadata any?
+
+CHI breath
+DOC accept a hello, and keep the bee in step
+EMITS humd
+HEARS bee
+FIELD sigils any
+DOC state per sigil, usually {}; [] on the breath humd gives before it has heard anything, which admits nothing
+FIELD protoVersion string?
+DOC the THRUM version humd speaks
+FIELD models [model]?
+DOC for a forager: the models nurses grow
+FIELD scents [model]?
+DOC for a forager: the scents attendants distil
+FIELD tools [any]?
+DOC for a forager: the tools attendants serve its blooms
+
+CHI unfurl
+DOC a petal growing
+EMITS nurse
+HEARS forager
+CARRIES ensemble
+FIELD petal uint
+DOC its index in the bloom
+FIELD kind petal-kind
+FIELD text string?
+FIELD sap string?
+DOC a tendril's input, as it grows
+FIELD callId string?
+FIELD name string?
+FIELD grain grain?
+FIELD propolis string?
+FIELD source any?
+FIELD brix any?
+FIELD closed bool?
+DOC once the petal is whole
+
+CHI wilt
+DOC close the bloom, with its nectar
+EMITS nurse
+HEARS forager
+CARRIES ensemble
+FIELD reason string
+DOC stop; max_tokens when its season ran out; refusal; cancel; or the cell's own word
+FIELD nectar any?
+DOC what the bloom took: tokens in and out, cache reads and writes
+FIELD exitCode int?
+FIELD subtype string?
+
+CHI error
+DOC the bloom broke off
+EMITS nurse attendant humd
+HEARS forager
+CARRIES ensemble
+FIELD message string
+FIELD code string?
+DOC no-nurse when no nurse here or on a trusted peer grows the model; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft
+FIELD subtype string?
+FIELD nectar any?
+
+CHI pulse
+DOC a cell's life, and headroom
+EMITS nurse
+HEARS forager humd
+CARRIES ensemble
+FIELD kind pulse-kind
+FIELD pid int?
+FIELD headroom headroom?
+DOC the nurse's headroom after this
+FIELD cell string?
+DOC on cell-ready: the cell's id
+FIELD model string?
+DOC on cell-ready: its model
+FIELD tools [any]?
+DOC on cell-ready: its tools
+
+CHI scout
+DOC send a scout out
+EMITS nurse
+HEARS forager
+FIELD task string?
+FIELD tools [any]?
+
+CHI tendril-reach
+DOC a tendril reaching
+EMITS nurse forager
+HEARS forager builder attendant
+CARRIES ensemble
+FIELD callId string
+FIELD name string
+FIELD args any?
+FIELD cwd string?
+DOC on a bash reach to a builder: where its shell starts; its host's home directory when absent
+
+CHI tendril-meta
+DOC what a tendril carries besides its result
+EMITS nurse
+HEARS forager
+CARRIES ensemble
+FIELD callId string?
+FIELD name string?
+FIELD metadata any?
+
+CHI tendril-info
+DOC a tendril that already came back, told whole, for showing only
+EMITS nurse
+HEARS forager
+FIELD callId string
+FIELD name string?
+FIELD args any?
+FIELD result any?
+FIELD isError bool?
+
+CHI echo
+DOC delivery ack for a rid
+EMITS humd bee
+HEARS bee humd
+FIELD ok bool
+FIELD error string?
+DOC why not, when ok is false
+
+CHI perf-mark
+DOC a timing measurement — measured both ways
+EMITS bee humd
+HEARS bee humd
+CARRIES ensemble
+FIELD at int?
+FIELD note string?
+
+CHI log
+DOC structured log forwarding
+EMITS bee humd
+HEARS bee humd
+FIELD level string?
+FIELD message string?
+FIELD fields any?
+DOC from humd, an advisory: fields.advisory is its code
+
+CHI drone
+DOC drone heartbeat
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD health string
+FIELD rhythm_ms uint?
+FIELD pending_echoes [any]?
+FIELD load drone-load?
+
+CHI drone-retrofit
+DOC drone swallow + retry signal
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD sigil string?
+FIELD reason string?
+
+# Between humds. A humd sounds these to its peers, or to itself.
+
+CHI peer-add
+DOC register a peer humd, once its hello is verified: a humd's ensemble tells its own kernel
+EMITS humd
+HEARS humd
+FIELD humd_id string
+DOC the peer, in hex
+FIELD hints [any]?
+DOC where it may be reached
+
+CHI peer-remove
+DOC drop a peer humd
+EMITS humd
+HEARS humd
+FIELD humd_id string
+
+CHI attach
+DOC observe a sid hosted on another humd: its reply tones then fan out to the observer too
+EMITS forager
+HEARS humd
+CARRIES ensemble
+FIELD hearOnly bool?
+
+CHI detach
+DOC stop observing a sid
+EMITS forager
+HEARS humd
+CARRIES ensemble
+
+CHI wane-sync
+DOC reconcile wane after a partition heals: each side sends its snapshot, and each merges by max
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD snapshot {uint}
+DOC sigil to wane
+
+CHI gossip-publish
+DOC ensemble-wide gossip: deduped on msg_id, dispatched by topic, re-fanned to every other peer
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD topic string
+FIELD payload any
+FIELD from string?
+DOC the originator
+FIELD msg_id string
+DOC minted once per publish by the originator, never derived from the rid or the payload
+
+CHI kad-find-node
+DOC Kademlia FIND_NODE: ask a peer for the peers it knows closest to a target
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD query_id string
+FIELD target string
+DOC a hid, in hex
+
+CHI kad-find-node-resp
+DOC Kademlia FIND_NODE answer: up to K peers closest to the target
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD query_id string
+FIELD closest [any]
+DOC HumdAddrs, closest in XOR distance to the target
+
+CHI backfill
+DOC replay thehum's chi-log for an author, from a sequence number
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD author string
+DOC a hid
+FIELD from int?
+DOC the first sequence number wanted
+
+CHI backfill-event
+DOC one event of a backfill
+EMITS humd
+HEARS humd
+CARRIES ensemble
+FIELD event any
+
+# Shapes nested in bodies.
+
+SHAPE headroom
+DOC how many more cells a nurse can take
+FIELD freeSlots uint
+FIELD totalSlots uint
+
+SHAPE petal
+DOC one unit of content: in a prompt's content, and in a graft
+FIELD kind petal-kind
+FIELD text string?
+FIELD grain grain?
+FIELD callId string?
+FIELD name string?
+FIELD args any?
+FIELD result any?
+FIELD isError bool?
+FIELD propolis string?
+FIELD source any?
+FIELD brix any?
+FIELD bouquet [any]?
+
+SHAPE grain
+DOC a grain of media
+FIELD kind string
+DOC image, audio or file
+FIELD mediaType string
+FIELD data string?
+FIELD url string?
+
+SHAPE prune
+DOC cut the unlikely tail
+FIELD p float?
+FIELD k uint?
+
+SHAPE tendrils
+DOC how a bloom reaches its tendrils
+FIELD reach string?
+DOC auto, none, required, or a tendril's name
+FIELD parallel bool?
+
+SHAPE sepal
+DOC how much the cell reasons first
+FIELD effort string?
+FIELD budget uint?
+
+SHAPE bloom
+DOC one bloom of a graft: what its prompt carried, and what grew
+FIELD content [petal]?
+FIELD grew [petal]?
+
+SHAPE model
+DOC a model, and the hive that grows it
+FIELD id string
+FIELD hive string
+
+SHAPE drone-load
+DOC what a drone is carrying
+FIELD active_sigils uint?
+FIELD inflight_tools uint?
+FIELD tokens_burned uint?
+
+# Kinds: closed sets of strings a field is drawn from.
+
+KIND role
+DOC the one job a bee does, set when its hive enters it
+VALUE forager
+DOC opens blooms, bringing the outside world into the thrum
+VALUE nurse
+DOC grows blooms in its cells; all inference is nursing
+VALUE builder
+DOC changes the world: runs what a bloom composes on its host, through `bash`
+VALUE attendant
+DOC serves the fixed, named tools in its hello's `tools`, and the `scent` of the models its hello's `models` name, and nothing else
+
+KIND petal-kind
+DOC which unit of content a petal is
+VALUE text
+DOC words, in `text`
+VALUE tendril
+DOC a brokered tool call: `callId`, `name`, `args`; its input grows as `sap`
+VALUE grasp
+DOC what a tendril came back with: `callId`, `result`, `isError`
+VALUE pollen
+DOC a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url`
+VALUE sepal
+DOC the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom
+VALUE waggle
+DOC where a petal's words came from: `source`
+VALUE thorn
+DOC the cell declining, or a filter acting: `text` says why
+VALUE brix
+DOC how likely each token was: `brix`
+VALUE bouquet
+DOC several candidate petals for one prompt: `bouquet`
+
+KIND pulse-kind
+DOC a moment in a cell's life
+VALUE cell-spawned
+DOC process created
+VALUE cell-ready
+DOC brooded: accepting prompts, its id, model and tools known
+VALUE cell-idle
+DOC the bloom wilted, no listeners
+VALUE cell-died
+DOC process exited
+VALUE cell-evicted
+DOC killed to make room
+
+# Patterns: the figures tones make together.
+
+PATTERN attunement
+DOC a bee's hello and humd's verdict: humd echoes the hello's rid, then breathes to admit the bee, or echoes ok false under the same rid to refuse it; a refusal is final
+OPEN hello
+STEP echo
+CLOSE breath echo
+
+PATTERN bloom
+DOC one turn of conversation: a prompt opens it, each unfurl grows one petal, and it closes when it wilts or breaks off; a cancel closes it early, as a wilt whose reason is cancel
+KEY sid
+OPEN prompt
+STEP unfurl cancel
+CLOSE wilt error
+
+PATTERN tendril
+DOC a tool reaching and grasping, within a bloom or straight from a forager to an attendant
+KEY callId
+OPEN tendril-reach
+STEP tendril-meta
+CLOSE tendril-result error
+
+# Advisories: humd refuses what it must and advises on the rest. An
+# advisory reaches a bee as a log tone whose fields.advisory is one of
+# these codes; hum's client raises some itself before a tone leaves the bee.
+
+ADVISORY undeclared-key
+BY client humd
+DOC a tone carries keys the thrum does not declare for its chi
+
+ADVISORY unknown-chi
+BY client
+DOC a tone's chi is not in the thrum
+
+ADVISORY not-a-tone
+BY client
+DOC a line from the bee is not a JSON object with a chi, and was dropped
+
+ADVISORY client-owned
+BY client
+DOC the bee set a hello field the client owns, and it was ignored
+
+ADVISORY tone-refused
+BY client
+DOC humd refused a tone under a rid the client gave it
+
+ADVISORY dropped-while-away
+BY client
+DOC tones sent while humd was away were dropped
+
+ADVISORY proto-drift
+BY humd
+DOC the bee speaks another minor version of the thrum
+
+ADVISORY reconnect-storm
+BY humd
+DOC the bee said hello 10 times within 10 minutes
+
+ADVISORY did-not-return
+BY humd
+DOC the bee was nestled when humd stopped and had not come back 2 minutes after humd started
+
+ADVISORY cwd-not-hum
+BY humd
+DOC a prompt's `cwd` is not a `hum://` address, and was dropped

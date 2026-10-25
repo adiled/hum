@@ -11,8 +11,8 @@ like the thing — readers and writers share the same mental model.
 
 ## Wire
 
-- **thrum** — the bidirectional NDJSON socket between humd and any nestler.
-- **tone** — one message frame on the thrum. Envelope (chi/rid/sid/…) plus body.
+- **thrum** — the hum-native vibration protocol, carrying tones across a range of `chi`. Defined in `hum.thrum`; the NDJSON socket between humd and a bee is one medium it travels.
+- **tone** — one vibration on the thrum. Envelope (chi/rid/sid/…) plus the body its chi declares.
 - **chi** — the tone's discriminator. `prompt`, `unfurl`, `wilt`, `gossip-publish`, …
 - **chis** — the *list* of chi values a bee speaks. Advertised in the hello.
 - **sigil** — what ties a run of blooms together: a hash of their `sid`. Stable across reconnects.

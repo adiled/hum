@@ -7,12 +7,16 @@ description: "the language-neutral protocol bees speak to humd. Implementable in
 
 > _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
-This is the **canonical wire spec**. hum speaks it through one client,
-`hum-thrum`, in Rust: a Rust bee holds it in-process, and a bee in TS,
-Python, Go or C reaches it through `hum bee link` with the client
-codegen emits for its language (`thrum-clients/`). A language hum does
-not generate a client for can speak [the link](#the-link) or the wire
-itself. If a client disagrees with this document, the document wins.
+This is the wire spec: what a party does with a tone. What a tone *is*,
+the envelope, the range of chis with their bodies, who sounds and hears
+each, the shapes and kinds they carry, the patterns and the advisories,
+is [`hum.thrum`](./hum.thrum), and for that the file wins. hum speaks
+the thrum through one client, `hum-thrum`, in Rust: a Rust bee holds it
+in-process, and a bee in TS, Python, Go or C reaches it through
+`hum bee link` with the client codegen emits for its language from
+`hum.thrum` (`thrum-clients/`). A language hum does not generate a client
+for can speak [the link](#the-link) or the wire itself. If a client
+disagrees with this document on behaviour, the document wins.
 
 ## Transport
 
@@ -33,8 +37,9 @@ itself. If a client disagrees with this document, the document wins.
   at-most-once delivery of any single tone.
 - **Authentication**: nothing on the socket itself. Filesystem
   permissions on the socket file are the trust boundary. The ensemble
-  layer adds Ed25519 handshakes for inter-humd traffic — that lives on
-  a different wire and is out of scope here.
+  layer adds Ed25519 handshakes between humds; the tones it carries are
+  the same tones, framed the same way, and `hum.thrum` marks which may
+  cross (`CARRIES ensemble`).
 
 ## Frame structure (envelope)
 
@@ -59,13 +64,14 @@ Beyond the envelope, **each chi defines its own body fields**. A
 Unknown body fields MUST be preserved on forwarding paths (gRPC
 bridge, gossip relay) so future chi extensions are backward-compatible.
 
-A key is **declared** when it is an envelope key or a field of its chi's
-body struct in `thrum-core/src/views.rs`; those structs are the spec
-(`thrum_core::spec`). Anything else is undeclared: no bee should send it
-and no humd may rely on it. A bee's private data goes under `ext`. humd
-checks every tone it hears and sends. In the field it logs each
-undeclared key once (`thrum.tone.undeclared`); in the simulator the test
-fails. A new key on the wire starts as a field in `views.rs`.
+A key is **declared** when it is an envelope key or a FIELD of its chi
+in `hum.thrum`; the structs in `thrum-core/src/views.rs` are that file's
+Rust reading (`thrum_core::spec`), held to it by `cargo run -p codegen
+-- --check`. Anything else is undeclared: no bee should send it and no
+humd may rely on it. A bee's private data goes under `ext`. humd checks
+every tone it hears and sends. In the field it logs each undeclared key
+once (`thrum.tone.undeclared`); in the simulator the test fails. A new
+key on the wire starts as a FIELD in `hum.thrum`.
 
 ## Handshake
 
@@ -206,19 +212,19 @@ prompts your way. The wire stays exactly the same.
 
 ## Chi registry (THRUM_VERSION 0.8.0)
 
-This section is the wire contract. `thrum-core/src/chi.rs` mirrors it as
-the Rust enum, and `codegen` emits the TypeScript, Python, Go and C
-mirrors from it — so the five copies cannot drift.
+The range is `hum.thrum`: every chi, its body, who sounds it and who
+hears it. These tables read it out for a human, by hand until they are
+generated from it; where they differ, the file wins. `thrum-core/src/chi.rs`
+is held to the file, and `codegen` emits the TypeScript, Python, Go and
+C clients from it.
 
 `body fields` below are the chi-specific fields only. `sid` is not
 among them — it is an [envelope](#envelope) field, and a tone carries it
 alongside any of these.
 
 Each row carries two prose columns: `meaning` is for a human reading
-this spec, `description` is the canonical one-liner the generated
-clients carry as their doc comment. They are the same contract stated
-at two lengths — `description` is the one the clients quote, so a chi
-with no description here has none in the clients either.
+this spec, `description` is the one-liner the generated clients carry as
+their doc comment, from the chi's DOC in `hum.thrum`.
 
 ### Nestler → humd
 
@@ -251,7 +257,7 @@ with no description here has none in the clients either.
 | chi | body fields | meaning | description |
 |---|---|---|
 | `echo` | `ok`, optional `error` | delivery ack for `rid` | delivery ack for a rid |
-| `perf-mark` | `label`, `phase`, `t` | a timing measurement, measured both ways | a timing measurement — measured both ways |
+| `perf-mark` | optional `at`, `note` | a timing measurement, measured both ways | a timing measurement — measured both ways |
 | `log` | `level`, `message`, optional fields | structured log forwarding | structured log forwarding |
 | `drone` | (drone-shaped payload) | drone heartbeat | drone heartbeat |
 | `drone-retrofit` | (retrofit instruction) | drone swallow + retry signal | drone swallow + retry signal |
@@ -272,6 +278,7 @@ See [`ensemble/README.md`](../ensemble/README.md).
 | `kad-find-node` | `query_id`, `target`, `from` | Kademlia DHT FIND_NODE query. The receiver answers with `kad-find-node-resp` carrying up to K HumdAddrs from its routing table closest in XOR distance to `target`. Sent during `Ensemble::kad_find` iterative lookups when a peer's HumdAddr isn't already known locally. | Kademlia DHT FIND_NODE query — `{ query_id, target: <Hid hex>, from: <Hid hex> }`. The receiver answers with `kad-find-node-resp` carrying up to K HumdAddrs from its routing table closest in XOR distance to `target`. Sent during `Ensemble::kad_find` iterative lookups when a peer's HumdAddr isn't already known locally. |
 | `kad-find-node-resp` | `query_id`, `from`, `closest` | Kademlia DHT FIND_NODE response, matched to the originating `kad-find-node` by `query_id`. The lookup driver inserts every advertised HumdAddr into its routing table and re-queries the α closest unqueried peers until no closer node is returned. | Kademlia DHT FIND_NODE response — `{ query_id, from: <Hid hex>, closest: [<HumdAddr JSON>, ...] }`. Matched to the originating `kad-find-node` by `query_id`. The lookup driver inserts every advertised HumdAddr into its routing table and re-queries the α closest unqueried peers until no closer node is returned. |
 | `backfill` | `author`, `from` | thehum chi-log replay request. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author. | thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author. |
+| `backfill-event` | `event` | one event of a backfill, under the event's own `rid` | one event of a backfill |
 
 ### `pulse.kind`
 
@@ -669,7 +676,8 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 ## See also
 
-- [`thrum-core`](../thrum-core): the Rust source of truth (chi enum, views, helpers).
+- [`hum.thrum`](./hum.thrum): the thrum itself — the envelope, the range, the shapes, kinds, patterns and advisories. The file wins on what a tone is.
+- [`thrum-core`](../thrum-core): the Rust reading of it (chi enum, views, helpers), held to the file.
 - [`hum-thrum`](../hum-thrum): the client, sans-IO at its core, and the link.
 - [`thrum-clients`](../thrum-clients): the generated client for TS, Python, Go and C.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.

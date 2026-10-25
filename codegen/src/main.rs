@@ -4,14 +4,17 @@
 //!   cargo run -p codegen -- ts          # one target
 //!   cargo run -p codegen -- --check     # exit nonzero if any target drifted
 //!
-//! The same logic runs from `thrum-core/build.rs` on every cargo build,
-//! so manual invocation should rarely be needed. Output locations live
-//! in `codegen::paths` — never hand-write them here.
+//! Every run first holds thrum-core's Rust to `hum.thrum` and stops on
+//! a difference: the file is the thrum, and a client emitted while the
+//! Rust disagrees would be a client of two thrums. The same logic runs
+//! from `thrum-core/build.rs` on every cargo build, so manual invocation
+//! should rarely be needed. Output locations live in `codegen::paths`;
+//! never hand-write them here.
 //!
-//! A target is the files it owns: the registry and the views read from
-//! thrum-core, and the client itself, each language's template from
-//! `codegen/templates/` with the link's constants read from hum-thrum.
-//! Every source file of every client is generated.
+//! A target is the files it owns: the registry and the views projected
+//! from `hum.thrum`, and the client itself, each language's template
+//! from `codegen/templates/` with the link's constants read from
+//! hum-thrum. Every source file of every client is generated.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -46,23 +49,19 @@ fn run() -> Result<()> {
         positional
     };
 
-    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs(), &paths::wire_md())
-        .context("parse chi spec")?;
-    let proto = codegen::protocol::protocol_spec(
+    let thrum = codegen::thrum::parse(&paths::hum_thrum()).context("read the thrum")?;
+    codegen::rust::check(
+        &thrum,
+        &paths::chi_rs(),
         &paths::views_rs(),
         &paths::envelope_rs(),
         &paths::lib_rs(),
-    )
-    .context("parse protocol spec")?;
-
-    let link = codegen::link::link_spec(
-        &paths::link_rs(),
-        &paths::core_rs(),
-        &paths::chi_rs(),
-        &paths::lib_rs(),
-        &paths::wire_md(),
-    )
-    .context("parse link spec")?;
+    )?;
+    eprintln!("codegen: thrum-core agrees with {}", paths::HUM_THRUM_REL);
+    let spec = thrum.chi_spec()?;
+    let proto = thrum.protocol_spec();
+    let link = codegen::link::link_spec(&paths::link_rs(), &paths::core_rs(), &thrum)
+        .context("read the link")?;
 
     for t in &targets {
         run_target(t, &spec, &proto, &link, check)?;
