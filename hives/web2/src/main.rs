@@ -31,6 +31,9 @@ web2: the web2 world as one tendril, wrepl.
   web2 serve               the bee: an attendant serving wrepl on the thrum
   web2 login <service>     sign a service in (a token at the prompt, or piped with --token-stdin; or OAuth in a browser)
   web2 logout <service>    forget what web2 holds for a service
+  web2 allow <service> <command|glob>...   turn writes on, by name; `*` matches any run of letters
+  web2 deny <service> <command|glob>...    turn commands off, whatever else says
+  web2 review <service>    go through a service's commands that are off, and turn on the ones you choose
   web2 status              the services, and how each is signed in
   web2 refresh [service]   read specs and tool lists again
   web2 import [--dry-run]  copy in the MCP servers the harnesses on this machine already know
@@ -61,6 +64,9 @@ async fn main() -> ExitCode {
         "run" => run(&args[1..]).await,
         "login" => login(&args[1..]).await,
         "logout" => logout(&args[1..]),
+        "allow" => allow(&args[1..], "allow").await,
+        "deny" => allow(&args[1..], "deny").await,
+        "review" => review(&args[1..]).await,
         "status" => status().await,
         "refresh" => refresh(&args[1..]).await,
         "import" => import(&args[1..]),
@@ -145,6 +151,78 @@ async fn login(args: &[String]) -> Result<ExitCode> {
         bail!("web2 login <service>");
     };
     println!("{}", engine()?.login(name, token_stdin).await?);
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn allow(args: &[String], key: &str) -> Result<ExitCode> {
+    let [service, names @ ..] = args else { bail!("web2 {key} <service> <command|glob>...") };
+    if names.is_empty() {
+        bail!("web2 {key} {service} <command|glob>...");
+    }
+    let config = config::load()?;
+    if !config.services.contains_key(service) {
+        bail!("no service is called {service}; `web2 status` lists them");
+    }
+    let mut added = Vec::new();
+    config::edit(|doc| {
+        added = config::add_to_list(doc, service, key, names);
+        if key == "deny" {
+            config::remove_from_list(doc, service, "allow", names);
+        }
+        Ok(())
+    })?;
+    let verb = if key == "allow" { "on" } else { "off" };
+    match added.as_slice() {
+        [] => println!("{service}: already {key}s {}", names.join(" ")),
+        some => println!("{service}: {} {verb}", some.join(" ")),
+    }
+    if key == "allow"
+        && let Ok(off) = engine()?.off(service).await
+    {
+        println!("{service} has {} command{} still off", off.len(), if off.len() == 1 { "" } else { "s" });
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn review(args: &[String]) -> Result<ExitCode> {
+    let [service] = args else { bail!("web2 review <service>") };
+    let off = engine()?.off(service).await?;
+    if off.is_empty() {
+        println!("{service} has nothing off");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        for cmd in &off {
+            println!("{}  {}", cmd.name, cmd.summary);
+        }
+        println!("\n`web2 allow {service} <command|glob>...` turns them on.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("{service} has {} command{} off. For each: y turns it on, n leaves it, q stops.\n", off.len(), if off.len() == 1 { "" } else { "s" });
+    let mut chosen = Vec::new();
+    for cmd in &off {
+        print!("{}  {}\n  turn on? [y/N/q] ", cmd.name, cmd.summary);
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        if stdin.lock().read_line(&mut answer)? == 0 {
+            break;
+        }
+        match answer.trim() {
+            "y" | "Y" | "yes" => chosen.push(cmd.name.clone()),
+            "q" | "Q" => break,
+            _ => {}
+        }
+    }
+    if chosen.is_empty() {
+        println!("nothing changed");
+        return Ok(ExitCode::SUCCESS);
+    }
+    config::edit(|doc| {
+        config::add_to_list(doc, service, "allow", &chosen);
+        Ok(())
+    })?;
+    println!("{service}: {} on", chosen.join(" "));
     Ok(ExitCode::SUCCESS)
 }
 

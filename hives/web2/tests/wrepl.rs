@@ -76,6 +76,12 @@ impl Home {
         String::from_utf8_lossy(&out.stdout).to_string()
     }
 
+    async fn cli(&self, args: &[&str]) -> (bool, String) {
+        let out = self.command(args).output().await.unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        (out.status.success(), text.trim_end().to_string())
+    }
+
     async fn logout(&self, service: &str) {
         let out = self.command(&["logout", service]).output().await.unwrap();
         assert!(out.status.success());
@@ -273,4 +279,65 @@ async fn a_broken_or_empty_config_says_what_to_do() {
     home.configure(json!({ "services": { "x": { "openapi": "a.json", "colour": "red" } } }));
     let (ok, text) = home.run("help").await;
     assert!(!ok && text.contains("services.x"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_turns_commands_on_and_off_from_the_command_line() {
+    let server = mock_mcp();
+    let home = Home::new(json!({ "mcpServers": { "mock": { "command": server } } }));
+    assert!(home.fails("mock create-note --title x").await.contains("only reads here"));
+    assert!(home.ok("mock help").await.contains("1 off"));
+
+    let (ok, said) = home.cli(&["allow", "mock", "create-*"]).await;
+    assert!(ok && said.contains("create-* on") && said.contains("0 commands still off"), "{said}");
+    assert_eq!(home.ok("mock create-note --title x").await, "created x");
+
+    let (ok, said) = home.cli(&["deny", "mock", "echo"]).await;
+    assert!(ok && said.contains("echo off"), "{said}");
+    assert!(home.fails("mock echo hi").await.contains("turned off here"));
+    let (ok, listed) = home.cli(&["review", "mock"]).await;
+    assert!(ok && listed.contains("echo") && listed.contains("web2 allow mock"), "{listed}");
+
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(home.dir.path().join("web2.json")).unwrap()).unwrap();
+    assert_eq!(written["services"]["mock"], json!({ "allow": ["create-*"], "deny": ["echo"] }));
+    assert_eq!(written["mcpServers"]["mock"]["command"], json!(server));
+    assert!(!home.cli(&["allow", "nosuch", "x"]).await.0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_mcp_server_that_asks_to_be_signed_in_is_signed_in_once() {
+    let mut child = tokio::process::Command::new(mock_mcp())
+        .args(["--http", "--oauth"])
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let port = lines.next_line().await.unwrap().unwrap().trim_start_matches("listening ").to_string();
+    let redirect = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+    let home = Home::new(json!({
+        "redirectPort": redirect,
+        "mcpServers": { "guarded": { "type": "http", "url": format!("http://127.0.0.1:{port}/mcp") } },
+        "services": { "guarded": { "writes": true } }
+    }));
+    let browser = home.dir.path().join("browser");
+    std::fs::write(&browser, "#!/bin/sh\nexec curl -s -L -o /dev/null \"$1\"\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let home = home.with_env("WEB2_BROWSER", browser.to_str().unwrap());
+
+    let before = home.fails("guarded echo hi").await;
+    assert!(before.contains("login guarded"), "{before}");
+
+    let (ok, said) = home.cli(&["login", "guarded"]).await;
+    assert!(ok, "login failed:\n{said}");
+    assert!(said.contains("guarded is signed in") && said.contains("offers 4 commands"), "{said}");
+    assert!(!said.contains("tok-1"), "the token was shown: {said}");
+
+    assert_eq!(home.ok("guarded echo hi").await, "hi");
+    let stored = std::fs::read_to_string(home.dir.path().join("state/secrets/credentials.json")).unwrap();
+    assert!(stored.contains("mcpOauth") && stored.contains("tok-1"));
+    drop(child);
 }

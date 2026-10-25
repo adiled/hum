@@ -256,7 +256,9 @@ impl Engine {
         if !description.is_empty() {
             out.push_str(&format!(" — {description}"));
         }
-        out.push_str(&format!(" ({}, {} commands, {})\n", service.kind_name(), catalogue.commands.len(), Self::writes(service)));
+        let off = catalogue.commands.iter().filter(|c| allowed(service, c).is_err()).count();
+        let off = if off == 0 { String::new() } else { format!(", {off} off") };
+        out.push_str(&format!(" ({}, {} commands{off}, {})\n", service.kind_name(), catalogue.commands.len(), Self::writes(service)));
         out.push_str(&format!("`{} <command> --help` shows a command's flags. A command marked (write, off) is not reached here", service.name));
         if matches!(service.kind, Kind::Mcp(_)) && !service.writes {
             out.push_str("; an MCP tool counts as a write unless it says it only reads");
@@ -412,13 +414,18 @@ impl Engine {
         }
     }
 
+    pub async fn off(&self, name: &str) -> Result<Vec<Command>> {
+        let service = self.config.services.get(name).ok_or_else(|| anyhow!("no service is called {name}; `web2 status` lists them"))?;
+        let catalogue = self.catalogue(service).await.map_err(|e| anyhow!("{e}"))?;
+        Ok(catalogue.commands.into_iter().filter(|c| allowed(service, c).is_err()).collect())
+    }
+
     pub async fn login(&self, name: &str, token_from_stdin: bool) -> Result<String> {
         let service = self.config.services.get(name).ok_or_else(|| anyhow!("no service is called {name}; `web2 status` lists them"))?;
         if let Kind::Mcp(server) = &service.kind
             && service.auth.is_none()
         {
-            let port = crate::config::DEFAULT_REDIRECT_PORT;
-            return crate::mcp::login(service, server, &self.creds, port).await;
+            return crate::mcp::login(service, server, &self.creds, self.config.redirect_port).await;
         }
         let effective = self.auth(service).await.map_err(|e| anyhow!("{e}"))?;
         match effective {
@@ -455,9 +462,10 @@ fn read_token(name: &str, from_stdin: bool) -> Result<String> {
 
 pub fn allowed(service: &Service, cmd: &Command) -> Result<(), String> {
     let named = |list: &[String]| {
-        list.iter().any(|n| {
-            let n = normalize(n);
-            n == normalize(&cmd.name) || n == normalize(&cmd.original)
+        let (name, original) = (normalize(&cmd.name), normalize(&cmd.original));
+        list.iter().any(|p| {
+            let p = normalize(p);
+            crate::config::glob(&p, &name) || crate::config::glob(&p, &original)
         })
     };
     let (s, c) = (&service.name, &cmd.name);

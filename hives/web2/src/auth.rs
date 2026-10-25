@@ -1,7 +1,8 @@
 //! Who web2 is to each service: the tokens it holds, and how it gets them.
 //!
-//! Tokens live in one file, `credentials.json` in web2's state directory,
-//! mode 0600, written whole and renamed into place. A token is never put in
+//! Tokens live in one file, `secrets/credentials.json` in web2's state
+//! directory, mode 0600 in a 0700 directory, written whole and renamed into
+//! place. `secrets/` is the directory a builder's shell is kept out of. A token is never put in
 //! an environment, never logged, and never answered back. The serving bee
 //! reads the file again whenever it changes, so `web2 login` in a terminal
 //! takes effect on the next call without a restart.
@@ -29,6 +30,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::config::{Auth, OAuthApp, Secret, Service};
 
 pub const CREDENTIALS_FILE: &str = "credentials.json";
+pub const SECRETS_DIR: &str = "secrets";
 const REFRESH_AHEAD: u64 = 60;
 const CALLBACK_WAIT: Duration = Duration::from_secs(300);
 
@@ -69,7 +71,7 @@ pub struct Creds {
 impl Creds {
     pub fn at(state: &Path) -> Arc<Creds> {
         Arc::new(Creds {
-            path: state.join(CREDENTIALS_FILE),
+            path: state.join(SECRETS_DIR).join(CREDENTIALS_FILE),
             cache: Mutex::new((None, Map::new())),
             refreshing: tokio::sync::Mutex::new(()),
         })
@@ -116,6 +118,11 @@ impl Creds {
     fn write(&self, map: Map<String, Value>) -> Result<()> {
         let dir = self.path.parent().ok_or_else(|| anyhow!("credentials have no directory"))?;
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         let staged = dir.join(format!(".{CREDENTIALS_FILE}.{}", std::process::id()));
         let text = serde_json::to_string_pretty(&Value::Object(map.clone()))?;
         write_private(&staged, text.as_bytes())?;
@@ -350,6 +357,13 @@ pub async fn login_oauth(
 
 pub fn show_sign_in(service: &str, url: &str) {
     eprintln!("Sign {service} in at:\n\n  {url}\n");
+    if let Some(browser) = std::env::var_os("WEB2_BROWSER") {
+        match std::process::Command::new(&browser).arg(url).stdin(std::process::Stdio::null()).spawn() {
+            Ok(_) => eprintln!("(handed to $WEB2_BROWSER; waiting for it to come back here)"),
+            Err(e) => eprintln!("($WEB2_BROWSER would not start: {e}; open the link yourself)"),
+        }
+        return;
+    }
     if open::that(url).is_ok() {
         eprintln!("(opened in your browser; waiting for it to come back here)");
     } else {
@@ -464,11 +478,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let creds = Creds::at(dir.path());
         store_token("github", " ghp_abc \n", &creds).unwrap();
-        let path = dir.path().join(CREDENTIALS_FILE);
+        let path = dir.path().join(SECRETS_DIR).join(CREDENTIALS_FILE);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
         }
         assert_eq!(creds.get("github").unwrap()["token"], "ghp_abc");
         std::thread::sleep(Duration::from_millis(20));

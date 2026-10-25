@@ -36,6 +36,7 @@ pub struct Config {
     pub max_output: usize,
     pub timeout_ms: u64,
     pub idle_ms: u64,
+    pub redirect_port: u16,
     pub base_dir: PathBuf,
 }
 
@@ -112,6 +113,7 @@ struct RawConfig {
     max_output: Option<usize>,
     timeout_ms: Option<u64>,
     idle_ms: Option<u64>,
+    redirect_port: Option<u16>,
 }
 
 #[derive(Deserialize, Default)]
@@ -169,6 +171,7 @@ fn defaults(base_dir: PathBuf) -> Config {
         max_output: DEFAULT_MAX_OUTPUT,
         timeout_ms: DEFAULT_TIMEOUT_MS,
         idle_ms: DEFAULT_IDLE_MS,
+        redirect_port: DEFAULT_REDIRECT_PORT,
         base_dir,
     }
 }
@@ -184,25 +187,26 @@ pub fn parse(raw: &str, base_dir: PathBuf) -> Result<Config> {
         max_output: raw.max_output.unwrap_or(DEFAULT_MAX_OUTPUT),
         timeout_ms: raw.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
         idle_ms: raw.idle_ms.unwrap_or(DEFAULT_IDLE_MS),
+        redirect_port: raw.redirect_port.unwrap_or(DEFAULT_REDIRECT_PORT),
         ..defaults(base_dir)
     };
     for (name, server) in &mcp_servers {
         if raw.services.contains_key(name) {
             continue;
         }
-        let service = service(name, RawService { mcp: Some(server.clone()), ..RawService::default() }, &mcp_servers)
+        let service = service(name, RawService { mcp: Some(server.clone()), ..RawService::default() }, &mcp_servers, config.redirect_port)
             .with_context(|| format!("mcpServers.{name}"))?;
         config.services.insert(name.clone(), service);
     }
     for (name, entry) in raw.services {
         let entry: RawService = serde_json::from_value(entry).with_context(|| format!("services.{name}"))?;
-        let service = service(&name, entry, &mcp_servers).with_context(|| format!("services.{name}"))?;
+        let service = service(&name, entry, &mcp_servers, config.redirect_port).with_context(|| format!("services.{name}"))?;
         config.services.insert(name, service);
     }
     Ok(config)
 }
 
-fn service(name: &str, raw: RawService, mcp_servers: &BTreeMap<String, RawMcp>) -> Result<Service> {
+fn service(name: &str, raw: RawService, mcp_servers: &BTreeMap<String, RawMcp>, port: u16) -> Result<Service> {
     if !is_service_name(name) {
         bail!("a service name is letters, digits, `-` and `_`, and does not start with `-`");
     }
@@ -220,9 +224,32 @@ fn service(name: &str, raw: RawService, mcp_servers: &BTreeMap<String, RawMcp>) 
         writes: raw.writes,
         allow: raw.allow,
         deny: raw.deny,
-        auth: raw.auth.as_ref().map(auth).transpose()?,
+        auth: raw.auth.as_ref().map(|a| auth(a, port)).transpose()?,
         timeout_ms: raw.timeout_ms,
     })
+}
+
+pub fn glob(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
+    while ni < n.len() {
+        if pi < p.len() && p[pi] != '*' && p[pi] == n[ni] {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
 }
 
 pub fn is_service_name(name: &str) -> bool {
@@ -251,7 +278,7 @@ fn mcp_server(raw: &RawMcp) -> Result<McpServer> {
     }
 }
 
-fn auth(raw: &Value) -> Result<Auth> {
+fn auth(raw: &Value, port: u16) -> Result<Auth> {
     let secret = |v: &Value| match v.get("env").and_then(Value::as_str) {
         Some(var) => Secret::Env(var.to_string()),
         None => Secret::Stored,
@@ -291,10 +318,54 @@ fn auth(raw: &Value) -> Result<Auth> {
                 .get("redirectPort")
                 .and_then(Value::as_u64)
                 .and_then(|p| u16::try_from(p).ok())
-                .unwrap_or(DEFAULT_REDIRECT_PORT),
+                .unwrap_or(port),
         }));
     }
     bail!("auth is one of bearer, header, query, basic or oauth")
+}
+
+pub fn edit(change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>) -> Result<()> {
+    let path = config_path();
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text).with_context(|| format!("read {}", path.display()))? {
+            Value::Object(obj) => obj,
+            _ => bail!("{} is not a JSON object", path.display()),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    change(&mut doc)?;
+    let text = serde_json::to_string_pretty(&Value::Object(doc))? + "\n";
+    parse(&text, path.parent().map(Path::to_path_buf).unwrap_or_default()).context("the change would break web2.json, so it was not made")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let staged = path.with_extension(format!("json.{}", std::process::id()));
+    crate::auth::write_private(&staged, text.as_bytes())?;
+    std::fs::rename(&staged, &path).with_context(|| format!("place {}", path.display()))
+}
+
+pub fn add_to_list(doc: &mut serde_json::Map<String, Value>, service: &str, key: &str, names: &[String]) -> Vec<String> {
+    let services = doc.entry("services").or_insert_with(|| serde_json::json!({}));
+    let Value::Object(services) = services else { return Vec::new() };
+    let entry = services.entry(service).or_insert_with(|| serde_json::json!({}));
+    let Value::Object(entry) = entry else { return Vec::new() };
+    let list = entry.entry(key).or_insert_with(|| serde_json::json!([]));
+    let Value::Array(items) = list else { return Vec::new() };
+    let mut added = Vec::new();
+    for name in names {
+        if !items.iter().any(|i| i.as_str() == Some(name)) {
+            items.push(Value::String(name.clone()));
+            added.push(name.clone());
+        }
+    }
+    added
+}
+
+pub fn remove_from_list(doc: &mut serde_json::Map<String, Value>, service: &str, key: &str, names: &[String]) {
+    if let Some(Value::Array(items)) = doc.get_mut("services").and_then(|s| s.get_mut(service)).and_then(|e| e.get_mut(key)) {
+        items.retain(|i| !i.as_str().is_some_and(|s| names.iter().any(|n| n == s)));
+    }
 }
 
 pub fn interpolate(text: &str) -> Result<String> {
@@ -377,6 +448,26 @@ mod tests {
         assert_eq!(interpolate("https://${WEB2_TEST_HOST}/v1").unwrap(), "https://api.example.com/v1");
         let err = interpolate("${WEB2_TEST_SURELY_UNSET}").unwrap_err().to_string();
         assert!(err.contains("WEB2_TEST_SURELY_UNSET"), "{err}");
+    }
+
+    #[test]
+    fn a_glob_matches_with_stars_and_nothing_else() {
+        assert!(glob("read*", "readwikistructure"));
+        assert!(glob("*wiki*", "askwikiquestion"));
+        assert!(glob("*", "anything"));
+        assert!(glob("issues/create", "issues/create"));
+        assert!(!glob("read*", "askwikiquestion"));
+        assert!(!glob("get", "getx"));
+    }
+
+    #[test]
+    fn the_redirect_port_is_shared_unless_an_app_says_its_own() {
+        let c = parsed(r#"{ "redirectPort": 9100, "services": {
+            "a": { "openapi": "a", "auth": { "oauth": { "clientId": "x" } } },
+            "b": { "openapi": "b", "auth": { "oauth": { "clientId": "y", "redirectPort": 9200 } } } } }"#);
+        assert_eq!(c.redirect_port, 9100);
+        let port = |n: &str| match &c.services[n].auth { Some(Auth::OAuth2(app)) => app.redirect_port, _ => 0 };
+        assert_eq!((port("a"), port("b")), (9100, 9200));
     }
 
     #[test]
