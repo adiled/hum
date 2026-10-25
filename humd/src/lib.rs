@@ -51,8 +51,16 @@ pub struct DaemonConfig {
     pub bootstrap_peers: Vec<PeerConfig>,
     pub thehum_cfg: Option<thehum::Config>,
     pub trust_remote_nurses: bool,
+    pub trust_remote_attendants: bool,
     pub hives: InstalledHives,
     pub bees: EnteredBees,
+}
+
+fn env_says(var: &str) -> bool {
+    matches!(
+        std::env::var(var).ok().map(|v| v.trim().to_string()).as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
 }
 
 impl DaemonConfig {
@@ -68,13 +76,9 @@ impl DaemonConfig {
         };
         let bootstrap_peers = peers::load();
         let hum_cfg = hum_paths::config::load();
-        let trust_remote_nurses = matches!(
-            std::env::var("HUM_TRUST_REMOTE_NURSES")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .as_deref(),
-            Some("1") | Some("true") | Some("yes")
-        ) || hum_cfg.humd.trust_remote_nurses;
+        let trust_remote_nurses = env_says("HUM_TRUST_REMOTE_NURSES") || hum_cfg.humd.trust_remote_nurses;
+        let trust_remote_attendants =
+            env_says("HUM_TRUST_REMOTE_ATTENDANTS") || hum_cfg.humd.trust_remote_attendants;
         Self {
             thrum_path,
             http_path,
@@ -94,6 +98,7 @@ impl DaemonConfig {
             bootstrap_peers,
             thehum_cfg: None,
             trust_remote_nurses,
+            trust_remote_attendants,
             hives: InstalledHives::on_disk(),
             bees: EnteredBees::on_disk(),
         }
@@ -368,6 +373,7 @@ where
         thehum: thehum_handle.clone(),
         comb: comb.clone(),
         trust_remote_nurses: cfg.trust_remote_nurses,
+        trust_remote_attendants: cfg.trust_remote_attendants,
         revoked: revoked::Revocations::load(&cfg.revoked_path),
         hives: cfg.hives.clone(),
         bees: cfg.bees.clone(),
@@ -575,6 +581,7 @@ struct HumdSink {
     thehum: Option<Arc<thehum::TheHum>>,
     comb: Arc<comb::Comb>,
     trust_remote_nurses: bool,
+    trust_remote_attendants: bool,
     revoked: revoked::Revocations,
     hives: InstalledHives,
     bees: EnteredBees,
@@ -696,6 +703,32 @@ impl HumdSink {
         Hid::from_hex(&found.first()?.1).ok()
     }
 
+    fn trusted_remote_attendants(&self) -> Vec<(ensemble::Hid, ensemble::BeeManifest)> {
+        let Some(ens) = self.ensemble.as_ref().filter(|_| self.trust_remote_attendants) else {
+            return Vec::new();
+        };
+        let live: std::collections::BTreeSet<String> = ens.peers().iter().map(|h| h.to_hex()).collect();
+        let table = self.remote_bees.read();
+        let mut found: Vec<(String, String, ensemble::Hid, ensemble::BeeManifest)> = table
+            .iter()
+            .filter(|(humd, _)| live.contains(&humd.to_hex()))
+            .flat_map(|(humd, bees)| {
+                bees.iter()
+                    .filter(|(_, m)| m.plays(Role::Attendant) && self.hives.recognises(&m.hive))
+                    .map(|(key, m)| (humd.to_hex(), key.clone(), *humd, m.clone()))
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        found.into_iter().map(|(_, _, humd, m)| (humd, m)).collect()
+    }
+
+    fn remote_attendant(&self, tool: &str) -> Option<ensemble::Hid> {
+        self.trusted_remote_attendants()
+            .into_iter()
+            .find(|(_, m)| m.tools.iter().any(|t| t.name == tool))
+            .map(|(humd, _)| humd)
+    }
+
     fn attendant_serving(&self, tool: &str, from: &str) -> Option<String> {
         let m = self.manifests.read();
         let mut serving: Vec<&String> = m
@@ -762,6 +795,17 @@ impl HumdSink {
                 && named.insert(name.to_string())
             {
                 tools.push(t.clone());
+            }
+        }
+        for (_, man) in self.trusted_remote_attendants() {
+            for t in &man.tools {
+                if named.insert(t.name.clone()) {
+                    tools.push(serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "inputSchema": t.input_schema,
+                    }));
+                }
             }
         }
         tools
@@ -848,23 +892,10 @@ impl HumdSink {
             self.tendril_routes.write().insert(call_id.to_string(), nurse.to_string());
         }
         let here = self.ensemble.as_ref().map(|e| e.me());
-        if let (Some(humd), Some(me), Some(ens)) = (site.humd, here, &self.ensemble)
+        if let (Some(humd), Some(me)) = (site.humd, here)
             && humd != me
         {
-            if !call_id.is_empty() {
-                self.tendril_routes_peer.write().insert(call_id.to_string(), humd);
-            }
-            if let Some(obj) = reach.as_object_mut() {
-                obj.insert("to".into(), Value::String(humd.to_hex()));
-                obj.insert("from".into(), Value::String(me.to_hex()));
-            }
-            trace!(nurse, to = %humd.short(), call_id, "tendril-reach.bash.route.peer");
-            if let Err(e) = ens.route(reach).await {
-                warn!(err = %e, "tendril-reach.bash.peer.route.failed");
-                self.tendril_routes.write().remove(call_id);
-                self.tendril_routes_peer.write().remove(call_id);
-                self.unserved(nurse, sid, call_id, Unserved::NoBuilder);
-            }
+            self.reach_peer(nurse, sid, call_id, humd, reach, Unserved::NoBuilder).await;
             return;
         }
         match self.builder_here() {
@@ -876,6 +907,29 @@ impl HumdSink {
                 self.tendril_routes.write().remove(call_id);
                 self.unserved(nurse, sid, call_id, Unserved::NoBuilder);
             }
+        }
+    }
+
+    async fn reach_peer(&self, nurse: &str, sid: &str, call_id: &str, humd: ensemble::Hid, mut reach: Value, failed: Unserved) {
+        let Some(ens) = &self.ensemble else {
+            self.unserved(nurse, sid, call_id, failed);
+            return;
+        };
+        if !call_id.is_empty() {
+            self.tendril_routes.write().insert(call_id.to_string(), nurse.to_string());
+            self.tendril_routes_peer.write().insert(call_id.to_string(), humd);
+        }
+        if let Some(obj) = reach.as_object_mut() {
+            obj.insert("to".into(), Value::String(humd.to_hex()));
+            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+        }
+        let name = reach.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        trace!(nurse, to = %humd.short(), call_id, %name, "tendril-reach.route.peer");
+        if let Err(e) = ens.route(reach).await {
+            warn!(err = %e, %name, "tendril-reach.peer.route.failed");
+            self.tendril_routes.write().remove(call_id);
+            self.tendril_routes_peer.write().remove(call_id);
+            self.unserved(nurse, sid, call_id, failed);
         }
     }
 
@@ -1042,6 +1096,10 @@ impl ToneSink for HumdSink {
         {
             let call_id = tone.get("callId").and_then(Value::as_str).unwrap_or("").to_string();
             let from_peer = tone.get("from").and_then(Value::as_str).and_then(parse_humd_id);
+            if from_peer.is_none() {
+                warn!(%name, "tendril-reach.peer.no-origin — a reach from the ensemble names no humd it came from, so nothing could answer it");
+                return;
+            }
             let reached = if name == thrum_core::BASH {
                 self.builder_here()
             } else {
@@ -1124,7 +1182,12 @@ impl ToneSink for HumdSink {
                             self.tendril_routes.write().insert(call_id.clone(), client_id.to_string());
                         }
                         trace!(from = client_id, to = %reached, %name, %call_id, "tendril-reach.route.local");
-                        self.thrum.thrum_to(&reached, tone);
+                        let mut local = tone;
+                        if let Some(obj) = local.as_object_mut() {
+                            obj.remove("from");
+                            obj.remove("to");
+                        }
+                        self.thrum.thrum_to(&reached, local);
                         return;
                     }
                     let offered = self
@@ -1132,6 +1195,10 @@ impl ToneSink for HumdSink {
                         .read()
                         .get(&sid)
                         .is_some_and(|names| names.iter().any(|n| *n == name));
+                    if !offered && let Some(humd) = self.remote_attendant(&name) {
+                        self.reach_peer(client_id, &sid, &call_id, humd, tone, Unserved::NoOneServes(name)).await;
+                        return;
+                    }
                     if is_nurse && !offered && self.forager_tools.read().contains_key(&sid) {
                         self.unserved(client_id, &sid, &call_id, Unserved::NoOneServes(name));
                         return;

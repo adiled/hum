@@ -467,11 +467,21 @@ bee serve one:
 - a **forager** serves the tools it put on its prompt's `tools`.
 
 When humd hands a nurse a prompt, the prompt's `tools` are everything the
-bloom may reach: the forager's own, every attendant's, and `bash` when
-the bloom builds somewhere. A nurse hands them to its cell as they are.
-humd routes each reach by its name: `bash` to the builder where the bloom
-builds, any other name to an attendant serving it here or on a peer, and
-failing that back to the forager.
+bloom may reach, each name once and the first to claim it keeping it:
+`bash` when the bloom builds somewhere, every attendant's here, the
+forager's own, and every attendant's on a live peer, when this humd
+trusts remote attendants and knows the peer bee's hive. A nurse hands
+them to its cell as they are. humd routes each reach by its name: `bash`
+to the builder where the bloom builds, any other name to an attendant
+serving it here, then back to the forager when it offered the name, then
+to the peer whose attendant serves it.
+
+A peer's attendant sees the input of every reach sent to it, and its
+tools' descriptions reach every model here, so trusting remote
+attendants is a choice, off by default: `humd.trustRemoteAttendants` in
+hum.json, or `HUM_TRUST_REMOTE_ATTENDANTS`. A reach that came from a peer
+arrives at the attendant with that peer's `from`, so an attendant can
+answer its own humd's blooms and not a peer's.
 
 ```
 forager → humd:   chi:"prompt" { tools: [{ name, description, inputSchema }, ...] }

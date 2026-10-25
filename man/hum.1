@@ -242,6 +242,14 @@ also lives in \fBhum.json\fR as \fBhumd.trustRemoteNurses\fR, which is
 where it belongs: the installer never rewrites hum.json, so the gate
 does not shut under you. This variable overrides that key.
 .TP
+.B HUM_TRUST_REMOTE_ATTENDANTS
+Set to \fB1\fR, \fBtrue\fR or \fByes\fR to hand this humd's blooms the
+tools a peer's attendants serve, and send a reach for one to that peer.
+Off by default: the peer sees the reach's input, and its tool
+descriptions reach every model here. The setting also lives in
+\fBhum.json\fR as \fBhumd.trustRemoteAttendants\fR; this variable overrides
+that key.
+.TP
 .B CLAUDE_CLI_PATH
 Path to the claude binary a nurse's cells spawn. Default \fBclaude\fR on
 \fBPATH\fR.

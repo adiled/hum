@@ -37,6 +37,8 @@ pub struct HumdSection {
     pub iroh_port: u16,
     #[serde(default, rename = "trustRemoteNurses")]
     pub trust_remote_nurses: bool,
+    #[serde(default, rename = "trustRemoteAttendants")]
+    pub trust_remote_attendants: bool,
 }
 
 impl Default for HumdSection {
@@ -46,6 +48,7 @@ impl Default for HumdSection {
             tcp_listen: None,
             iroh_port: defaults::iroh_port(),
             trust_remote_nurses: false,
+            trust_remote_attendants: false,
         }
     }
 }
