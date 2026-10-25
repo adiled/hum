@@ -49,11 +49,17 @@ export interface PromptBody {
   trellis?: unknown;
   tendrils?: Tendrils;
   sepal?: Sepal;
+  scion?: string;
+  graft?: Bloom[];
+}
+
+export interface Bloom {
+  content?: Petal[];
+  grew?: Petal[];
 }
 
 export interface Petal {
   kind: string;
-  role?: string;
   text?: string;
   grain?: Grain;
   callId?: string;
@@ -92,6 +98,14 @@ export interface Sepal {
 export interface BreathBody {
   sigils: unknown;
   protoVersion?: string;
+  models?: Model[];
+  scents?: Model[];
+  tools?: unknown[];
+}
+
+export interface Model {
+  id: string;
+  hive: string;
 }
 
 export interface UnfurlBody {
@@ -256,10 +270,6 @@ export interface ScoutBody {
   tools?: unknown[];
 }
 
-export interface PetalCellBody {
-  cell?: unknown;
-}
-
 export interface Envelope {
   chi: ChiKind;
   rid: string;
@@ -306,7 +316,6 @@ export interface ToneViews {
   "curate": CurateBody;
   "scout-result": ScoutResultBody;
   "scout": ScoutBody;
-  "petal-cell": PetalCellBody;
 }
 
 // A tone: the envelope and its chi's declared body, the same tone

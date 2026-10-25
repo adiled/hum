@@ -1,12 +1,17 @@
 //! graft — JSONL stitching for Claude CLI transcripts.
 //!
-//! Mirrors the TypeScript reference at `fs/session.ts`. Each function walks
-//! `serde_json::Value` by field name so we don't have to model the whole
-//! tagged-union shape statically.
+//! Each function walks `serde_json::Value` by field name so we don't have
+//! to model the whole tagged-union shape statically.
 //!
 //! Files live at `<HOME>/.claude/projects/<dashed-cwd>/<session-id>.jsonl`.
 //! Entry types we care about: `summary`, `user`, `assistant`, `last-prompt`,
 //! `queue-operation`. Every real entry has `uuid` and `parentUuid`.
+//!
+//! A prompt's graft reaches the transcript through [`prior_of`]: each
+//! bloom is a user turn of its content's words, then what grew, the words
+//! and tendrils of the cell as assistant turns and each grasp as the tool
+//! result that answered them. A tendril is named as the cell knew it, a
+//! tool of the nest's `hum` MCP server.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -37,7 +42,7 @@ fn cwd_hash(cwd: &Path) -> String {
 }
 
 pub fn session_dir(cwd: &Path) -> PathBuf {
-    hum_paths::claude_session_dir(&cwd_hash(cwd))
+    hum_paths::home().join(".claude").join("projects").join(cwd_hash(cwd))
 }
 
 pub fn session_path(cwd: &Path, session_id: &str) -> PathBuf {
@@ -152,6 +157,75 @@ pub fn last_uuid(path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+pub fn tell(prior: &mut [Value], instructions: &str) -> bool {
+    let Some(first) = prior.iter_mut().find(|m| role_of(m) == "user") else { return false };
+    match first.get_mut("content") {
+        Some(Value::Array(parts)) => parts.insert(0, json!({ "type": "text", "text": instructions })),
+        _ => return false,
+    }
+    true
+}
+
+pub fn prior_of(blooms: &[thrum_core::Bloom]) -> Vec<Value> {
+    let mut prior = Vec::new();
+    for bloom in blooms {
+        let said: Vec<Value> = bloom
+            .content
+            .iter()
+            .flatten()
+            .filter(|p| p.kind == thrum_core::PetalKind::Text.as_str())
+            .filter_map(|p| p.text.as_ref())
+            .map(|t| json!({ "type": "text", "text": t }))
+            .collect();
+        if !said.is_empty() {
+            prior.push(json!({ "role": "user", "content": said }));
+        }
+        let mut grew: Vec<Value> = Vec::new();
+        let mut grasped: Vec<Value> = Vec::new();
+        for petal in bloom.grew.iter().flatten() {
+            let kind = petal.kind.as_str();
+            if kind == thrum_core::PetalKind::Grasp.as_str() {
+                if !grew.is_empty() {
+                    prior.push(json!({ "role": "assistant", "content": std::mem::take(&mut grew) }));
+                }
+                let result = match &petal.result {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                grasped.push(json!({
+                    "type": "tool-result",
+                    "toolCallId": petal.call_id.clone().unwrap_or_default(),
+                    "result": result,
+                }));
+                continue;
+            }
+            if !grasped.is_empty() {
+                prior.push(json!({ "role": "tool", "content": std::mem::take(&mut grasped) }));
+            }
+            if kind == thrum_core::PetalKind::Text.as_str() {
+                if let Some(text) = petal.text.as_ref().filter(|t| !t.is_empty()) {
+                    grew.push(json!({ "type": "text", "text": text }));
+                }
+            } else if kind == thrum_core::PetalKind::Tendril.as_str() {
+                grew.push(json!({
+                    "type": "tool-call",
+                    "toolCallId": petal.call_id.clone().unwrap_or_default(),
+                    "toolName": format!("mcp__hum__{}", petal.name.clone().unwrap_or_default()),
+                    "input": petal.args.clone().unwrap_or_else(|| json!({})),
+                }));
+            }
+        }
+        if !grew.is_empty() {
+            prior.push(json!({ "role": "assistant", "content": grew }));
+        }
+        if !grasped.is_empty() {
+            prior.push(json!({ "role": "tool", "content": grasped }));
+        }
+    }
+    prior
 }
 
 // ─── Graft ────────────────────────────────────────────────────────────────

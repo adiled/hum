@@ -16,7 +16,7 @@ type Chi string
 const (
     // announce self: hive, role, signed identity
     ChiHello Chi = "hello"
-    // open a bloom: its petals, and how the cell should grow it
+    // open a bloom: its petals, the blooms before it, and how the cell should grow it
     ChiPrompt Chi = "prompt"
     // stop the open bloom
     ChiCancel Chi = "cancel"
@@ -28,9 +28,7 @@ const (
     ChiScoutResult Chi = "scout-result"
     // what a tendril grasped
     ChiTendrilResult Chi = "tendril-result"
-    // OC message-graph update (graft hint)
-    ChiPetalCell Chi = "petal-cell"
-    // accept a hello, sync state on connect
+    // accept a hello, and keep the bee in step
     ChiBreath Chi = "breath"
     // a petal growing
     ChiUnfurl Chi = "unfurl"
@@ -87,7 +85,6 @@ var AllChi = map[Chi]struct{}{
     ChiCurate: {},
     ChiScoutResult: {},
     ChiTendrilResult: {},
-    ChiPetalCell: {},
     ChiBreath: {},
     ChiUnfurl: {},
     ChiWilt: {},
@@ -169,6 +166,6 @@ const (
     RoleNurse Role = "nurse"
     // changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
     RoleBuilder Role = "builder"
-    // serves the fixed, named tools in its hello's `tools`, and nothing else
+    // serves the fixed, named tools in its hello's `tools`, and the [`scent`](#scent) of the models its hello's `models` name, and nothing else
     RoleAttendant Role = "attendant"
 )

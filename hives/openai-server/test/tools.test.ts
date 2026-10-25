@@ -1,55 +1,33 @@
-// Pins the OpenAI-tool → thrum-tool mapping. The wire field MUST
-// be `inputSchema` — humd merges these into the nurse's MCP
-// catalogue and claude's mcp client rejects the entire
-// `tools/list` response if any entry has `inputSchema: null`. A
-// past regression named the field `parameters`, which served
-// claude null schemas and made it claim it had no read/write
-// tools.
+// A caller's tools, in either of OpenAI's shapes, as thrum tools: the
+// name exactly as given, the schema always an object, and a tool only
+// OpenAI could run left out.
 
 import { describe, expect, test } from "bun:test";
-import { toolsFromOpenAI } from "../src/tools.ts";
+import { reachOf, toolsFromOpenAI } from "../src/tools.ts";
 
 describe("toolsFromOpenAI", () => {
-  test("renames `parameters` to `inputSchema` on the wire", () => {
-    const out = toolsFromOpenAI([
-      {
-        type: "function",
-        function: {
-          name: "read",
-          description: "Read a file",
-          parameters: { type: "object", properties: { path: { type: "string" } } },
-        },
-      } as any,
-    ])!;
-    expect(out).toHaveLength(1);
-    expect(out[0]).toEqual({
-      name: "read",
-      description: "Read a file",
-      inputSchema: { type: "object", properties: { path: { type: "string" } } },
-    });
-    expect((out[0] as any).parameters).toBeUndefined();
+  test("chat's nested shape and the Responses API's flat one read alike", () => {
+    const schema = { type: "object", properties: { path: { type: "string" } } };
+    const nested = toolsFromOpenAI([{ type: "function", function: { name: "readFile", description: "Read", parameters: schema } }]);
+    const flat = toolsFromOpenAI([{ type: "function", name: "readFile", description: "Read", parameters: schema }]);
+    expect(nested).toEqual([{ name: "readFile", description: "Read", inputSchema: schema }]);
+    expect(flat).toEqual(nested);
   });
 
-  test("emits empty-object schema when caller omits parameters", () => {
-    const out = toolsFromOpenAI([
-      { type: "function", function: { name: "ping" } } as any,
-    ])!;
-    expect(out[0].inputSchema).toEqual({});
-    expect(out[0].inputSchema).not.toBeNull();
+  test("a tool with no schema gets an empty object", () => {
+    expect(toolsFromOpenAI([{ type: "function", function: { name: "ping" } }])).toEqual([{ name: "ping", inputSchema: { type: "object", properties: {} } }]);
   });
 
-  test("drops entries missing function name", () => {
-    const out = toolsFromOpenAI([
-      { type: "function" } as any,
-      { type: "function", function: { name: "" } } as any,
-      { type: "function", function: { name: "ok" } } as any,
-    ]);
-    expect(out).toHaveLength(1);
-    expect(out![0].name).toBe("ok");
-  });
-
-  test("returns undefined for empty / missing input", () => {
-    expect(toolsFromOpenAI(undefined)).toBeUndefined();
+  test("a tool only OpenAI runs is left out, and no tools is none", () => {
+    expect(toolsFromOpenAI([{ type: "web_search" }, { type: "function", name: "x" }])?.map((t) => t.name)).toEqual(["x"]);
     expect(toolsFromOpenAI([])).toBeUndefined();
+    expect(toolsFromOpenAI(undefined)).toBeUndefined();
+  });
+
+  test("a tool choice names what may reach", () => {
+    expect(reachOf("required")).toBe("required");
+    expect(reachOf({ type: "function", function: { name: "readFile" } })).toBe("readFile");
+    expect(reachOf({ type: "function", name: "readFile" })).toBe("readFile");
+    expect(reachOf(undefined)).toBeUndefined();
   });
 });

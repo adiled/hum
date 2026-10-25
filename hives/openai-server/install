@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install this hive on a humd: build its bee and keep it running. The bee
-# enters itself under the hive when it starts.
+# Install this hive on a humd: build its bees and keep them running. Each
+# bee enters itself under the hive when it starts.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,3 +19,4 @@ done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | g
 run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
 run fell >/dev/null 2>&1 || true
 run grow "$hive"
+echo "openai-server: make a key with: node $here/dist/index.js key add <name>; until one exists, anyone who reaches its port may call"

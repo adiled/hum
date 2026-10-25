@@ -13,7 +13,7 @@ class Chi:
     protocol minor; renaming/removing bumps major."""
     # announce self: hive, role, signed identity
     HELLO: str = "hello"
-    # open a bloom: its petals, and how the cell should grow it
+    # open a bloom: its petals, the blooms before it, and how the cell should grow it
     PROMPT: str = "prompt"
     # stop the open bloom
     CANCEL: str = "cancel"
@@ -25,9 +25,7 @@ class Chi:
     SCOUT_RESULT: str = "scout-result"
     # what a tendril grasped
     TENDRIL_RESULT: str = "tendril-result"
-    # OC message-graph update (graft hint)
-    PETAL_CELL: str = "petal-cell"
-    # accept a hello, sync state on connect
+    # accept a hello, and keep the bee in step
     BREATH: str = "breath"
     # a petal growing
     UNFURL: str = "unfurl"
@@ -82,7 +80,6 @@ ALL_CHI: frozenset[str] = frozenset({
     "curate",
     "scout-result",
     "tendril-result",
-    "petal-cell",
     "breath",
     "unfurl",
     "wilt",
@@ -153,6 +150,6 @@ class Role:
     NURSE: str = "nurse"
     # changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
     BUILDER: str = "builder"
-    # serves the fixed, named tools in its hello's `tools`, and nothing else
+    # serves the fixed, named tools in its hello's `tools`, and the [`scent`](#scent) of the models its hello's `models` name, and nothing else
     ATTENDANT: str = "attendant"
 

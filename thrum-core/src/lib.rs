@@ -25,7 +25,7 @@ pub use envelope::{Envelope, Tone};
 pub use prims::{dusk_in, echo_for, is_dusk, now_ms, rid, sigil};
 pub use views::*;
 pub use spec::{body_keys, envelope_keys, undeclared};
-pub use tendril::{BASH, BASH_TIMEOUT_MOST_MS, BASH_TIMEOUT_MS, BashArgs, bash_tool};
+pub use tendril::{BASH, BASH_TIMEOUT_MOST_MS, BASH_TIMEOUT_MS, BashArgs, SCENT, ScentArgs, Scents, bash_tool};
 pub use wane::WaneTracker;
 
 pub const THRUM_VERSION: &str = "0.8.0";

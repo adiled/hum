@@ -6,7 +6,7 @@
 //!
 //! `chi` and `rid` are required; everything else is situational. `ext`
 //! is the bee-private extension bag — thrum core ignores it, each bee
-//! owns its own key (e.g. `ext.opencode.serverUrl`).
+//! owns its own key, its hive's name (`ext.<hive>.…`).
 //!
 //! The body lives in a raw `serde_json::Map` because tone shapes vary
 //! per chi. Code that needs strongly typed access decodes the body into

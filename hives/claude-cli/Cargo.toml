@@ -13,6 +13,8 @@ path = "src/main.rs"
 hum-paths = { path = "../../hum-paths" }
 hum-nest = { path = "../../hum-nest" }
 hum-identity = { path = "../../hum-identity" }
+thrum-core = { path = "../../thrum-core" }
+uuid = { version = "1", features = ["v5"] }
 tokio = { version = "1", features = ["full"] }
 command-group = { version = "5", features = ["with-tokio"] }
 serde_json = "1"

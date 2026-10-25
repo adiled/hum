@@ -125,8 +125,10 @@ single protocol.
 - All other fields — optional but **strongly recommended**: humd uses
   them to build a `BeeManifest` and gossip it to the rest of the
   ensemble on the `hum/hives/announce` topic.
-- humd replies with `chi:"breath"` — a snapshot of any state relevant
-  to this nestler (today: `{}`; reserved for future state sync).
+- humd replies with `chi:"breath"`, which admits the bee and carries
+  what humd keeps it in step with. A forager's says what it can reach,
+  and humd breathes again whenever that changes
+  ([What a forager can reach](#what-a-forager-can-reach)).
 - A hello with **no** `protoVersion` is **refused**: the bee is not
   registered, not announced to the ensemble, and the connection is closed.
 - A hello naming **no** hive, or a hive **not installed** on this humd,
@@ -162,10 +164,10 @@ whole of its life.
 
 | role | does | sends | receives |
 |---|---|---|---|
-| **forager** | opens blooms, bringing the outside world into the thrum | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"scout-result"`, `chi:"tendril-result"` for the tools it put on its prompt, and `chi:"tendril-reach"` straight to an attendant, with no bloom between | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"scout"`, `chi:"tendril-info"`, and `chi:"tendril-reach"` for its own tools |
+| **forager** | opens blooms, bringing the outside world into the thrum | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"scout-result"`, `chi:"tendril-result"` for the tools it put on its prompt, and `chi:"tendril-reach"` straight to an attendant, with no bloom between, a [`scent`](#scent) among them | `chi:"breath"` saying what it can reach, `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"scout"`, `chi:"tendril-info"`, `chi:"tendril-reach"` for its own tools, and `chi:"tendril-result"` for a reach it sent |
 | **nurse** | grows blooms in its cells; all inference is nursing | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"tendril-reach"`, `chi:"tendril-info"`, `chi:"scout"` | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"tendril-result"`, `chi:"scout-result"` |
 | **builder** | changes the world: runs what a bloom composes on its host, through [`bash`](#bash) | `chi:"tendril-result"` | `chi:"tendril-reach"` for `bash`, `chi:"cleanup"` |
-| **attendant** | serves the fixed, named tools in its hello's `tools`, and nothing else | `chi:"tendril-result"`, or `chi:"error"` under the reach's `callId` to refuse it | `chi:"tendril-reach"` for its tools |
+| **attendant** | serves the fixed, named tools in its hello's `tools`, and the [`scent`](#scent) of the models its hello's `models` name, and nothing else | `chi:"tendril-result"`, or `chi:"error"` under the reach's `callId` to refuse it | `chi:"tendril-reach"` for its tools and its scents |
 
 Every bee sends `chi:"hello"` first and hears `chi:"breath"` accept it.
 It is the same bee throughout: a **nestler** before its hello is
@@ -186,9 +188,12 @@ What the wire *does* see, at the humd level:
   the ensemble) which **kinds** of hive its nest is configured to
   host.
 - Each `chi:"prompt"` carries a `modelId`: the forager says which
-  model it wants. humd's routing picks an appropriate nurse
-  (a local one over thrum, or routes to a peer humd whose advertised
-  hives can serve it).
+  model it wants, from the `models` its breath says it can reach
+  ([What a forager can reach](#what-a-forager-can-reach)). humd's
+  routing picks an appropriate nurse (a local one over thrum, or routes
+  to a peer humd whose advertised hives can serve it). A prompt with no
+  `modelId` goes to any nurse with room, which grows it with a model of
+  its own.
 
 That's the whole "compute discovery" mechanism. Nothing on a bee's
 hello claims a nest: the kind is `hive: "<name>"`, and its `role`.
@@ -220,22 +225,21 @@ with no description here has none in the clients either.
 | chi | body fields | meaning | description |
 |---|---|---|
 | `hello` | `hive`, `role`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `builds`/`version`/`models`/`tools`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, role, signed identity |
-| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd` (where it builds, `hum://`)/`systemPrompt`/`tools`/`allowedTools`/`resume`, and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal` | open a bloom | open a bloom: its petals, and how the cell should grow it |
-| `cancel` | `sid` | stop the open bloom of this sigil | stop the open bloom |
+| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd` (where it builds, `hum://`)/`systemPrompt`/`tools`/`allowedTools`/`resume`/`graft` (the blooms before it), and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal`/`scion` | open a bloom | open a bloom: its petals, the blooms before it, and how the cell should grow it |
+| `cancel` | `sid` | stop the open bloom of this sigil, wherever it grows: humd follows it, and `cleanup`, to the peer whose nurse grows it | stop the open bloom |
 | `cleanup` | `sid` | drop humd's state for this sigil | drop humd's state for a sigil |
 | `curate` | `sid` | manual compaction request | manual compaction request |
 | `scout-result` | `sid`, `callId`, `output` | a scout came back | a scout came back |
 | `tendril-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | what a tendril grasped | what a tendril grasped |
-| `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) | OC message-graph update (graft hint) |
 
 ### humd → nestler
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `breath` | `sigils` (state per sigil, usually `{}`), optional `protoVersion` | reply to hello: accepts it, and syncs state on connect | accept a hello, sync state on connect |
+| `breath` | `sigils` (state per sigil, usually `{}`), optional `protoVersion`, and for a forager the `models`, `scents` and `tools` it can reach | reply to hello: accepts it and keeps the bee in step, breathed again when what a forager can reach changes | accept a hello, and keep the bee in step |
 | `unfurl` | `petal` (its index in the bloom), `kind`, and what grew: `text`, `sap`, `callId`/`name`, `grain`, `propolis`, `source`, `brix`; `closed` once the petal is whole | one petal of a bloom growing | a petal growing |
-| `wilt` | `reason`, `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
-| `error` | `message`, `code`, optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
+| `wilt` | `reason` (`stop`; `max_tokens` when its season ran out; `refusal`; `cancel`; or the cell's own word), `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
+| `error` | `message`, `code` (`no-nurse` when no nurse here or on a trusted peer grows the model, `cannot-grow-on` from a nurse that grows only from new words, `empty-prompt` for a prompt with neither words nor a graft), optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
 | `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the nurse's headroom after it | a cell's life, and headroom |
 | `scout` | `task`, `tools` | send a scout out | send a scout out |
 | `tendril-reach` | `sid`, `callId`, `name`, `args`, and on a `bash` reach to a builder the `cwd` its shell starts in, its host's home directory when absent | a brokered tool call reaching | a tendril reaching |
@@ -312,6 +316,25 @@ A prompt says how the cell should grow its bloom.
 | `trellis` | the shape the answer grows along: a schema, or `"json"` |
 | `tendrils` | `reach` (`auto`, `none`, `required`, or a tendril's name) and `parallel` |
 | `sepal` | how much the cell reasons first: `effort`, or a `budget` |
+| `scion` | the text that comes after the bloom: it grows what joins where it starts to this |
+
+### Graft
+
+A prompt's `graft` is the blooms of its sigil before it, oldest first, as
+its forager has them: each the `content` its prompt carried and the
+petals that `grew`, its tendrils and their grasps among them. It is for a
+cell that did not grow them: a stateless nurse, a fresh cell, another
+nurse than last time, a history its forager has edited. A nurse whose
+cell grew every bloom the graft holds grows on from its own; any other
+grows from the graft, as if its cell had grown it.
+
+A prompt with no `content` opens no new turn: its bloom grows on from
+the graft's last bloom, from where that stopped. A last bloom whose
+grasps came back is answered, one whose words stopped mid-way is
+continued, and a graft of one bloom with nothing in its `content` is
+plain text to grow on from. With a `scion`, the bloom grows what goes
+between them. A nurse that cannot grow on that way refuses with
+`chi:"error"`, and one with nothing to grow on from does the same.
 
 ### Advisories
 
@@ -462,8 +485,9 @@ reaches (`chi:"tendril-reach"`), and the bee that serves the tool answers
 with `chi:"tendril-result"` carrying the same `callId`. Three kinds of
 bee serve one:
 
-- a **builder** serves [`bash`](#bash), the thrum's own tendril;
-- an **attendant** serves the tools it lists in its hello's `tools`;
+- a **builder** serves [`bash`](#bash), one of the thrum's own tendrils;
+- an **attendant** serves the tools it lists in its hello's `tools`, and
+  [`scent`](#scent), the other, for the models its hello names;
 - a **forager** serves the tools it put on its prompt's `tools`.
 
 When humd hands a nurse a prompt, the prompt's `tools` are everything the
@@ -508,6 +532,31 @@ together, its last line naming the exit code when it is not 0;
 `metadata.exitCode` is the exit code, and `isError` is true when it is
 not 0.
 
+### `scent`
+
+The thrum's other tendril (`thrum_core::SCENT`). A scent is where a text
+sits among others: a vector of numbers near the scents of texts that mean
+alike, as a bee knows one flower from another by its smell. Nothing
+blooms, and nothing grows: the same texts always give the same scents, so
+it is not nursing but a tool, served by an attendant for the models its
+hello's `models` name.
+
+A reach carries the `model` to distil by, the texts as `input`, and
+optionally the `dimensions` the scents should have. humd routes it by its
+`model`: to an attendant here that names it, then to one on a trusted
+peer, and answers it unserved otherwise. Its `result` is
+`{ scents, nectar }`, one scent per text in order. A forager reaches it
+with no bloom between; no bloom is handed it, since a cell makes words
+and has no use for one, and no attendant may offer a tool of its own
+named `scent` or `bash`.
+
+```
+forager → humd:     chi:"tendril-reach" { callId, name: "scent", args: { model, input: [...] } }
+humd → attendant:   chi:"tendril-reach" { callId, name: "scent", args }
+attendant → humd:   chi:"tendril-result" { callId, result: { scents: [[...], ...], nectar } }
+humd → forager:     chi:"tendril-result" { callId, result }
+```
+
 ### Where a bloom builds
 
 A prompt's `cwd` says where its bloom builds: `hum://<humdid>/<path>`,
@@ -524,6 +573,26 @@ prompt goes anywhere.
   builds nowhere, and its `bash` reaches are answered as unserved.
 - A `cwd` that is not a `hum://` address is dropped, with the
   `cwd-not-hum` advisory, and the prompt is taken as having none.
+
+### What a forager can reach
+
+The breath that admits a forager says what it can reach, and humd
+breathes again whenever that changes:
+
+- `models`: what nurses here grow, and those on peers when this humd
+  trusts remote nurses, each `{ id, hive }`;
+- `scents`: the models attendants here and on trusted peers distil a
+  [`scent`](#scent) by, each `{ id, hive }`;
+- `tools`: the tools attendants here and on trusted peers serve its
+  blooms, as a nurse is handed them, and [`bash`](#bash) besides wherever
+  a bloom builds.
+
+```json
+{ "chi": "breath", "sigils": {},
+  "models": [{ "id": "claude-opus-4-7", "hive": "claude-cli" }],
+  "scents": [{ "id": "text-embedding-3-small", "hive": "openai-server" }],
+  "tools": [{ "name": "wrepl", "description": "...", "inputSchema": { ... } }] }
+```
 
 ## The client
 
@@ -590,7 +659,7 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` and its one `role` (`forager`, `nurse`, `builder`, `attendant`; was `roles`, and before that `bee`), both required, and is signed by a key its hive entered for that role; bee hids are `bee_`; `sigil(sid)` drops its nest; a nurse claims `headroom` on hello and `pulse`; humd hosts no cells; `permission-ask` and `release-permit` are gone, and the drone `load`'s `pending_permissions` with them. The thrum declares `bash`, which a builder serves; a prompt's `cwd` is where its bloom builds, `hum://`, and a forager's hello may say `builds`; humd hands a nurse the bloom's tools in the prompt's `tools`, so `provides`, `foragerTools`, `provided` and `disallowedTools` are gone. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
+| 0.8.0 | hello names its `hive` and its one `role` (`forager`, `nurse`, `builder`, `attendant`; was `roles`, and before that `bee`), both required, and is signed by a key its hive entered for that role; bee hids are `bee_`; `sigil(sid)` drops its nest; a nurse claims `headroom` on hello and `pulse`; humd hosts no cells; `permission-ask` and `release-permit` are gone, and the drone `load`'s `pending_permissions` with them. The thrum declares `bash`, which a builder serves; a prompt's `cwd` is where its bloom builds, `hum://`, and a forager's hello may say `builds`; humd hands a nurse the bloom's tools in the prompt's `tools`, so `provides`, `foragerTools`, `provided` and `disallowedTools` are gone. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`, and a forager's breath what it can reach (`models`, `scents`, `tools`), breathed again on change; prompt `content` is petals, and a prompt says how its bloom grows, `scion` among it; a prompt's `graft` carries the blooms before it, so petals no longer carry a `role` and `petal-cell` is gone, and a prompt with no content grows on from its graft; the thrum declares `scent`, which an attendant serves by model; a reach for a forager's own tool comes back to the nurse that reached; a cancel and a cleanup follow a bloom to the peer that grows it; a prompt with no `modelId` goes to any nurse with room, and one no nurse grows is refused with `code: "no-nurse"` |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |

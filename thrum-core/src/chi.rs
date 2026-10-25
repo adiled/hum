@@ -34,7 +34,6 @@ pub enum Chi {
     Curate,
     ScoutResult,
     TendrilResult,
-    PetalCell,
     Breath,
     Unfurl,
     Wilt,
@@ -156,8 +155,6 @@ mod tests {
         assert_eq!(PetalKind::Sepal.as_str(), "sepal");
         assert_eq!(serde_json::to_string(&Chi::DroneRetrofit).unwrap(), "\"drone-retrofit\"");
         assert_eq!(serde_json::to_string(&Chi::WaneSync).unwrap(), "\"wane-sync\"");
-        let parsed: Chi = serde_json::from_str("\"petal-cell\"").unwrap();
-        assert_eq!(parsed, Chi::PetalCell);
         let parsed: Chi = serde_json::from_str("\"wane-sync\"").unwrap();
         assert_eq!(parsed, Chi::WaneSync);
     }

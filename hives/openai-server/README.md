@@ -1,180 +1,110 @@
 ---
 title: "openai-server"
-description: "OpenAI-compatible HTTP surface for hum"
+description: "OpenAI's HTTP API in front of hum, and bees behind it that call an OpenAI-compatible API"
 ---
 
 # openai-server
 
-> _An OpenAI-compatible HTTP surface in front of hum, where every requester is a bee, **and** a nurse that consumes OpenAI's API for hum's daemons._
+> _OpenAI's HTTP API in front of hum, and bees behind it that call an OpenAI-compatible API._
 
-One process, one hive kind, many bees, two directions.
-The **forager** half puts an OpenAI-shaped `/v1/chat/completions` + `/v1/responses`
-server in front of hum's local thrum socket: any tool or client that
-speaks OpenAI wire can drive a hum daemon without knowing thrum
-exists. The **nurse** half accepts `chi:"prompt"` tones humd routes
-to this bee by advertised model, calls the upstream OpenAI API, and
-streams the reply back. A bee does one job, so the halves are separate
-bees: the process's own bee (`--as main`) is the nurse, and each
-requester is a forager of its own.
+Any client that speaks OpenAI drives hum through this hive without
+knowing hum exists: the official SDKs, coding agents, chat UIs, editor
+completion. Its requests are grown by whatever nurse humd can reach, here
+or on a trusted peer, and its embeddings distilled by whatever attendant
+serves them. The hive also serves the API at `OPENAI_API_BASE` to hum, so
+that API's models are grown and distilled for every other forager too.
 
-## Propensity
+## Its bees
 
-| statefulness | richness | wire shape | hides |
-|---|---|---|---|
-| convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, scout, tendril-meta |
+| bee | role | does |
+|---|---|---|
+| `key-<name>`, one per key | forager | asks humd for each request a key's caller makes |
+| `anonymous` | forager | the same, when no key exists |
+| `main` | nurse | grows the upstream's models |
+| `scent` | attendant | distils the upstream's embedding models |
 
-Forager half: convention-stateful — no server-side hum tracking; the
-OpenAI `user` field is the hint that continues a sigil. Nurse half:
-stateless-per-call (OpenAI's API is stateless — every request carries
-full history), keeping each sid's history so a tendril's result resumes
-the thread.
+## The surface
 
-## What it does
+| route | |
+|---|---|
+| `POST /v1/chat/completions` | streamed or not, with tools, images, audio and files |
+| `POST /v1/responses`, `GET` and `DELETE /v1/responses/{id}` | the Responses API, `previous_response_id` and `conversation` included |
+| `POST /v1/completions` | text grown on from as it stands, `suffix` for filling in the middle |
+| `POST /v1/embeddings` | floats or base64 |
+| `GET /v1/models`, `/v1/models/{id}` | what the caller's bee can reach; a model that grows words lists, as `tools`, the tools the server runs itself |
+| `GET /v1/usage` | what the calling key has taken |
 
-```
-client                           openai-server                       humd
-  │                                   │                                │
-  │  POST /v1/chat/completions        │                                │
-  ├──────────────────────────────────►│                                │
-  │   { messages, model, stream }     │                                │
-  │                                   │  chi:"hello"                   │
-  │                                   ├───────────────────────────────►│
-  │                                   │  chi:"prompt"                  │
-  │                                   ├───────────────────────────────►│
-  │                                   │  chi:"unfurl" (text petals)    │
-  │                                   │◄───────────────────────────────┤
-  │   data: {...}\n\n (SSE)           │                                │
-  │◄──────────────────────────────────┤                                │
-  │                                   │  chi:"wilt"                    │
-  │                                   │◄───────────────────────────────┤
-  │   data: [DONE]\n\n                │                                │
-  │◄──────────────────────────────────┤                                │
-```
+Every route answers without its `/v1` too.
 
-## Every requester is a bee
+**Conversations.** OpenAI's APIs send the whole conversation every time;
+hum keeps it in a sigil. A request's earlier turns travel as the prompt's
+`graft`, so any nurse can grow it, and its last turn as the prompt. A
+conversation stays on one sigil while it only grows, so a nurse that keeps
+sessions picks up where it was; one whose history was edited, or one
+already growing, gets a sigil of its own. Two conversations never share
+one.
 
-Each HTTP requester is fingerprinted by a hash of its bearer token, its
-`X-Tenant` and the request's `user`, and entered as its own bee of this
-hive (`hum bee enter --hive openai-server --as requester-<fingerprint>`,
-role `forager`). Its requests go to humd over its own socket, signed by its
-own key, so humd sees, logs and accounts each requester apart, and
-`hum bee <id> exit` shuts one out without touching the rest. The
-fingerprint is the only trace of the token on disk. A requester's socket
-closes after ten idle minutes and reopens on its next request.
+**Tools.** A caller's function tools are tools a bloom may reach back to
+it for, by their exact names. Calls come back as `tool_calls`, or
+`function_call` items, several at once when the model makes several, and
+their answers carry the bloom on. A tool the server runs, `bash` where a
+bloom builds or an attendant's, stays out of chat completions, which has
+no place for a result the caller did not produce; a response shows it as
+an `mcp_call` item, output and all.
 
-## Nurse half (the inverse direction)
-
-Same bee also answers `chi:"prompt"` tones humd routes to it. humd
-matches `modelId` against the models this bee advertises; when a
-caller asks for one, humd forwards the prompt right back here. The
-nurse calls the upstream OpenAI API and unfurls the bloom back — so a
-daemon in another hive can ask **this** hive to generate, and it
-consumes OpenAI's real API.
-
-```
-humd                          openai-server                    OpenAI API
-  │  chi:"prompt" (modelId)         │                                │
-  ├───────────────────────────────►│                                │
-  │                                │  POST /chat/completions        │
-  │                                ├───────────────────────────────►│
-  │                                │◄─────────────── SSE deltas ────┤
-  │                                │                                │
-  │  chi:"unfurl" (petals)         │                                │
-  │◄───────────────────────────────┤                                │
-  │  chi:"wilt" (nectar)           │                                │
-  │◄───────────────────────────────┤                                │
-```
-
-Tools loop exactly like the Rust nurses: when OpenAI returns
-`tool_calls`, the nurse unfurls each as a tendril petal and reaches
-with `chi:"tendril-reach"` instead of wilting; humd routes it to the bee
-that serves the tool, or back to the forager that declared it, which
-answers `chi:"tendril-result"`; the nurse feeds the output back into
-the OpenAI conversation and grows on. Sampling settings (`temperature`,
-`top_p`, `max_tokens`, `stop`, `seed`, `tool_choice`,
-`response_format`, `reasoning.effort`) ride on the prompt as how the
-bloom grows, and images as pollen petals. Everything gets hummed.
+**Failures.** An unknown model is a 404, a request the nurse cannot grow a
+400, a nurse or upstream failure a 502, humd away a 503, a request past
+its time a 504, each in OpenAI's error shape. A stream that has begun
+ends with its error. A caller that hangs up cancels its bloom.
 
 ## Configure
 
-| env | default | what |
-|---|---|---|
-| `OPENAI_SERVER_PORT` | `14620` | HTTP listen port |
-| `OPENAI_SERVER_HOST` | `127.0.0.1` | HTTP listen host |
-| `OPENAI_SERVER_API_KEY` | _(unset → no auth)_ | bearer token required on requests |
-| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
-| `OPENAI_API_KEY` | `OPENAI_SERVER_API_KEY` | upstream OpenAI bearer (nurse half) |
-| `OPENAI_API_BASE` | `https://api.openai.com/v1` | upstream OpenAI-compatible base URL (nurse half) |
+| env | config key | default | |
+|---|---|---|---|
+| `OPENAI_SERVER_HOST` | `host` | `127.0.0.1` | where the surface listens |
+| `OPENAI_SERVER_PORT` | `port` | `14620` | |
+| `OPENAI_SERVER_API_KEY` | `apiKey` | | a key named `default` |
+| `OPENAI_SERVER_TIMEOUT_MS` | `timeoutMs` | 15 minutes | how long one request may take |
+| | `cors` | none | origins a browser may call from, or `"*"` |
+| | `rate` | none | `{ "capacity": 60, "refillPerSec": 1 }` for each key |
+| | `scents` | ids that say `embed` | the upstream models the `scent` attendant distils by |
+| `OPENAI_API_BASE` | | `https://api.openai.com/v1` | the API the `main` and `scent` bees call |
+| `OPENAI_API_KEY` | | | its key |
 
-The bee's own kind (`openai-server`) is its env namespace —
-`HUM_*` is reserved for hum-side knobs like `HUM_THRUM_SOCK`.
+The config file is `hives/openai-server.json` under hum's config root.
 
-### Config file (optional)
-
-Also reads `~/.config/hum/hives/openai-server.json` if present:
-
-```json
-{ "host": "127.0.0.1", "port": 14620, "apiKey": "secret" }
-```
-
-The nurse bee is the source of truth for what models the hive can
-serve. On startup the nurse half calls the upstream OpenAI-compatible
-spec's own model listing (`GET {OPENAI_API_BASE}/models`) and reports
-the discovered ids on its `chi:"hello"` and on this server's
-`/v1/models`. Nothing hive-side governs the list — no env, no config
-seed. humd routes `chi:"prompt"` to this bee only when `modelId`
-matches a discovered model, and the nurse rejects unknown ids.
-
-## Run
+## Keys
 
 ```bash
-npm install
-npm run build
-npm start
+node dist/index.js key add alice     # prints alice's token, once
+node dist/index.js key list
+node dist/index.js key remove alice
 ```
 
-Or in dev:
-
-```bash
-npx tsx src/index.ts
-```
+A token is kept only as its sha256, in `secrets/keys.json` under the
+hive's state, and a key counts as soon as it is added. Each key is one
+forager bee, so humd hears every caller apart and `hum bee <id> exit` shuts
+one out. With no key at all, anyone who reaches the port may call.
 
 ## Use
 
-```bash
-curl http://localhost:14620/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "sonnet",
-    "stream": true,
-    "messages": [{ "role": "user", "content": "ping" }]
-  }'
-```
-
-Drop-in for the OpenAI SDK:
-
 ```ts
 import OpenAI from "openai";
-const client = new OpenAI({
-  baseURL: "http://localhost:14620/v1",
-  apiKey:  "anything",
-});
+const client = new OpenAI({ baseURL: "http://127.0.0.1:14620/v1", apiKey: "sk-hum-..." });
 const r = await client.chat.completions.create({
-  model: "sonnet",
+  model: "claude-opus-4-7",
   messages: [{ role: "user", content: "ping" }],
 });
 ```
 
-## Status
+## Test
 
-Reference implementation. Tools / function-calling map onto thrum's
-`chi:"tendril-reach"` / `chi:"tendril-result"` pair; lots of OpenAI surface
-(images, audio, fine-tuning) is intentionally not implemented — file
-an issue if you need a specific endpoint.
+```bash
+pnpm install && pnpm run build
+cargo build -p hum -p humd           # from the repo root
+bun test
+```
 
-## See also
-
-- [`thrum`](../../thrum) — the npm package this bee imports.
-- [`paid-oracle`](../paid-oracle) — for monetizing this bee
-  via x402-style payment.
-- [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.
+The end-to-end tests run the official OpenAI SDK against this server
+under Node, a humd of their own built from this checkout, and a scripted
+upstream.

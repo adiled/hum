@@ -24,9 +24,11 @@
  * takes them in order and tends the GPU between them, while the client's
  * thread reads the link. A cancel stops its sid's bloom, waiting or in
  * flight, and drops its sid's queued blooms. The bee is stateless: every
- * prompt carries what it needs, as the text petals of its content, else
- * its text, and the engine's session reuses whatever of it the KV cache
- * already holds. An unfurl always carries whole UTF-8 characters, even
+ * prompt carries what it needs, the blooms its graft holds as the turns
+ * before it and the text petals of its content, else its text, as the
+ * turn it asks for, and the engine's session reuses whatever of it the KV
+ * cache already holds. A prompt with no words is refused: the engine
+ * grows only from them. An unfurl always carries whole UTF-8 characters, even
  * when a token ends inside one. A bloom wilts with its nectar: the tokens
  * in and out.
  *
@@ -416,48 +418,56 @@ static int add_message(struct bloom *t, const char *role, const char *text) {
     return 0;
 }
 
-static int read_messages(const cJSON *tone, struct bloom *t) {
-    const char *text = str_of(tone, "text");
-    const cJSON *content = cJSON_GetObjectItemCaseSensitive(tone, "content");
+static char *words_of(const cJSON *petals) {
     const cJSON *petal;
-    bool roles = false;
     char *joined = NULL;
-    size_t joined_len = 0;
+    size_t len = 0;
 
-    if (!cJSON_IsArray(content) || cJSON_GetArraySize(content) == 0) {
-        return text && text[0] ? add_message(t, NULL, text) : -1;
-    }
-
-    cJSON_ArrayForEach(petal, content) {
-        if (str_of(petal, "role")) roles = true;
-    }
-    cJSON_ArrayForEach(petal, content) {
+    cJSON_ArrayForEach(petal, petals) {
         const char *kind = str_of(petal, "kind");
         const char *piece = str_of(petal, "text");
+        size_t n;
+        char *grown;
+
         if (!piece || !kind || strcmp(kind, THRUM_PETAL_TEXT) != 0) continue;
-        if (roles) {
-            if (add_message(t, str_of(petal, "role"), piece) != 0) return -1;
-            continue;
+        n = strlen(piece);
+        grown = (char *)realloc(joined, len + n + 2);
+        if (!grown) {
+            free(joined);
+            return NULL;
         }
-        {
-            size_t n = strlen(piece);
-            char *grown = (char *)realloc(joined, joined_len + n + 2);
-            if (!grown) {
-                free(joined);
-                return -1;
-            }
-            joined = grown;
-            if (joined_len > 0) joined[joined_len++] = '\n';
-            memcpy(joined + joined_len, piece, n + 1);
-            joined_len += n;
-        }
+        joined = grown;
+        if (len > 0) joined[len++] = '\n';
+        memcpy(joined + len, piece, n + 1);
+        len += n;
     }
-    if (joined) {
-        int rc = joined_len > 0 ? add_message(t, NULL, joined) : -1;
-        free(joined);
-        return rc;
+    return joined;
+}
+
+static int add_words(struct bloom *t, const char *role, const cJSON *petals) {
+    char *words = words_of(petals);
+    int rc = 0;
+
+    if (words && words[0]) rc = add_message(t, role, words);
+    free(words);
+    return rc;
+}
+
+static int read_messages(const cJSON *tone, struct bloom *t) {
+    const cJSON *graft = cJSON_GetObjectItemCaseSensitive(tone, "graft");
+    const cJSON *bloom;
+    const char *text = str_of(tone, "text");
+    size_t before;
+
+    cJSON_ArrayForEach(bloom, graft) {
+        if (add_words(t, "user", cJSON_GetObjectItemCaseSensitive(bloom, "content")) != 0) return -1;
+        if (add_words(t, "assistant", cJSON_GetObjectItemCaseSensitive(bloom, "grew")) != 0) return -1;
     }
-    return t->count > 0 ? 0 : -1;
+    before = t->count;
+    if (add_words(t, "user", cJSON_GetObjectItemCaseSensitive(tone, "content")) != 0) return -1;
+    if (t->count == before && text && text[0] && add_message(t, "user", text) != 0) return -1;
+    if (t->count == before) return before > 0 ? -2 : -1;
+    return 0;
 }
 
 static void on_prompt(const cJSON *tone) {
@@ -476,8 +486,15 @@ static void on_prompt(const cJSON *tone) {
         free_bloom(t);
         return;
     }
-    if (read_messages(tone, t) != 0) {
-        send_error(t, "empty_prompt", "the prompt carried no text");
+    switch (read_messages(tone, t)) {
+    case 0:
+        break;
+    case -2:
+        send_error(t, "cannot-grow-on", "dwarfstar grows a bloom only from new words, and cannot grow one on from its graft");
+        free_bloom(t);
+        return;
+    default:
+        send_error(t, "empty-prompt", "the prompt carried no words");
         free_bloom(t);
         return;
     }

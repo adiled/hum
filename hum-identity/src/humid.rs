@@ -26,10 +26,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub const NS_CLAUDE_SESSION: Uuid = Uuid::from_bytes([
-    0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
-]);
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HumId(String);
 
@@ -282,9 +278,9 @@ mod tests {
 
     #[test]
     fn hum_id_from_foreign_is_deterministic() {
-        let a = HumId::from_foreign("oc-session-abc");
-        let b = HumId::from_foreign("oc-session-abc");
-        let c = HumId::from_foreign("oc-session-xyz");
+        let a = HumId::from_foreign("foreign-session-abc");
+        let b = HumId::from_foreign("foreign-session-abc");
+        let c = HumId::from_foreign("foreign-session-xyz");
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
@@ -292,8 +288,9 @@ mod tests {
     #[test]
     fn hum_id_to_uuid_v5_deterministic() {
         let h = HumId::parse(&mint_id()).unwrap();
-        let u1 = h.to_uuid_v5(NS_CLAUDE_SESSION);
-        let u2 = h.to_uuid_v5(NS_CLAUDE_SESSION);
+        let ns = Uuid::from_bytes([7; 16]);
+        let u1 = h.to_uuid_v5(ns);
+        let u2 = h.to_uuid_v5(ns);
         assert_eq!(u1, u2);
         assert_eq!(u1.get_version_num(), 5);
     }

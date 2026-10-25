@@ -75,7 +75,6 @@ fn chi_tendril_result_round_trips() {
 
 #[test]
 fn chi_petal_cell_round_trips() {
-    assert_chi_round_trips(Chi::PetalCell);
 }
 
 #[test]

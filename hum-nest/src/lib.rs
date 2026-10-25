@@ -1,9 +1,14 @@
 //! hum's hive-side kernel for a nurse. The nurse contract ([`Nurse`],
-//! [`Egg`], [`Cell`], [`Propensity`], tone encoders), the process
-//! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
-//! sampling / [`limits`] rlimits), the [`mcp`] its cells reach their
-//! tools through, and the wire-semantics loop that wraps [`hum-thrum`]
-//! for a nurse: [`serve`] (`serve_nurse`).
+//! [`Egg`], [`Cell`], [`Propensity`]), the process supervision runtime
+//! ([`lifecycle`] group-owning / [`metrics`] sampling / [`limits`]
+//! rlimits), the [`mcp`] its cells reach their tools through, and the
+//! wire-semantics loop that wraps [`hum-thrum`] for a nurse: [`serve`]
+//! (`serve_nurse`).
+//!
+//! A cell speaks the thrum and nothing else to the nest. It is fed its
+//! sigil's tones, each prompt, an answer to a tool it reached outside its
+//! sigil's tools, a cancel, and gives back the tones of what it grew. What
+//! the engine behind it speaks is the hive's own to translate.
 //!
 //! One crate, no `nest`-common indirection: a hive that needs the nest
 //! lives here; a remote hive that only needs the wire takes the leaf
@@ -13,6 +18,14 @@
 //! and whatever it does to the world it does through a tendril, `bash` to
 //! a builder above all, so the kernel sees every reach.
 //!
+//! An [`Egg`] is what any nurse raises a cell from: the sigil, the model,
+//! the nest's directory, the sigil's MCP address, the environment and
+//! limits, and the prompt the cell is raised for, the blooms its forager
+//! grafted on it among the rest, so a cell that did not grow them grows
+//! from them. A nurse that can grow a bloom on from its graft, with
+//! no new words, says so with [`Nurse::grows_on`]; any other is never
+//! handed such a prompt.
+//!
 //! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
 //! also lives here (patterns for chat-LLM context-loss detection).
 //!
@@ -20,13 +33,12 @@
 //! `hives/README.md`, declared from the bee side so peers can adapt
 //! prompt assembly:
 //!
-//! - `StatefulSession` — the bee process retains conversation state in
-//!   its own memory across multiple prompts that share a sid. Foragers
-//!   should derive a stable sid per external conversation and send only
-//!   the *new* prompt each bloom; the nurse keeps prior history.
-//! - `StatelessPerCall` — the bee treats every call as a fresh
-//!   self-contained request. Foragers should send the full transcript
-//!   every time; pooling buys nothing.
+//! - `StatefulSession` — the nurse keeps a sigil's conversation itself
+//!   across the prompts that share its sid, so a forager that keeps one
+//!   sid per conversation sends only the new turn, and a prompt's graft
+//!   matters only to a cell that did not grow those blooms.
+//! - `StatelessPerCall` — the nurse keeps nothing between calls and
+//!   grows each bloom from its prompt's graft; pooling buys nothing.
 //! - `EphemeralPerCall` — like `StatelessPerCall` but the bee process
 //!   exits after a single result. Eviction is automatic; sid stability
 //!   is irrelevant.
@@ -53,7 +65,6 @@ use async_trait::async_trait;
 use hum_identity::HumId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thrum_core::{Grain, Petal, PetalKind};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -75,16 +86,10 @@ pub struct Egg {
     pub sid: HumId,
     pub model_id: String,
     pub cwd: String,
-    pub system_prompt: Option<String>,
     pub mcp_url: Option<String>,
-    pub cli_path: Option<String>,
-    pub resume_id: Option<String>,
-    pub fresh: bool,
-    pub plan_mode: bool,
-    pub allowed_tools: Vec<String>,
-    pub disallowed_tools: Vec<String>,
     pub env: HashMap<String, String>,
     pub bounds: limits::Bounds,
+    pub prompt: thrum_core::PromptBody,
 }
 
 impl Egg {
@@ -93,23 +98,17 @@ impl Egg {
             sid,
             model_id: model_id.into(),
             cwd: cwd.into(),
-            system_prompt: None,
             mcp_url: None,
-            cli_path: None,
-            resume_id: None,
-            fresh: false,
-            plan_mode: false,
-            allowed_tools: Vec::new(),
-            disallowed_tools: Vec::new(),
             env: HashMap::new(),
             bounds: limits::Bounds::default(),
+            prompt: thrum_core::PromptBody::default(),
         }
     }
 }
 
 pub struct Cell {
     pub mark: Option<u32>,
-    pub feed: mpsc::Sender<String>,
+    pub feed: mpsc::Sender<Value>,
     pub mmm: Arc<Mutex<mpsc::Receiver<Value>>>,
     pub emerged: tokio::sync::oneshot::Receiver<i32>,
     pub ephemeral: bool,
@@ -175,74 +174,11 @@ pub trait Nurse: Send + Sync {
     }
     async fn raise(&self, egg: Egg) -> Result<Cell>;
 
+    fn grows_on(&self) -> bool {
+        false
+    }
+
     async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {
         Ok(CurateReport::default())
     }
-}
-
-pub fn encode_prompt(text: &str) -> String {
-    encode_petals(&[Petal {
-        kind: PetalKind::Text.as_str().into(),
-        text: Some(text.into()),
-        ..Petal::default()
-    }])
-}
-
-pub fn encode_petals(petals: &[Petal]) -> String {
-    let mut content: Vec<Value> = Vec::new();
-    for petal in petals {
-        match (petal.kind.as_str(), &petal.text, &petal.grain) {
-            ("text", Some(text), _) => content.push(serde_json::json!({"type": "text", "text": text})),
-            ("pollen", _, Some(grain)) => content.push(grain_block(grain)),
-            _ => {}
-        }
-    }
-    serde_json::json!({
-        "type": "user",
-        "message": { "role": "user", "content": content }
-    })
-    .to_string()
-}
-
-fn grain_block(grain: &Grain) -> Value {
-    match (grain.kind.as_str(), &grain.data, &grain.url) {
-        ("image", Some(data), _) => serde_json::json!({
-            "type": "image",
-            "source": { "type": "base64", "media_type": grain.media_type, "data": data }
-        }),
-        ("image", None, Some(url)) => serde_json::json!({
-            "type": "image",
-            "source": { "type": "url", "url": url }
-        }),
-        (kind, _, url) => {
-            let at = url.as_deref().map(|u| format!(" ({u})")).unwrap_or_default();
-            serde_json::json!({
-                "type": "text",
-                "text": format!("[attachment: kind={kind} media_type={}{at}]", grain.media_type)
-            })
-        }
-    }
-}
-
-pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {
-    serde_json::json!({
-        "type": "user",
-        "message": {
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": result,
-            }]
-        }
-    })
-    .to_string()
-}
-
-pub fn encode_cancel(request_id: &str) -> String {
-    serde_json::json!({
-        "type": "control_cancel_request",
-        "request_id": request_id,
-    })
-    .to_string()
 }

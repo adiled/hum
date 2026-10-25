@@ -25,9 +25,13 @@
 //! comes next. A humd that gives no verdict within [`VERDICT`] is
 //! treated as gone.
 //!
+//! The bee hears every breath after the one on connect, the one that
+//! admits it included: a breath carries what humd keeps the bee in step
+//! with, and a forager's says what it can reach.
+//!
 //! A change to the hello while nestled goes out at once as a fresh signed
 //! hello on the same connection, which humd takes as the bee's new
-//! announcement; its breath is swallowed and its refusal is final. A
+//! announcement; its refusal is final. A
 //! change made while humd's verdict is pending goes out the same way the
 //! moment the bee is admitted. A `pulse` carrying `headroom` updates the
 //! stored hello too, so a reconnect announces the bee's latest capacity.
@@ -406,6 +410,7 @@ impl Core {
                 } else if chi == "breath" && *acked {
                     let rids = vec![hello_rid.clone()];
                     self.nestle(rids);
+                    self.out.push_back(Output::Tone(tone));
                     if self.hello_stale {
                         self.rehello(now_ms);
                     }
@@ -421,6 +426,7 @@ impl Core {
                     }
                 } else if chi == "breath" && *rehello {
                     *rehello = false;
+                    self.out.push_back(Output::Tone(tone));
                 } else if chi == "echo" && rid.as_ref().is_some_and(|r| self.minted_set.contains(r)) {
                     let rid = rid.unwrap_or_default();
                     if !ok {

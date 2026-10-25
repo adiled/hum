@@ -11,7 +11,7 @@ export const THRUM_VERSION = "0.8.0" as const;
 export const Chi = {
   /** announce self: hive, role, signed identity */
   hello: "hello",
-  /** open a bloom: its petals, and how the cell should grow it */
+  /** open a bloom: its petals, the blooms before it, and how the cell should grow it */
   prompt: "prompt",
   /** stop the open bloom */
   cancel: "cancel",
@@ -23,9 +23,7 @@ export const Chi = {
   scoutResult: "scout-result",
   /** what a tendril grasped */
   tendrilResult: "tendril-result",
-  /** OC message-graph update (graft hint) */
-  petalCell: "petal-cell",
-  /** accept a hello, sync state on connect */
+  /** accept a hello, and keep the bee in step */
   breath: "breath",
   /** a petal growing */
   unfurl: "unfurl",
@@ -123,7 +121,7 @@ export const Role = {
   nurse: "nurse",
   /** changes the world: runs what a bloom composes on its host, through [`bash`](#bash) */
   builder: "builder",
-  /** serves the fixed, named tools in its hello's `tools`, and nothing else */
+  /** serves the fixed, named tools in its hello's `tools`, and the [`scent`](#scent) of the models its hello's `models` name, and nothing else */
   attendant: "attendant",
 } as const;
 export type RoleT = typeof Role[keyof typeof Role];

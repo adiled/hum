@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `$XDG_STATE_HOME/hum` | keys, snapshots, the thrum socket, the rendezvous file |
 //! | `$XDG_CONFIG_HOME/hum` | user-editable config: `hum.json`, `peers.json` |
-//! | `$XDG_DATA_HOME/hum` | installed source clone, recipes |
+//! | `$XDG_DATA_HOME/hum` | installed source clone |
 //! | `$XDG_CACHE_HOME/hum` | derived caches, e.g. foreign hive clones |
 //! | `$XDG_RUNTIME_DIR/hum` | non-essential per-boot runtime files |
 //!
@@ -92,13 +92,7 @@ pub const PEERS_JSON_BASENAME: &str = "peers.json";
 pub const ORCHFILE_BASENAME: &str = "Orchfile";
 pub const ROUTING_JSON_BASENAME: &str = "routing.json";
 pub const HIVES_SUBDIR: &str = "hives";
-pub const RECIPES_SUBDIR: &str = "recipes";
 pub const HIVE_INSTALL_UNIT: &str = "hive-install";
-pub const RECIPE_INSTALL_SCRIPT: &str = "install";
-
-pub fn claude_session_dir(cwd_hash: &str) -> PathBuf {
-    claude_data_dir().join("projects").join(cwd_hash)
-}
 
 pub fn thrum_sock() -> PathBuf {
     if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
@@ -316,10 +310,6 @@ pub fn humd_bin() -> PathBuf {
 
 pub fn fnm_node_bin() -> PathBuf {
     local_dir().join("share/fnm/aliases/default/bin/node")
-}
-
-pub fn claude_data_dir() -> PathBuf {
-    home().join(".claude")
 }
 
 pub fn hum_bin(name: &str) -> PathBuf {

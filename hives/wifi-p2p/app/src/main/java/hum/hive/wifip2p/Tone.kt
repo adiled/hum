@@ -22,7 +22,6 @@ object Chi {
     const val CURATE = "curate"
     const val SCOUT_RESULT = "scout-result"
     const val TENDRIL_RESULT = "tendril-result"
-    const val PETAL_CELL = "petal-cell"
     const val BREATH = "breath"
     const val UNFURL = "unfurl"
     const val WILT = "wilt"
