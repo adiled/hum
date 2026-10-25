@@ -39,7 +39,8 @@ Learn more by simply humming along.. or read the [scenarios](https://adiled.gith
 
 Refer to hum.schema.json
 
-**Comparison for the sake of comparison**
+<details>
+<summary><strong>Comparison for the sake of comparison</strong></summary>
 
 > hum is an agentic kernel, not an LLM router, and incomparable in scope. This table simply highlights
 > how hum's out-of-the-box hives overlap with the winning representative from each class.
@@ -70,3 +71,5 @@ Refer to hum.schema.json
 | **Agent-human consensus** | ✅ (`thehum` hash chain + on-chain anchoring via `HumdRegistry` contract) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
+
+</details>

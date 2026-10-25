@@ -151,5 +151,5 @@ between the P2P radio and the local thrum socket.
 - [`gsm-modem`](../gsm-modem) — same forager pattern over GSM AT-command serial
 - [`bp7`](../bp7) — same forager pattern over Bundle Protocol v7 (DTN)
 - [`twilio-sms`](../twilio-sms) — same forager pattern over Twilio webhook
-- [WIRE.md](../../WIRE.md) — the thrum protocol spec
+- [THRUM.md](../../THRUM.md) — the thrum protocol spec
 - [Android WifiP2pManager docs](https://developer.android.com/guide/topics/connectivity/wifip2p)

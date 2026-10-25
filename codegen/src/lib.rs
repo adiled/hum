@@ -5,8 +5,8 @@
 //!
 //! `thrum` reads the file. The emitters here and in `protocol` and
 //! `link` take its projections: the registries (`ChiSpec`), the views
-//! (`ProtocolSpec`), the link's constants (`LinkSpec`). `wire` reads the
-//! file out as Markdown into WIRE.md's marked regions. `rust` parses
+//! (`ProtocolSpec`), the link's constants (`LinkSpec`). `document` reads
+//! the file out as Markdown into THRUM.md's marked regions. `rust` parses
 //! thrum-core's `chi.rs`, `views.rs`, `envelope.rs` and `lib.rs` as text
 //! and compares them with the file.
 //!
@@ -19,12 +19,12 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context};
 use regex::Regex;
 
+pub mod document;
 pub mod link;
 pub mod paths;
 pub mod protocol;
 pub mod rust;
 pub mod thrum;
-pub mod wire;
 
 pub use anyhow::Result;
 

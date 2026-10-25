@@ -4,7 +4,7 @@
 # declares, and the envelope every tone carries. A bee sounds a tone and
 # humd carries it to whoever is tuned to hear it. Nothing here names a
 # socket, a pipe or a peer: those are media a tone travels through, each
-# bound in WIRE.md, and the tone is the same in all of them.
+# bound in THRUM.md, and the tone is the same in all of them.
 #
 # One declaration per line, KEYWORD first. A DOC line documents the line
 # above it. A blank line is nothing; a line starting with # is a comment.
@@ -30,8 +30,8 @@
 # range.
 #
 # For what a tone is, this file wins: thrum-core's Rust is held to it,
-# the TS, Python, Go and C clients are emitted from it, and WIRE.md's
-# tables are read out of it. For what a party does with a tone, WIRE.md
+# the TS, Python, Go and C clients are emitted from it, and THRUM.md's
+# tables are read out of it. For what a party does with a tone, THRUM.md
 # wins.
 
 THRUM 0.8.0

@@ -17,7 +17,7 @@
 //!   [`STORM_WINDOW`].
 //! - `did-not-return`: the bee was nestled when humd last stopped and has
 //!   not said hello within [`RETURN_GRACE`] of humd starting again. A bee
-//!   must outlive humd (WIRE.md, The client), and this is the
+//!   must outlive humd (THRUM.md, The client), and this is the
 //!   one rule humd sees broken only by an absence. The bee hears it when
 //!   it does return.
 //!

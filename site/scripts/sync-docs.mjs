@@ -51,8 +51,8 @@ async function* walk(dir = REPO_ROOT, rel = "") {
  *
  *   README.md                    → "index"
  *   ensemble/README.md           → "ensemble/index"
- *   thrum/WIRE.md                → "thrum/wire"
- *   VOCABULARY.md                → "vocabulary"
+ *   THRUM.md                     → "thrum"
+ *   GLOSSARY.md                  → "glossary"
  *   reports/compat-v0.10.3.md    → "reports/compat-v0.10.3"
  */
 function deriveSlug(rel) {

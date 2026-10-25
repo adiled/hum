@@ -72,7 +72,7 @@ A hive keeps its state in `$XDG_STATE_HOME/hum/hives/<hive>/` (`${HUM_HIVE_STATE
 
 ### 1. Speak thrum
 
-Use hum's client; a hive writes only what its bee does. In Rust that is `hum_thrum::Bee::link`, or `hum_nest::serve_nurse`, which runs a nurse on it, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go and C it is the client in [`thrum-clients/<lang>`](../thrum-clients), which runs `hum bee link` for you. Either way the client enters the bee, signs its hello, reads humd's verdict, reconnects when humd restarts, and checks every tone against the thrum, the same in every language ([WIRE.md, The client](../WIRE.md#the-client)).
+Use hum's client; a hive writes only what its bee does. In Rust that is `hum_thrum::Bee::link`, or `hum_nest::serve_nurse`, which runs a nurse on it, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go and C it is the client in [`thrum-clients/<lang>`](../thrum-clients), which runs `hum bee link` for you. Either way the client enters the bee, signs its hello, reads humd's verdict, reconnects when humd restarts, and checks every tone against the thrum, the same in every language ([THRUM.md, The client](../THRUM.md#the-client)).
 
 ### 2. Handshake, the hello contract
 
@@ -116,7 +116,7 @@ A forager maps incoming tones into its outside contract and back, as in `vercel-
 
 ### 4. Tools
 
-An attendant lists the tools it serves in its hello's `tools`; humd hands them to every bloom on its humd and routes each `chi:"tendril-reach"` for one of them to it. A builder serves the thrum's own `bash`, for the blooms that build on its host ([WIRE.md, Tendrils](../WIRE.md#tendrils)). Answer a reach with `chi:"tendril-result"` carrying the same `callId`, or `chi:"error"` under it to refuse, and humd resumes the parked model.
+An attendant lists the tools it serves in its hello's `tools`; humd hands them to every bloom on its humd and routes each `chi:"tendril-reach"` for one of them to it. A builder serves the thrum's own `bash`, for the blooms that build on its host ([THRUM.md, Tendrils](../THRUM.md#tendrils)). Answer a reach with `chi:"tendril-result"` carrying the same `callId`, or `chi:"error"` under it to refuse, and humd resumes the parked model.
 
 ### chi cheatsheet
 
@@ -166,5 +166,5 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 ## See also
 
 - [`hum-nest/`](../hum-nest) defines `Nurse`, `Egg`, `Cell`, the MCP its cells reach tools through, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `hum_nest::lifecycle`.
-- [WIRE.md](../WIRE.md) explains what the wire sees of nests and cells.
-- [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, hive installation, bee, its roles, nestler, and nestled.
+- [THRUM.md](../THRUM.md) explains what the wire sees of nests and cells.
+- [GLOSSARY](../GLOSSARY.md) holds the canonical entries for nest, hive, hive installation, bee, its roles, nestler, and nestled.

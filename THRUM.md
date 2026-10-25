@@ -1,9 +1,9 @@
 ---
-title: "thrum wire spec"
+title: "Thrum Protocol"
 description: "the thrum, hum's vibration protocol: what a tone is, the range of chis, the patterns tones make, the laws every node keeps, and the media a tone travels."
 ---
 
-# thrum wire spec
+# Thrum Protocol
 
 > _the thrum, hum's vibration protocol. A tone is the same in every medium: `hum.thrum` says what it is, and this document says what everyone does with it._
 
@@ -1274,11 +1274,12 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 ## See also
 
-- [`hum.thrum`](./hum.thrum): the thrum itself — the envelope, the range, the shapes, kinds, patterns and advisories. The file wins on what a tone is.
+- [`hum.thrum`](./hum.thrum): the thrum itself, its envelope, range, shapes, kinds, patterns and advisories. The file wins on what a tone is.
+- [GLOSSARY.md](./GLOSSARY.md): what each word means.
 - [`thrum-core`](../thrum-core): the Rust reading of it (chi enum, views, helpers), held to the file.
 - [`hum-thrum`](../hum-thrum): the client, sans-IO at its core, and the link.
 - [`thrum-clients`](../thrum-clients): the generated client for TS, Python, Go and C.
 - [`codegen`](../codegen): what reads the file out, into the clients and into this document.
-- [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
-- [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
-- [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.
+- [`ensemble/README.md`](../ensemble/README.md): inter-humd routing.
+- [`hives/foragers.md`](../hives/foragers.md): typology and propensity axes.
+- [adiled.github.io/hum](https://adiled.github.io/hum/): the docs site.

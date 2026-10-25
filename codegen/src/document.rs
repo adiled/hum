@@ -1,6 +1,6 @@
-//! WIRE.md's generated regions, read out of the thrum as Markdown.
+//! THRUM.md's generated regions, read out of the thrum as Markdown.
 //!
-//! WIRE.md is prose, hand-written, with regions between
+//! THRUM.md is prose, hand-written, with regions between
 //! `<!-- thrum: NAME -->` and `<!-- /thrum -->` that codegen fills from
 //! `hum.thrum`: the envelope, the range, the roles, each chi, the
 //! shapes, the kinds, the patterns and the advisories. `fill` rewrites
@@ -30,18 +30,18 @@ pub const REGIONS: &[&str] = &[
 
 pub fn emit(thrum: &Thrum, source: &Path, output: &Path) -> Result<()> {
     let src = crate::read(source)?;
-    let filled = fill(&src, thrum).with_context(|| paths::WIRE_MD_REL.to_string())?;
+    let filled = fill(&src, thrum).with_context(|| paths::THRUM_MD_REL.to_string())?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).ok();
     }
     fs::write(output, filled).with_context(|| format!("write {}", output.display()))
 }
 
-pub fn fill(wire_md: &str, thrum: &Thrum) -> Result<String> {
-    let mut out = String::with_capacity(wire_md.len() + 16 * 1024);
+pub fn fill(source: &str, thrum: &Thrum) -> Result<String> {
+    let mut out = String::with_capacity(source.len() + 16 * 1024);
     let mut open: Option<&str> = None;
     let mut seen: Vec<&str> = Vec::new();
-    for (i, line) in wire_md.lines().enumerate() {
+    for (i, line) in source.lines().enumerate() {
         let n = i + 1;
         if let Some(name) = opens(line) {
             if let Some(inside) = open {
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn the_spec_itself_fills() {
         let thrum = crate::thrum::parse(&paths::hum_thrum()).unwrap();
-        let src = crate::read(&paths::wire_md()).unwrap();
+        let src = crate::read(&paths::thrum_md()).unwrap();
         let out = fill(&src, &thrum).unwrap();
         assert!(out.contains("#### `prompt`"));
         assert!(out.contains("| **nurse** |"));
