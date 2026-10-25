@@ -25,6 +25,7 @@ A honeybee on the plant pot by your bed is still a bee; you just need to know wh
 | [`vercel-ai`](vercel-ai) | forager | `vercel-ai` | Vercel AI SDK `LanguageModelV3` |
 | [`bash`](bash) | builder | `bash-builder` | a bash shell per sigil, on its own host |
 | [`paid-oracle`](paid-oracle) | attendant | `paid-oracle` | x402 over a tendril, USDC per call |
+| [`web2`](web2) | attendant | `web2` | OpenAPI and MCP, as one command-line tendril, `wrepl` |
 | [`grpc`](grpc) | forager | `grpc-forager` | gRPC bidi stream |
 | [`twilio-sms`](twilio-sms) | forager | `twilio-sms` | Twilio Messaging webhook |
 | [`gsm-modem`](gsm-modem) | forager | `gsm-modem` | GSM AT-command serial SMS |
