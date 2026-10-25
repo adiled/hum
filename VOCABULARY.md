@@ -15,16 +15,34 @@ like the thing — readers and writers share the same mental model.
 - **tone** — one vibration on the thrum. Envelope (chi/rid/sid/…) plus the body its chi declares.
 - **chi** — the tone's discriminator. `prompt`, `unfurl`, `wilt`, `gossip-publish`, …
 - **chis** — the *list* of chi values a bee speaks. Advertised in the hello.
+- **range** — every chi a tone may carry, each saying who sounds it, who hears it, and whether it crosses humds.
+- **rid** — the echo key. An echo, or a reply, carries the rid of what it answers; never a dedup key.
+- **sid** — the line of blooms a tone belongs to, the string its sigil is drawn from. The forager picks it.
 - **sigil** — what ties a run of blooms together: a hash of their `sid`. Stable across reconnects.
 - **wane** — Lamport-clock per sigil. Increments on every state mutation.
 - **dusk** — absolute ms expiry on a tone. Past dusk, drop.
+- **mid** — the at-most-once claim: an id the originator mints once, which a receiver dispatches once. Absent, the tone is heard every time it is sent.
+- **ext** — a bee's own data on a tone, under its own key, carried untouched.
+- **echo** — delivery ack for a rid. An answer is an echo; nothing returns.
+- **breath** — humd accepting a hello, and keeping the bee in step. A forager's breath says what it can reach, breathed again when that changes.
+- **pulse** — a moment in a cell's life, with the nurse's headroom after it.
+- **advisory** — what the thrum tells a bee to fix without refusing it, as a `log` tone whose `fields.advisory` is the code.
+- **pattern** — a figure tones make together: an **attunement** (a bee's hello, and humd's verdict), a bloom, a tendril.
+- **law** — what every node does with any tone, in any medium: drop it past dusk, hear a mid once, merge wane by max, carry unknown fields whole, advise on undeclared keys.
+- **medium** — what carries a tone whole and says nothing about it: the stream (NDJSON on a socket, TCP, TLS or iroh), the link, a message.
+- **link** — `hum bee link`, hum's client as a process, which a bee in any language speaks to over two pipes. The link signs the hello, reconnects, and checks every tone against the thrum.
 
 ## Daemon
 
 - **humd**: the daemon process. One per machine install. A coordination
   node: it admits bees, routes between them and gossips with its peers.
   It hosts no cells.
-- **HumdId**: sha256 of the humd's Ed25519 public key.
+- **hid**: who a party is: the sha256 of its Ed25519 public key, prefixed
+  by what it is, `bee_` for a bee and `humd_` for a humd. A tone crossing
+  humds names them by hid in `from` and `to`.
+- **thehum**: the chi log a humd keeps, signed, sequenced and hash-chained:
+  every tone it heard or sounded, by author. A peer catches up with a
+  `backfill`, one `backfill-event` per line.
 - **nest**: the cells a hive hosts and the limits it keeps them under. A
   hive turns it on by using hum-nest, and the limits (`maxCells`,
   `idleMs`, cell `bounds`) are its own, in the `nest` section of its
@@ -43,11 +61,11 @@ like the thing — readers and writers share the same mental model.
 - **petal** — one unit of content. Its kind says which: **text**, a
   **tendril**, the **grasp** a tendril came back with, **pollen**, a
   **sepal**, a **waggle**, a **thorn**, **brix**, a **bouquet**.
-- **bloom** — one turn of conversation. Opens with a `prompt`, closes with a `wilt`.
+- **bloom** — one turn of conversation. Opens with a `prompt`, grows by
+  `unfurl`s, and closes with a `wilt`, or breaks off with an `error`; a
+  `cancel` closes it early.
 - **unfurl** — a petal growing, one tone at a time, until it is closed.
 - **wilt** — close the bloom. It carries the bloom's nectar.
-- **buds** — buffered tool events not yet committed.
-- **shed** — flush the buds.
 - **tendril** — brokered tool call. Reaches across the wire for execution
   (`tendril-reach`), and comes back with what it grasped (`tendril-result`).
 - **sap** — accumulated tool input being assembled; it grows in an unfurl.
@@ -100,10 +118,13 @@ grafted above grows into the stock).
   Entering starts no process; that is the hive's to do.
 - **nestler**: a bee's lifecycle phase: handshaking, awaiting the breath
   that accepts `chi:"hello"`. Verb-state of the same participant.
-- **nestled**: a bee's lifecycle phase: post-handshake, registered, with
-  a nestledId. The bee keeps asking (`chi:"prompt"`, `chi:"cancel"`,
-  `chi:"tendril-result"`, `chi:"cleanup"`, `chi:"curate"`) for the rest
-  of the connection.
+- **nestled**: a bee's lifecycle phase: admitted by a breath, and sounding
+  and hearing what its role says, for the rest of the connection.
+- **gossip**: a tone a humd fans to every peer, and each to every other,
+  heard once by its `msg_id`. How a hive's announcements and the rest of
+  the mesh's news travel.
+- **attach**: a forager observing a sid hosted on another humd; the
+  bloom's reply tones fan out to the observer too. **Detach** stops.
 
 The vocabulary stacks as: **hive** = kind, installed on a humd; **bee** =
 a participant the humd understands through its hive; **role** = the one
