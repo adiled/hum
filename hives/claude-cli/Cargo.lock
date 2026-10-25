@@ -240,9 +240,11 @@ dependencies = [
  "hum-paths",
  "serde_json",
  "tempfile",
+ "thrum-core",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

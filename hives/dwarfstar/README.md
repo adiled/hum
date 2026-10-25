@@ -90,8 +90,9 @@ as their engine is loaded:
   one.
 - The bee outlives humd: when humd restarts, it reconnects and nestles
   again with its model still loaded, dropping the blooms the old humd gave.
-- The bee is stateless: a prompt's text petals, else its `text` field,
-  are the conversation. Petals with roles become chat messages.
+- The bee is stateless: a prompt's `graft` is the turns before it, and
+  its text petals, else its `text` field, the turn it asks for. A prompt
+  with no words is refused, since the engine grows only from them.
 
 ## Build
 

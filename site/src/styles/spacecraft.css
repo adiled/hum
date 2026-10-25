@@ -1,12 +1,12 @@
 /* spacecraft theme — overrides Starlight's defaults.
- * Aesthetic: dark void + thin instrument-panel chrome + faint starfield.
- * Reading body stays warm + monospace-leaning; navigation panels feel HUD-like.
+ * Aesthetic: thin instrument-panel chrome over a faint starfield. Dark is
+ * the void; light is the same instruments in daylight. Every colour is a
+ * variable of the palette, so the two modes flip whole.
  */
 
 @import url("https://fonts.bunny.net/css?family=jetbrains-mono:400,500,700|inter:400,500,600");
 
 :root {
-  /* Palette — deep void to instrument-amber. */
   --sl-color-bg:                  #07090e;
   --sl-color-bg-nav:              #0a0d14;
   --sl-color-bg-sidebar:          #0a0d14;
@@ -14,7 +14,7 @@
   --sl-color-bg-accent:           #15212f;
 
   --sl-color-text:                #c8d3e3;
-  --sl-color-text-accent:         #ffd28e;        /* instrument amber */
+  --sl-color-text-accent:         #ffd28e;
   --sl-color-text-invert:         #07090e;
 
   --sl-color-accent:              #ffb347;
@@ -26,6 +26,7 @@
   --sl-color-hairline-shade:      #131923;
 
   --sl-color-white:               #e8eef8;
+  --sl-color-black:               #07090e;
   --sl-color-gray-1:              #c8d3e3;
   --sl-color-gray-2:              #98a3b3;
   --sl-color-gray-3:              #6b7585;
@@ -36,32 +37,108 @@
 
   --sl-font:                      "Inter", system-ui, sans-serif;
   --sl-font-mono:                 "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --hum-sky-warm:                 rgba(255, 179, 71, 0.04);
+  --hum-sky-cool:                 rgba(124, 158, 255, 0.03);
+  --hum-star:                     rgba(232, 238, 248, 0.15);
+  --hum-star-faint:               rgba(232, 238, 248, 0.08);
+  --hum-header-bg:                rgba(10, 13, 20, 0.85);
+  --hum-glow:                     rgba(255, 179, 71, 0.06);
+  --hum-sidebar-top:              #0a0d14;
+  --hum-sidebar-bottom:           #0c1018;
+  --hum-panel-top:                #0c1018;
+  --hum-panel-bottom:             #090c12;
+  --hum-thead-top:                #15212f;
+  --hum-thead-bottom:             #11192a;
+  --hum-code-text:                #e8eef8;
+  --hum-link-line:                rgba(255, 179, 71, 0.3);
+  --hum-link-hover:               #ffe1b4;
+  --hum-lit:                      rgba(255, 179, 71, 0.1);
+  --hum-hover:                    rgba(255, 179, 71, 0.05);
+  --hum-quote-bg:                 rgba(255, 179, 71, 0.04);
+  --hum-row-hover:                rgba(255, 179, 71, 0.02);
+  --hum-selection:                rgba(255, 179, 71, 0.25);
+  --hum-heading-glow:             rgba(255, 179, 71, 0.12);
+  --hum-tree-line:                #2a3548;
+  --hum-logo-shadow:              rgba(0, 0, 0, 0.55);
+
+  --hum-logo-size:                4.75rem;
+  --hum-toc-width:                14rem;
+  --sl-sidebar-width:             16rem;
+  color-scheme: dark;
 }
 
-[data-theme="light"] {
-  /* No light theme — hum is a spacecraft. The void doesn't flip. */
-  color-scheme: dark;
-  --sl-color-bg:                  #07090e;
-  --sl-color-text:                #c8d3e3;
+:root[data-theme="light"] {
+  --sl-color-bg:                  #f7f5f0;
+  --sl-color-bg-nav:              #fbfaf6;
+  --sl-color-bg-sidebar:          #f3f0e8;
+  --sl-color-bg-inline-code:      #ece7dc;
+  --sl-color-bg-accent:           #efe6d3;
+
+  --sl-color-text:                #2a3140;
+  --sl-color-text-accent:         #8a4b00;
+  --sl-color-text-invert:         #ffffff;
+
+  --sl-color-accent:              #b86b00;
+  --sl-color-accent-high:         #6b3a00;
+  --sl-color-accent-low:          #f6e7cc;
+
+  --sl-color-hairline:            #ddd8cc;
+  --sl-color-hairline-light:      #cfc8b8;
+  --sl-color-hairline-shade:      #e8e4da;
+
+  --sl-color-white:               #10141c;
+  --sl-color-black:               #f7f5f0;
+  --sl-color-gray-1:              #1f2632;
+  --sl-color-gray-2:              #3d4656;
+  --sl-color-gray-3:              #5f6878;
+  --sl-color-gray-4:              #8a93a2;
+  --sl-color-gray-5:              #c5cbd5;
+  --sl-color-gray-6:              #e4e1d8;
+  --sl-color-gray-7:              #f0ede5;
+
+  --hum-sky-warm:                 rgba(184, 107, 0, 0.05);
+  --hum-sky-cool:                 rgba(60, 90, 180, 0.04);
+  --hum-star:                     rgba(16, 20, 28, 0.08);
+  --hum-star-faint:               rgba(16, 20, 28, 0.04);
+  --hum-header-bg:                rgba(251, 250, 246, 0.88);
+  --hum-glow:                     rgba(184, 107, 0, 0.08);
+  --hum-sidebar-top:              #f5f2ea;
+  --hum-sidebar-bottom:           #efebe1;
+  --hum-panel-top:                #f3efe6;
+  --hum-panel-bottom:             #ece7dc;
+  --hum-thead-top:                #efe6d3;
+  --hum-thead-bottom:             #e8dcc4;
+  --hum-code-text:                #10141c;
+  --hum-link-line:                rgba(184, 107, 0, 0.35);
+  --hum-link-hover:               #6b3a00;
+  --hum-lit:                      rgba(184, 107, 0, 0.12);
+  --hum-hover:                    rgba(184, 107, 0, 0.06);
+  --hum-quote-bg:                 rgba(184, 107, 0, 0.06);
+  --hum-row-hover:                rgba(184, 107, 0, 0.04);
+  --hum-selection:                rgba(184, 107, 0, 0.22);
+  --hum-heading-glow:             transparent;
+  --hum-tree-line:                #cfc8b8;
+  --hum-logo-shadow:              rgba(60, 40, 10, 0.25);
+  color-scheme: light;
 }
 
 html, body {
   background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 179, 71, 0.04), transparent 60%),
-    radial-gradient(ellipse 60% 40% at 50% 110%, rgba(124, 158, 255, 0.03), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% -10%, var(--hum-sky-warm), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 110%, var(--hum-sky-cool), transparent 60%),
     var(--sl-color-bg);
   background-attachment: fixed;
 }
 
-/* Faint starfield via a repeating SVG dot pattern. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    radial-gradient(circle, rgba(232, 238, 248, 0.15) 1px, transparent 1px),
-    radial-gradient(circle, rgba(232, 238, 248, 0.08) 1px, transparent 1px);
+    radial-gradient(circle, var(--hum-star) 1px, transparent 1px),
+    radial-gradient(circle, var(--hum-star-faint) 1px, transparent 1px);
   background-size: 120px 120px, 200px 200px;
   background-position: 0 0, 60px 60px;
   z-index: 0;
@@ -72,36 +149,163 @@ main, .sl-container, .content-panel {
   z-index: 1;
 }
 
-/* HUD-style header — thin amber underline, monospace branding. */
+/* Header — a thin amber underline. */
 header.header {
-  background: rgba(10, 13, 20, 0.85);
+  background: var(--hum-header-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  box-shadow: inset 0 -1px 0 rgba(255, 179, 71, 0.06);
+  box-shadow: inset 0 -1px 0 var(--hum-glow);
 }
 
-.site-title, .site-title *, [class*="SiteTitle"] {
-  font-family: var(--sl-font-mono) !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.04em;
-  color: var(--sl-color-text-accent) !important;
+/* Branding — the bee hangs from the header's top edge past its bottom;
+ * the word fades h, u, m along one line. */
+header .title-wrapper {
+  overflow: visible;
 }
 
-/* Sidebar — panel rivets, faint border. */
+.site-title {
+  align-items: center;
+  padding-inline-start: calc(var(--hum-logo-size) + 0.6rem);
+  font-family: var(--sl-font);
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-title .hum-logo {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 0.35rem;
+  inset-inline-start: var(--sl-nav-pad-x);
+  width: var(--hum-logo-size);
+  height: var(--hum-logo-size);
+  filter: drop-shadow(0 6px 10px var(--hum-logo-shadow));
+}
+
+.site-title .hum-word {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.site-title .hum-h { font-size: 1.45rem; }
+.site-title .hum-u { font-size: 1.32rem; }
+.site-title .hum-m { font-size: 1.2rem; }
+
+@media (min-width: 50rem) {
+  :root { --hum-logo-size: 6rem; }
+}
+
+/* Sidebar — a file tree: each folder a caret and a trailing slash, its
+ * files under guide lines, the open page lit. */
 .sidebar-pane {
-  background: linear-gradient(180deg, #0a0d14 0%, #0c1018 100%);
-  border-right: 1px solid var(--sl-color-hairline);
+  background: linear-gradient(180deg, var(--hum-sidebar-top) 0%, var(--hum-sidebar-bottom) 100%);
+  border-inline-end: 1px solid var(--sl-color-hairline);
 }
 
-.sidebar a[aria-current="page"] {
-  background: linear-gradient(90deg, rgba(255, 179, 71, 0.08), transparent 70%);
-  border-left: 2px solid var(--sl-color-accent);
-  color: var(--sl-color-text-accent);
+:root .sidebar-pane .sidebar-content {
+  padding-block-start: 2.5rem;
 }
 
-.sidebar a:hover {
-  background: rgba(255, 179, 71, 0.04);
+.sidebar-pane .top-level > li + li {
+  margin-top: 0;
+}
+
+.sidebar-pane .sidebar-content a,
+.sidebar-pane .sidebar-content a.large,
+.sidebar-pane .sidebar-content summary {
+  font-family: var(--sl-font-mono);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.5;
+  padding-block: 0.15rem;
+  padding-inline: 0.4rem;
+  border-radius: 3px;
+  color: var(--sl-color-gray-2);
+  text-decoration: none;
+}
+
+.sidebar-pane .sidebar-content .large {
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+.sidebar-pane details {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+}
+
+.sidebar-pane summary {
+  justify-content: flex-start;
+  gap: 0.2rem;
+  cursor: pointer;
+  color: var(--sl-color-gray-1);
+}
+
+.sidebar-pane summary .caret {
+  order: -1;
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 0.6;
+}
+
+.sidebar-pane summary .group-label .large::after {
+  content: "/";
+  opacity: 0.5;
+}
+
+.sidebar-pane .top-level {
+  padding-inline-start: 0.35rem;
+}
+
+.sidebar-pane .top-level ul {
+  padding-inline-start: 0.85rem;
+}
+
+.sidebar-pane .top-level li {
+  position: relative;
+  margin-inline-start: 0;
+  padding-inline-start: 0.75rem;
+  border-inline-start: none;
+}
+
+.sidebar-pane .top-level li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: 0;
+  border-inline-start: 1px solid var(--hum-tree-line);
+}
+
+.sidebar-pane .top-level li:last-child::before {
+  inset-block-end: auto;
+  height: 0.82rem;
+}
+
+.sidebar-pane .top-level li::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0.82rem;
+  width: 0.55rem;
+  border-top: 1px solid var(--hum-tree-line);
+}
+
+.sidebar-pane a:hover,
+.sidebar-pane summary:hover {
   color: var(--sl-color-text-accent);
+  background: var(--hum-hover);
+}
+
+.sidebar-pane a[aria-current="page"],
+.sidebar-pane a[aria-current="page"]:hover {
+  color: var(--sl-color-text-accent);
+  background: var(--hum-lit);
+  font-weight: 600;
 }
 
 /* Page chrome — section panels with monospace headers. */
@@ -113,9 +317,7 @@ h1, h2, h3, h4 {
 }
 
 h1 {
-  border-bottom: 1px solid var(--sl-color-hairline-light);
-  padding-bottom: 0.6rem;
-  text-shadow: 0 0 24px rgba(255, 179, 71, 0.12);
+  text-shadow: 0 0 24px var(--hum-heading-glow);
 }
 
 h2 {
@@ -138,13 +340,13 @@ h3 {
 a {
   color: var(--sl-color-text-accent);
   text-decoration: underline;
-  text-decoration-color: rgba(255, 179, 71, 0.3);
+  text-decoration-color: var(--hum-link-line);
   text-underline-offset: 3px;
   transition: text-decoration-color 0.15s, color 0.15s;
 }
 
 a:hover {
-  color: #ffe1b4;
+  color: var(--hum-link-hover);
   text-decoration-color: var(--sl-color-accent);
 }
 
@@ -155,14 +357,14 @@ a:hover {
   padding: 0.1em 0.4em;
   border-radius: 3px;
   font-size: 0.9em;
-  color: #e8eef8;
+  color: var(--hum-code-text);
 }
 
 pre.expressive-code, pre {
-  background: linear-gradient(180deg, #0c1018 0%, #090c12 100%) !important;
+  background: linear-gradient(180deg, var(--hum-panel-top) 0%, var(--hum-panel-bottom) 100%) !important;
   border: 1px solid var(--sl-color-hairline) !important;
   border-radius: 4px;
-  box-shadow: inset 0 0 0 1px rgba(255, 179, 71, 0.02);
+  box-shadow: inset 0 0 0 1px var(--hum-row-hover);
 }
 
 /* Tables — instrument panels with thin amber separators. */
@@ -175,7 +377,7 @@ table {
 }
 
 thead {
-  background: linear-gradient(180deg, #15212f 0%, #11192a 100%);
+  background: linear-gradient(180deg, var(--hum-thead-top) 0%, var(--hum-thead-bottom) 100%);
   border-bottom: 1px solid var(--sl-color-hairline-light);
 }
 
@@ -195,13 +397,13 @@ td {
 }
 
 tr:hover td {
-  background: rgba(255, 179, 71, 0.02);
+  background: var(--hum-row-hover);
 }
 
 /* Blockquotes — manifest-style. */
 blockquote {
   border-left: 2px solid var(--sl-color-accent);
-  background: linear-gradient(90deg, rgba(255, 179, 71, 0.04), transparent 80%);
+  background: linear-gradient(90deg, var(--hum-quote-bg), transparent 80%);
   padding: 0.8rem 1.2rem;
   font-style: italic;
   color: var(--sl-color-gray-1);
@@ -227,75 +429,39 @@ hr::after {
   font-size: 0.7em;
 }
 
-/* Selection — soft amber. */
 ::selection {
-  background: rgba(255, 179, 71, 0.25);
+  background: var(--hum-selection);
   color: var(--sl-color-white);
 }
 
-/* Focus rings — visible but not garish. */
 :focus-visible {
   outline: 2px solid var(--sl-color-accent);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-/* Sidebar — file tree, not collapsible chrome.
- * No big group headings, no vertical guide-lines per directory, no
- * carets (autogenerated groups are always open via `collapsed: false`).
- */
-.sidebar-pane .group-label,
-.sidebar-pane .group-label .large,
-.sidebar-pane h2 {
-  font-family: var(--sl-font) !important;
-  font-size: var(--sl-text-sm) !important;
-  font-weight: 500 !important;
-  text-transform: none !important;
-  letter-spacing: 0 !important;
-  color: var(--sl-color-gray-2) !important;
-  margin-top: 0 !important;
-}
-
-/* Top-level link items get the same modest size as group labels — no
- * `large` outsizing. */
-.sidebar-pane .top-level > li > a.large {
-  font-size: var(--sl-text-sm) !important;
-  font-weight: 500 !important;
-}
-
-/* Tighten vertical rhythm — flat tree, not airline-magazine spacing. */
-.sidebar-pane .top-level > li + li {
-  margin-top: 0.1rem !important;
-}
-
-/* Kill the indent-guide border between nested ul/li levels. The
- * indent itself is what carries hierarchy. */
-.sidebar-pane ul ul li {
-  margin-inline-start: 0.6rem !important;
-  padding-inline-start: 0.4rem !important;
-  border-inline-start: none !important;
-}
-
-/* No caret — groups are pre-expanded and `details` is acting as a
- * pure structural container. */
-.sidebar-pane summary .caret {
-  display: none !important;
-}
-.sidebar-pane summary {
-  padding-block: 0.05rem !important;
-  cursor: default;
-}
-
-/* All leaves: a single line with mild horizontal padding. */
-.sidebar-pane li a {
-  padding-block: 0.12rem !important;
-  font-size: var(--sl-text-sm) !important;
-}
-
-/* TOC right rail — softer instrument feel. */
+/* Contents rail — a narrow column on the right; the body takes the rest. */
 nav.right-sidebar {
   background: transparent;
   border-left: 1px solid var(--sl-color-hairline-shade);
+}
+
+:root .sl-container {
+  max-width: none;
+}
+
+@media (min-width: 72rem) {
+  :root .right-sidebar-container {
+    width: var(--hum-toc-width);
+  }
+
+  :root[data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(100% - var(--hum-toc-width));
+  }
+
+  :root .right-sidebar-panel .sl-container {
+    width: calc(var(--hum-toc-width) - 2 * var(--sl-sidebar-pad-x));
+  }
 }
 
 /* Search bar — recessed. */
@@ -304,8 +470,8 @@ site-search dialog, search-input {
   border: 1px solid var(--sl-color-hairline) !important;
 }
 
-/* Markdown details / accordion — panel. */
-details {
+/* Markdown details / accordion — a panel in the page, never the sidebar. */
+.sl-markdown-content details {
   border: 1px solid var(--sl-color-hairline);
   border-radius: 4px;
   padding: 0.8rem 1rem;
@@ -313,7 +479,7 @@ details {
   background: var(--sl-color-bg-inline-code);
 }
 
-details summary {
+.sl-markdown-content details summary {
   cursor: pointer;
   font-family: var(--sl-font-mono);
   color: var(--sl-color-text-accent);

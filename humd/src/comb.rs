@@ -4,7 +4,7 @@
 //! accumulates for the life of the install. Two families live in it.
 //!
 //! **Activity** — what crossed the kernel, by chi: `chi:wilt`,
-//! `chi:tendril-reach`, and `hive:claude-cli:chi:wilt` for the same count
+//! `chi:tendril-reach`, and `hive:<hive>:chi:wilt` for the same count
 //! scoped to the hive of the bee that did the work. The scoped counts
 //! cover the work chis: a bloom wilted, a tendril reached, a tendril
 //! answered, something went wrong, because those are the ones that name
@@ -12,7 +12,7 @@
 //!
 //! **Nectar** — what was consumed, by metric: `nectar:in`, `nectar:out`,
 //! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a hive
-//! as `hive:claude-cli:nectar:in`. Nectar is the kernel's raw intake:
+//! as `hive:<hive>:nectar:in`. Nectar is the kernel's raw intake:
 //! tokens in, tokens out, cache reads and writes. A hive may name its
 //! tokens any of the ways the wilds do: `input_tokens` and `prompt_tokens`
 //! are the same measure, and so are their output counterparts. What the

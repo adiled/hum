@@ -15,7 +15,7 @@
 
 // announce self: hive, role, signed identity
 #define THRUM_CHI_HELLO "hello"
-// open a bloom: its petals, and how the cell should grow it
+// open a bloom: its petals, the blooms before it, and how the cell should grow it
 #define THRUM_CHI_PROMPT "prompt"
 // stop the open bloom
 #define THRUM_CHI_CANCEL "cancel"
@@ -27,9 +27,7 @@
 #define THRUM_CHI_SCOUT_RESULT "scout-result"
 // what a tendril grasped
 #define THRUM_CHI_TENDRIL_RESULT "tendril-result"
-// OC message-graph update (graft hint)
-#define THRUM_CHI_PETAL_CELL "petal-cell"
-// accept a hello, sync state on connect
+// accept a hello, and keep the bee in step
 #define THRUM_CHI_BREATH "breath"
 // a petal growing
 #define THRUM_CHI_UNFURL "unfurl"
@@ -76,7 +74,7 @@
 // thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author.
 #define THRUM_CHI_BACKFILL "backfill"
 
-#define THRUM_CHI_COUNT 31
+#define THRUM_CHI_COUNT 30
 
 static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_HELLO,
@@ -86,7 +84,6 @@ static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_CURATE,
     THRUM_CHI_SCOUT_RESULT,
     THRUM_CHI_TENDRIL_RESULT,
-    THRUM_CHI_PETAL_CELL,
     THRUM_CHI_BREATH,
     THRUM_CHI_UNFURL,
     THRUM_CHI_WILT,
@@ -199,7 +196,7 @@ static inline bool thrum_is_valid_petal(const char *value) {
 #define THRUM_ROLE_NURSE "nurse"
 // changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
 #define THRUM_ROLE_BUILDER "builder"
-// serves the fixed, named tools in its hello's `tools`, and nothing else
+// serves the fixed, named tools in its hello's `tools`, and the [`scent`](#scent) of the models its hello's `models` name, and nothing else
 #define THRUM_ROLE_ATTENDANT "attendant"
 
 #define THRUM_ROLE_COUNT 4

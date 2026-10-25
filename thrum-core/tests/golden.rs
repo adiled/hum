@@ -78,7 +78,6 @@ fn golden() -> Vec<Value> {
             text: Some("hi".into()),
             content: Some(vec![thrum_core::Petal {
                 kind: "pollen".into(),
-                role: None,
                 text: None,
                 grain: Some(thrum_core::Grain {
                     kind: "image".into(),
@@ -107,6 +106,30 @@ fn golden() -> Vec<Value> {
             trellis: None,
             tendrils: Some(thrum_core::Tendrils { reach: Some("auto".into()), parallel: Some(false) }),
             sepal: Some(thrum_core::Sepal { effort: Some("low".into()), budget: None }),
+            scion: Some("}".into()),
+            graft: Some(vec![thrum_core::Bloom {
+                content: Some(vec![thrum_core::Petal {
+                    kind: "text".into(),
+                    text: Some("earlier".into()),
+                    ..thrum_core::Petal::default()
+                }]),
+                grew: Some(vec![
+                    thrum_core::Petal {
+                        kind: "tendril".into(),
+                        call_id: Some("c-1".into()),
+                        name: Some("bash".into()),
+                        args: Some(serde_json::json!({ "command": "ls" })),
+                        ..thrum_core::Petal::default()
+                    },
+                    thrum_core::Petal {
+                        kind: "grasp".into(),
+                        call_id: Some("c-1".into()),
+                        result: Some(Value::from("a.txt")),
+                        is_error: Some(false),
+                        ..thrum_core::Petal::default()
+                    },
+                ]),
+            }]),
         }
     );
     push!(
@@ -198,6 +221,9 @@ fn golden() -> Vec<Value> {
         thrum_core::BreathBody {
             sigils: serde_json::json!([{ "sid": "s1", "model": "claude" }]),
             proto_version: Some("0.7.0".into()),
+            models: Some(vec![thrum_core::Model { id: "claude-opus-4-7".into(), hive: "claude-cli".into() }]),
+            scents: Some(vec![thrum_core::Model { id: "text-embedding-3-small".into(), hive: "openai-server".into() }]),
+            tools: Some(vec![serde_json::json!({ "name": "wrepl" })]),
         }
     );
     push!(

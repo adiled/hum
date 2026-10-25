@@ -104,7 +104,7 @@ You'll get a TwiML response back — same shape Twilio gets.
   on humd's side but won't reach the user. A future revision can send
   via Twilio REST API (Account SID + Auth Token required) for async.
 - **No MMS / images.** Inbound media URLs are ignored. Future revision
-  could pass them through as `petal-cell` attachments.
+  could pass them through as `pollen` petals.
 - **No outbound-initiated chat.** This bee only answers; humd
   doesn't push unsolicited messages to phone numbers.
 

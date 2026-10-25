@@ -4,9 +4,9 @@
 //! that occasionally drop their context window mid-conversation —
 //! Claude, GPT, Gemini all share the symptoms (apology + greeting
 //! reset + "let me search the codebase" hedging). The bank below
-//! mentions "Claude" / "OpenCode" by name in the identity-reset tier
-//! because those are the exact strings the models emit; rename when
-//! you have new common offenders.
+//! mentions "Claude" by name in the identity-reset tier because that is
+//! the exact string a model emits; rename when you have new common
+//! offenders.
 //!
 //! Tiering:
 //! - `Critical` — explicit context-loss admission
@@ -39,7 +39,7 @@ const CONTEXT_LOSS_EXPLICIT: &[&str] = &[
 ];
 
 const IDENTITY_RESET: &[&str] = &[
-    r"(?i)\bI'?m (OpenCode|Claude|an AI|a coding) ?(assistant|agent|language model|helper)?[.,!]",
+    r"(?i)\bI'?m (Claude|an AI|a coding) ?(assistant|agent|language model|helper)?[.,!]",
     r"(?i)\b(best coding agent|software engineering tasks|Use the instructions below)",
     r"(?i)\bas an AI (language model|assistant|,? I)",
     r"(?i)\bI apologize.{0,30}(don'?t|cannot|can'?t) (have|access)",

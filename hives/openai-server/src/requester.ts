@@ -1,51 +1,104 @@
-// The hive's bees, over the thrum client.
+// A caller, as a forager bee.
 //
-// The main bee is the nurse that serves OpenAI models. Each caller of
-// the HTTP surface prompts as a forager of its own, a requester, entered
-// under a label derived from who is asking, so humd hears every caller
-// apart. A requester follows each sigil it opened by sid. When humd goes
-// away mid-bloom, every open sigil hears an error and its HTTP response
-// ends, and a new request waits briefly for humd to return before it is
-// turned away. A requester is ready once humd hears it, and waits at
-// most the time it is given for that.
+// Each key is one requester, a forager bee of this hive entered under the
+// key's label (keys.ts). A requester is ready once humd admits it and its
+// breath says what it can reach, the `models`, `scents` and `tools` it
+// keeps as humd breathes again. It follows each sigil it is growing a bloom
+// in, one follower a sid, and a sid it follows hears an error if humd goes
+// away mid-bloom.
+//
+// A reach for one of its caller's tools is held by callId until the caller
+// answers it. A reach for a sid whose bloom has already gone back to the
+// caller cannot be put to the caller any more, so it is answered at once
+// with an error asking the cell to call again. A reach the requester sends
+// itself, a scent, waits for its result by callId. An idle requester's
+// link closes after ten minutes and opens again on its next request.
 
-import { Bee, Role, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { randomUUID } from "node:crypto";
+import { Bee, Chi, Role, type Model, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
+import { HIVE } from "./config.ts";
+import { HttpError } from "./http.ts";
 
-export const HIVE_NAME = "openai-server";
-export const BEE_VERSION = pkg.version;
 export const SOURCE = "https://github.com/adiled/hum/tree/main/hives/openai-server";
+export const VERSION = pkg.version;
 
-export type { Tone };
-type SidHandler = (msg: Tone) => void;
+const IDLE_MS = 10 * 60_000;
+const READY_MS = 10_000;
+const HELD_MS = 30 * 60_000;
+
+export interface Reach {
+  models: Model[];
+  scents: Model[];
+  tools: unknown[];
+}
+
+type Follower = (tone: Tone) => void;
 
 export class Requester {
+  readonly label: string;
   readonly bee: Bee;
   lastUsed = Date.now();
-  readonly started: Promise<void>;
-  #open = new Map<string, SidHandler>();
+  reach: Reach = { models: [], scents: [], tools: [] };
+  readonly #started: Promise<void>;
   #up = false;
+  #breathed = false;
   #waiting: Array<() => void> = [];
+  #following = new Map<string, Follower>();
+  #asked = new Map<string, (tone: Tone<"tendril-result">) => void>();
+  #held = new Map<string, { sid: string; at: number }>();
+  #rested = new Set<string>();
 
-  constructor(label: string) {
-    this.bee = new Bee({ hive: HIVE_NAME, as: label, role: Role.forager, hello: { version: BEE_VERSION, source: SOURCE } });
+  constructor(label: string, hum?: string) {
+    this.label = label;
+    this.bee = new Bee({ hive: HIVE, as: label, role: Role.forager, hello: { version: VERSION, source: SOURCE }, hum });
+    this.bee.on(Chi.breath, (b) => {
+      this.reach = { models: b.models ?? [], scents: b.scents ?? [], tools: b.tools ?? [] };
+      this.#breathed = true;
+      this.#wake();
+    });
+    this.bee.on(Chi.tendrilResult, (t) => {
+      const asked = this.#asked.get(t.callId);
+      if (asked) asked(t);
+    });
+    this.bee.onAny((t) => this.#stray(t));
     this.bee.onNestled(() => {
       this.#up = true;
-      for (const wake of this.#waiting.splice(0)) wake();
+      this.#wake();
     });
     this.bee.onAstray(() => {
       this.#up = false;
-      for (const [sid, fn] of [...this.#open]) fn({ chi: "error", sid, message: "humd went away mid-bloom" });
+      this.#breathed = false;
+      for (const [sid, fn] of [...this.#following]) fn({ chi: "error", sid, code: "humd-away", message: "humd went away mid-bloom" });
     });
-    this.started = this.bee.start();
-    this.started.catch(() => {});
+    this.#started = this.bee.start();
+    this.#started.catch(() => {});
   }
 
-  async ready(ms: number): Promise<void> {
-    await this.started;
-    if (this.#up) return;
+  #wake(): void {
+    if (!this.#up || !this.#breathed) return;
+    for (const wake of this.#waiting.splice(0)) wake();
+  }
+
+  #stray(t: Tone): void {
+    if (t.chi !== "tendril-reach" || !t.sid || !this.#rested.has(t.sid)) return;
+    this.bee.send({
+      chi: "tendril-result",
+      sid: t.sid,
+      callId: t.callId,
+      isError: true,
+      output: "this call came after the turn had gone back to the caller, so no one will answer it; call it again",
+    });
+  }
+
+  async ready(ms = READY_MS): Promise<void> {
+    if (this.#up && this.#breathed) return;
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("humd is away")), ms);
+      const timer = setTimeout(() => reject(new HttpError(503, "humd did not admit this caller's bee in time; is humd running?", "humd_away")), ms);
+      this.#started.catch((e) => {
+        clearTimeout(timer);
+        reject(new HttpError(503, `this caller's bee could not join humd: ${e instanceof Error ? e.message : e}`, "humd_refused"));
+      });
       this.#waiting.push(() => {
         clearTimeout(timer);
         resolve();
@@ -53,14 +106,21 @@ export class Requester {
     });
   }
 
-  on(sid: string, fn: SidHandler): void {
-    this.#open.set(sid, fn);
+  follow(sid: string, fn: Follower): void {
+    this.lastUsed = Date.now();
+    this.#rested.delete(sid);
+    this.#following.set(sid, fn);
     this.bee.onSid(sid, fn);
   }
 
-  off(sid: string): void {
-    this.#open.delete(sid);
+  unfollow(sid: string, rest = false): void {
+    this.#following.delete(sid);
     this.bee.offSid(sid);
+    if (rest) this.#rested.add(sid);
+  }
+
+  following(sid: string): boolean {
+    return this.#following.has(sid);
   }
 
   send(tone: Tone): void {
@@ -68,11 +128,82 @@ export class Requester {
     this.bee.send(tone);
   }
 
+  hold(sid: string, callId: string): void {
+    this.#held.set(callId, { sid, at: Date.now() });
+  }
+
+  heldSid(callIds: string[]): string | undefined {
+    const now = Date.now();
+    for (const [id, h] of this.#held) if (now - h.at > HELD_MS) this.#held.delete(id);
+    const sids = new Set(callIds.map((id) => this.#held.get(id)?.sid));
+    if (sids.size !== 1) return undefined;
+    const [sid] = sids;
+    return sid;
+  }
+
+  release(callIds: string[]): void {
+    for (const id of callIds) this.#held.delete(id);
+  }
+
+  scent(args: { model: string; input: string[]; dimensions?: number }, ms: number): Promise<Tone<"tendril-result">> {
+    const callId = `scent-${randomUUID()}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#asked.delete(callId);
+        reject(new HttpError(504, `no scent came back within ${ms} ms`));
+      }, ms);
+      this.#asked.set(callId, (t) => {
+        clearTimeout(timer);
+        this.#asked.delete(callId);
+        resolve(t);
+      });
+      this.send({ chi: "tendril-reach", callId, name: "scent", args });
+    });
+  }
+
   busy(): boolean {
-    return this.#open.size > 0;
+    return this.#following.size > 0 || this.#asked.size > 0;
   }
 
   close(): void {
     void this.bee.close();
+  }
+}
+
+export class Requesters {
+  readonly #all = new Map<string, Requester>();
+  readonly #hum: string | undefined;
+
+  constructor(hum?: string) {
+    this.#hum = hum;
+    setInterval(() => {
+      const now = Date.now();
+      for (const [label, rq] of this.#all) {
+        if (!rq.busy() && now - rq.lastUsed > IDLE_MS) {
+          rq.close();
+          this.#all.delete(label);
+        }
+      }
+    }, 60_000).unref();
+  }
+
+  peek(label: string): Requester | undefined {
+    return this.#all.get(label);
+  }
+
+  async get(label: string): Promise<Requester> {
+    let rq = this.#all.get(label);
+    if (!rq) {
+      const born = new Requester(label, this.#hum);
+      this.#all.set(label, born);
+      born.bee.closed().catch((e) => {
+        console.error(`[openai-server] ${label}: ${e}`);
+        if (this.#all.get(label) === born) this.#all.delete(label);
+      });
+      rq = born;
+    }
+    rq.lastUsed = Date.now();
+    await rq.ready();
+    return rq;
   }
 }

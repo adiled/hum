@@ -43,6 +43,10 @@ fn advisories(outs: &[Output]) -> Vec<Advisory> {
         .collect()
 }
 
+fn admitted() -> Vec<Output> {
+    vec![Output::Nestled, Output::Tone(json!({"chi": "breath", "sigils": {}}))]
+}
+
 fn line(v: Value) -> Vec<u8> {
     let mut b = serde_json::to_vec(&v).unwrap();
     b.push(b'\n');
@@ -66,7 +70,7 @@ fn nestle(core: &mut Core) -> String {
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
     assert!(drain(core).is_empty(), "the acknowledgement is not the verdict");
     core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
-    assert_eq!(drain(core), vec![Output::Nestled]);
+    assert_eq!(drain(core), admitted(), "the breath that admits is the bee's too");
     assert!(core.is_nestled());
     rid
 }
@@ -109,7 +113,7 @@ fn a_bee_split_across_reads_still_hears_whole_tones() {
     core.received(NOW, a);
     assert!(drain(&mut core).is_empty());
     core.received(NOW, b);
-    assert_eq!(drain(&mut core), vec![Output::Nestled]);
+    assert_eq!(drain(&mut core), admitted());
 }
 
 #[test]
@@ -167,7 +171,7 @@ fn nestle_again(core: &mut Core) {
     let rid = hello["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
     core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
-    assert_eq!(drain(core), vec![Output::Nestled]);
+    assert_eq!(drain(core), admitted(), "the breath that admits is the bee's too");
 }
 
 #[test]
@@ -288,7 +292,7 @@ fn a_reconnect_announces_the_latest_headroom() {
 }
 
 #[test]
-fn a_changed_hello_goes_out_at_once_and_its_breath_is_swallowed() {
+fn a_changed_hello_goes_out_at_once_and_its_breath_is_heard() {
     let mut core = core_with(json!({"models": ["a"]}));
     nestle(&mut core);
     let mut patch = Map::new();
@@ -303,7 +307,7 @@ fn a_changed_hello_goes_out_at_once_and_its_breath_is_swallowed() {
     let rid = hello["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
     core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
-    assert!(drain(&mut core).is_empty(), "the re-hello's verdict is not a tone");
+    assert_eq!(drain(&mut core).len(), 1, "the re-hello's breath is the bee's");
     core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     assert_eq!(drain(&mut core).len(), 1, "a later breath is the bee's");
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": false, "error": "revoked"})));

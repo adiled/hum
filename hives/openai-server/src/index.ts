@@ -1,1193 +1,181 @@
+// openai-server: OpenAI's HTTP surface in front of hum, and the bees behind
+// it that grow blooms and distil scents through an OpenAI-compatible API.
+//
+//   node dist/index.js                     serve
+//   node dist/index.js key add <name>      make a key; its token is printed once
+//   node dist/index.js key list
+//   node dist/index.js key remove <name>
+//
+// The surface, each route also without its /v1:
+//
+//   GET    /v1/models, /v1/models/{id}
+//   POST   /v1/chat/completions, /v1/responses, /v1/completions, /v1/embeddings
+//   GET    /v1/responses/{id}       DELETE /v1/responses/{id}
+//   GET    /v1/usage                what the calling key has taken
+//
+// A request bears a key once keys exist (keys.ts), and its key's forager
+// bee asks humd for it, so any nurse humd can reach grows its blooms and
+// any attendant distils its scents. A key may be held to a rate in the
+// hive's config. Browsers may call from the origins the config allows.
+//
+// Behind the surface the hive's own bees serve what the API upstream
+// offers: the nurse `main` grows its models' blooms and the attendant
+// `scent` distils its embedding models' scents, both following the
+// upstream's model list. If either is refused, the process ends, for its
+// unit to restart it.
+
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { Bee, Chi, PetalKind, Role, type Grain, type Hello, type Petal, type Tone } from "../../../thrum-clients/ts/index.ts";
-import { BEE_VERSION, HIVE_NAME, Requester, SOURCE } from "./requester.ts";
-import { OpenAITranslator } from "./transform.ts";
-import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
-import { OpenAINurse } from "./openai.ts";
-export { toolsFromOpenAI } from "./tools.ts";
+import { chat } from "./chat.ts";
+import { completions } from "./completions.ts";
+import { loadConfig, type Rate } from "./config.ts";
+import { Sigils } from "./conversation.ts";
+import { embeddings } from "./embeddings.ts";
+import type { Caller, Ctx } from "./hive.ts";
+import { bearerOf, cors, HttpError, sendError, sendJson } from "./http.ts";
+import { addKey, Keys, labelOf, listKeys, removeKey } from "./keys.ts";
+import { model, models } from "./models.ts";
+import { Nurse } from "./nurse.ts";
+import { Requesters } from "./requester.ts";
+import { dropResponse, readResponse, responses } from "./responses.ts";
+import { Scent } from "./scent.ts";
+import { watchModels } from "./upstream.ts";
+import { Usage } from "./usage.ts";
 
-interface HiveConfig {
-  host?: string;
-  port?: number;
-  apiKey?: string;
-}
-
-function readConfigFile(): HiveConfig {
-  const path = join(homedir(), ".config", "hum", "hives", "openai-server.json");
+function keyCommand(args: string[]): number {
+  const [verb, name] = args;
   try {
-    const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as HiveConfig;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-const fileConfig = readConfigFile();
-let MODEL_IDS: string[] = [];
-
-const PORT = process.env.OPENAI_SERVER_PORT !== undefined
-  ? parseInt(process.env.OPENAI_SERVER_PORT, 10)
-  : (typeof fileConfig.port === "number" ? fileConfig.port : 14620);
-const HOST = process.env.OPENAI_SERVER_HOST
-  ?? fileConfig.host
-  ?? "127.0.0.1";
-const API_KEY = process.env.OPENAI_SERVER_API_KEY
-  ?? fileConfig.apiKey
-  ?? "";
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (c) => { body += c.toString(); });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-function unauthorized(res: ServerResponse): void {
-  res.writeHead(401, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: { message: "missing or bad bearer", type: "invalid_request_error" } }));
-}
-
-function bad(res: ServerResponse, msg: string): void {
-  res.writeHead(400, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: { message: msg, type: "invalid_request_error" } }));
-}
-
-function unavailable(res: ServerResponse, msg: string): void {
-  res.writeHead(503, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: { message: msg, type: "service_unavailable" } }));
-}
-
-function checkAuth(req: IncomingMessage): boolean {
-  if (!API_KEY) return true;
-  const auth = req.headers["authorization"];
-  if (typeof auth !== "string") return false;
-  const [scheme, token] = auth.split(" ");
-  return scheme === "Bearer" && token === API_KEY;
-}
-
-const STATE_DIR = (process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state")) + "/hum/hives/openai-server";
-const AUDIT_LOG = join(STATE_DIR, "audit.log");
-const USAGE_PATH = join(STATE_DIR, "usage.json");
-const USAGE_TMP_PATH = `${USAGE_PATH}.tmp`;
-const USAGE_FLUSH_INTERVAL_MS = 30_000;
-const NO_MODEL = "unspecified";
-const SSE_DATA_RE = /^data: (.+)\n\n$/;
-const DATA_URI_RE = /^data:([^;]+);base64,(.+)$/;
-try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}
-
-function tenantOf(req: IncomingMessage): string {
-  const h = req.headers["x-tenant"];
-  if (typeof h === "string" && h.length > 0) return h.replace(/[^A-Za-z0-9_-]/g, "");
-  return "default";
-}
-
-function audit(entry: Record<string, unknown>): void {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n";
-  try { appendFileSync(AUDIT_LOG, line); } catch {}
-}
-
-interface TenantUsage {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  requests: number;
-}
-const USAGE_DEFAULTS: TenantUsage = {
-  promptTokens: 0,
-  completionTokens: 0,
-  totalTokens: 0,
-  requests: 0,
-};
-const USAGE: Record<string, TenantUsage> = (() => {
-  try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
-})();
-
-const sid_to_cell: Map<string, string> = new Map();
-const bloom_to_sid: Map<string, string> = new Map();
-
-interface SidMeta {
-  metadata?: Record<string, string>;
-  safety_identifier?: string;
-  prompt_cache_key?: string;
-}
-const sid_to_meta: Map<string, SidMeta> = new Map();
-const SID_META_CAP = 4096;
-function rememberSidMeta(sid: string, meta: SidMeta): void {
-  if (Object.keys(meta).length === 0) return;
-  if (sid_to_meta.size >= SID_META_CAP) {
-    const first = sid_to_meta.keys().next().value;
-    if (first) sid_to_meta.delete(first);
-  }
-  sid_to_meta.set(sid, meta);
-}
-const RESPONSE_MAP_CAP = 4096;
-function rememberResponse(responseId: string, sid: string): void {
-  if (bloom_to_sid.size >= RESPONSE_MAP_CAP) {
-    const first = bloom_to_sid.keys().next().value;
-    if (first) bloom_to_sid.delete(first);
-  }
-  bloom_to_sid.set(responseId, sid);
-}
-let usageDirty = false;
-function trackUsage(tenant: string, prompt: number, completion: number): void {
-  const u = USAGE[tenant] ?? { ...USAGE_DEFAULTS };
-  u.promptTokens += prompt;
-  u.completionTokens += completion;
-  u.totalTokens += prompt + completion;
-  u.requests += 1;
-  USAGE[tenant] = u;
-  usageDirty = true;
-}
-setInterval(() => {
-  if (!usageDirty) return;
-  try {
-    appendFileSync(USAGE_TMP_PATH, JSON.stringify(USAGE, null, 2));
-    renameSync(USAGE_TMP_PATH, USAGE_PATH);
-    usageDirty = false;
-  } catch {}
-}, USAGE_FLUSH_INTERVAL_MS).unref();
-
-interface Bucket { tokens: number; lastRefill: number; }
-const BUCKETS: Record<string, Bucket> = {};
-const RATE_CAPACITY = parseInt(process.env.OPENAI_SERVER_RATE_CAPACITY ?? "60", 10);
-const RATE_REFILL_PER_SEC = parseFloat(process.env.OPENAI_SERVER_RATE_REFILL ?? "1.0");
-function allow(tenant: string): boolean {
-  const now = Date.now();
-  const b = BUCKETS[tenant] ?? { tokens: RATE_CAPACITY, lastRefill: now };
-  const elapsed = (now - b.lastRefill) / 1000;
-  b.tokens = Math.min(RATE_CAPACITY, b.tokens + elapsed * RATE_REFILL_PER_SEC);
-  b.lastRefill = now;
-  if (b.tokens < 1) { BUCKETS[tenant] = b; return false; }
-  b.tokens -= 1;
-  BUCKETS[tenant] = b;
-  return true;
-}
-function tooManyRequests(res: ServerResponse, tenant: string): void {
-  res.writeHead(429, {
-    "Content-Type": "application/json",
-    "Retry-After": String(RATE_REFILL_PER_SEC * 60),
-    "X-RateLimit-Tenant": tenant,
-  });
-  res.end(JSON.stringify({ error: { message: `rate limit exceeded for tenant '${tenant}'`, type: "rate_limit_exceeded" } }));
-}
-
-interface OpenAIMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content?: string | Array<{ type: string; text?: string }>;
-  tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
-  tool_call_id?: string;
-  name?: string;
-}
-
-
-function flatten(content: OpenAIMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.filter(p => p.type === "text").map(p => p.text ?? "").join("\n");
-  return "";
-}
-
-function grainFromUrl(url: string): Grain {
-  const inline = url.match(DATA_URI_RE);
-  if (inline) return { kind: "image", mediaType: inline[1], data: inline[2] };
-  return { kind: "image", mediaType: "image/*", url };
-}
-
-function grainsFromContent(content: OpenAIMessage["content"]): Grain[] {
-  if (!Array.isArray(content)) return [];
-  const out: Grain[] = [];
-  for (const part of content) {
-    if (part.type !== "image_url") continue;
-    const url = (part as { image_url?: { url?: string } }).image_url?.url;
-    if (url) out.push(grainFromUrl(url));
-  }
-  return out;
-}
-
-function allGrains(messages: OpenAIMessage[]): Grain[] {
-  const out: Grain[] = [];
-  for (const m of messages) out.push(...grainsFromContent(m.content));
-  return out;
-}
-
-function petalsOf(text: string, grains: Grain[]): Petal[] {
-  return [
-    { kind: PetalKind.text, text },
-    ...grains.map((grain): Petal => ({ kind: PetalKind.pollen, grain })),
-  ];
-}
-
-function isFirstPrompt(messages: OpenAIMessage[]): boolean {
-  const asked = messages.filter(m => m.role === "user").length;
-  const answered = messages.filter(m => m.role === "assistant").length;
-  return asked === 1 && answered === 0;
-}
-
-function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; userPrompt: string } {
-  const systemPieces: string[] = [];
-  const said: string[] = [];
-  for (const msg of messages) {
-    if (msg.role === "system") {
-      systemPieces.push(flatten(msg.content));
-    } else if (msg.role === "user") {
-      said.push(`User: ${flatten(msg.content)}`);
-    } else if (msg.role === "assistant") {
-      const text = flatten(msg.content);
-      if (text) said.push(`Assistant: ${text}`);
+    if (verb === "add" && name) {
+      console.log(addKey(name));
+      return 0;
     }
+    if (verb === "list") {
+      for (const k of listKeys()) console.log(`${k.name}\t${k.created}`);
+      return 0;
+    }
+    if (verb === "remove" && name) {
+      if (removeKey(name)) return 0;
+      console.error(`no key named ${name}`);
+      return 1;
+    }
+  } catch (e) {
+    console.error((e as Error).message);
+    return 1;
   }
-  return {
-    systemPrompt: systemPieces.length > 0 ? systemPieces.join("\n\n") : undefined,
-    userPrompt: isFirstPrompt(messages)
-      ? (said[0]?.replace(/^User: /, "") ?? "")
-      : said.join("\n\n"),
+  console.error("usage: key add <name> | key list | key remove <name>");
+  return 2;
+}
+
+class Buckets {
+  readonly #rate: Rate;
+  readonly #held = new Map<string, { tokens: number; at: number }>();
+
+  constructor(rate: Rate) {
+    this.#rate = rate;
+  }
+
+  take(key: string): void {
+    const now = Date.now();
+    const b = this.#held.get(key) ?? { tokens: this.#rate.capacity, at: now };
+    b.tokens = Math.min(this.#rate.capacity, b.tokens + ((now - b.at) / 1000) * this.#rate.refillPerSec);
+    b.at = now;
+    this.#held.set(key, b);
+    if (b.tokens < 1) {
+      throw new HttpError(429, `the key ${key} is past its rate; try again in ${Math.ceil((1 - b.tokens) / this.#rate.refillPerSec)} s`, "rate_limit_exceeded");
+    }
+    b.tokens -= 1;
+  }
+}
+
+async function serve(): Promise<void> {
+  const config = loadConfig();
+  const keys = new Keys(config.apiKey);
+  const requesters = new Requesters();
+  const buckets = config.rate ? new Buckets(config.rate) : undefined;
+  const ctx: Ctx = {
+    config,
+    requesters,
+    usage: new Usage(),
+    sigils: new Sigils((sid, label) => requesters.peek(label)?.send({ chi: "cleanup", sid })),
   };
-}
 
-function hash16(value: string): string {
-  return createHash("sha1").update(value).digest("hex").slice(0, 16);
-}
-
-function sigilKey(messages: OpenAIMessage[]): string {
-  const firstUser = messages.find(m => m.role === "user");
-  return hash16(firstUser ? flatten(firstUser.content) : `none-${Date.now()}`);
-}
-
-interface ToolReturn { tool_call_id: string; result: string; }
-
-function trailingToolReturns(messages: OpenAIMessage[]): ToolReturn[] {
-  const out: ToolReturn[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "tool" && m.tool_call_id) {
-      out.unshift({ tool_call_id: m.tool_call_id, result: flatten(m.content) });
-    } else if (m.role !== "tool") break;
-  }
-  return out;
-}
-
-function hasTrailingUserAfterTool(messages: OpenAIMessage[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "user") return true;
-    if (m.role === "tool" || m.role === "assistant") return false;
-  }
-  return false;
-}
-
-interface ResponsesSidAnchors {
-  prefix: string;
-  isDeltaMode: boolean;
-  previousResponseId?: string;
-  conversationId?: string;
-  metaSessionId?: string;
-  firstItemId: string;
-  firstUserMsg: string;
-}
-
-function responsesSid(anchors: ResponsesSidAnchors): string {
-  const { prefix, isDeltaMode, previousResponseId, conversationId, metaSessionId } = anchors;
-  if (isDeltaMode && previousResponseId) {
-    return bloom_to_sid.get(previousResponseId) ?? `${prefix}${hash16(previousResponseId)}`;
-  }
-  for (const anchor of [conversationId, metaSessionId, anchors.firstItemId || undefined]) {
-    if (anchor) return `${prefix}${hash16(anchor)}`;
-  }
-  return `${prefix}${hash16(anchors.firstUserMsg.slice(0, 256))}`;
-}
-
-const JSON_MODE_HINT = "Respond with valid JSON only. No prose, no markdown fences.";
-
-interface JsonModeFormat {
-  type: string;
-  json_schema?: { schema?: unknown } | unknown;
-}
-
-function jsonModeSchema(format: JsonModeFormat): unknown {
-  if (format.type !== "json_schema") return undefined;
-  const jsonSchema = format.json_schema as { schema?: unknown } | undefined;
-  return jsonSchema?.schema;
-}
-
-interface BloomAsk {
-  temperature?: number;
-  topP?: number;
-  season?: number;
-  stop?: string | string[];
-  seed?: number;
-  toolChoice?: string | { type: string; name?: string; function?: { name: string } };
-  parallel?: boolean;
-  effort?: string;
-  format?: JsonModeFormat;
-}
-
-function reachOf(choice: BloomAsk["toolChoice"]): string | undefined {
-  if (typeof choice === "string") return choice;
-  return choice?.function?.name ?? choice?.name;
-}
-
-function trellisOf(format: JsonModeFormat | undefined): unknown {
-  if (!format || format.type === "text") return undefined;
-  return jsonModeSchema(format) ?? "json";
-}
-
-function bloomSettings(ask: BloomAsk): Partial<Tone<"prompt">> {
-  const out: Partial<Tone<"prompt">> = {};
-  if (typeof ask.temperature === "number") out.temperature = ask.temperature;
-  if (typeof ask.topP === "number") out.prune = { p: ask.topP };
-  if (typeof ask.season === "number") out.season = ask.season;
-  if (ask.stop !== undefined) out.frost = Array.isArray(ask.stop) ? ask.stop : [ask.stop];
-  if (typeof ask.seed === "number") out.seed = ask.seed;
-  const reach = reachOf(ask.toolChoice);
-  if (reach !== undefined || typeof ask.parallel === "boolean") {
-    out.tendrils = {
-      ...(reach !== undefined ? { reach } : {}),
-      ...(typeof ask.parallel === "boolean" ? { parallel: ask.parallel } : {}),
-    };
-  }
-  if (ask.effort) out.sepal = { effort: ask.effort };
-  const trellis = trellisOf(ask.format);
-  if (trellis !== undefined) out.trellis = trellis;
-  return out;
-}
-
-type Nectar = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
-
-function responsesUsage(nectar: unknown): { input_tokens: number; output_tokens: number; total_tokens: number } | undefined {
-  if (!nectar || typeof nectar !== "object") return undefined;
-  const n = nectar as Nectar;
-  const input = (n.input_tokens ?? 0) + (n.cache_read_input_tokens ?? 0) + (n.cache_creation_input_tokens ?? 0);
-  const output = n.output_tokens ?? 0;
-  return { input_tokens: input, output_tokens: output, total_tokens: input + output };
-}
-
-function mcpCall(info: Tone<"tendril-info">): Record<string, unknown> {
-  const name = info.name ?? "";
-  const output = typeof info.result === "string" ? info.result : info.result === undefined ? "" : JSON.stringify(info.result);
-  const isError = info.isError === true;
-  return {
-    id: info.callId || `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
-    type: "mcp_call",
-    server_label: name.includes("_") ? name.split("_", 2)[0] : "hum",
-    name,
-    arguments: info.args === undefined ? "{}" : typeof info.args === "string" ? info.args : JSON.stringify(info.args),
-    status: isError ? "failed" : "completed",
-    output,
-    ...(isError ? { error: { message: output } } : {}),
-  };
-}
-
-function injectJsonMode(
-  systemPrompt: string | undefined,
-  format: JsonModeFormat | undefined,
-): string | undefined {
-  if (!format || format.type === "text") return systemPrompt;
-  let hint = JSON_MODE_HINT;
-  const shown = jsonModeSchema(format);
-  if (shown !== undefined) {
-    hint += `\nConform to this JSON Schema:\n${JSON.stringify(shown, null, 2)}`;
-  }
-  return systemPrompt ? `${systemPrompt}\n\n${hint}` : hint;
-}
-
-const mainHello: Hello = {
-  version: BEE_VERSION,
-  propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
-  chis: ["hello", "prompt", "cancel", "tendril-result", "unfurl", "wilt", "tendril-reach", "error"],
-  source: SOURCE,
-};
-const thrum = new Bee({ hive: HIVE_NAME, as: "main", role: Role.nurse, hello: mainHello });
-
-const REQUESTER_IDLE_MS = 10 * 60_000;
-const REQUESTER_READY_MS = 10_000;
-const requesters = new Map<string, Requester>();
-
-function bearerOf(req: IncomingMessage): string {
-  const auth = req.headers["authorization"];
-  if (typeof auth !== "string") return "";
-  const [scheme, token] = auth.split(" ");
-  return scheme === "Bearer" && token ? token : "";
-}
-
-function requesterLabel(req: IncomingMessage, tenant: string, user: string | undefined): string {
-  const fingerprint = createHash("sha256").update(`${bearerOf(req)}\0${tenant}\0${user ?? ""}`).digest("hex");
-  return `requester-${fingerprint.slice(0, 32)}`;
-}
-
-function hiveExt(sampling: Record<string, unknown>): { ext?: Record<string, Record<string, unknown>> } {
-  return Object.keys(sampling).length > 0 ? { ext: { [HIVE_NAME]: { sampling } } } : {};
-}
-
-async function requester(req: IncomingMessage, tenant: string, user: string | undefined): Promise<Requester> {
-  const label = requesterLabel(req, tenant, user);
-  let rq = requesters.get(label);
-  if (!rq) {
-    const born = new Requester(label);
-    requesters.set(label, born);
-    born.bee.closed().catch((e) => {
-      console.error(`[thrum] ${label}:`, e);
-      if (requesters.get(label) === born) requesters.delete(label);
-    });
-    rq = born;
-  }
-  rq.lastUsed = Date.now();
-  await rq.ready(REQUESTER_READY_MS);
-  return rq;
-}
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [label, rq] of requesters) {
-    if (!rq.busy() && now - rq.lastUsed > REQUESTER_IDLE_MS) {
-      rq.close();
-      requesters.delete(label);
-    }
-  }
-}, 60_000).unref();
-
-async function start(): Promise<void> {
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      if (!checkAuth(req)) return unauthorized(res);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        object: "list",
-        data: MODEL_IDS.map(id => ({ id, object: "model", created: 0, owned_by: "hum" })),
-      }));
+  const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const url = new URL(req.url ?? "/", "http://hum");
+    const path = url.pathname.replace(/\/+$/, "").replace(/^\/v1(?=\/|$)/, "") || "/";
+    const allowed = cors(req, res, config.cors);
+    if (req.method === "OPTIONS") {
+      res.writeHead(allowed ? 204 : 403);
+      res.end();
       return;
     }
-
-    if (req.method === "GET" && url.pathname.startsWith("/v1/models/")) {
-      if (!checkAuth(req)) return unauthorized(res);
-      const id = decodeURIComponent(url.pathname.slice("/v1/models/".length));
-      if (!MODEL_IDS.includes(id)) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: `model '${id}' not found`, type: "invalid_request_error" } }));
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ id, object: "model", created: 0, owned_by: "hum" }));
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-      if (!checkAuth(req)) return unauthorized(res);
-      const tenant = tenantOf(req);
-      if (!allow(tenant)) return tooManyRequests(res, tenant);
-      let body: {
-        messages?: OpenAIMessage[];
-        model?: string;
-        stream?: boolean;
-        user?: string;
-        tools?: OpenAITool[];
-        temperature?: number;
-        top_p?: number;
-        max_completion_tokens?: number;
-        max_tokens?: number;
-        stop?: string | string[];
-        seed?: number;
-        n?: number;
-        frequency_penalty?: number;
-        presence_penalty?: number;
-        tool_choice?: string | { type: string; function?: { name: string } };
-        parallel_tool_calls?: boolean;
-        response_format?: { type: string; json_schema?: { name?: string; schema?: unknown; strict?: boolean } };
-        logprobs?: boolean;
-        top_logprobs?: number;
-        stream_options?: { include_usage?: boolean };
-      };
-      try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
-      let rq: Requester;
-      try { rq = await requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot reach humd as this requester: ${e}`); }
-      const messages = body.messages ?? [];
-      if (messages.length === 0) return bad(res, "messages required");
-
-      if (typeof body.n === "number" && body.n > 1) {
-        return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
-      }
-      if (body.logprobs === true || (typeof body.top_logprobs === "number" && body.top_logprobs > 0)) {
-        return bad(res, "logprobs unsupported by hum nurses (claude-cli doesn't emit token probabilities)");
-      }
-
-      const stream = body.stream !== false;
-      const includeUsage = body.stream_options?.include_usage !== false;
-      const model = body.model ?? MODEL_IDS[0] ?? NO_MODEL;
-      const sid = `${tenant === "default" ? "" : tenant + ":"}${body.user ?? `oai-${sigilKey(messages)}`}`;
-      audit({ endpoint: "chat.completions", tenant, model, sid, stream: body.stream ?? true });
-      let { systemPrompt, userPrompt } = messagesToPrompt(messages);
-      const tools = toolsFromOpenAI(body.tools);
-      const grains = allGrains(messages);
-
-      systemPrompt = injectJsonMode(systemPrompt, body.response_format);
-
-      const settings = bloomSettings({
-        temperature: body.temperature,
-        topP: body.top_p,
-        season: body.max_completion_tokens ?? body.max_tokens,
-        stop: body.stop,
-        seed: body.seed,
-        toolChoice: body.tool_choice,
-        parallel: body.parallel_tool_calls,
-        format: body.response_format,
-      });
-      const sampling: Record<string, unknown> = {};
-      if (typeof body.frequency_penalty === "number") sampling.frequencyPenalty = body.frequency_penalty;
-      if (typeof body.presence_penalty === "number") sampling.presencePenalty = body.presence_penalty;
-
-      const chunkId = `chatcmpl-${randomUUID()}`;
-      const translator = new OpenAITranslator(chunkId, model, includeUsage);
-
-      if (stream) {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "X-Accel-Buffering": "no",
-        });
-        rq.on(sid, (msg) => {
-          const frames = translator.ingest(msg);
-          for (const f of frames) {
-            if (f === "data: [DONE]\n\n") {
-              res.write(f);
-              res.end();
-              rq.off(sid);
-              return;
-            }
-            const um = f.match(SSE_DATA_RE);
-            if (um) {
-              try {
-                const parsed = JSON.parse(um[1]) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
-                if (parsed.usage) {
-                  trackUsage(tenant, parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0);
-                }
-              } catch {}
-            }
-            res.write(f);
-          }
-        });
-      } else {
-        let accumulatedContent = "";
-        let accumulatedReasoning = "";
-        const accumulatedToolCalls: Array<{
-          id: string;
-          type: string;
-          function: { name: string; arguments: string };
-        }> = [];
-        let finishReason: string | null = "stop";
-        let usage: Record<string, number> | undefined;
-        rq.on(sid, (msg) => {
-          const frames = translator.ingest(msg);
-          for (const f of frames) {
-            if (f === "data: [DONE]\n\n") {
-              const body: Record<string, unknown> = {
-                id: chunkId,
-                object: "chat.completion",
-                created: Math.floor(Date.now() / 1000),
-                model,
-                choices: [{
-                  index: 0,
-                  message: {
-                    role: "assistant",
-                    content: accumulatedContent || null,
-                    ...(accumulatedReasoning ? { reasoning_content: accumulatedReasoning } : {}),
-                    ...(accumulatedToolCalls.length > 0 ? { tool_calls: accumulatedToolCalls } : {}),
-                  },
-                  finish_reason: finishReason,
-                }],
-              };
-              if (usage) {
-                body.usage = usage;
-                trackUsage(tenant, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
-              }
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify(body));
-              rq.off(sid);
-              return;
-            }
-            const m = f.match(SSE_DATA_RE);
-            if (!m) continue;
-            try {
-              const chunk = JSON.parse(m[1]) as {
-                choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }>;
-                usage?: Record<string, number>;
-              };
-              if (chunk.usage) usage = chunk.usage;
-              const choice = chunk.choices?.[0];
-              if (!choice) continue;
-              if (choice.finish_reason) finishReason = choice.finish_reason;
-              const d = choice.delta ?? {};
-              if (typeof d.content === "string") accumulatedContent += d.content;
-              if (typeof d.reasoning_content === "string") accumulatedReasoning += d.reasoning_content;
-              const tcs = d.tool_calls as Array<{
-                index: number;
-                id?: string;
-                type?: string;
-                function?: { name?: string; arguments?: string };
-              }> | undefined;
-              if (Array.isArray(tcs)) {
-                for (const tc of tcs) {
-                  const slot = accumulatedToolCalls[tc.index] ?? {
-                    id: "",
-                    type: "function",
-                    function: { name: "", arguments: "" },
-                  };
-                  if (tc.id) slot.id = tc.id;
-                  if (tc.type) slot.type = tc.type;
-                  if (tc.function?.name) slot.function.name = tc.function.name;
-                  if (tc.function?.arguments) slot.function.arguments += tc.function.arguments;
-                  accumulatedToolCalls[tc.index] = slot;
-                }
-              }
-            } catch {}
-          }
-        });
-      }
-
-      req.on("close", () => {
-        rq.off(sid);
-      });
-
-      const toolReturns = trailingToolReturns(messages);
-      for (const tr of toolReturns) {
-        rq.send({ chi: "tendril-result", sid, callId: tr.tool_call_id, result: tr.result });
-      }
-
-      const sendPrompt = hasTrailingUserAfterTool(messages) || toolReturns.length === 0;
-      if (sendPrompt) {
-        rq.send({
-          chi: "prompt",
-          sid,
-          modelId: model,
-          content: petalsOf(userPrompt, grains),
-          ...(systemPrompt ? { systemPrompt } : {}),
-          ...(tools ? { tools } : {}),
-          ...settings,
-          ...hiveExt(sampling),
-        });
-      }
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      if (!checkAuth(req)) return unauthorized(res);
-      const tenant = tenantOf(req);
-      if (!allow(tenant)) return tooManyRequests(res, tenant);
-      type ResponsesInputItem =
-        | { role?: string; content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> }
-        | { type: "function_call"; call_id?: string; name?: string; arguments?: string }
-        | { type: "function_call_output"; call_id?: string; output?: string }
-        | { type: "mcp_call"; id?: string; server_label?: string; name?: string; arguments?: string; output?: string };
-      let body: {
-        model?: string;
-        input?: string | Array<ResponsesInputItem>;
-        instructions?: string;
-        stream?: boolean;
-        previous_response_id?: string;
-        conversation?: string | { id: string } | null;
-        user?: string;
-        metadata?: Record<string, string>;
-        safety_identifier?: string;
-        prompt_cache_key?: string;
-        prompt_cache_retention?: string;
-        store?: boolean;
-        allowed_tools?: string[];
-        service_tier?: string;
-        truncation?: string;
-        reasoning?: { effort?: string; summary?: string };
-        text?: { verbosity?: string };
-        include?: string[];
-        background?: boolean;
-        stream_options?: Record<string, unknown>;
-        max_output_tokens?: number;
-        max_tool_calls?: number;
-        temperature?: number;
-        top_p?: number;
-        top_logprobs?: number;
-        frequency_penalty?: number;
-        presence_penalty?: number;
-        tools?: OpenAITool[];
-        tool_choice?: string | { type: string };
-        parallel_tool_calls?: boolean;
-        response_format?: { type: string; json_schema?: unknown };
-      };
-      try { body = JSON.parse(await readBody(req)); } catch { return bad(res, "invalid JSON body"); }
-      let rq: Requester;
-      try { rq = await requester(req, tenant, body.user); } catch (e) { return unavailable(res, `cannot reach humd as this requester: ${e}`); }
-      if (!body.input) return bad(res, "input required");
-
-      const stream = body.stream === true;
-      const model = body.model ?? MODEL_IDS[0] ?? NO_MODEL;
-      const isDeltaMode = typeof body.previous_response_id === "string" && body.previous_response_id.length > 0;
-
-      let userText = "";
-      let firstUserMsg = "";
-      let firstItemId = "";
-      const grains: Grain[] = [];
-      if (typeof body.input === "string") {
-        userText = body.input;
-        firstUserMsg = body.input;
-      } else if (Array.isArray(body.input)) {
-        if (body.input.length > 0) {
-          const first = body.input[0] as { id?: unknown };
-          if (typeof first?.id === "string") firstItemId = first.id;
-        }
-        const asked: string[] = [];
-        for (const item of body.input) {
-          const it = item as ResponsesInputItem & { role?: string; type?: string };
-          if (typeof it.type === "string" && it.type !== "message") continue;
-          if ((it as { role?: string }).role !== "user" || !("content" in it)) continue;
-          const content = (it as { content?: unknown }).content;
-          let collected = "";
-          if (typeof content === "string") {
-            collected = content;
-          } else if (Array.isArray(content)) {
-            const parts: string[] = [];
-            for (const p of content as Array<{ type: string; text?: string; image_url?: { url?: string } }>) {
-              if (p.type === "input_text" || p.type === "text") {
-                if (p.text) parts.push(p.text);
-              } else if (p.type === "input_image" || p.type === "image_url") {
-                const u = p.image_url?.url;
-                if (u) grains.push(grainFromUrl(u));
-              }
-            }
-            collected = parts.join("\n");
-          }
-          if (collected) asked.push(collected);
-        }
-        firstUserMsg = asked[0] ?? "";
-        userText = isDeltaMode
-          ? asked.join("\n")
-          : (asked[asked.length - 1] ?? "");
-      }
-
-      const prefix = `${tenant === "default" ? "" : tenant + ":"}oai-r-`;
-      const conversationId = typeof body.conversation === "string"
-        ? body.conversation
-        : (body.conversation && typeof body.conversation === "object" && typeof body.conversation.id === "string")
-          ? body.conversation.id
-          : undefined;
-      const metaSessionId = typeof body.metadata?.session_id === "string"
-        ? body.metadata.session_id
-        : undefined;
-      const sid = responsesSid({
-        prefix,
-        isDeltaMode,
-        previousResponseId: body.previous_response_id,
-        conversationId,
-        metaSessionId,
-        firstItemId,
-        firstUserMsg,
-      });
-      const responseId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      rememberResponse(responseId, sid);
-      rememberSidMeta(sid, {
-        ...(body.metadata && Object.keys(body.metadata).length > 0 ? { metadata: body.metadata } : {}),
-        ...(body.safety_identifier ? { safety_identifier: body.safety_identifier } : {}),
-        ...(body.prompt_cache_key ? { prompt_cache_key: body.prompt_cache_key } : {}),
-      });
-      audit({ endpoint: "responses", tenant, model, sid, responseId, stream });
-
-      let systemPrompt = injectJsonMode(body.instructions, body.response_format);
-
-      const settings = bloomSettings({
-        temperature: body.temperature,
-        topP: body.top_p,
-        season: body.max_output_tokens,
-        toolChoice: body.tool_choice,
-        parallel: body.parallel_tool_calls,
-        effort: body.reasoning?.effort,
-        format: body.response_format,
-      });
-      const sampling: Record<string, unknown> = {};
-      if (body.service_tier) sampling.serviceTier = body.service_tier;
-      if (body.truncation) sampling.truncation = body.truncation;
-      if (body.reasoning?.summary) sampling.reasoningSummary = body.reasoning.summary;
-      if (body.text?.verbosity) sampling.textVerbosity = body.text.verbosity;
-      if (Array.isArray(body.include)) sampling.include = body.include;
-      if (typeof body.max_tool_calls === "number") sampling.maxToolCalls = body.max_tool_calls;
-      if (typeof body.frequency_penalty === "number") sampling.frequencyPenalty = body.frequency_penalty;
-      if (typeof body.presence_penalty === "number") sampling.presencePenalty = body.presence_penalty;
-      if (typeof body.top_logprobs === "number") sampling.topLogprobs = body.top_logprobs;
-
-      const tools = toolsFromOpenAI(body.tools);
-      const itemId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      const createdAt = Math.floor(Date.now() / 1000);
-
-      if (stream) {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "X-Accel-Buffering": "no",
-        });
-        let seq = 0;
-        const sse = (event: string, data: Record<string, unknown>) => {
-          const enriched = { ...data, sequence_number: seq++ };
-          res.write(`event: ${event}\ndata: ${JSON.stringify(enriched)}\n\n`);
-        };
-        sse("response.created", { type: "response.created", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
-        sse("response.in_progress", { type: "response.in_progress", response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress" } });
-
-        type OpenItem =
-          | { kind: "reasoning"; outputIndex: number; itemId: string; text: string }
-          | { kind: "message"; outputIndex: number; itemId: string; text: string };
-        const openItems = new Map<number, OpenItem>();
-        const finalOutput: Array<Record<string, unknown>> = [];
-        let nextOutputIndex = 0;
-        const closeItem = (petal: number) => {
-          const open = openItems.get(petal);
-          if (!open) return;
-          openItems.delete(petal);
-          if (open.kind === "reasoning") {
-            sse("response.reasoning_summary_text.done", {
-              type: "response.reasoning_summary_text.done",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              summary_index: 0,
-              text: open.text,
-            });
-            sse("response.reasoning_summary_part.done", {
-              type: "response.reasoning_summary_part.done",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              summary_index: 0,
-              part: { type: "summary_text", text: open.text },
-            });
-            sse("response.reasoning.done", {
-              type: "response.reasoning.done",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              content_index: 0,
-              text: open.text,
-            });
-            const doneItem = {
-              id: open.itemId,
-              type: "reasoning",
-              status: "completed",
-              summary: [{ type: "summary_text", text: open.text }],
-            };
-            sse("response.output_item.done", {
-              type: "response.output_item.done",
-              output_index: open.outputIndex,
-              item: doneItem,
-            });
-            finalOutput.push(doneItem);
-          } else {
-            sse("response.output_text.done", {
-              type: "response.output_text.done",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              content_index: 0,
-              text: open.text,
-            });
-            sse("response.content_part.done", {
-              type: "response.content_part.done",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              content_index: 0,
-              part: { type: "output_text", text: open.text },
-            });
-            const doneItem = {
-              id: open.itemId,
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: open.text }],
-            };
-            sse("response.output_item.done", {
-              type: "response.output_item.done",
-              output_index: open.outputIndex,
-              item: doneItem,
-            });
-            finalOutput.push(doneItem);
-          }
-        };
-
-        const openFor = (petal: number, kind: string): OpenItem | undefined => {
-          const open = openItems.get(petal);
-          if (open) return open;
-          if (kind === PetalKind.sepal) {
-            const idx = nextOutputIndex++;
-            const rsId = `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            const fresh: OpenItem = { kind: "reasoning", outputIndex: idx, itemId: rsId, text: "" };
-            openItems.set(petal, fresh);
-            sse("response.output_item.added", {
-              type: "response.output_item.added",
-              output_index: idx,
-              item: { id: rsId, type: "reasoning", status: "in_progress", summary: [] },
-            });
-            sse("response.reasoning_summary_part.added", {
-              type: "response.reasoning_summary_part.added",
-              item_id: rsId,
-              output_index: idx,
-              summary_index: 0,
-              part: { type: "summary_text", text: "" },
-            });
-            return fresh;
-          }
-          if (kind === PetalKind.text) {
-            const idx = nextOutputIndex++;
-            const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            const fresh: OpenItem = { kind: "message", outputIndex: idx, itemId: msgId, text: "" };
-            openItems.set(petal, fresh);
-            sse("response.output_item.added", {
-              type: "response.output_item.added",
-              output_index: idx,
-              item: { id: msgId, type: "message", role: "assistant", status: "in_progress", content: [] },
-            });
-            sse("response.content_part.added", {
-              type: "response.content_part.added",
-              item_id: msgId,
-              output_index: idx,
-              content_index: 0,
-              part: { type: "output_text", text: "" },
-            });
-            return fresh;
-          }
-          return undefined;
-        };
-
-        rq.on(sid, (msg) => {
-          if (msg.chi === "pulse") {
-            if (msg.kind === "cell-ready" && msg.cell) sid_to_cell.set(sid, msg.cell);
-            return;
-          }
-          if (msg.chi === "unfurl") {
-            if (msg.closed) {
-              closeItem(msg.petal);
-              return;
-            }
-            const open = openFor(msg.petal, msg.kind);
-            const delta = msg.text ?? "";
-            if (!open || !delta) return;
-            open.text += delta;
-            if (open.kind === "reasoning") {
-              sse("response.reasoning.delta", {
-                type: "response.reasoning.delta",
-                item_id: open.itemId,
-                output_index: open.outputIndex,
-                content_index: 0,
-                delta,
-              });
-              sse("response.reasoning_summary_text.delta", {
-                type: "response.reasoning_summary_text.delta",
-                item_id: open.itemId,
-                output_index: open.outputIndex,
-                summary_index: 0,
-                delta,
-              });
-            } else {
-              sse("response.output_text.delta", {
-                type: "response.output_text.delta",
-                item_id: open.itemId,
-                output_index: open.outputIndex,
-                content_index: 0,
-                delta,
-              });
-            }
-            return;
-          }
-          if (msg.chi === "tendril-info") {
-            const item = mcpCall(msg);
-            const idx = nextOutputIndex++;
-            sse("response.output_item.added", {
-              type: "response.output_item.added",
-              output_index: idx,
-              item: { ...item, output: "", status: "in_progress" },
-            });
-            sse("response.output_item.done", {
-              type: "response.output_item.done",
-              output_index: idx,
-              item,
-            });
-            finalOutput.push(item);
-            return;
-          }
-          if (msg.chi === "wilt") {
-            for (const idx of [...openItems.keys()]) closeItem(idx);
-            const finalUsage = responsesUsage(msg.nectar);
-            if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
-            const meta = sid_to_meta.get(sid);
-            sse("response.completed", { type: "response.completed", response: {
-              id: responseId,
-              object: "response",
-              created_at: createdAt,
-              model,
-              status: "completed",
-              output: finalOutput,
-              ...(meta?.metadata ? { metadata: meta.metadata } : {}),
-              ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
-              ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
-              ...(finalUsage ? { usage: finalUsage } : {}),
-            } });
-            res.write("data: [DONE]\n\n");
-            res.end();
-            rq.off(sid);
-            return;
-          }
-          if (msg.chi === "error") {
-            sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: msg.message ?? "unknown" } } });
-            res.write("data: [DONE]\n\n");
-            res.end();
-            rq.off(sid);
-          }
-        });
-      } else {
-        type NSOpen =
-          | { kind: "reasoning"; itemId: string; text: string }
-          | { kind: "message"; itemId: string; text: string };
-        const nsOpen = new Map<number, NSOpen>();
-        const nsOutput: Array<Record<string, unknown>> = [];
-        const nsCloseItem = (petal: number) => {
-          const open = nsOpen.get(petal);
-          if (!open) return;
-          nsOpen.delete(petal);
-          if (open.kind === "reasoning") {
-            nsOutput.push({
-              id: open.itemId,
-              type: "reasoning",
-              status: "completed",
-              summary: [{ type: "summary_text", text: open.text }],
-            });
-          } else {
-            nsOutput.push({
-              id: open.itemId,
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: open.text }],
-            });
-          }
-        };
-        rq.on(sid, (msg) => {
-          if (msg.chi === "pulse") {
-            if (msg.kind === "cell-ready" && msg.cell) sid_to_cell.set(sid, msg.cell);
-            return;
-          }
-          if (msg.chi === "unfurl") {
-            if (msg.closed) {
-              nsCloseItem(msg.petal);
-              return;
-            }
-            let open = nsOpen.get(msg.petal);
-            if (!open && msg.kind === PetalKind.sepal) {
-              open = { kind: "reasoning", itemId: `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
-              nsOpen.set(msg.petal, open);
-            }
-            if (!open && msg.kind === PetalKind.text) {
-              open = { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
-              nsOpen.set(msg.petal, open);
-            }
-            if (open) open.text += msg.text ?? "";
-            return;
-          }
-          if (msg.chi === "tendril-info") {
-            nsOutput.push(mcpCall(msg));
-            return;
-          }
-          if (msg.chi === "wilt") {
-            for (const idx of [...nsOpen.keys()]) nsCloseItem(idx);
-            const finalUsage = responsesUsage(msg.nectar);
-            if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
-            const meta = sid_to_meta.get(sid);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-              id: responseId,
-              object: "response",
-              created_at: createdAt,
-              model,
-              status: "completed",
-              output: nsOutput,
-              ...(meta?.metadata ? { metadata: meta.metadata } : {}),
-              ...(meta?.safety_identifier ? { safety_identifier: meta.safety_identifier } : {}),
-              ...(meta?.prompt_cache_key ? { prompt_cache_key: meta.prompt_cache_key } : {}),
-              ...(finalUsage ? { usage: finalUsage } : {}),
-            }));
-            rq.off(sid);
-            return;
-          }
-          if (msg.chi === "error") {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: { message: msg.message ?? "unknown", type: "internal_error" } }));
-            rq.off(sid);
-          }
-        });
-      }
-
-      req.on("close", () => { rq.off(sid); });
-
-      const resume = sid_to_cell.get(sid);
-      rq.send({
-        chi: "prompt",
-        sid,
-        modelId: model,
-        content: petalsOf(userText, grains),
-        ...(systemPrompt ? { systemPrompt } : {}),
-        ...(tools ? { tools } : {}),
-        ...(Array.isArray(body.allowed_tools) && body.allowed_tools.length > 0 ? { allowedTools: body.allowed_tools } : {}),
-        ...settings,
-        ...hiveExt(sampling),
-        ...(resume ? { resume } : {}),
-      });
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/v1/usage") {
-      if (!checkAuth(req)) return unauthorized(res);
-      const tenant = tenantOf(req);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ tenant, usage: USAGE[tenant] ?? { ...USAGE_DEFAULTS } }));
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/") {
+    if (req.method === "GET" && path === "/") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("hum-openai-server\n");
       return;
     }
+    const key = keys.nameOf(bearerOf(req));
+    if (!key) throw new HttpError(401, "Incorrect API key provided: bear one of this server's keys as `Authorization: Bearer <key>`", "invalid_api_key");
+    buckets?.take(key);
+    const who: Caller = { key, rq: await requesters.get(labelOf(key)) };
+    const at = path.match(/^\/(models|responses)\/(.+)$/);
+    switch (`${req.method} ${at ? `/${at[1]}/:id` : path}`) {
+      case "GET /models":
+        return models(who, res);
+      case "GET /models/:id":
+        return model(who, decodeURIComponent(at![2]), res);
+      case "POST /chat/completions":
+        return chat(ctx, who, req, res);
+      case "POST /responses":
+        return responses(ctx, who, req, res);
+      case "GET /responses/:id":
+        return readResponse(who, decodeURIComponent(at![2]), res);
+      case "DELETE /responses/:id":
+        return dropResponse(who, decodeURIComponent(at![2]), res);
+      case "POST /completions":
+        return completions(ctx, who, req, res);
+      case "POST /embeddings":
+        return embeddings(ctx, who, req, res);
+      case "GET /usage":
+        return sendJson(res, 200, { key, usage: ctx.usage.of(key) });
+    }
+    throw new HttpError(404, `${req.method} ${url.pathname} is not served here`, "unknown_url");
+  };
 
-    res.writeHead(404);
-    res.end();
+  const server = createServer((req, res) => {
+    route(req, res).catch((e) => {
+      if (!res.headersSent) sendError(res, e);
+      else if (!res.writableEnded) res.end();
+    });
   });
-
-  await new Promise<void>((resolve) => {
-    server.listen(PORT, HOST, () => resolve());
-  });
-
+  server.requestTimeout = 0;
+  server.headersTimeout = 60_000;
+  await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
   const addr = server.address();
-  const actualHost = (addr && typeof addr === "object" && addr.address) ? addr.address : HOST;
-  const actualPort = (addr && typeof addr === "object" && typeof addr.port === "number") ? addr.port : PORT;
-  console.log(`[hum-openai-server] listening on http://${actualHost}:${actualPort}`);
+  const host = addr && typeof addr === "object" ? addr.address : config.host;
+  const port = addr && typeof addr === "object" ? addr.port : config.port;
+  console.log(`[hum-openai-server] listening on http://${host}:${port}${keys.open() ? " (no keys: anyone may call)" : ""}`);
 
-  const openaiNurse = new OpenAINurse(thrum);
-  await openaiNurse.discover();
-  MODEL_IDS = openaiNurse.models();
-  mainHello.models = MODEL_IDS;
-  mainHello.bind = { host: actualHost, port: actualPort, scheme: "http" };
-
-  thrum.on(Chi.prompt, (msg) => {
-    if (msg.sid) { openaiNurse.handlePrompt(msg).catch(e => console.error("[nurse] prompt failed:", e)); }
-  });
-  thrum.on(Chi.tendrilResult, (msg) => {
-    openaiNurse.handleTendrilResult(msg).catch(e => console.error("[nurse] tendril-result failed:", e));
-  });
-  thrum.on(Chi.cancel, (msg) => {
-    openaiNurse.cancel(msg);
-  });
-  await thrum.start();
-  console.log(`[hum-openai-server] nestled as ${thrum.id}`);
-  thrum.closed().catch((e) => {
-    console.error("[hum-openai-server] the main bee ended:", e);
-    process.exit(1);
+  const nurse = new Nurse(undefined, { host, port, scheme: "http" });
+  const scent = new Scent();
+  for (const [bee, name] of [[nurse.bee, "nurse"], [scent.bee, "scent attendant"]] as const) {
+    bee.start().then(() => console.log(`[hum-openai-server] the ${name} nestled as ${bee.id}`), () => {});
+    bee.closed().catch((e) => {
+      console.error(`[hum-openai-server] the ${name} ended: ${e}`);
+      process.exit(1);
+    });
+  }
+  watchModels(config.scents, (m) => {
+    console.log(`[hum-openai-server] upstream grows ${m.grown.length} models and distils ${m.scents.length} scents`);
+    nurse.serve(m.grown);
+    scent.serve(m.scents);
   });
 }
 
-start().catch(e => { console.error("[hum-openai-server] startup failed:", e); process.exit(1); });
+const [command, ...rest] = process.argv.slice(2);
+if (command === "key") {
+  process.exit(keyCommand(rest));
+} else {
+  serve().catch((e) => {
+    console.error("[hum-openai-server] could not start:", e);
+    process.exit(1);
+  });
+}

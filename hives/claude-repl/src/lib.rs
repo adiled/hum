@@ -7,6 +7,9 @@
 //! As in claude-cli, a cell never works the host it runs on: Claude
 //! Code's own host tools, [`HOST_TOOLS`], are always off, and its shell
 //! is the bloom's `bash` over the nest's MCP.
+//!
+//! The cell is fed the sigil's tones and types a prompt's words; it gives
+//! back a `cell-ready` pulse once the REPL is perched.
 
 use std::io::Read;
 
@@ -52,7 +55,7 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     if let Some(mcp_url) = spec.mcp_url.as_deref() {
         let mcp_config = serde_json::json!({
             "mcpServers": {
-                "hum": { "type": "http", "url": format!("{}/s/{}", mcp_url, spec.sid) }
+                "hum": { "type": "http", "url": mcp_url }
             }
         }).to_string();
         argv.push("--mcp-config".into());
@@ -61,11 +64,11 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     }
     argv.push("--disallowed-tools".into());
     argv.push(HOST_TOOLS.join(" "));
-    if let Some(sp) = spec.system_prompt.as_deref() {
+    if let Some(sp) = spec.prompt.system_prompt.as_deref() {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
     }
-    if let Some(harness_sid) = spec.resume_id.as_deref() {
+    if let Some(harness_sid) = spec.prompt.resume.as_deref() {
         argv.push("--resume".into());
         argv.push(harness_sid.to_string());
     }
@@ -79,7 +82,7 @@ impl Nurse for ClaudeReplNurse {
     }
 
     async fn raise(&self, spec: Egg) -> Result<Cell> {
-        let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
+        let cli = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -98,9 +101,7 @@ impl Nurse for ClaudeReplNurse {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         cmd.env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1");
-        if !spec.plan_mode {
-            cmd.env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "1");
-        }
+        cmd.env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "1");
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
@@ -116,16 +117,14 @@ impl Nurse for ClaudeReplNurse {
         let writer = pair.master.take_writer().context("pty writer")?;
         let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
-        let (tx_in, mut rx_in) = mpsc::channel::<String>(32);
+        let (tx_in, mut rx_in) = mpsc::channel::<Value>(32);
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(64);
         let (tx_exit, rx_exit) = oneshot::channel::<i32>();
 
-        // stdin pump — interpret stream-json `user`/`text` lines as keystrokes.
-        // Pure stub: extract text and write it followed by CR.
         let writer_for_in = writer.clone();
         tokio::spawn(async move {
-            while let Some(line) = rx_in.recv().await {
-                let text = prompt_text_from_json(&line).unwrap_or_default();
+            while let Some(tone) = rx_in.recv().await {
+                let text = words_of(&tone);
                 if text.is_empty() {
                     continue;
                 }
@@ -140,7 +139,8 @@ impl Nurse for ClaudeReplNurse {
         // stdout reader — pumped on a blocking thread because portable-pty's
         // Reader is sync. State stays in-task: idle-2s OR sees `❯` → PERCHED.
         let tx_evt_out = tx_evt.clone();
-        let harness_sid = spec.resume_id.clone().unwrap_or_default();
+        let harness_sid = spec.prompt.resume.clone().unwrap_or_default();
+        let model = spec.model_id.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let mut acc = String::new();
@@ -160,10 +160,10 @@ impl Nurse for ClaudeReplNurse {
                             state = HarnessState::Perched;
                             trace!(target: "nest", "pty.state Nesting->Perched (glyph)");
                             let _ = tx_evt_out.blocking_send(json!({
-                                "type": "system",
-                                "subtype": "init",
-                                "session_id": harness_sid,
-                                "model": "claude",
+                                "chi": "pulse",
+                                "kind": "cell-ready",
+                                "cell": harness_sid,
+                                "model": model,
                                 "tools": [],
                             }));
                         }
@@ -215,23 +215,19 @@ impl Nurse for ClaudeReplNurse {
     }
 }
 
-/// Pull `text` out of a stream-json `{type:"user", message:{content:[{text}]}}`
-/// envelope. The PTY can only accept keystrokes, so non-text content (e.g.
-/// tool_result) is dropped — the MCP server is the real round-trip path.
-fn prompt_text_from_json(line: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(line).ok()?;
-    let content = v.get("message")?.get("content")?.as_array()?;
-    let mut out = String::new();
-    for part in content {
-        if part.get("type")?.as_str()? == "text" {
-            if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
-                out.push_str(t);
-            }
-        }
+fn words_of(tone: &Value) -> String {
+    if tone.get("chi").and_then(Value::as_str) != Some("prompt") {
+        return String::new();
     }
-    if out.is_empty() {
-        None
+    let petals = tone.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+    let words: Vec<&str> = petals
+        .iter()
+        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .collect();
+    if words.is_empty() {
+        tone.get("text").and_then(Value::as_str).unwrap_or("").to_string()
     } else {
-        Some(out)
+        words.join("\n")
     }
 }

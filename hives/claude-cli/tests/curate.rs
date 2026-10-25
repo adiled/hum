@@ -41,7 +41,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 /// Place a fixture transcript where `curate` will look for this sid's.
 fn stage_transcript(home: &TempDir, cwd: &str, sid: &hum_identity::HumId, name: &str) -> std::path::PathBuf {
-    let derived = sid.to_uuid_v5(hum_identity::NS_CLAUDE_SESSION).to_string();
+    let derived = claude_cli::session_of(&sid);
     let path = session_path(std::path::Path::new(cwd), &derived);
     fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     fs::copy(fixture(name), &path).expect("copy fixture");

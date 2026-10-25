@@ -59,7 +59,6 @@ pub fn body_keys(chi: Chi) -> &'static [&'static str] {
         Chi::Curate => fields_of::<CurateBody>(),
         Chi::ScoutResult => fields_of::<ScoutResultBody>(),
         Chi::TendrilResult => fields_of::<TendrilResultBody>(),
-        Chi::PetalCell => fields_of::<PetalCellBody>(),
         Chi::Breath => fields_of::<BreathBody>(),
         Chi::Unfurl => fields_of::<UnfurlBody>(),
         Chi::Wilt => fields_of::<WiltBody>(),

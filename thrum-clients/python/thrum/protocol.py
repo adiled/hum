@@ -78,6 +78,8 @@ class PromptBody:
     trellis: Optional[Any] = None
     tendrils: Optional[Tendrils] = None
     sepal: Optional[Sepal] = None
+    scion: Optional[str] = None
+    graft: Optional[list[Bloom]] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -97,12 +99,24 @@ class PromptBody:
         "trellis": "trellis",
         "tendrils": "tendrils",
         "sepal": "sepal",
+        "scion": "scion",
+        "graft": "graft",
+    }
+
+@dataclass
+class Bloom:
+    content: Optional[list[Petal]] = None
+    grew: Optional[list[Petal]] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "content": "content",
+        "grew": "grew",
     }
 
 @dataclass
 class Petal:
     kind: str
-    role: Optional[str] = None
     text: Optional[str] = None
     grain: Optional[Grain] = None
     call_id: Optional[str] = None
@@ -118,7 +132,6 @@ class Petal:
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "kind": "kind",
-        "role": "role",
         "text": "text",
         "grain": "grain",
         "call_id": "callId",
@@ -184,11 +197,28 @@ class Sepal:
 class BreathBody:
     sigils: Any
     proto_version: Optional[str] = None
+    models: Optional[list[Model]] = None
+    scents: Optional[list[Model]] = None
+    tools: Optional[list[Any]] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "sigils": "sigils",
         "proto_version": "protoVersion",
+        "models": "models",
+        "scents": "scents",
+        "tools": "tools",
+    }
+
+@dataclass
+class Model:
+    id: str
+    hive: str
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "id": "id",
+        "hive": "hive",
     }
 
 @dataclass
@@ -532,15 +562,6 @@ class ScoutBody:
     }
 
 @dataclass
-class PetalCellBody:
-    cell: Optional[Any] = None
-
-    # rust field name -> wire key (single source in views.rs)
-    _wire: ClassVar[dict[str, str]] = {
-        "cell": "cell",
-    }
-
-@dataclass
 class Envelope:
     chi: Chi
     rid: str
@@ -621,5 +642,4 @@ TONE_VIEWS: dict[str, type] = {
     "curate": CurateBody,
     "scout-result": ScoutResultBody,
     "scout": ScoutBody,
-    "petal-cell": PetalCellBody,
 }

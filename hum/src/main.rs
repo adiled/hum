@@ -13,7 +13,6 @@
 //!   hum bee <id> exit        sign it out (reenter signs it back in)
 //!   hum config               show the paths hum keeps
 //!   hum comb [hive]          show the comb: lifetime measures
-//!   hum recipes [name]     list recipes / point at one
 //!   hum thehum <verb>      inspect the persistent chi log
 //!                          (status | tail | range | verify | replay)
 //!   hum update             self-update from latest GitHub release
@@ -62,7 +61,7 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
-    #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + nurse logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
+    #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, every bee + service state, and recent daemon + nurse logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
     Doctor,
     #[command(about = "Hives: the kinds this humd understands.")]
     #[command(long_about = "Hives: the kinds this humd understands.
@@ -126,11 +125,6 @@ whose hive is installed. hum starts no process.
     Comb {
         #[arg(help = "Hive to report on (default: every hive)")]
         hive: Option<String>,
-    },
-    #[command(about = "List available recipes (recipes/*) or run one")]
-    Recipes {
-        #[arg(help = "Recipe name (e.g. \"opencode\"). Omit to list")]
-        name: Option<String>,
     },
     #[command(about = "Inspect the persistent chi log (thehum).")]
     #[command(long_about = "Inspect the persistent chi log (thehum).
@@ -244,7 +238,6 @@ fn main() -> Result<()> {
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
         Some(Cmd::Bee { target, verb, hive, label, role, list }) => bee(target, verb, hive, label, role, list),
         Some(Cmd::Comb { hive }) => comb(hive),
-        Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
         Some(Cmd::Ensemble { verb }) => ensemble(verb),
         Some(Cmd::Uninstall) => uninstall(),
@@ -674,13 +667,6 @@ fn doctor() -> Result<()> {
         Err(e) => println!("  thrum sock: {} ✗ {e}", sock.display()),
     }
 
-    println!("\n[claude binary]");
-    let claude = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
-    match Command::new(&claude).arg("--version").output() {
-        Ok(o) if o.status.success() => println!("  {claude}: {}", String::from_utf8_lossy(&o.stdout).trim()),
-        Ok(_) | Err(_) => println!("  {claude}: ✗ NOT RUNNABLE — set CLAUDE_CLI_PATH to the real binary"),
-    }
-
     println!("\n[bees]");
     let _ = bees::list();
 
@@ -691,8 +677,8 @@ fn doctor() -> Result<()> {
     print_recent_logs("hum", 60);
 
     println!("\n{bar}");
-    println!("If a bee shows 0 tokens / a silent wilt, look for `nurse.result.error`");
-    println!("above — claude reports auth/model/credit failures there, not on stderr.");
+    println!("If a bloom wilts silently or with 0 tokens, look above for its nurse's errors:");
+    println!("a nurse reports its engine's auth, model and credit failures in its own log.");
     Ok(())
 }
 
@@ -942,36 +928,6 @@ fn comb(hive: Option<String>) -> Result<()> {
             for (metric, n) in rows.iter() {
                 println!("      {metric:<width$}  {n:>12}", width = width);
             }
-        }
-    }
-    Ok(())
-}
-
-fn recipes(name: Option<String>) -> Result<()> {
-    let root = repo_root_or_install_dir();
-    let recipes_dir = root.join(hum_paths::RECIPES_SUBDIR);
-    if !recipes_dir.exists() {
-        println!("no recipes/ dir at {}", recipes_dir.display());
-        return Ok(());
-    }
-    match name {
-        None => {
-            println!("Available recipes (in {}):", recipes_dir.display());
-            for entry in std::fs::read_dir(&recipes_dir)? {
-                let entry = entry?;
-                if entry.path().is_dir() {
-                    println!("  {}", entry.file_name().to_string_lossy());
-                }
-            }
-            println!();
-            println!("Run one with: hum recipes <name>");
-        }
-        Some(n) => {
-            let install = recipes_dir.join(&n).join(hum_paths::RECIPE_INSTALL_SCRIPT);
-            if !install.exists() {
-                anyhow::bail!("recipes/{n}/install not found");
-            }
-            Command::new(install).status()?;
         }
     }
     Ok(())

@@ -43,7 +43,6 @@ like the thing — readers and writers share the same mental model.
 - **petal** — one unit of content. Its kind says which: **text**, a
   **tendril**, the **grasp** a tendril came back with, **pollen**, a
   **sepal**, a **waggle**, a **thorn**, **brix**, a **bouquet**.
-- **petal-cell** — a nestler's view of one petal in its own conversation graph.
 - **bloom** — one turn of conversation. Opens with a `prompt`, closes with a `wilt`.
 - **unfurl** — a petal growing, one tone at a time, until it is closed.
 - **wilt** — close the bloom. It carries the bloom's nectar.
@@ -60,11 +59,19 @@ like the thing — readers and writers share the same mental model.
 - **brix** — how likely each token was, as sugar is read in nectar.
 - **bouquet** — several candidate petals gathered for one prompt.
 - **scout** — a subagent sent out to explore, which comes back with what it found.
+- **graft** — the blooms before a prompt, carried on it for a cell that did not
+  grow them, as a grown branch is joined to new roots and grows on as one plant.
+- **scent** — where a text sits among others: numbers near the scents of texts
+  that mean alike, as a bee knows one flower from another by its smell. Nothing
+  blooms for it, so it is not nursing: an attendant distils it, through the
+  thrum's `scent` tendril.
 
 How a bloom grows is said on its prompt: its **temperature**, **prune**
 (cut the unlikely tail), **season** (how long it may grow), **frost**
 (where it stops), **seed**, **trellis** (the shape it grows along),
-**tendrils** (which may reach) and **sepal** (how much it reasons first).
+**tendrils** (which may reach), **sepal** (how much it reasons first)
+and **scion** (the text after it, which it grows to join, as a scion
+grafted above grows into the stock).
 
 ## Ensemble
 
@@ -128,7 +135,8 @@ carries over.
   With no `cwd` it builds at its forager's humd's home if the forager
   `builds`, and nowhere otherwise.
 - **attendant**: serves the tools it offers, fixed and named, and runs
-  nothing else, whether they read the world or change it. The line with a
+  nothing else, whether they read the world or change it. The scents of
+  the models it names are among them. The line with a
   builder is who writes what runs: on a builder the bloom does, on an
   attendant the attendant does.
 

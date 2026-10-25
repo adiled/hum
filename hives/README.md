@@ -19,7 +19,7 @@ A honeybee on the plant pot by your bed is still a bee; you just need to know wh
 |---|---|---|---|
 | [`claude-cli`](claude-cli) | nurse | `claude-cli-nurse` | `claude -p` stream-json over a pipe |
 | [`claude-repl`](claude-repl) | nurse | `claude-repl-nurse` | claude REPL over a PTY |
-| [`openai-server`](openai-server) | nurse, forager | `openai-server` | OpenAI `/v1/chat/completions` |
+| [`openai-server`](openai-server) | forager, nurse, attendant | `openai-server` | OpenAI `/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/embeddings` |
 | [`anthropic-server`](anthropic-server) | forager | `anthropic-server` | Anthropic `/v1/messages` |
 | [`ollama-server`](ollama-server) | forager, nurse | `ollama-server`, `ollama-nurse` | Ollama `/api/chat`, both ways |
 | [`vercel-ai`](vercel-ai) | forager | `vercel-ai` | Vercel AI SDK `LanguageModelV3` |
@@ -40,7 +40,7 @@ Every bee sits somewhere on three orthogonal axes, declared in its hello's `prop
 
 The first axis is **statefulness**. A `stateful` bee holds its own session graph. A `convention-stateful` bee keeps no server state but speaks a protocol that implies continuation. A `stateless` bee treats each call as a fresh sid. A `transport-only` bee is pure bytes in and bytes out.
 
-The second axis is **richness**. A `rich` bee hands humd cwd, MCP configs, and prior petals. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
+The second axis is **richness**. A `rich` bee hands humd cwd, MCP configs, and the blooms before its prompt as its `graft`. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
 
 The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tendril`, or `grpc/bidi`.
 
@@ -92,7 +92,7 @@ Give the client your role and your hello's own fields. It adds `hive`, `role`, `
 
 > ### A bee signs its hello with the key its hive entered
 >
-> A bee is entered with `hum bee enter --hive <hive> --role <role> --as <label>`, which mints an ed25519 key, files it at `$XDG_STATE_HOME/hum/bees/<id>.key` (a raw 32-byte seed), records it as entered under the hive for that role with that label, and prints its id: `bee_<hex>`, the sha256 of its public key. The same hive and label are always the same bee, so a process enters itself each time it starts (`--as main`), and a runtime that holds many bees enters each by a label of its own. Entering a label again for another role files it under a new key, so nothing the old one was trusted with carries over. openai-server labels each requester by a fingerprint of its token, tenant and `user`. Without `--as`, every call mints a new bee.
+> A bee is entered with `hum bee enter --hive <hive> --role <role> --as <label>`, which mints an ed25519 key, files it at `$XDG_STATE_HOME/hum/bees/<id>.key` (a raw 32-byte seed), records it as entered under the hive for that role with that label, and prints its id: `bee_<hex>`, the sha256 of its public key. The same hive and label are always the same bee, so a process enters itself each time it starts (`--as main`), and a runtime that holds many bees enters each by a label of its own. Entering a label again for another role files it under a new key, so nothing the old one was trusted with carries over. openai-server enters one forager for each of its keys, `key-<name>`. Without `--as`, every call mints a new bee.
 >
 > On every hello, load the key filed under your id and send `hid` (your id), `pubkey` (hex), `signedAt` (unix ms) and `signature` (hex ed25519 over `hum-bee-socket-v1:<hid>:<signedAt>`). humd admits the hello only if the signature verifies, `signedAt` is fresh, the id is entered and not exited, and it entered under the `hive` and for the `role` you name. `hum bee <id> exit` signs you out, so humd refuses your next hello, and `reenter` signs you back in.
 >

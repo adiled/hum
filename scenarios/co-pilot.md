@@ -15,7 +15,7 @@ Trust tier **T2** — known-circle. Two operators on two humds, paired
 by manual key exchange:
 
 - **humd-A** (driver) — hosts the hum. A nestler attaches in normal
-  stateful-rich mode (e.g. opencode pointing at hum's openai-server),
+  stateful-rich mode (e.g. a coding agent pointing at hum's openai-server),
   full keyboard, full bloom.
 - **humd-B** (observer) — attaches a nestler with the **`hearOnly`**
   propensity. It is allowed to receive every chi but cannot emit

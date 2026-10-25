@@ -50,11 +50,17 @@ type PromptBody struct {
 	Trellis json.RawMessage `json:"trellis,omitempty"`
 	Tendrils *Tendrils `json:"tendrils,omitempty"`
 	Sepal *Sepal `json:"sepal,omitempty"`
+	Scion *string `json:"scion,omitempty"`
+	Graft []Bloom `json:"graft,omitempty"`
+}
+
+type Bloom struct {
+	Content []Petal `json:"content,omitempty"`
+	Grew []Petal `json:"grew,omitempty"`
 }
 
 type Petal struct {
 	Kind string `json:"kind"`
-	Role *string `json:"role,omitempty"`
 	Text *string `json:"text,omitempty"`
 	Grain *Grain `json:"grain,omitempty"`
 	CallId *string `json:"callId,omitempty"`
@@ -93,6 +99,14 @@ type Sepal struct {
 type BreathBody struct {
 	Sigils json.RawMessage `json:"sigils"`
 	ProtoVersion *string `json:"protoVersion,omitempty"`
+	Models []Model `json:"models,omitempty"`
+	Scents []Model `json:"scents,omitempty"`
+	Tools []json.RawMessage `json:"tools,omitempty"`
+}
+
+type Model struct {
+	Id string `json:"id"`
+	Hive string `json:"hive"`
 }
 
 type UnfurlBody struct {
@@ -257,10 +271,6 @@ type ScoutBody struct {
 	Tools []json.RawMessage `json:"tools,omitempty"`
 }
 
-type PetalCellBody struct {
-	Cell json.RawMessage `json:"cell,omitempty"`
-}
-
 type Envelope struct {
 	Chi Chi `json:"chi"`
 	Rid string `json:"rid"`
@@ -307,5 +317,4 @@ var ToneViews = map[Chi]any{
 	ChiCurate: CurateBody{},
 	ChiScoutResult: ScoutResultBody{},
 	ChiScout: ScoutBody{},
-	ChiPetalCell: PetalCellBody{},
 }

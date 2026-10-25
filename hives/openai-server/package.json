@@ -11,10 +11,10 @@
     "build": "tsup",
     "start": "node dist/index.js"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@types/node": "^22.19.17",
+    "openai": "^6.49.0",
     "tsup": "^8.5.1",
-    "typescript": "^5.7.0",
-    "@types/node": "^22.19.17"
+    "typescript": "^5.7.0"
   }
 }

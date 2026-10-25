@@ -38,7 +38,6 @@ pub struct DaemonConfig {
     pub comb_path: PathBuf,
     pub routing_path: PathBuf,
     pub hum_cfg: hum_paths::config::HumConfig,
-    pub cli_path: String,
     pub comb_persist_interval: Duration,
     pub routing_persist_interval: Duration,
     pub thrum_override: Option<Thrum>,
@@ -85,7 +84,6 @@ impl DaemonConfig {
             comb_path: hum_paths::comb(),
             routing_path: hum_paths::routing_json(),
             hum_cfg,
-            cli_path: std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into()),
             comb_persist_interval: Duration::from_secs(10),
             routing_persist_interval: Duration::from_secs(30),
             thrum_override: None,
@@ -343,6 +341,8 @@ where
     }
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let sid_growers: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let tendril_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let build_sites: Arc<parking_lot::RwLock<HashMap<String, BuildSite>>> =
@@ -354,7 +354,7 @@ where
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let incoming_tendrils: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
-    let sink: Arc<dyn ToneSink> = Arc::new(HumdSink {
+    let humd_sink = Arc::new(HumdSink {
         thrum: thrum.clone(),
         waneman: waneman.clone(),
         ensemble: ensemble_for_sink.clone(),
@@ -364,6 +364,7 @@ where
         bees_snapshot_path: cfg.bees_snapshot_path.clone(),
         advisories: advisories.clone(),
         sid_origins: sid_origins.clone(),
+        sid_growers,
         tendril_routes,
         build_sites: build_sites.clone(),
         forager_tools: forager_tools.clone(),
@@ -374,10 +375,22 @@ where
         comb: comb.clone(),
         trust_remote_nurses: cfg.trust_remote_nurses,
         trust_remote_attendants: cfg.trust_remote_attendants,
+        breathed: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         revoked: revoked::Revocations::load(&cfg.revoked_path),
         hives: cfg.hives.clone(),
         bees: cfg.bees.clone(),
     });
+    {
+        let humd_sink = humd_sink.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(BREATH_EVERY);
+            loop {
+                tick.tick().await;
+                humd_sink.breathe_foragers();
+            }
+        });
+    }
+    let sink: Arc<dyn ToneSink> = humd_sink;
     thrum.set_sink(sink);
     {
         let advisories = advisories.clone();
@@ -572,6 +585,7 @@ struct HumdSink {
     bees_snapshot_path: std::path::PathBuf,
     advisories: Arc<advise::Advisories>,
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+    sid_growers: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
     tendril_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
     build_sites: Arc<parking_lot::RwLock<HashMap<String, BuildSite>>>,
     forager_tools: Arc<parking_lot::RwLock<HashMap<String, Vec<String>>>>,
@@ -582,6 +596,7 @@ struct HumdSink {
     comb: Arc<comb::Comb>,
     trust_remote_nurses: bool,
     trust_remote_attendants: bool,
+    breathed: Arc<parking_lot::RwLock<HashMap<String, String>>>,
     revoked: revoked::Revocations,
     hives: InstalledHives,
     bees: EnteredBees,
@@ -604,6 +619,7 @@ enum Unserved {
     NowhereToBuild,
     NoBuilder,
     NoOneServes(String),
+    NoScent(String),
 }
 
 impl Unserved {
@@ -616,6 +632,7 @@ impl Unserved {
                 "bash has nowhere to run: no builder is nestled on the humd this conversation builds on".into()
             }
             Unserved::NoOneServes(name) => format!("no bee serves {name} to this conversation"),
+            Unserved::NoScent(model) => format!("no attendant here or on a trusted peer distils scents by {model}"),
         }
     }
 }
@@ -671,7 +688,7 @@ fn last_seen(path: &std::path::Path) -> HashMap<String, String> {
 }
 
 impl HumdSink {
-    fn pick_remote_nurse(&self, model: &str) -> Option<ensemble::Hid> {
+    fn pick_remote_nurse(&self, model: Option<&str>) -> Option<ensemble::Hid> {
         let ens = self.ensemble.as_ref()?;
         if !self.trust_remote_nurses {
             warn!(
@@ -690,7 +707,7 @@ impl HumdSink {
                 bees.values()
                     .filter(|m| {
                         m.plays(Role::Nurse)
-                            && m.models.iter().any(|x| x == model)
+                            && model.is_none_or(|model| m.models.iter().any(|x| x == model))
                             && self.hives.recognises(&m.hive)
                             && !m.is_full()
                     })
@@ -727,6 +744,109 @@ impl HumdSink {
             .into_iter()
             .find(|(_, m)| m.tools.iter().any(|t| t.name == tool))
             .map(|(humd, _)| humd)
+    }
+
+    fn scent_here(&self, model: &str, from: &str) -> Option<String> {
+        let m = self.manifests.read();
+        let mut distilling: Vec<&String> = m
+            .iter()
+            .filter(|(cid, man)| {
+                cid.as_str() != from
+                    && man.plays(Role::Attendant)
+                    && man.models.iter().any(|x| x == model)
+                    && self.thrum.is_connected(cid)
+            })
+            .map(|(cid, _)| cid)
+            .collect();
+        distilling.sort();
+        distilling.first().map(|cid| (*cid).clone())
+    }
+
+    fn remote_scent(&self, model: &str) -> Option<ensemble::Hid> {
+        self.trusted_remote_attendants()
+            .into_iter()
+            .find(|(_, m)| m.models.iter().any(|x| x == model))
+            .map(|(humd, _)| humd)
+    }
+
+    fn reachable(&self) -> Value {
+        let mut models = std::collections::BTreeSet::new();
+        let mut scents = std::collections::BTreeSet::new();
+        let mut attendants: Vec<ensemble::BeeManifest> = Vec::new();
+        {
+            let m = self.manifests.read();
+            let mut here: Vec<_> = m.iter().filter(|(cid, _)| self.thrum.is_connected(cid)).collect();
+            here.sort_by(|a, b| a.0.cmp(b.0));
+            for (_, man) in here {
+                if man.plays(Role::Nurse) {
+                    models.extend(man.models.iter().map(|id| thrum_core::Model { id: id.clone(), hive: man.hive.clone() }));
+                } else if man.plays(Role::Attendant) {
+                    attendants.push(man.clone());
+                }
+            }
+        }
+        if self.trust_remote_nurses
+            && let Some(ens) = &self.ensemble
+        {
+            let live: std::collections::BTreeSet<String> = ens.peers().iter().map(|h| h.to_hex()).collect();
+            for (humd, bees) in self.remote_bees.read().iter() {
+                if !live.contains(&humd.to_hex()) {
+                    continue;
+                }
+                for man in bees.values().filter(|m| m.plays(Role::Nurse) && self.hives.recognises(&m.hive)) {
+                    models.extend(man.models.iter().map(|id| thrum_core::Model { id: id.clone(), hive: man.hive.clone() }));
+                }
+            }
+        }
+        attendants.extend(self.trusted_remote_attendants().into_iter().map(|(_, m)| m));
+        let mut named = std::collections::BTreeSet::new();
+        let mut tools = Vec::new();
+        for man in &attendants {
+            scents.extend(man.models.iter().map(|id| thrum_core::Model { id: id.clone(), hive: man.hive.clone() }));
+            for t in &man.tools {
+                if !reserved(&t.name) && named.insert(t.name.clone()) {
+                    tools.push(serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "inputSchema": t.input_schema,
+                    }));
+                }
+            }
+        }
+        serde_json::json!({ "models": models, "scents": scents, "tools": tools })
+    }
+
+    fn forager_breath(listing: &Value) -> Tone {
+        let mut breath = thrumd::breath_tone(serde_json::json!({}));
+        if let (Some(obj), Some(said)) = (breath.as_object_mut(), listing.as_object()) {
+            for (k, v) in said {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        breath
+    }
+
+    fn breathe_foragers(&self) {
+        let foragers: Vec<String> = self
+            .manifests
+            .read()
+            .iter()
+            .filter(|(cid, m)| m.plays(Role::Forager) && self.thrum.is_connected(cid))
+            .map(|(cid, _)| cid.clone())
+            .collect();
+        if foragers.is_empty() {
+            return;
+        }
+        let listing = self.reachable();
+        let said = listing.to_string();
+        let mut breathed = self.breathed.write();
+        for cid in foragers {
+            if breathed.get(&cid) != Some(&said) {
+                trace!(client_id = %cid, "breath.forager.reach-changed");
+                self.thrum.thrum_to(&cid, Self::forager_breath(&listing));
+                breathed.insert(cid, said.clone());
+            }
+        }
     }
 
     fn attendant_serving(&self, tool: &str, from: &str) -> Option<String> {
@@ -780,7 +900,7 @@ impl HumdSink {
             attendants.sort_by(|a, b| a.0.cmp(b.0));
             for (_, man) in attendants {
                 for t in &man.tools {
-                    if named.insert(t.name.clone()) {
+                    if !reserved(&t.name) && named.insert(t.name.clone()) {
                         tools.push(serde_json::json!({
                             "name": t.name,
                             "description": t.description,
@@ -799,7 +919,7 @@ impl HumdSink {
         }
         for (_, man) in self.trusted_remote_attendants() {
             for t in &man.tools {
-                if named.insert(t.name.clone()) {
+                if !reserved(&t.name) && named.insert(t.name.clone()) {
                     tools.push(serde_json::json!({
                         "name": t.name,
                         "description": t.description,
@@ -907,6 +1027,27 @@ impl HumdSink {
                 self.tendril_routes.write().remove(call_id);
                 self.unserved(nurse, sid, call_id, Unserved::NoBuilder);
             }
+        }
+    }
+
+    async fn follow_to_grower(&self, client_id: &str, sid: &str, tone: &Value, last: bool) {
+        if client_id == "ensemble" {
+            return;
+        }
+        let grower = if last {
+            self.sid_growers.write().remove(sid)
+        } else {
+            self.sid_growers.read().get(sid).copied()
+        };
+        let (Some(peer), Some(ens)) = (grower, &self.ensemble) else { return };
+        let mut copy = tone.clone();
+        if let Some(obj) = copy.as_object_mut() {
+            obj.insert("to".into(), Value::String(peer.to_hex()));
+            obj.insert("from".into(), Value::String(ens.me().to_hex()));
+        }
+        trace!(sid, to = %peer.short(), "sigil.follow.grower");
+        if let Err(e) = ens.route(copy).await {
+            warn!(sid, err = %e, "sigil.follow.grower.failed");
         }
     }
 
@@ -1038,12 +1179,14 @@ impl ToneSink for HumdSink {
             return;
         }
         let had_manifest = self.manifests.write().remove(client_id).is_some();
+        self.breathed.write().remove(client_id);
         self.tendril_routes
             .write()
             .retain(|_, originator| originator != client_id);
         if had_manifest {
             trace!(client_id, "manifest.evict.disconnect");
             self.snapshot_bees();
+            self.breathe_foragers();
         }
     }
 
@@ -1102,6 +1245,8 @@ impl ToneSink for HumdSink {
             }
             let reached = if name == thrum_core::BASH {
                 self.builder_here()
+            } else if name == thrum_core::SCENT {
+                self.scent_here(&scent_model(&tone), client_id)
             } else {
                 self.attendant_serving(&name, client_id)
             };
@@ -1111,6 +1256,8 @@ impl ToneSink for HumdSink {
                     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("");
                     let why = if name == thrum_core::BASH {
                         Unserved::NoBuilder.why()
+                    } else if name == thrum_core::SCENT {
+                        Unserved::NoScent(scent_model(&tone)).why()
                     } else {
                         format!("no bee serves {name} on the humd it was sent to")
                     };
@@ -1176,6 +1323,27 @@ impl ToneSink for HumdSink {
                     }
                 }
 
+                if name.as_deref() == Some(thrum_core::SCENT) {
+                    let model = scent_model(&tone);
+                    if let Some(reached) = self.scent_here(&model, client_id) {
+                        if !call_id.is_empty() {
+                            self.tendril_routes.write().insert(call_id.clone(), client_id.to_string());
+                        }
+                        trace!(from = client_id, to = %reached, %model, %call_id, "tendril-reach.scent.local");
+                        let mut local = tone;
+                        if let Some(obj) = local.as_object_mut() {
+                            obj.remove("from");
+                            obj.remove("to");
+                        }
+                        self.thrum.thrum_to(&reached, local);
+                    } else if let Some(humd) = self.remote_scent(&model) {
+                        self.reach_peer(client_id, &sid, &call_id, humd, tone, Unserved::NoScent(model)).await;
+                    } else {
+                        self.unserved(client_id, &sid, &call_id, Unserved::NoScent(model));
+                    }
+                    return;
+                }
+
                 if let Some(name) = name {
                     if let Some(reached) = self.attendant_serving(&name, client_id) {
                         if !call_id.is_empty() {
@@ -1202,6 +1370,10 @@ impl ToneSink for HumdSink {
                     if is_nurse && !offered && self.forager_tools.read().contains_key(&sid) {
                         self.unserved(client_id, &sid, &call_id, Unserved::NoOneServes(name));
                         return;
+                    }
+                    if is_nurse && offered && !call_id.is_empty() {
+                        trace!(from = client_id, %name, %call_id, "tendril-reach.route.forager");
+                        self.tendril_routes.write().insert(call_id.clone(), client_id.to_string());
                     }
                 }
             }
@@ -1423,7 +1595,13 @@ impl ToneSink for HumdSink {
                     }
                 };
 
-                let breath = thrumd::breath_tone(serde_json::json!({}));
+                let breath = if role == Some(Role::Forager) && client_id != "ensemble" {
+                    let listing = self.reachable();
+                    self.breathed.write().insert(client_id.to_string(), listing.to_string());
+                    Self::forager_breath(&listing)
+                } else {
+                    thrumd::breath_tone(serde_json::json!({}))
+                };
                 self.thrum.thrum_to(client_id, breath);
 
                 let models: Vec<String> = tone
@@ -1535,6 +1713,9 @@ impl ToneSink for HumdSink {
                         m.insert(client_id.to_string(), manifest.clone());
                         drop(m);
                         self.snapshot_bees();
+                        if matches!(role, Some(Role::Nurse) | Some(Role::Attendant)) {
+                            self.breathe_foragers();
+                        }
                         if role == Some(Role::Nurse) {
                             info!(client_id, ?models, "nurse.registered");
                         }
@@ -1566,8 +1747,9 @@ impl ToneSink for HumdSink {
                 let model = tone
                     .get("modelId")
                     .and_then(Value::as_str)
-                    .unwrap_or("sonnet")
-                    .to_string();
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string);
+                let grows = |models: &[String]| model.as_ref().is_none_or(|m| models.iter().any(|x| x == m));
                 let site = self.build_site(client_id, &sid, &tone);
                 let mut tone = tone;
                 if let Some(obj) = tone.as_object_mut() {
@@ -1628,7 +1810,7 @@ impl ToneSink for HumdSink {
                 } else {
                     None
                 };
-                trace!(sid, model, ?origin, "thrum.recv.prompt");
+                trace!(sid, ?model, ?origin, "thrum.recv.prompt");
 
                 let (with_room, full) = {
                     let mut to_prune: Vec<String> = Vec::new();
@@ -1639,9 +1821,7 @@ impl ToneSink for HumdSink {
                         let mut sorted: Vec<_> = m.iter().collect();
                         sorted.sort_by(|a, b| a.0.cmp(b.0));
                         for (cid, man) in sorted {
-                            if man.plays(Role::Nurse)
-                                && man.models.iter().any(|m| m == &model)
-                            {
+                            if man.plays(Role::Nurse) && grows(&man.models) {
                                 if !self.thrum.is_connected(cid) {
                                     to_prune.push(cid.clone());
                                 } else if man.is_full() {
@@ -1663,7 +1843,7 @@ impl ToneSink for HumdSink {
                     pick
                 };
                 if with_room.is_none()
-                    && let Some(peer) = self.pick_remote_nurse(&model)
+                    && let Some(peer) = self.pick_remote_nurse(model.as_deref())
                     && let Some(ens) = self.ensemble.clone()
                 {
                     let mut forward = tone.clone();
@@ -1671,22 +1851,27 @@ impl ToneSink for HumdSink {
                         obj.insert("to".into(), Value::String(peer.to_hex()));
                         obj.insert("from".into(), Value::String(ens.me().to_hex()));
                     }
-                    trace!(sid, model, peer = %peer.short(), "prompt.forward.remote");
+                    trace!(sid, ?model, peer = %peer.short(), "prompt.forward.remote");
                     match ens.route(forward).await {
-                        Ok(()) => return,
+                        Ok(()) => {
+                            self.sid_growers.write().insert(sid.clone(), peer);
+                            return;
+                        }
                         Err(e) => warn!(sid, peer = %peer.short(), err = %e,
                             "prompt.forward.remote.failed"),
                     }
                 }
                 let Some(nurse) = with_room.or(full) else {
-                    warn!(
-                        sid,
-                        model, "prompt.no-nurse — no nurse on this mesh advertises this model"
-                    );
+                    warn!(sid, ?model, "prompt.no-nurse — no nurse here or on a trusted peer grows this model");
+                    let message = match &model {
+                        Some(model) => format!("no nurse here or on a trusted peer grows {model}"),
+                        None => "no nurse is here, or on a trusted peer, to grow it".to_string(),
+                    };
                     let err = serde_json::json!({
                         "chi": "error",
                         "sid": sid,
-                        "message": format!("no nurse advertises model '{}'", model),
+                        "code": "no-nurse",
+                        "message": message,
                     });
                     if let (Some(origin), Some(ens)) = (origin, &self.ensemble) {
                         let mut out = err.clone();
@@ -1720,7 +1905,8 @@ impl ToneSink for HumdSink {
                         obj.insert("tools".into(), Value::Array(tools));
                     }
                 }
-                trace!(sid, model, %nurse, "prompt.forward.to-nurse");
+                trace!(sid, ?model, %nurse, "prompt.forward.to-nurse");
+                self.sid_growers.write().remove(&sid);
                 if let Some(origin) = origin {
                     self.sid_origins.write().insert(sid.clone(), origin);
                 }
@@ -1728,7 +1914,8 @@ impl ToneSink for HumdSink {
                 self.waneman.tick(&sid);
             }
             Some(Chi::Cancel) => {
-                if tone.get("sid").and_then(Value::as_str).is_some() {
+                if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
+                    self.follow_to_grower(client_id, sid, &tone, false).await;
                     for nurse in self.playing(&[Role::Nurse]) {
                         self.thrum.thrum_to(&nurse, tone.clone());
                     }
@@ -1736,6 +1923,7 @@ impl ToneSink for HumdSink {
             }
             Some(Chi::Cleanup) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
+                    self.follow_to_grower(client_id, sid, &tone, true).await;
                     self.build_sites.write().remove(sid);
                     self.forager_tools.write().remove(sid);
                     for bee in self.playing(&[Role::Nurse, Role::Builder]) {
@@ -1986,7 +2174,6 @@ impl ToneSink for HumdSink {
                 }
             }
             Some(Chi::ScoutResult)
-            | Some(Chi::PetalCell)
             | Some(Chi::Echo)
             | Some(Chi::PerfMark)
             | Some(Chi::Log)
@@ -2014,14 +2201,29 @@ fn my_capabilities() -> PeerCapabilities {
 }
 
 fn unserved_result(sid: &str, call_id: &str, why: &str) -> Value {
-    serde_json::json!({
+    let mut result = serde_json::json!({
         "chi": "tendril-result",
-        "sid": sid,
         "callId": call_id,
         "output": why,
         "isError": true,
-    })
+    });
+    if !sid.is_empty()
+        && let Some(obj) = result.as_object_mut()
+    {
+        obj.insert("sid".into(), Value::String(sid.to_string()));
+    }
+    result
 }
+
+fn reserved(tool: &str) -> bool {
+    tool == thrum_core::BASH || tool == thrum_core::SCENT
+}
+
+fn scent_model(tone: &Value) -> String {
+    tone.pointer("/args/model").and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+const BREATH_EVERY: Duration = Duration::from_secs(2);
 
 fn parse_humd_id(s: &str) -> Option<ensemble::Hid> {
     ensemble::Hid::from_hex(s).ok()

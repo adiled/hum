@@ -58,7 +58,7 @@ static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
     {"totalSlots", THRUM_FIELD_UINT, false},
 };
 
-static const thrum_field THRUM_FIELDS_PROMPT_BODY[16] = {
+static const thrum_field THRUM_FIELDS_PROMPT_BODY[18] = {
     {"modelId", THRUM_FIELD_STRING, true},
     {"cwd", THRUM_FIELD_STRING, true},
     {"systemPrompt", THRUM_FIELD_STRING, true},
@@ -75,11 +75,17 @@ static const thrum_field THRUM_FIELDS_PROMPT_BODY[16] = {
     {"trellis", THRUM_FIELD_ANY, true},
     {"tendrils", THRUM_FIELD_OBJECT, true},
     {"sepal", THRUM_FIELD_OBJECT, true},
+    {"scion", THRUM_FIELD_STRING, true},
+    {"graft", THRUM_FIELD_ARRAY, true},
 };
 
-static const thrum_field THRUM_FIELDS_PETAL[13] = {
+static const thrum_field THRUM_FIELDS_BLOOM[2] = {
+    {"content", THRUM_FIELD_ARRAY, true},
+    {"grew", THRUM_FIELD_ARRAY, true},
+};
+
+static const thrum_field THRUM_FIELDS_PETAL[12] = {
     {"kind", THRUM_FIELD_STRING, false},
-    {"role", THRUM_FIELD_STRING, true},
     {"text", THRUM_FIELD_STRING, true},
     {"grain", THRUM_FIELD_OBJECT, true},
     {"callId", THRUM_FIELD_STRING, true},
@@ -115,9 +121,17 @@ static const thrum_field THRUM_FIELDS_SEPAL[2] = {
     {"budget", THRUM_FIELD_UINT, true},
 };
 
-static const thrum_field THRUM_FIELDS_BREATH_BODY[2] = {
+static const thrum_field THRUM_FIELDS_BREATH_BODY[5] = {
     {"sigils", THRUM_FIELD_ANY, false},
     {"protoVersion", THRUM_FIELD_STRING, true},
+    {"models", THRUM_FIELD_ARRAY, true},
+    {"scents", THRUM_FIELD_ARRAY, true},
+    {"tools", THRUM_FIELD_ARRAY, true},
+};
+
+static const thrum_field THRUM_FIELDS_MODEL[2] = {
+    {"id", THRUM_FIELD_STRING, false},
+    {"hive", THRUM_FIELD_STRING, false},
 };
 
 static const thrum_field THRUM_FIELDS_UNFURL_BODY[11] = {
@@ -270,10 +284,6 @@ static const thrum_field THRUM_FIELDS_SCOUT_BODY[2] = {
     {"tools", THRUM_FIELD_ARRAY, true},
 };
 
-static const thrum_field THRUM_FIELDS_PETAL_CELL_BODY[1] = {
-    {"cell", THRUM_FIELD_ANY, true},
-};
-
 static const thrum_field THRUM_FIELDS_ENVELOPE[11] = {
     {"chi", THRUM_FIELD_STRING, false},
     {"rid", THRUM_FIELD_STRING, false},
@@ -290,12 +300,12 @@ static const thrum_field THRUM_FIELDS_ENVELOPE[11] = {
 
 static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 
-#define THRUM_VIEW_COUNT 31
+#define THRUM_VIEW_COUNT 30
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"hello", THRUM_FIELDS_HELLO_BODY, 16},
-    {"prompt", THRUM_FIELDS_PROMPT_BODY, 16},
-    {"breath", THRUM_FIELDS_BREATH_BODY, 2},
+    {"prompt", THRUM_FIELDS_PROMPT_BODY, 18},
+    {"breath", THRUM_FIELDS_BREATH_BODY, 5},
     {"unfurl", THRUM_FIELDS_UNFURL_BODY, 11},
     {"wilt", THRUM_FIELDS_WILT_BODY, 4},
     {"error", THRUM_FIELDS_ERROR_BODY, 4},
@@ -323,7 +333,6 @@ static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"curate", NULL, 0},
     {"scout-result", THRUM_FIELDS_SCOUT_RESULT_BODY, 2},
     {"scout", THRUM_FIELDS_SCOUT_BODY, 2},
-    {"petal-cell", THRUM_FIELDS_PETAL_CELL_BODY, 1},
 };
 
 #endif

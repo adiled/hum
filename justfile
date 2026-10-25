@@ -28,15 +28,6 @@ build-all: build bees
 test:
     cargo test --workspace
 
-# Recipe tests (vitest) — opencode integration
-test-recipes:
-    #!/usr/bin/env bash
-    if [ -f recipes/opencode/tests/package.json ]; then
-      cd recipes/opencode/tests && pnpm install --silent >/dev/null 2>&1 && pnpm test
-    else
-      echo "no recipes/opencode/tests/package.json"
-    fi
-
 # Fast Rust subset: sim narratives only
 sim:
     cargo test -p sim
@@ -90,10 +81,6 @@ install:
 # Local-dev redeploy (env-specific glue, gitignored)
 dev:
     ./dev/deploy
-
-# Recipe: bring up hum + opencode end-to-end
-recipe-opencode:
-    ./recipes/opencode/install
 
 clean:
     cargo clean

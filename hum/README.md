@@ -29,7 +29,6 @@ hum bee enter --hive <hive> [--as <label>]  # sign a bee in; prints its id
 hum bee <id> exit|reenter
 hum comb [hive]              # the comb: lifetime measures
 hum thehum status|tail|range|verify|replay
-hum recipes [name]           # list / run recipes
 hum uninstall                # stop + remove binary (state preserved)
 hum update [--force]         # check upstream release, self-update
 ```
@@ -126,11 +125,6 @@ tones of each chi, and nectar — tokens in, tokens out, cache reads —
 per hive. `hum comb` shows the whole comb; `hum comb claude-cli` shows
 one hive. The measure is written by the daemon, so it is observed
 rather than self-reported.
-
-### `recipes`
-Recipes live under `recipes/`. `hum recipes` lists; `hum recipes <name>`
-runs the recipe. Used for one-shot integrations (opencode setup, etc.)
-that aren't long-running services.
 
 ### `uninstall`
 Stops the service via the service manager and removes the `humd`

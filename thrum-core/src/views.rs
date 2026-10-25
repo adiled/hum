@@ -19,14 +19,23 @@
 //! A bloom opens with a `prompt` and closes with a `wilt`. The prompt
 //! carries its petals in `content` and how the cell should grow the
 //! bloom: `temperature`, `prune`, `season`, `frost`, `seed`, `trellis`,
-//! `tendrils`, `sepal`. What the cell grows comes back as `unfurl` tones,
-//! each growing one petal named by its kind until the petal is `closed`,
-//! and the nectar the bloom took rides on its wilt. A prompt's `cwd` is
-//! where the bloom builds, `hum://<humdid>/<path>`.
+//! `tendrils`, `sepal`, `scion`. What the cell grows comes back as
+//! `unfurl` tones, each growing one petal named by its kind until the
+//! petal is `closed`, and the nectar the bloom took rides on its wilt. A
+//! prompt's `cwd` is where the bloom builds, `hum://<humdid>/<path>`.
+//!
+//! A prompt's `graft` is the blooms of its sigil before it, each the
+//! `content` its prompt carried and what `grew`, for a cell that did not
+//! grow them. A prompt with no content grows on from its graft's last
+//! bloom.
+//!
+//! The breath humd gives a forager says what it can reach: the `models`
+//! nurses grow, the `scents` attendants distil, and the `tools` an
+//! attendant serves its blooms.
 //!
 //! Each `*Body` struct is the body of exactly one chi, named after it.
-//! `DroneLoad`, `Petal`, `Grain`, `Prune`, `Tendrils` and `Sepal` are
-//! shapes nested in a body rather than chis of their own.
+//! `DroneLoad`, `Petal`, `Grain`, `Prune`, `Tendrils`, `Sepal`, `Bloom`
+//! and `Model` are shapes nested in a body rather than chis of their own.
 
 use std::collections::BTreeMap;
 
@@ -72,7 +81,7 @@ pub struct Headroom {
     pub total_slots: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PromptBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "modelId")]
@@ -109,13 +118,23 @@ pub struct PromptBody {
     pub tendrils: Option<Tendrils>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sepal: Option<Sepal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graft: Option<Vec<Bloom>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Bloom {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<Petal>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grew: Option<Vec<Petal>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Petal {
     pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,6 +202,18 @@ pub struct BreathBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "protoVersion")]
     pub proto_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<Model>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scents: Option<Vec<Model>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Model {
+    pub id: String,
+    pub hive: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,12 +467,6 @@ pub struct ScoutBody {
     pub task: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PetalCellBody {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cell: Option<Value>,
 }
 
 #[cfg(test)]
