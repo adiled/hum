@@ -2,7 +2,10 @@
 //!
 //! A reach carries one command line in `line`, and its result is the
 //! engine's answer. Every reach is answered, even when the engine fails or
-//! panics. web2.json is read again when it changes, so a service added
+//! panics. A reach that came from a peer humd carries that peer's `from`,
+//! and is refused unless web2.json says `servePeers`: what web2 is signed
+//! in to is this machine's, lent to a peer's blooms only when a person says
+//! so. web2.json is read again when it changes, so a service added
 //! there is reached on the next call; a broken file is answered with what
 //! is wrong with it.
 
@@ -99,11 +102,28 @@ pub async fn answer_reach(shared: &Shared, tone: &Value) -> Answer {
             };
         }
     };
+    if let Some(refused) = peer_refused(&engine.config, tone) {
+        return refused;
+    }
     let line = line.to_string();
     match tokio::spawn(async move { engine.run(&line).await }).await {
         Ok(answer) => answer,
         Err(e) => Answer { output: format!("wrepl failed on that line: {e}"), is_error: true },
     }
+}
+
+pub fn peer_refused(config: &config::Config, tone: &Value) -> Option<Answer> {
+    let peer = tone.get("from").and_then(Value::as_str).filter(|f| !f.is_empty())?;
+    if config.serve_peers {
+        return None;
+    }
+    let short: String = peer.chars().take(17).collect();
+    Some(Answer {
+        output: format!(
+            "web2 on this humd serves its own blooms, not {short}…'s; a person lends it to peers with `servePeers: true` in its web2.json"
+        ),
+        is_error: true,
+    })
 }
 
 fn result(tone: &Value, answer: &Answer) -> Value {
@@ -171,6 +191,18 @@ mod tests {
         let t = tool();
         assert_eq!(t["name"], TOOL);
         assert_eq!(t["inputSchema"]["required"], json!(["line"]));
+    }
+
+    #[test]
+    fn a_peers_reach_is_refused_until_web2_json_lends_it() {
+        let local = json!({ "name": TOOL, "args": { "line": "help" } });
+        let remote = json!({ "name": TOOL, "args": { "line": "help" }, "from": "humd_0123456789abcdef0123" });
+        let closed = config::parse("{}", std::path::PathBuf::new()).unwrap();
+        let open = config::parse(r#"{ "servePeers": true }"#, std::path::PathBuf::new()).unwrap();
+        assert!(peer_refused(&closed, &local).is_none());
+        let refused = peer_refused(&closed, &remote).expect("a peer is refused by default");
+        assert!(refused.is_error && refused.output.contains("servePeers"), "{}", refused.output);
+        assert!(peer_refused(&open, &remote).is_none());
     }
 
     #[test]

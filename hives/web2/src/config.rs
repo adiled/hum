@@ -37,6 +37,7 @@ pub struct Config {
     pub timeout_ms: u64,
     pub idle_ms: u64,
     pub redirect_port: u16,
+    pub serve_peers: bool,
     pub base_dir: PathBuf,
 }
 
@@ -114,6 +115,8 @@ struct RawConfig {
     timeout_ms: Option<u64>,
     idle_ms: Option<u64>,
     redirect_port: Option<u16>,
+    #[serde(default)]
+    serve_peers: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -172,6 +175,7 @@ fn defaults(base_dir: PathBuf) -> Config {
         timeout_ms: DEFAULT_TIMEOUT_MS,
         idle_ms: DEFAULT_IDLE_MS,
         redirect_port: DEFAULT_REDIRECT_PORT,
+        serve_peers: false,
         base_dir,
     }
 }
@@ -188,6 +192,7 @@ pub fn parse(raw: &str, base_dir: PathBuf) -> Result<Config> {
         timeout_ms: raw.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
         idle_ms: raw.idle_ms.unwrap_or(DEFAULT_IDLE_MS),
         redirect_port: raw.redirect_port.unwrap_or(DEFAULT_REDIRECT_PORT),
+        serve_peers: raw.serve_peers,
         ..defaults(base_dir)
     };
     for (name, server) in &mcp_servers {

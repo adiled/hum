@@ -73,7 +73,8 @@ value reads the environment web2 runs in.
 At the top level, `maxOutput` (32 KiB) bounds an answer, keeping its
 start and its end, `timeoutMs` sets every service's default, `idleMs`
 (ten minutes) is how long an MCP server stays connected unused, and
-`redirectPort` (8976) is where a sign-in comes back to.
+`redirectPort` (8976) is where a sign-in comes back to, and `servePeers`
+lends web2 to peers' blooms (below).
 
 ## Commands
 
@@ -150,8 +151,11 @@ where its binary is.
   elicitation, no roots. A tool that asks for input mid-call, or turns
   into a long task, answers that wrepl does not follow it.
 - Legacy SSE MCP servers and Swagger 2.0 specs are not read.
-- Its tools reach blooms grown on its own humd; humd does not hand a
-  peer's blooms a local attendant's tools yet.
+- A peer's blooms reach it only when both sides say so: the peer's humd
+  trusts remote attendants (`humd.trustRemoteAttendants`), and this
+  web2.json says `servePeers: true`. Every service web2 is signed in to
+  here is then lent to them, so the second is a person's choice, off by
+  default; a peer's reach is refused, saying so.
 - The tokens are as safe as the user web2 runs as: a process of that
   user can read `secrets/`. A builder that keeps its shells out of hum's
   secrets closes that to blooms.
