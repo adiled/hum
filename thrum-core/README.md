@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         "rid": "hello-1",
         "from": "my-bee",
         "hive": "my-hive",
-        "roles": ["worker"],
+        "role": "nurse",
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
         "chis": ["hello", "prompt", "unfurl", "wilt"],

@@ -14,15 +14,15 @@ from typing import Any, ClassVar, Optional
 class HelloBody:
     proto_version: str
     hive: str
+    role: str
     hid: str
     pubkey: str
     signed_at: int
     signature: str
-    roles: Optional[list[str]] = None
+    builds: Optional[bool] = None
     version: Optional[str] = None
     models: Optional[list[str]] = None
     tools: Optional[list[Any]] = None
-    provides: Optional[list[str]] = None
     chis: Optional[list[str]] = None
     propensity: Optional[Any] = None
     headroom: Optional[Headroom] = None
@@ -33,15 +33,15 @@ class HelloBody:
     _wire: ClassVar[dict[str, str]] = {
         "proto_version": "protoVersion",
         "hive": "hive",
+        "role": "role",
         "hid": "hid",
         "pubkey": "pubkey",
         "signed_at": "signedAt",
         "signature": "signature",
-        "roles": "roles",
+        "builds": "builds",
         "version": "version",
         "models": "models",
         "tools": "tools",
-        "provides": "provides",
         "chis": "chis",
         "propensity": "propensity",
         "headroom": "headroom",
@@ -68,9 +68,6 @@ class PromptBody:
     text: Optional[str] = None
     content: Optional[list[Petal]] = None
     tools: Optional[list[Any]] = None
-    forager_tools: Optional[list[Any]] = None
-    provided: Optional[list[str]] = None
-    disallowed_tools: Optional[list[str]] = None
     allowed_tools: Optional[list[str]] = None
     resume: Optional[str] = None
     temperature: Optional[float] = None
@@ -90,9 +87,6 @@ class PromptBody:
         "text": "text",
         "content": "content",
         "tools": "tools",
-        "forager_tools": "foragerTools",
-        "provided": "provided",
-        "disallowed_tools": "disallowedTools",
         "allowed_tools": "allowedTools",
         "resume": "resume",
         "temperature": "temperature",
@@ -261,12 +255,14 @@ class TendrilReachBody:
     call_id: str
     name: str
     args: Optional[Any] = None
+    cwd: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "call_id": "callId",
         "name": "name",
         "args": "args",
+        "cwd": "cwd",
     }
 
 @dataclass

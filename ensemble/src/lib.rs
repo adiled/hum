@@ -966,9 +966,9 @@ mod tests {
         })
     }
 
-    fn worker_announce(claimed: &str, model: &str) -> serde_json::Value {
-        let mut manifest = bees::BeeManifest::new("worker-bee", "0.1.0", "0.7.0");
-        manifest.roles = vec!["worker".to_string()];
+    fn nurse_announce(claimed: &str, model: &str) -> serde_json::Value {
+        let mut manifest = bees::BeeManifest::new("nurse-bee", "0.1.0", "0.7.0");
+        manifest.role = Some(thrum_core::Role::Nurse);
         manifest.models = vec![model.to_string()];
         serde_json::to_value(bees::BeeAnnounce::Advertise {
             humd_id: claimed.to_string(),
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn an_announce_matching_its_tone_origin_is_accepted() {
         let me = Hid::random_humd();
-        let tone = announce_tone(&me.to_hex(), worker_announce(&me.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&me.to_hex(), nurse_announce(&me.to_hex(), "claude-opus-4-7"));
         assert!(announce_origin_matches_payload(&tone));
     }
 
@@ -999,7 +999,7 @@ mod tests {
     fn an_announce_claiming_another_hums_hid_is_rejected() {
         let me = Hid::random_humd();
         let victim = Hid::random_humd();
-        let tone = announce_tone(&me.to_hex(), worker_announce(&victim.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&me.to_hex(), nurse_announce(&victim.to_hex(), "claude-opus-4-7"));
         assert!(
             !announce_origin_matches_payload(&tone),
             "a peer must not advertise capabilities under a Hid it does not own"
@@ -1010,7 +1010,7 @@ mod tests {
     fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
         let a = Hid::random_humd();
         let b = Hid::random_humd();
-        let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&a.to_hex(), nurse_announce(&a.to_hex(), "claude-opus-4-7"));
         assert!(announce_origin_matches_payload(&tone), "relay was blocked");
         assert_ne!(a, b);
     }

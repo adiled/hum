@@ -37,7 +37,7 @@ interface Sigil {
   wilted: boolean;
 }
 
-export class OpenAIWorker {
+export class OpenAINurse {
   private thrum: Bee;
   private sigils = new Map<string, Sigil>();
   private static readonly MAX_SIGILS = 32;
@@ -75,7 +75,7 @@ export class OpenAIWorker {
 
     const modelId = msg.modelId ?? "";
     if (!this.discovered.includes(modelId)) {
-      this.error(sid, "unknown_model", `worker does not serve model '${modelId}'`);
+      this.error(sid, "unknown_model", `nurse does not serve model '${modelId}'`);
       return;
     }
 
@@ -245,7 +245,7 @@ export class OpenAIWorker {
   private sigilFor(sid: string): Sigil {
     const existing = this.sigils.get(sid);
     if (existing) return existing;
-    if (this.sigils.size >= OpenAIWorker.MAX_SIGILS) {
+    if (this.sigils.size >= OpenAINurse.MAX_SIGILS) {
       const oldest = this.sigils.keys().next().value as string | undefined;
       if (oldest !== undefined) this.sigils.delete(oldest);
     }

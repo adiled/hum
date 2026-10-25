@@ -3,6 +3,10 @@
 //! Spawns the PTY, watches stdout, marks PERCHED when the prompt glyph
 //! `❯` shows up. No transcript synth, no hooks, no classifier yet — the
 //! cell compiles and runs but can't carry a bloom.
+//!
+//! As in claude-cli, a cell never works the host it runs on: Claude
+//! Code's own host tools, [`HOST_TOOLS`], are always off, and its shell
+//! is the bloom's `bash` over the nest's MCP.
 
 use std::io::Read;
 
@@ -13,7 +17,13 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use hum_nest::{Cell, Egg, Worker};
+use hum_nest::{Cell, Egg, Nurse};
+
+pub const HOST_TOOLS: &[&str] = &[
+    "Bash", "BashOutput", "KillShell", "KillBash",
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "Glob", "Grep", "LS",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -22,9 +32,9 @@ enum HarnessState {
     Felled,
 }
 
-pub struct ClaudeReplWorker;
+pub struct ClaudeReplNurse;
 
-impl Default for ClaudeReplWorker {
+impl Default for ClaudeReplNurse {
     fn default() -> Self {
         Self
     }
@@ -49,6 +59,8 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
         argv.push(mcp_config);
         argv.push("--strict-mcp-config".into());
     }
+    argv.push("--disallowed-tools".into());
+    argv.push(HOST_TOOLS.join(" "));
     if let Some(sp) = spec.system_prompt.as_deref() {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
@@ -61,7 +73,7 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
 }
 
 #[async_trait]
-impl Worker for ClaudeReplWorker {
+impl Nurse for ClaudeReplNurse {
     fn ephemeral(&self) -> bool {
         true
     }

@@ -13,8 +13,9 @@
 //! The hello. On connect humd breathes once (`sigils: []`) before it
 //! has heard anything. The core answers with the bee's hello, signed at
 //! the time it is given, under a fresh rid, carrying the fields the
-//! client owns ([`CLIENT_OWNED`]): `chi`, `rid`, `hive`, `protoVersion`,
-//! and the signature (`hid`, `from`, `pubkey`, `signedAt`, `signature`).
+//! client owns ([`CLIENT_OWNED`]): `chi`, `rid`, `hive`, `role`,
+//! `protoVersion`, and the signature (`hid`, `from`, `pubkey`, `signedAt`,
+//! `signature`).
 //! humd acknowledges the hello's rid as it does every tone's, then gives
 //! its verdict: a breath (`sigils: {}`) admits the bee, an echo with
 //! `ok: false` under the hello's rid refuses it. A breath before the
@@ -76,6 +77,7 @@ pub const CLIENT_OWNED: &[&str] = &[
     "chi",
     "rid",
     "hive",
+    "role",
     "protoVersion",
     "hid",
     "from",
@@ -143,6 +145,7 @@ enum State {
 
 pub struct Core {
     hive: String,
+    role: thrum_core::Role,
     key: BeeKey,
     endpoint: Endpoint,
     hello: Map<String, Value>,
@@ -159,9 +162,16 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn new(hive: impl Into<String>, key: BeeKey, hello: Map<String, Value>, endpoint: Endpoint) -> Self {
+    pub fn new(
+        hive: impl Into<String>,
+        role: thrum_core::Role,
+        key: BeeKey,
+        hello: Map<String, Value>,
+        endpoint: Endpoint,
+    ) -> Self {
         let mut core = Self {
             hive: hive.into(),
+            role,
             key,
             endpoint,
             hello: Map::new(),
@@ -187,6 +197,10 @@ impl Core {
 
     pub fn hive(&self) -> &str {
         &self.hive
+    }
+
+    pub fn role(&self) -> thrum_core::Role {
+        self.role
     }
 
     pub fn is_nestled(&self) -> bool {
@@ -454,6 +468,7 @@ impl Core {
             obj.insert("chi".into(), json!("hello"));
             obj.insert("rid".into(), json!(rid));
             obj.insert("hive".into(), json!(self.hive));
+            obj.insert("role".into(), json!(self.role.as_str()));
             obj.insert("protoVersion".into(), json!(thrum_core::THRUM_VERSION));
         }
         self.key.sign_hello_at(&mut hello, now_ms);

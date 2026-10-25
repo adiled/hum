@@ -439,7 +439,7 @@ mod revocation_tests {
 
     #[test]
     fn a_hive_installation_lives_under_hives_d() {
-        assert!(hive_installation("humfs").ends_with("hives.d/humfs.orch"));
+        assert!(hive_installation("bash").ends_with("hives.d/bash.orch"));
         assert!(is_plain_name("openai-server"));
         assert!(is_plain_name("claude_cli.2"));
         assert!(!is_plain_name(""));

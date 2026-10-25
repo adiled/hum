@@ -3,8 +3,8 @@
 //! humd hosts no cells. A hive that does turns this module on, and the
 //! limits are the hive's own, in the `nest` section of its
 //! `hives/<hive>.json`. Without one, a hive gets the limits every hum-nest
-//! worker ran with before a hive could say otherwise. The headroom left
-//! under those limits is what the worker claims to humd.
+//! nurse ran with before a hive could say otherwise. The headroom left
+//! under those limits is what the nurse claims to humd.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

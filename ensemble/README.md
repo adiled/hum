@@ -374,7 +374,7 @@ keeps the mesh layer thin and reusable.
 - **AML / KYC / reputation.** A bee layered on top can rate-limit,
   scorecard, or refuse to fill. ensemble has no policy.
 - **Model inference.** The hives spawn the
-  worker that answers a `chi:"prompt"`. ensemble doesn't know what
+  nurse that answers a `chi:"prompt"`. ensemble doesn't know what
   is inside the prompt.
 - **Persistence.** ensemble is in-RAM. The daemon keeps its own
   state under `$XDG_STATE_HOME/hum`; peer addresses live in

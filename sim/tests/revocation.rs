@@ -24,7 +24,7 @@ fn hello_with_identity(bee: &BeeKey) -> serde_json::Value {
     let (pubkey, signed_at, signature) = (sig.pubkey, sig.signed_at, sig.signature);
     serde_json::json!({
         "chi": "hello",
-        "roles": ["worker"],
+        "role": "nurse",
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -46,7 +46,7 @@ async fn a_revoked_bee_is_refused_the_socket() {
     let humd = sim.spawn_humd_revoking(id, &[&bee.hid.to_hex()]).await;
     sim.await_ready(humd.id).await.expect("humd ready");
 
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let cid = hum_identity::HumId::mint().to_string();
     let _rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
@@ -75,7 +75,7 @@ async fn dropping_the_signature_does_not_evade_revocation() {
 
     let unsigned = serde_json::json!({
         "chi": "hello",
-        "roles": ["worker"],
+        "role": "nurse",
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -101,7 +101,7 @@ async fn an_unrevoked_bee_is_unaffected() {
     let humd = sim.spawn_humd_revoking(id, &[&other.hid.to_hex()]).await;
     sim.await_ready(humd.id).await.expect("humd ready");
 
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let cid = hum_identity::HumId::mint().to_string();
     let _rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum

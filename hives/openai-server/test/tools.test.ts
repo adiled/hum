@@ -1,5 +1,5 @@
 // Pins the OpenAI-tool → thrum-tool mapping. The wire field MUST
-// be `inputSchema` — humd merges these into the worker's MCP
+// be `inputSchema` — humd merges these into the nurse's MCP
 // catalogue and claude's mcp client rejects the entire
 // `tools/list` response if any entry has `inputSchema: null`. A
 // past regression named the field `parameters`, which served

@@ -11,7 +11,7 @@
 // print sid <chi> for the next tone of it. Closing its stdin closes the
 // bee.
 
-import { Bee, Chi, PetalKind, Refused } from "../index.ts";
+import { Bee, Chi, PetalKind, Refused, Role } from "../index.ts";
 
 const say = (line: string) => process.stdout.write(line + "\n");
 const model = process.env.ECHO_MODEL || "echo-ts";
@@ -19,7 +19,8 @@ const model = process.env.ECHO_MODEL || "echo-ts";
 const bee = new Bee({
   hive: process.env.ECHO_HIVE || "echo-ts",
   as: process.env.ECHO_AS || "main",
-  hello: { roles: ["worker"], version: "1.0.0", models: [model], headroom: { freeSlots: 1, totalSlots: 1 } },
+  role: Role.nurse,
+  hello: { version: "1.0.0", models: [model], headroom: { freeSlots: 1, totalSlots: 1 } },
 });
 
 bee.on(Chi.prompt, (tone) => {

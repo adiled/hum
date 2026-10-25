@@ -1,6 +1,6 @@
 // The hive's bees, over the thrum client.
 //
-// The main bee is the worker that serves OpenAI models. Each caller of
+// The main bee is the nurse that serves OpenAI models. Each caller of
 // the HTTP surface prompts as a forager of its own, a requester, entered
 // under a label derived from who is asking, so humd hears every caller
 // apart. A requester follows each sigil it opened by sid. When humd goes
@@ -9,7 +9,7 @@
 // turned away. A requester is ready once humd hears it, and waits at
 // most the time it is given for that.
 
-import { Bee, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Role, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
 
 export const HIVE_NAME = "openai-server";
@@ -28,7 +28,7 @@ export class Requester {
   #waiting: Array<() => void> = [];
 
   constructor(label: string) {
-    this.bee = new Bee({ hive: HIVE_NAME, as: label, hello: { roles: ["forager"], version: BEE_VERSION, source: SOURCE } });
+    this.bee = new Bee({ hive: HIVE_NAME, as: label, role: Role.forager, hello: { version: BEE_VERSION, source: SOURCE } });
     this.bee.onNestled(() => {
       this.#up = true;
       for (const wake of this.#waiting.splice(0)) wake();

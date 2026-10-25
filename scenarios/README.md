@@ -29,7 +29,7 @@ Pairing is the rule, not yet the state of the directory:
 | `overflow-inference.md` | `sim/tests/overflow_inference.rs` |
 | `partition-and-heal.md` | `sim/tests/partition_and_heal.rs` |
 | `eggs-on-the-hum.md` | `sim/tests/eggs_on_the_hum.rs` |
-| `find-the-worker.md` | `sim/tests/remote_discovery.rs` |
+| `find-the-nurse.md` | `sim/tests/remote_discovery.rs` |
 
 Tests with no scenario prose yet: `admission_gate.rs`, `chi_scoping.rs`,
 `delivery.rs`, `liveness.rs`, `lossy_link.rs`, `mock_prompt.rs`,

@@ -58,14 +58,14 @@ Refer to hum.schema.json
 | **Agent memory / long-term context** | ✅ (`bloom` + `thrum` protocol) | ❌ | ❌ | ❌ | ✅ (societal memory) | ✅ (cognitive memory) | ❌ | ❌ | ❌ |
 | **Streaming / SSE** | ✅ (thrum tones, `petal` primitives) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
 | **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` transport) | ✅ (cost, usage, logs) | ❌ | ❌ | ✅ (swarm traces) | ✅ (run traces, deploy) | ✅ traces, evals, prompt mgmt | ❌ | ❌ |
-| **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **Tool / MCP gateway** | ✅ (attendants serve tools; MCP only at a nurse's cells) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) | ✅ vector DBs | ❌ | ✅ |
 | **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
 | **Trust / Risk modeling** | ✅ (`strict_auth` + T1→T4 trust via `Transport` + `Ensemble` hello handshake) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Roaming inference** | ✅ (`Chi::Attach` + `wane` cursor replay) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Roaming filesystems** | ✅ (`hum://` URI routing; `fs` being formalized, [#92](https://github.com/adiled/hum/issues/92)) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Roaming filesystems** | ✅ (a bloom builds on any humd: `hum://` `cwd`, a builder's `bash`) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Multi-party gamification** | ✅ (multiple nestlers per bloom via `observers[sid]` roster) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + headroom-aware routing to workers with room) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + headroom-aware routing to nurses with room) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Zero-trust access control** | ✅ (scoped capability grants + revocation via `federation.*` error chi) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Agent-human consensus** | ✅ (`thehum` hash chain + on-chain anchoring via `HumdRegistry` contract) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 

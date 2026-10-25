@@ -137,7 +137,6 @@ fn build_reply(my_eid: &str, source_eid: &str, payload: &[u8]) -> bundle_protoco
 
 async fn run_prompt(_cfg: &Config, payload: &Payload) -> Result<String> {
     let hello = json!({
-        "roles": ["forager"],
         "version": NESTLING_VERSION,
         "propensity": {
             "statefulness": "stateless",
@@ -147,7 +146,7 @@ async fn run_prompt(_cfg: &Config, payload: &Payload) -> Result<String> {
         "chis": ["hello", "prompt", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/bp7",
     });
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Forager).hello(hello))
         .await
         .context("link the bp7 bee")?;
 

@@ -1,11 +1,11 @@
 ---
 title: "dwarfstar"
-description: "The DwarfStar engine linked into hum worker bees, one bee per model, sharing one GPU"
+description: "The DwarfStar engine linked into hum nurses, one bee per model, sharing one GPU"
 ---
 
 # dwarfstar
 
-> _Worker bees with the DwarfStar engine inside them, one per model. A prompt tone goes into the model's token stream, and the answer unfurls back as a bloom._
+> _Nurses with the DwarfStar engine inside them, one per model. A prompt tone goes into the model's token stream, and the answer unfurls back as a bloom._
 
 [DwarfStar](https://github.com/antirez/ds4) (ds4) is a narrow, fast
 local inference engine for a few open-weight models: DeepSeek V4 and

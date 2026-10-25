@@ -1,11 +1,11 @@
 ---
 title: "ollama-server (Rust)"
-description: "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client"
+description: "Ollama for hum, both ways: a drop-in surface for any Ollama client, and a nurse that calls Ollama"
 ---
 
 # ollama-server (Rust)
 
-> _Ollama-compatible HTTP surface for hum — drop-in for any Ollama client_
+> _Ollama for hum, both ways: a drop-in surface for any Ollama client, and a nurse that calls Ollama_
 
 A bee that fronts hum's local thrum socket with the Ollama REST
 API. Drop-in for `ollama`, `open-webui`, `lobe-chat`, `cline`,
@@ -132,6 +132,16 @@ print(llm.invoke("ping"))
 | streamed `message.tool_calls` | `chi:"tendril-reach"` |
 | `done:true` line | `chi:"wilt"` |
 | `error` line | `chi:"error"` |
+
+## The nurse half
+
+The hive's second bee, `ollama-nurse`, is entered as a nurse under the
+label `nurse` and goes the other way: it serves the models in
+`OLLAMA_NURSE_MODELS` by calling Ollama at `OLLAMA_NURSE_URL` (default
+`http://127.0.0.1:11434`). Both run from the one Orchfile. When the
+forager holds port 11434 itself, point the nurse at Ollama's real
+address; a call the nurse makes to its own forager is refused rather
+than looped back into hum.
 
 ## Status
 

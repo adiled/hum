@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn prompt_routes_to_a_worker_found_only_by_discovery() {
+async fn prompt_routes_to_a_nurse_found_only_by_discovery() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = sim::Sim::new();
@@ -12,16 +12,16 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut nurse_rx = server.thrum.register_synthetic(nurse_cid.clone());
     let server_thrum = server.thrum.clone();
     server
         .thrum
         .inject_tone(
-            &worker_cid,
+            &nurse_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "roles": ["worker"],
+                "role": "nurse",
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -31,9 +31,9 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
         )
         .await;
 
-    let cid_for_pump = worker_cid.clone();
+    let cid_for_pump = nurse_cid.clone();
     tokio::spawn(async move {
-        while let Some(tone) = worker_rx.recv().await {
+        while let Some(tone) = nurse_rx.recv().await {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
@@ -82,13 +82,13 @@ async fn prompt_routes_to_a_worker_found_only_by_discovery() {
 
     assert!(
         saw_wilt,
-        "laptop never got chi:wilt from the discovered worker — \
+        "laptop never got chi:wilt from the discovered nurse — \
          discovery did not route the prompt across the mesh{saw_error:?}",
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
+async fn a_peer_that_joins_after_the_announce_still_finds_the_nurse() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = sim::Sim::new();
@@ -97,16 +97,16 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
     sim.await_ready(laptop.id).await.expect("laptop ready");
     sim.await_ready(server.id).await.expect("server ready");
 
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut nurse_rx = server.thrum.register_synthetic(nurse_cid.clone());
     let server_thrum = server.thrum.clone();
     server
         .thrum
         .inject_tone(
-            &worker_cid,
+            &nurse_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "roles": ["worker"],
+                "role": "nurse",
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -116,9 +116,9 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
         )
         .await;
 
-    let cid_for_pump = worker_cid.clone();
+    let cid_for_pump = nurse_cid.clone();
     tokio::spawn(async move {
-        while let Some(tone) = worker_rx.recv().await {
+        while let Some(tone) = nurse_rx.recv().await {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
@@ -171,7 +171,7 @@ async fn a_peer_that_joins_after_the_announce_still_finds_the_worker() {
 
     assert!(
         saw_wilt,
-        "laptop never got chi:wilt from a worker that announced before the laptop \
+        "laptop never got chi:wilt from a nurse that announced before the laptop \
          joined — a peer that arrives later must still be told{saw_error:?}",
     );
 }

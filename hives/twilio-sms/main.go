@@ -102,8 +102,8 @@ func newSmsBee() *smsBee {
 	b := &smsBee{Bee: thrum.NewBee(thrum.Options{
 		Hive: "twilio-sms",
 		As:   "main",
+		Role: thrum.RoleForager,
 		Hello: map[string]any{
-			"roles":   []string{"forager"},
 			"version": beeVersion,
 			"propensity": map[string]any{
 				"statefulness": "stateful",

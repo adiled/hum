@@ -15,7 +15,7 @@ use serde_json::Value;
 use thrum_core::WaneTracker;
 use tokio::sync::{mpsc, oneshot};
 
-pub const SIM_HIVES: [&str; 3] = ["claude-cli", "claude-repl", "humfs"];
+pub const SIM_HIVES: [&str; 4] = ["claude-cli", "claude-repl", "bash", "openai-server"];
 
 fn sim_caps(_humd: &SimHumd) -> PeerCapabilities {
     PeerCapabilities {
@@ -40,15 +40,20 @@ pub struct SimHumd {
 }
 
 impl SimHumd {
-    pub fn enter(&self, hive: &str) -> hum_identity::BeeKey {
+    pub fn enter(&self, hive: &str, role: thrum_core::Role) -> hum_identity::BeeKey {
         let key = hum_identity::BeeKey::generate();
-        self.bees.enter(hive, &key);
+        self.bees.enter(hive, role, &key);
         key
     }
 
     pub fn signed_hello(&self, mut hello: Value) -> Value {
         let hive = hello.get("hive").and_then(Value::as_str).unwrap_or("").to_string();
-        self.enter(&hive).sign_hello(&mut hello);
+        let role = hello
+            .get("role")
+            .and_then(Value::as_str)
+            .and_then(thrum_core::Role::parse)
+            .unwrap_or(thrum_core::Role::Nurse);
+        self.enter(&hive, role).sign_hello(&mut hello);
         hello
     }
 }
@@ -111,7 +116,7 @@ impl Sim {
         self.spawn_humd_inner(id, true).await
     }
 
-    pub async fn spawn_humd_not_trusting_remote_workers(&self, id: Hid) -> Arc<SimHumd> {
+    pub async fn spawn_humd_not_trusting_remote_nurses(&self, id: Hid) -> Arc<SimHumd> {
         self.spawn_humd_inner(id, false).await
     }
 
@@ -120,15 +125,15 @@ impl Sim {
             .await
     }
 
-    async fn spawn_humd_inner(&self, id: Hid, trust_remote_workers: bool) -> Arc<SimHumd> {
-        self.spawn_humd_inner_with_revocations(id, trust_remote_workers, &[])
+    async fn spawn_humd_inner(&self, id: Hid, trust_remote_nurses: bool) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, trust_remote_nurses, &[])
             .await
     }
 
     async fn spawn_humd_inner_with_revocations(
         &self,
         id: Hid,
-        trust_remote_workers: bool,
+        trust_remote_nurses: bool,
         revoked: &[&str],
     ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
@@ -159,7 +164,6 @@ impl Sim {
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
-            mcp_addr: ([127, 0, 0, 1], 0).into(),
             comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
@@ -171,12 +175,11 @@ impl Sim {
             revoked_path: revoked_path.clone(),
             bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
             advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
-            bind_mcp: false,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
-            trust_remote_workers,
+            trust_remote_nurses,
             hives: hives.clone(),
             bees: bees.clone(),
         };
@@ -278,7 +281,6 @@ impl Sim {
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
-            mcp_addr: ([127, 0, 0, 1], 0).into(),
             comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
@@ -290,12 +292,11 @@ impl Sim {
             revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
             bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
             advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
-            bind_mcp: false,
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
-            trust_remote_workers: true,
+            trust_remote_nurses: true,
             hives: hives.clone(),
             bees: bees.clone(),
         };
@@ -571,11 +572,11 @@ impl Sim {
         Ok(())
     }
 
-    pub async fn attach_mock_worker(&self, humd: Hid, models: Vec<String>) -> Result<String> {
-        self.attach_mock_worker_claiming(humd, models, None, "HELLO").await
+    pub async fn attach_mock_nurse(&self, humd: Hid, models: Vec<String>) -> Result<String> {
+        self.attach_mock_nurse_claiming(humd, models, None, "HELLO").await
     }
 
-    pub async fn attach_mock_worker_claiming(
+    pub async fn attach_mock_nurse_claiming(
         &self,
         humd: Hid,
         models: Vec<String>,
@@ -598,7 +599,7 @@ impl Sim {
         let mut rx = h.thrum.register_synthetic(client_id.clone());
         let mut hello = serde_json::json!({
             "chi": "hello",
-            "roles": ["worker"],
+            "role": "nurse",
             "hive": "claude-repl",
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
@@ -774,11 +775,12 @@ impl Sim {
             .collect();
         let hello = h.signed_hello(serde_json::json!({
             "chi": "hello",
+            "role": "attendant",
             "hive": hive,
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "tools": tools,
-            "chis": ["hello", "tendril-reach", "tendril-result", "cancel"],
+            "chis": ["hello", "tendril-reach", "tendril-result"],
         }));
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
@@ -816,6 +818,61 @@ impl Sim {
                     "sid": sid,
                     "callId": call_id,
                     "result": result,
+                });
+                thrum.inject_tone(&cid_for_pump, reply).await;
+            }
+        });
+        Ok(client_id)
+    }
+
+    pub async fn attach_mock_builder<F>(&self, humd: Hid, run: F) -> Result<String>
+    where
+        F: Fn(&str, &str) -> (String, i64) + Send + Sync + 'static,
+    {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        for _ in 0..200 {
+            if h.thrum.has_sink() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let client_id = hum_identity::HumId::mint().to_string();
+        let mut rx = h.thrum.register_synthetic(client_id.clone());
+        let hello = h.signed_hello(serde_json::json!({
+            "chi": "hello",
+            "role": "builder",
+            "hive": "bash",
+            "version": "0.0.0",
+            "protoVersion": thrum_core::THRUM_VERSION,
+            "chis": ["hello", "tendril-reach", "tendril-result", "cleanup"],
+        }));
+        h.thrum.inject_tone(&client_id, hello).await;
+        let thrum = h.thrum.clone();
+        let cid_for_pump = client_id.clone();
+        tokio::spawn(async move {
+            while let Some(tone) = rx.recv().await {
+                if tone.get("chi").and_then(Value::as_str) != Some("tendril-reach") {
+                    continue;
+                }
+                let text = |k: &str| tone.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let command = tone
+                    .pointer("/args/command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let (output, exit) = run(&text("cwd"), &command);
+                let reply = serde_json::json!({
+                    "chi": "tendril-result",
+                    "sid": text("sid"),
+                    "callId": text("callId"),
+                    "output": output,
+                    "isError": exit != 0,
+                    "metadata": { "exitCode": exit },
                 });
                 thrum.inject_tone(&cid_for_pump, reply).await;
             }

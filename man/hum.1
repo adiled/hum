@@ -42,7 +42,7 @@ come from launchd; on Linux, journalctl.
 .B doctor
 One-shot full diagnostic dump. Run this first when something is wrong:
 versions, config, environment sanity, the claude binary, every bee and
-service state, and recent daemon + worker logs with warnings highlighted.
+service state, and recent daemon + nurse logs with warnings highlighted.
 Paste the output into a bug report.
 .TP
 .B hive
@@ -73,14 +73,15 @@ installed. hum starts no process.
 .B hum bee \-\-list
 Bees entered here, which have nestled, and what humd advised each.
 .br
-.B hum bee enter \-\-hive \fIhive\fR [\-\-as \fIlabel\fR]
-Sign a bee in under the hive and print its id. With a label, the same
-hive and label are always the same bee, so a process enters itself each
-time it starts and a runtime can hold one bee per label; without one,
-every call mints a new bee.
+.B hum bee enter \-\-hive \fIhive\fR \-\-role \fIrole\fR [\-\-as \fIlabel\fR]
+Sign a bee in under the hive for its one role (forager, nurse, builder
+or attendant) and print its id. With a label, the same hive and label
+are always the same bee, so a process enters itself each time it starts
+and a runtime can hold one bee per label; without one, every call mints
+a new bee. Entering a label for another role files it under a new key.
 .br
-.B hum bee link \-\-hive \fIhive\fR \-\-as \fIlabel\fR
-Be that bee's client on stdio: enter it, sign its hello, keep it
+.B hum bee link \-\-hive \fIhive\fR \-\-as \fIlabel\fR \-\-role \fIrole\fR
+Be that bee's client on stdio: enter it for its role, sign its hello, keep it
 nestled through humd restarts, and pass its tones over two pipes, one
 JSON object per line. A bee's thrum client in TS, Python, Go or C runs
 this for it; WIRE.md says what the lines are.
@@ -233,19 +234,16 @@ Path to the thrum socket. Overrides the default, for both the daemon
 .B HUM_SOCKET
 Same as \fBHUM_THRUM_SOCK\fR, checked second.
 .TP
-.B HUM_TRUST_REMOTE_WORKERS
+.B HUM_TRUST_REMOTE_NURSES
 Set to \fB1\fR, \fBtrue\fR or \fByes\fR to let humd forward a prompt to a peer
 on the strength of that peer's advertised model. Off by default: an
 unverified claim hands the prompt to whoever made it. The setting
-also lives in \fBhum.json\fR as \fBhumd.trustRemoteWorkers\fR, which is
+also lives in \fBhum.json\fR as \fBhumd.trustRemoteNurses\fR, which is
 where it belongs: the installer never rewrites hum.json, so the gate
 does not shut under you. This variable overrides that key.
 .TP
-.B HUM_MCP_PORT
-Port for humd's own MCP server. Default 29147.
-.TP
 .B CLAUDE_CLI_PATH
-Path to the claude binary the worker cells spawn. Default \fBclaude\fR on
+Path to the claude binary a nurse's cells spawn. Default \fBclaude\fR on
 \fBPATH\fR.
 .TP
 .B XDG_RUNTIME_DIR
@@ -306,11 +304,13 @@ chi	the tone's discriminator (prompt, unfurl, wilt, gossip-publish, ...)
 sigil	the content-addressable hash a sid pairs under, stable across reconnects
 wane	Lamport clock per sigil, incremented on every state mutation
 dusk	absolute ms expiry on a tone; past dusk, drop
-cell	one live LLM subprocess in the nest; fungible
+cell	one live LLM subprocess in a nurse's nest; fungible
 brood	the state machine that walks a cell from cold to ready (PTY-only)
 drone	the sentinel watching every tone (self-governance + drift detection)
-worker	a bee that produces compute (accepts prompt, emits unfurl/wilt/tendril-reach)
 forager	a bee that prompts, bringing an outside wire into thrum (HTTP/gRPC/stdio)
+nurse	a bee that grows blooms in its cells (accepts prompt, emits unfurl/wilt/tendril-reach)
+builder	a bee that changes the world, running what a bloom composes on its host (bash)
+attendant	a bee that serves the fixed, named tools it offers, and nothing else
 .TE
 .SH SEE ALSO
 .PP

@@ -29,11 +29,12 @@ like the thing — readers and writers share the same mental model.
   hive turns it on by using hum-nest, and the limits (`maxCells`,
   `idleMs`, cell `bounds`) are its own, in the `nest` section of its
   `hives/<hive>.json`. A humd hosts no nest.
-- **cell**: one live LLM subprocess in a hive's nest. The compute itself,
+- **cell**: one live LLM subprocess in a nurse's nest. The compute itself,
   what grows a `chi:"prompt"` into `chi:"unfurl"`s and a `chi:"wilt"`.
-  Fungible: spawn, kill, respawn.
-- **headroom**: how many more cells a worker can take, which it claims on
-  its hello and on each cell pulse. humd sends a prompt to a worker with
+  Fungible: spawn, kill, respawn. The cell is where the hive meets the
+  flower: a comb is made of cells, and so is every plant.
+- **headroom**: how many more cells a nurse can take, which it claims on
+  its hello and on each cell pulse. humd sends a prompt to a nurse with
   room, here or on a peer.
 - **brood**: the state machine that walks a cell from cold to ready (PTY-only).
 
@@ -81,22 +82,15 @@ How a bloom grows is said on its prompt: its **temperature**, **prune**
   `bee_<sha256(pubkey)>`, filed at `bees/<hid>.key`. Whatever signs a
   hello with that key is the bee, be it a process its hive started, a
   runtime hosting many bees, or a service on a phone. The hello names the
-  `hive` it belongs to and the `roles` it claims:
-  - **worker**: produces compute. Implements the `Worker` trait (or
-    its non-Rust equivalent), accepts `chi:"prompt"` for advertised
-    models and emits `chi:"unfurl"` / `chi:"wilt"` / `chi:"tendril-reach"`.
-  - **forager**: the bee that prompts. It brings the outside world into
-    the thrum, an HTTP / gRPC / SMS / stdio surface, and opens blooms.
-
-  A role is a claim, never part of who the bee is; a bee may claim both,
-  or a role a future hive invents.
+  `hive` it belongs to, and the bee does the one [role](#roles) it was
+  entered for.
 - **entering**: a hive signing a bee in (`hum bee enter --hive <hive>
-  --as <label>`), minting its key and recording it under the hive by a
-  label the hive knows it by, so the same label is always the same bee.
-  humd admits only a hello signed by an entered key, under the hive it
-  entered. **Exiting** signs the bee out (humd refuses its next hello);
-  **reentering** signs it back in. Entering starts no process; that is
-  the hive's to do.
+  --as <label> --role <role>`), minting its key and recording it under
+  the hive by a label the hive knows it by, with the role it plays, so the
+  same label is always the same bee. humd admits only a hello signed by an
+  entered key, under the hive and role it entered. **Exiting** signs the
+  bee out (humd refuses its next hello); **reentering** signs it back in.
+  Entering starts no process; that is the hive's to do.
 - **nestler**: a bee's lifecycle phase: handshaking, awaiting the breath
   that accepts `chi:"hello"`. Verb-state of the same participant.
 - **nestled**: a bee's lifecycle phase: post-handshake, registered, with
@@ -105,10 +99,38 @@ How a bloom grows is said on its prompt: its **temperature**, **prune**
   `chi:"curate"`) for the rest of the connection.
 
 The vocabulary stacks as: **hive** = kind, installed on a humd; **bee** =
-a participant the humd understands through its hive; **nestler** and
-**nestled** = states of that same bee. Nestler arrives, nestled inhabits:
-same actor, two phases. A nestled bee shares the nest with the cells that
-live there.
+a participant the humd understands through its hive; **role** = the one
+job that bee does; **nestler** and **nestled** = states of that same bee.
+Nestler arrives, nestled inhabits: same actor, two phases. A nurse shares
+its nest with the cells it keeps.
+
+## Roles
+
+A bee does one job. So does a honeybee: it moves to another only as its
+body changes, over days, never between morning and afternoon. The jobs
+are those of a colony's workers, and **worker** is the caste they all
+belong to, never a role. A bee's role is set when its hive enters it and
+changes only by entering it again, and nothing granted to the old role
+carries over.
+
+- **forager**: the bee that prompts. It brings the outside world into the
+  thrum, an HTTP / gRPC / SMS / stdio surface, and opens blooms. A
+  tendril for a tool it put on its prompt reaches back to it.
+- **nurse**: grows blooms in its cells. It claims the models it serves and
+  its headroom, takes `chi:"prompt"` and answers with `chi:"unfurl"`s and
+  a `chi:"wilt"`, reaching tendrils for its cells. All inference is
+  nursing, and what it makes is words.
+- **builder**: changes the world. It works the host it is on, running
+  what a bloom composes there: a shell (`bash`) today, anything executable
+  in time. A bloom says where it builds with its `cwd`,
+  `hum://<humdid>/<path>` (`hum:///<path>` for its forager's own humd),
+  and with no path the shell starts in the home directory of that host.
+  With no `cwd` it builds at its forager's humd's home if the forager
+  `builds`, and nowhere otherwise.
+- **attendant**: serves the tools it offers, fixed and named, and runs
+  nothing else, whether they read the world or change it. The line with a
+  builder is who writes what runs: on a builder the bloom does, on an
+  attendant the attendant does.
 
 ## Observation
 
@@ -122,4 +144,13 @@ live there.
   Only the kernel writes the comb, so the measure is observed rather than
   self-reported. What the kernel *produces* is honey, and that side belongs
   to whoever earns it.
+
+## Reserved
+
+Words kept for what the hum has not grown yet.
+
+- **receiver**: the bee that makes honey, turning what blooms yield into
+  lasting value. Inference only makes nectar.
+- **species**: mason, carpenter, bumble and the rest, kept for a future
+  of their own.
 

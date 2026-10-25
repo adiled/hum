@@ -14,8 +14,8 @@ thrum. Every language gets that same client, so a Go bee behaves exactly
 as a Rust, TS, Python or C one.
 
 ```go
-bee := thrum.NewBee(thrum.Options{Hive: "my-hive", As: "main",
-	Hello: map[string]any{"roles": []string{"worker"}, "models": []string{"my-model"}}})
+bee := thrum.NewBee(thrum.Options{Hive: "my-hive", As: "main", Role: thrum.RoleNurse,
+	Hello: map[string]any{"models": []string{"my-model"}}})
 bee.On(thrum.ChiPrompt, func(tone thrum.Tone) {
 	_ = bee.Send(thrum.Tone{"chi": thrum.ChiUnfurl, "sid": tone["sid"], "petal": 0, "kind": thrum.PetalKindText, "text": "hello"})
 	_ = bee.Send(thrum.Tone{"chi": thrum.ChiWilt, "sid": tone["sid"], "reason": "stop"})
@@ -28,7 +28,7 @@ log.Fatal(bee.Wait())
 
 | | |
 |---|---|
-| `NewBee(Options{Hive, As, Hello})` | a bee's client; nothing runs until `Start` |
+| `NewBee(Options{Hive, As, Role, Hello})` | a bee's client; nothing runs until `Start` |
 | `On(chi, fn)`, `OnSid(sid, fn)`, `OffSid(sid)`, `OnAny(fn)` | a tone goes to its sid's handler, else its chi's, else `OnAny` |
 | `OnNestled(fn)`, `OnAstray(fn)`, `OnAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `Start(ctx)` | returns once humd admits the bee, or `*Refused`, or `*LinkError` |

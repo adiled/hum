@@ -12,7 +12,8 @@ import "encoding/json"
 type HelloBody struct {
 	ProtoVersion string `json:"protoVersion"`
 	Hive string `json:"hive"`
-	Roles []string `json:"roles,omitempty"`
+	Role string `json:"role"`
+	Builds *bool `json:"builds,omitempty"`
 	Version *string `json:"version,omitempty"`
 	Hid string `json:"hid"`
 	Pubkey string `json:"pubkey"`
@@ -20,7 +21,6 @@ type HelloBody struct {
 	Signature string `json:"signature"`
 	Models []string `json:"models,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
-	Provides []string `json:"provides,omitempty"`
 	Chis []string `json:"chis,omitempty"`
 	Propensity json.RawMessage `json:"propensity,omitempty"`
 	Headroom *Headroom `json:"headroom,omitempty"`
@@ -40,9 +40,6 @@ type PromptBody struct {
 	Text *string `json:"text,omitempty"`
 	Content []Petal `json:"content,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
-	ForagerTools []json.RawMessage `json:"foragerTools,omitempty"`
-	Provided []string `json:"provided,omitempty"`
-	DisallowedTools []string `json:"disallowedTools,omitempty"`
 	AllowedTools []string `json:"allowedTools,omitempty"`
 	Resume *string `json:"resume,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
@@ -130,6 +127,7 @@ type TendrilReachBody struct {
 	CallId string `json:"callId"`
 	Name string `json:"name"`
 	Args json.RawMessage `json:"args,omitempty"`
+	Cwd *string `json:"cwd,omitempty"`
 }
 
 type TendrilResultBody struct {

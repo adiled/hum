@@ -14,7 +14,7 @@ type Chi string
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 const (
-    // announce self: hive, roles, signed identity
+    // announce self: hive, role, signed identity
     ChiHello Chi = "hello"
     // open a bloom: its petals, and how the cell should grow it
     ChiPrompt Chi = "prompt"
@@ -163,4 +163,18 @@ const (
     PetalKindBrix PetalKind = "brix"
     // several candidate petals for one prompt: `bouquet`
     PetalKindBouquet PetalKind = "bouquet"
+)
+
+// Role is the one job a bee does, set when its hive enters it.
+type Role string
+
+const (
+    // opens blooms, bringing the outside world into the thrum
+    RoleForager Role = "forager"
+    // grows blooms in its cells; all inference is nursing
+    RoleNurse Role = "nurse"
+    // changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
+    RoleBuilder Role = "builder"
+    // serves the fixed, named tools in its hello's `tools`, and nothing else
+    RoleAttendant Role = "attendant"
 )

@@ -1,12 +1,12 @@
-//! A worker of a kind the laptop was never taught is still a bee on the
+//! A nurse of a kind the laptop was never taught is still a bee on the
 //! server, but the laptop hands it nothing until it installs that hive.
 
 use std::time::Duration;
 
-async fn prompt_reaches_the_remote_worker(
+async fn prompt_reaches_the_remote_nurse(
     sim: &sim::Sim,
     laptop: ensemble::Hid,
-    worker_rx: &mut tokio::sync::mpsc::Receiver<serde_json::Value>,
+    nurse_rx: &mut tokio::sync::mpsc::Receiver<serde_json::Value>,
     sid: &str,
 ) -> bool {
     sim.nestler_send(
@@ -24,7 +24,7 @@ async fn prompt_reaches_the_remote_worker(
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         if let Ok(Some(tone)) =
-            tokio::time::timeout(Duration::from_millis(50), worker_rx.recv()).await
+            tokio::time::timeout(Duration::from_millis(50), nurse_rx.recv()).await
             && tone.get("chi").and_then(|v| v.as_str()) == Some("prompt")
         {
             return true;
@@ -52,15 +52,15 @@ async fn a_remote_bee_is_routed_to_only_once_its_hive_is_installed_here() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     server.hives.install("far-kind");
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut nurse_rx = server.thrum.register_synthetic(nurse_cid.clone());
     server
         .thrum
         .inject_tone(
-            &worker_cid,
+            &nurse_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "roles": ["worker"],
+                "role": "nurse",
                 "hive": "far-kind",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -71,18 +71,18 @@ async fn a_remote_bee_is_routed_to_only_once_its_hive_is_installed_here() {
         .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        server.thrum.is_connected(&worker_cid),
+        server.thrum.is_connected(&nurse_cid),
         "the server installed the hive, so the bee belongs there"
     );
 
     assert!(
-        !prompt_reaches_the_remote_worker(&sim, laptop.id, &mut worker_rx, "hum-far-1").await,
+        !prompt_reaches_the_remote_nurse(&sim, laptop.id, &mut nurse_rx, "hum-far-1").await,
         "the laptop routed to a bee whose hive it never installed"
     );
 
     laptop.hives.install("far-kind");
     assert!(
-        prompt_reaches_the_remote_worker(&sim, laptop.id, &mut worker_rx, "hum-far-2").await,
+        prompt_reaches_the_remote_nurse(&sim, laptop.id, &mut nurse_rx, "hum-far-2").await,
         "once the laptop knows the kind, the remote bee is understood"
     );
 }

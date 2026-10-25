@@ -1,31 +1,39 @@
-//! `serve_worker` — wraps a Worker impl into a standalone process
-//! that handshakes with humd via thrum and routes prompts over the wire.
+//! `serve_nurse` — wraps a Nurse impl into a standalone process that
+//! handshakes with humd via thrum and grows the blooms it is sent.
 //!
-//! The worker process owns its own lifecycle; humd is just a router. The
+//! The nurse process owns its own lifecycle; humd is just a router. The
 //! wire contract:
 //!
-//! - **Hello**: announce the hive it belongs to and the models it serves.
-//!   humd routes to it only once that hive is installed there.
+//! - **Hello**: announce the hive it belongs to, its role, and the models
+//!   it serves. humd routes to it only once that hive is installed there.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
-//!   matches one of the worker's advertised models. The worker calls
-//!   `Worker::raise(egg)`, then feeds the prompt text on `cell.feed`.
+//!   matches one of the nurse's advertised models. The nurse calls
+//!   `Nurse::raise(egg)`, then feeds the prompt text on `cell.feed`. The
+//!   prompt's `tools` are what its cell may reach, offered over the
+//!   sigil's [`mcp`](crate::mcp) path.
 //! - **The bloom out**: each content block from `cell.mmm` unfurls as one
 //!   petal, by its index: text as `text`, thinking as `sepal` sealed by
 //!   its `propolis`. The cell's init is a `cell-ready` pulse, and the
 //!   result wilts the bloom with its nectar.
 //! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
-//! - **Tendril result**: `chi:"tendril-result"` feeds into the cell via the
-//!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
+//! - **Tendril result**: `chi:"tendril-result"` answers the cell's MCP
+//!   call by its `callId`, or, for a call outside the sigil's tools, feeds
+//!   into the cell via the tool-result encoder (`hum_nest::encode_tool_result`).
+//! - **Cleanup**: `chi:"cleanup"` forgets the sigil's tools.
 //!
-//! The connection is hum-thrum's: the worker links its `main` bee and
-//! reads events. A humd that goes away takes the worker's cells with it,
+//! A cell runs in its nest's directory, `hives/<hive>/nest` in the state
+//! root, never where its bloom builds: that host is a builder's, reached
+//! through `bash`.
+//!
+//! The connection is hum-thrum's: the nurse links its `main` bee and
+//! reads events. A humd that goes away takes the nurse's cells with it,
 //! since their sigils went with that humd; the client dials again,
-//! quietly while humd is still booting, and the worker carries on. A
-//! refused bee ends `serve_worker` with the refusal, so the process exits
+//! quietly while humd is still booting, and the nurse carries on. A
+//! refused bee ends `serve_nurse` with the refusal, so the process exits
 //! non-zero and its supervisor decides.
 //!
 //! A prompt's model comes from its `modelId`, else the first model the
-//! worker advertises (`CLAUDE_MODELS` leads with the install default),
+//! nurse advertises (`CLAUDE_MODELS` leads with the install default),
 //! else opus 4.7. Without a fallback a forager that omits `modelId`
 //! would spawn `claude --model ""`.
 //!
@@ -39,22 +47,16 @@
 //! pre-flight failure — a bad or absent session on `--resume`, an id
 //! clash on `--session-id` — rather than a mid-bloom error, which arrives
 //! only after content. On the first bloom `--resume` fails fast that
-//! way, so the worker retries with `fresh: true`.
+//! way, so the nurse retries with `fresh: true`.
 //!
 //! claude reports failure inside that result event, not on stderr:
 //! `is_error:true` (or an `error_*` subtype) with the human-readable
 //! reason in `result`. Surfacing it is the difference between a visible
 //! auth, model, or credit error and a silent zero-token wilt that
-//! looks like the worker is dead.
+//! looks like the nurse is dead.
 //!
-//! The tool catalogue is MCP: the standard field is `inputSchema`, and
-//! the legacy `parameters` spelling is tolerated on the wire. An entry
-//! with no name or no usable schema is dropped, because claude's mcp
-//! client rejects the entire tools/list if any entry has
-//! `inputSchema: null` — one bad apple kills all tools for the cell.
-//!
-//! A tendril-result whose callId is not pending in the worker MCP bridge
-//! came from a call the model made outside our catalogue, so it is
+//! A tendril-result whose callId is not pending in the MCP bridge came
+//! from a call the model made outside the sigil's tools, so it is
 //! forwarded to claude over stdin rather than dropped.
 
 use std::collections::BTreeMap;
@@ -69,59 +71,58 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
-use hum_mcp::protocol::ToolDef;
-use crate::{encode_cancel, encode_petals, encode_tool_result, Cell, Egg, NestConfig, Worker};
-use thrum_core::{Petal, PetalKind};
+use crate::mcp::{self, Bridge, ToolDef};
+use crate::{encode_cancel, encode_petals, encode_tool_result, Cell, Egg, NestConfig, Nurse};
+use thrum_core::{Petal, PetalKind, Role};
 use tokio::sync::mpsc;
 
 use hum_thrum::{Bee, Event, Options, Refused};
-use hum_mcp::{spawn_local_mcp, McpBridge};
-
 
 #[derive(Debug, Clone)]
-pub struct WorkerAdvert {
+pub struct NurseAdvert {
     pub hive: String,
+    pub label: String,
     pub version: String,
     pub models: Vec<String>,
     pub source: Option<String>,
 }
 
-pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdvert) -> Result<()> {
+pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert) -> Result<()> {
     let nest = Arc::new(NestConfig::for_hive(&advert.hive));
-    let propensity_str = match worker.propensity() {
+    let home = hum_paths::hive_state_dir(&advert.hive).join("nest");
+    std::fs::create_dir_all(&home).with_context(|| format!("make the nest at {}", home.display()))?;
+    let home = home.to_string_lossy().to_string();
+    let propensity_str = match nurse.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
         crate::Propensity::StatelessPerCall => "stateless_per_call",
         crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
-        "roles": ["worker"],
         "version": &advert.version,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "curate", "tendril-result", "unfurl", "wilt", "error", "tendril-reach", "pulse"],
+        "chis": ["hello", "prompt", "cancel", "cleanup", "curate", "tendril-result", "unfurl", "wilt", "error", "tendril-reach", "tendril-info", "pulse"],
         "headroom": nest.headroom(0),
         "source": advert.source.clone().unwrap_or_default(),
     });
-    info!(hive = %advert.hive, models = ?advert.models, "worker.linking");
-    let mut bee = Bee::link(Options::new(&advert.hive, "main").hello(hello))
+    info!(hive = %advert.hive, models = ?advert.models, "nurse.linking");
+    let mut bee = Bee::link(Options::new(&advert.hive, &advert.label, Role::Nurse).hello(hello))
         .await
-        .with_context(|| format!("link the main bee of {}", advert.hive))?;
-    info!(hive = %advert.hive, bee = %bee.id(), models = ?advert.models, "worker.nestled");
+        .with_context(|| format!("link the {} bee of {}", advert.label, advert.hive))?;
+    info!(hive = %advert.hive, bee = %bee.id(), models = ?advert.models, "nurse.nestled");
     let write_half = bee.sender();
 
+    let pool = NonZeroUsize::new(nest.max_cells()).unwrap_or(NonZeroUsize::MIN);
+    let sigils = pool.saturating_mul(NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN));
     let write_for_bridge = write_half.clone();
-    let bridge = McpBridge::new(Arc::new(move |tone: Value| {
+    let bridge = Bridge::new(sigils, Arc::new(move |tone: Value| {
         write_for_bridge.send(tone);
     }));
-    let mcp_addr = spawn_local_mcp(bridge.clone()).await
-        .context("spawn local mcp bridge")?;
+    let mcp_addr = mcp::serve(bridge.clone()).await.context("serve the nest's mcp")?;
     let mcp_url = format!("http://{}", mcp_addr);
-    info!(%mcp_url, "worker.mcp.bridge.up");
+    info!(%mcp_url, "nurse.mcp.up");
 
-    let pool = NonZeroUsize::new(nest.max_cells()).unwrap_or(NonZeroUsize::MIN);
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> = Arc::new(Mutex::new(LruCache::new(pool)));
-
-    let sid_cwd: Arc<Mutex<LruCache<String, String>>> = Arc::new(Mutex::new(LruCache::new(pool)));
 
     while let Some(event) = bee.next().await {
         let tone = match event {
@@ -138,39 +139,25 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
 
         match chi {
             "prompt" => {
-                let provided: Vec<String> = tone.get("provided")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .unwrap_or_default();
-                let forager_tools: Vec<ToolDef> = tone.get("foragerTools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
-                    .unwrap_or_default();
-                let nestler_tools: Vec<ToolDef> = tone.get("tools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
-                    .unwrap_or_default();
-                if !forager_tools.is_empty() || !nestler_tools.is_empty() {
-                    bridge.set_catalogue(forager_tools, nestler_tools, &provided);
+                if !sid.is_empty() {
+                    bridge.offer(&sid, ToolDef::all_in(tone.get("tools")));
                 }
-                let cwd = if !sid.is_empty() {
-                    tone.get("cwd").and_then(Value::as_str).map(str::to_string)
-                } else { None };
-                let worker = worker.clone();
+                let nurse = nurse.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
                 let mcp_url = mcp_url.clone();
-                let sid_cwd = sid_cwd.clone();
                 let nest = nest.clone();
-                let sid2 = sid.clone();
+                let home = home.clone();
                 tokio::spawn(async move {
-                    if let Some(cwd) = cwd {
-                        sid_cwd.lock().await.put(sid2, cwd);
-                    }
-                    if let Err(e) = handle_prompt(worker, write_half, cells, nest, mcp_url, tone).await {
-                        warn!(err = %e, "worker.prompt.handle.failed");
+                    if let Err(e) = handle_prompt(nurse, write_half, cells, nest, mcp_url, home, tone).await {
+                        warn!(err = %e, "nurse.prompt.handle.failed");
                     }
                 });
+            }
+            "cleanup" => {
+                if !sid.is_empty() {
+                    bridge.forget(&sid);
+                }
             }
             "cancel" => {
                 if !sid.is_empty() {
@@ -189,25 +176,15 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
             }
             "curate" => {
                 if !sid.is_empty() {
-                    let sid_cwd = sid_cwd.clone();
-                    let worker = worker.clone();
+                    let nurse = nurse.clone();
+                    let home = home.clone();
                     let sid = sid.clone();
                     tokio::spawn(async move {
-                        let cwd = sid_cwd.lock().await.get(&sid).cloned();
-                        match cwd {
-                            Some(cwd) => {
-                                let hum_sid = hum_identity::HumId::parse(&sid)
-                                    .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
-                                match worker.curate(&hum_sid, &cwd).await {
-                                    Ok(report) => trace!(
-                                        sid = %sid,
-                                        trimmed = report.trimmed(),
-                                        "worker.curate.done"
-                                    ),
-                                    Err(e) => warn!(sid = %sid, err = %e, "worker.curate.failed"),
-                                }
-                            }
-                            None => trace!(sid = %sid, "worker.curate.unknown-sid"),
+                        let hum_sid = hum_identity::HumId::parse(&sid)
+                            .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
+                        match nurse.curate(&hum_sid, &home).await {
+                            Ok(report) => trace!(sid = %sid, trimmed = report.trimmed(), "nurse.curate.done"),
+                            Err(e) => warn!(sid = %sid, err = %e, "nurse.curate.failed"),
                         }
                     });
                 }
@@ -223,12 +200,10 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
                     tokio::spawn(async move {
                         let mut r = cells.lock().await;
                         if let Some(bundle) = r.get(&sid)
-                            && let (Some(call_id), Some(result)) = (
-                                tone.get("callId").and_then(Value::as_str),
-                                tone.get("result").and_then(Value::as_str),
-                            )
+                            && let Some(call_id) = tone.get("callId").and_then(Value::as_str)
                         {
-                            let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
+                            let grasped = crate::ToolResult::of(&tone);
+                            let _ = bundle.stdin.send(encode_tool_result(call_id, &grasped.output)).await;
                         }
                     });
                 }
@@ -236,7 +211,7 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
             "breath" | "echo" | "" => {
                         }
             other => {
-                trace!(chi = other, "worker.unknown.chi");
+                trace!(chi = other, "nurse.unknown.chi");
             }
         }
     }
@@ -253,19 +228,6 @@ struct CellBundle {
 
 impl Drop for CellBundle {
     fn drop(&mut self) { self.cancel.cancel(); }
-}
-
-fn parse_tool_def(v: &Value) -> Option<ToolDef> {
-    let name = v.get("name").and_then(Value::as_str)?.to_string();
-    let description = v.get("description").and_then(Value::as_str).unwrap_or("").to_string();
-    let schema = v.get("inputSchema")
-        .or_else(|| v.get("parameters"))
-        .cloned();
-    let schema = match schema {
-        Some(s) if s.is_object() => s,
-        _ => serde_json::json!({ "type": "object", "properties": {} }),
-    };
-    Some(ToolDef { name, description, input_schema: schema })
 }
 
 async fn pulse(
@@ -289,12 +251,12 @@ fn is_preflight_error(v: &Value) -> bool {
         && m.get("is_error").and_then(Value::as_bool).unwrap_or(false)
 }
 
-async fn attempt_spawn<W: Worker + 'static>(
-    worker: &Arc<W>,
+async fn attempt_spawn<N: Nurse + 'static>(
+    nurse: &Arc<N>,
     spec: Egg,
     message: &str,
 ) -> Option<(Cell, Value)> {
-    let cell = worker.raise(spec).await.ok()?;
+    let cell = nurse.raise(spec).await.ok()?;
     if cell.feed.send(message.to_string()).await.is_err() {
         cell.silence.cancel();
         return None;
@@ -313,12 +275,13 @@ async fn attempt_spawn<W: Worker + 'static>(
     }
 }
 
-async fn handle_prompt<W: Worker + 'static>(
-    worker: Arc<W>,
+async fn handle_prompt<N: Nurse + 'static>(
+    nurse: Arc<N>,
     write_half: hum_thrum::Sender,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
     nest: Arc<NestConfig>,
     mcp_url: String,
+    home: String,
     tone: Value,
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
@@ -330,7 +293,6 @@ async fn handle_prompt<W: Worker + 'static>(
             .and_then(|m| m.split(',').next().map(|s| s.trim().to_string()))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "claude-opus-4-7".into()));
-    let cwd = tone.get("cwd").and_then(Value::as_str).unwrap_or("/").to_string();
     let petals: Vec<Petal> = tone.get("content").cloned()
         .and_then(|c| serde_json::from_value(c).ok())
         .filter(|p: &Vec<Petal>| !p.is_empty())
@@ -353,7 +315,7 @@ async fn handle_prompt<W: Worker + 'static>(
             drop(g);
             send.send(message).await
                 .map_err(|e| anyhow::anyhow!("stdin closed on reused cell: {e}"))?;
-            trace!(sid = %sid, "worker.cell.reused");
+            trace!(sid = %sid, "nurse.cell.reused");
             return Ok(());
         }
     }
@@ -363,7 +325,7 @@ async fn handle_prompt<W: Worker + 'static>(
         let evicted = if g.len() >= nest.max_cells()
             && let Some((esid, _evicted)) = g.pop_lru()
         {
-            warn!(evicted_sid = %esid, "worker.cell.evict.lru");
+            warn!(evicted_sid = %esid, "nurse.cell.evict.lru");
             metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
             Some(g.len())
         } else {
@@ -377,27 +339,24 @@ async fn handle_prompt<W: Worker + 'static>(
     }
 
     let hum_sid = hum_identity::HumId::parse(&sid).unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
-    let mut base = Egg::new(hum_sid, model.clone(), cwd);
+    let mut base = Egg::new(hum_sid, model.clone(), home);
     base.system_prompt = system_prompt;
     base.mcp_url = Some(mcp_url);
     base.bounds = nest.bounds.clone();
     if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
         base.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
-    if let Some(arr) = tone.get("disallowedTools").and_then(Value::as_array) {
-        base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
-    }
 
     let (cell, first_event) = {
         let mut s1 = base.clone();
         s1.resume_id = explicit_resume.clone();
-        match attempt_spawn(&worker, s1, &message).await {
+        match attempt_spawn(&nurse, s1, &message).await {
             Some(pair) => pair,
             None => {
-                trace!(sid = %sid, "worker.resume.miss.creating");
+                trace!(sid = %sid, "nurse.resume.miss.creating");
                 let mut s2 = base.clone();
                 s2.fresh = true;
-                attempt_spawn(&worker, s2, &message).await
+                attempt_spawn(&nurse, s2, &message).await
                     .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
             }
         }
@@ -427,7 +386,7 @@ async fn handle_prompt<W: Worker + 'static>(
         while let Some(value) = guard.recv().await {
             listener_clone.forward_raw(value).await;
         }
-        trace!(sid = %sid_for_loop, "worker.dispatch.exit");
+        trace!(sid = %sid_for_loop, "nurse.dispatch.exit");
     });
 
     let cells_for_idle = cells.clone();
@@ -446,7 +405,7 @@ async fn handle_prompt<W: Worker + 'static>(
                     g.pop(&sid_for_idle).map(|_| g.len())
                 };
                 if let Some(live) = live {
-                    warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
+                    warn!(sid = %sid_for_idle, age_ms = age, "nurse.cell.idle.kill");
                     pulse(&write_for_idle, "cell-evicted", nest_for_idle.headroom(live)).await;
                 }
                 return;
@@ -467,7 +426,7 @@ async fn handle_prompt<W: Worker + 'static>(
     };
     pulse(&write_half, "cell-spawned", nest.headroom(live)).await;
 
-    trace!(sid = %sid, "worker.cell.spawned");
+    trace!(sid = %sid, "nurse.cell.spawned");
 
     let cells_for_cleanup = cells.clone();
     let write_for_cleanup = write_half.clone();
@@ -493,7 +452,7 @@ async fn handle_prompt<W: Worker + 'static>(
         if let Some(live) = live {
             pulse(&write_for_cleanup, "cell-died", nest_for_cleanup.headroom(live)).await;
         }
-        trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
+        trace!(sid = %sid_for_cleanup, exit_code, "nurse.cell.exit");
     });
 
     Ok(())
@@ -592,11 +551,11 @@ impl WireListener {
                         .or_else(|| msg.get("error").and_then(Value::as_str))
                         .filter(|s| !s.is_empty())
                         .unwrap_or("claude returned an error result with no detail (check auth / model / credit)");
-                    warn!(sid = %self.sid, subtype, detail, "worker.result.error");
+                    warn!(sid = %self.sid, subtype, detail, "nurse.result.error");
                     self.send(json!({
                         "chi": "error",
                         "sid": self.sid,
-                        "code": "worker_error",
+                        "code": "nurse_error",
                         "subtype": subtype,
                         "message": detail,
                         "nectar": nectar,

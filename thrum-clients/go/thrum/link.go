@@ -8,19 +8,20 @@
 //
 // A Bee runs `hum bee link` and speaks to it over two pipes, one JSON
 // object per line. The link is hum's own client, in Rust: it enters the
-// bee, signs the hello, reads humd's verdict, reconnects when humd
-// restarts, and checks every tone against the thrum. So this file knows
-// no protocol, and a Go bee behaves exactly as a bee in any language.
+// bee for its role, signs the hello, reads humd's verdict, reconnects
+// when humd restarts, and checks every tone against the thrum. So this
+// file knows no protocol, and a Go bee behaves exactly as a bee in any
+// language.
 //
-//	bee := thrum.NewBee(thrum.Options{Hive: "twilio-sms", As: "main", Hello: hello})
+//	bee := thrum.NewBee(thrum.Options{Hive: "twilio-sms", As: "main", Role: thrum.RoleForager, Hello: hello})
 //	bee.On(thrum.ChiPrompt, onPrompt)
-//	bee.OnAstray(stopTurns)
+//	bee.OnAstray(stopBlooms)
 //	if err := bee.Start(ctx); err != nil { ... } // admitted, or *Refused, or *LinkError
 //	err := bee.Wait()                              // how the link ended
 //
 // A tone goes to the handler for its sid if there is one, else to the
 // handler for its chi, else to OnAny: a forager follows each sigil it
-// opened by sid, a worker takes prompts by chi. Handlers run one at a
+// opened by sid, a nurse takes prompts by chi. Handlers run one at a
 // time, in the order tones arrive, on the goroutine reading the link:
 // start long work in a goroutine of its own, so the tone after it (a
 // cancel) is not held up. Send is safe from any goroutine. A tone sent
@@ -40,7 +41,7 @@ import (
 	"sync"
 )
 
-const LinkVersion = 1
+const LinkVersion = 2
 
 const (
 	LinkExitClosed = 0
@@ -49,7 +50,7 @@ const (
 	LinkExitRefused = 3
 )
 
-var ClientOwned = []string{"chi", "rid", "hive", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature"}
+var ClientOwned = []string{"chi", "rid", "hive", "role", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature"}
 
 const (
 	HumCLIEnv     = "HUM_CLI"
@@ -69,6 +70,7 @@ const (
 	AdvisoryProtoDrift AdvisoryCode = "proto-drift"
 	AdvisoryReconnectStorm AdvisoryCode = "reconnect-storm"
 	AdvisoryDidNotReturn AdvisoryCode = "did-not-return"
+	AdvisoryCwdNotHum AdvisoryCode = "cwd-not-hum"
 )
 
 type Tone = map[string]any
@@ -76,8 +78,9 @@ type Tone = map[string]any
 type Options struct {
 	Hive  string
 	As    string
+	Role  Role
 	Hello map[string]any
-	Hum string
+	Hum   string
 }
 
 type Advisory struct {
@@ -207,7 +210,7 @@ func (b *Bee) Start(ctx context.Context) error {
 	if hum == "" {
 		hum = HumCLI()
 	}
-	cmd := exec.Command(hum, "bee", "link", "--hive", b.opts.Hive, "--as", b.opts.As)
+	cmd := exec.Command(hum, "bee", "link", "--hive", b.opts.Hive, "--as", b.opts.As, "--role", string(b.opts.Role))
 	cmd.Stderr = os.Stderr
 	b.cmd = cmd
 	b.mu.Unlock()

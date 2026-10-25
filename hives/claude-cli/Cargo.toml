@@ -3,10 +3,10 @@ name = "claude-cli"
 version = "0.33.1"
 edition = "2024"
 license = "MIT"
-description = "Concrete WorkerBee impl: `claude -p` over a pipe. Builds the CLI command line from a high-level SpawnSpec, parses stream-json stdout."
+description = "A nurse: `claude -p` over a pipe. Builds the CLI command line from an Egg, parses stream-json stdout."
 
 [[bin]]
-name = "claude-cli-worker"
+name = "claude-cli-nurse"
 path = "src/main.rs"
 
 [dependencies]

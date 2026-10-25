@@ -1,9 +1,9 @@
 ---
-title: "find-the-worker"
+title: "find-the-nurse"
 description: "the prompt names a model; the mesh decides which humd runs it"
 ---
 
-# find-the-worker
+# find-the-nurse
 
 > _the prompt names a model; the mesh decides which humd runs it_
 
@@ -14,13 +14,13 @@ See `sim/tests/remote_discovery.rs` for the executable form.
 Trust tier **T3/T4** — federated or open mesh. Two humds, asymmetric
 by kind rather than by capacity:
 
-- **humd-L** — the laptop. Has a nestler attached and **no worker at
+- **humd-L** — the laptop. Has a nestler attached and **no nurse at
   all**. It cannot answer a single model on its own.
-- **humd-S** — the server. Hosts a `claude-cli` worker nest advertising
+- **humd-S** — the server. Hosts a `claude-cli` nurse nest advertising
   `models: ["claude-opus-4-7"]`. No nestler is attached; its role is
   purely to run work humd-L asks for.
 
-humd-S has already advertised its worker on `hum/hives/announce` when
+humd-S has already advertised its nurse on `hum/hives/announce` when
 that bee handshook with its own humd. humd-L subscribed at startup and
 holds the manifest under humd-S's Hid.
 
@@ -29,16 +29,16 @@ holds the manifest under humd-S's Hid.
 1. A nestler on humd-L emits `chi:"prompt"` with a `modelId` and
    **no `to`**. It is not naming a machine. It cannot; it has never
    heard of humd-S.
-2. humd-L finds no local worker advertising that model. It consults the
+2. humd-L finds no local nurse advertising that model. It consults the
    manifests it heard over gossip, keeps only humds still in
-   `ens.peers()`, and picks one advertising a worker for that model.
+   `ens.peers()`, and picks one advertising a nurse for that model.
    Emits a `prompt.forward.remote` trace naming the chosen peer.
 3. humd-L sets `to: <humd-S Hid>` and `from: <humd-L Hid>` and routes
    the tone. It does not run the session and does not claim the sigil.
 4. humd-S sees the prompt with `client_id == "ensemble"`, reads
-   `from` as its `origin`, and runs its **own** local worker selection —
+   `from` as its `origin`, and runs its **own** local nurse selection —
    the same by-model lookup it would run for a local nestler.
-5. The worker emits `chi:"unfurl"` then `chi:"wilt"`. humd-S routes
+5. The nurse emits `chi:"unfurl"` then `chi:"wilt"`. humd-S routes
    each one to `sid_origins[sid]` (humd-L) *and* broadcasts locally.
 6. humd-L receives each tone with `client_id == "ensemble"`, matches on
    `sid`, and broadcasts onto its nestler's stream. The nestler sees
@@ -75,7 +75,7 @@ holds the manifest under humd-S's Hid.
 - Every reply carries `to: <humd-L Hid>` — the return path is explicit,
   not ambient broadcast.
 - Without the discovery feed the same tone yields
-  `no worker bee advertises model 'claude-opus-4-7'` and no `wilt`.
+  `no nurse advertises model 'claude-opus-4-7'` and no `wilt`.
 
 ## What this scenario validates
 

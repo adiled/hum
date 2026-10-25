@@ -2,11 +2,12 @@
 //
 // A Bee runs `hum bee link` and speaks to it over two pipes, one JSON
 // object per line. The link is hum's own client, in Rust: it enters the
-// bee, signs the hello, reads humd's verdict, reconnects when humd
-// restarts, and checks every tone against the thrum. So this file knows
-// no protocol, and a TS bee behaves exactly as a bee in any language.
+// bee for its role, signs the hello, reads humd's verdict, reconnects
+// when humd restarts, and checks every tone against the thrum. So this
+// file knows no protocol, and a TS bee behaves exactly as a bee in any
+// language.
 //
-//   const bee = new Bee({ hive: "openai-server", as: "main", hello: { roles: ["worker"], models } });
+//   const bee = new Bee({ hive: "openai-server", as: "main", role: Role.nurse, hello: { models } });
 //   bee.on(Chi.prompt, (tone) => { bee.send({ chi: Chi.unfurl, sid: tone.sid, petal: 0, kind: PetalKind.text, text }) });
 //   bee.onAstray(() => stopBlooms());
 //   await bee.start();   // admitted, or Refused, or LinkError
@@ -14,7 +15,7 @@
 //
 // A tone goes to the handler for its sid if there is one, else to the
 // handler for its chi, else to onAny: a forager follows each sigil it
-// opened by sid, a worker takes prompts by chi. Handlers run in the
+// opened by sid, a nurse takes prompts by chi. Handlers run in the
 // order tones arrive. An async handler is not awaited, so a long bloom
 // never holds up the tone after it (a cancel).
 // A tone sent while humd is away is dropped by the link, which says so.
@@ -27,6 +28,7 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
+import type { RoleT } from "./chi.ts";
 import type { HelloBody, Tone, ToneViews } from "./protocol.ts";
 
 // @constants
@@ -47,6 +49,7 @@ export interface Advisory {
 export interface BeeOptions {
   hive: string;
   as: string;
+  role: RoleT;
   hello?: Hello;
   hum?: string;
 }
@@ -90,6 +93,7 @@ type Handler<T> = (arg: T) => unknown;
 export class Bee {
   readonly hive: string;
   readonly as: string;
+  readonly role: RoleT;
   id = "";
 
   #opts: BeeOptions;
@@ -110,6 +114,7 @@ export class Bee {
   constructor(opts: BeeOptions) {
     this.hive = opts.hive;
     this.as = opts.as;
+    this.role = opts.role;
     this.#opts = opts;
     this.#done = new Promise<void>((resolve, reject) => {
       this.#finish = (e) => (e ? reject(e) : resolve());
@@ -155,7 +160,7 @@ export class Bee {
   start(): Promise<void> {
     if (this.#child) return Promise.reject(new LinkError("this bee has already started"));
     const hum = this.#opts.hum ?? humCli();
-    const child = spawn(hum, ["bee", "link", "--hive", this.hive, "--as", this.as], {
+    const child = spawn(hum, ["bee", "link", "--hive", this.hive, "--as", this.as, "--role", this.role], {
       stdio: ["pipe", "pipe", "inherit"],
     });
     this.#child = child;

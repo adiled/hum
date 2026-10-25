@@ -3,16 +3,17 @@ name = "hum-nest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "hum's hive-side kernel — worker contract (WorkerBee/Egg/Cell), process supervision (lifecycle/metrics/limits), and the serve_worker wire loop. One crate, no nest-common indirection."
+description = "hum's hive-side kernel for a nurse: the nurse contract (Nurse/Egg/Cell), process supervision (lifecycle/metrics/limits), the MCP its cells reach tools through, and the serve_nurse wire loop."
 
 [dependencies]
 hum-paths = { path = "../hum-paths" }
 hum-identity = { path = "../hum-identity" }
 hum-thrum = { path = "../hum-thrum" }
-hum-mcp = { path = "../hum-mcp" }
 thrum-core = { path = "../thrum-core" }
 
 anyhow = { workspace = true }
+axum = "0.7"
+parking_lot = { workspace = true }
 async-trait = { workspace = true }
 command-group = { version = "5", features = ["with-tokio"] }
 lru = "0.12"

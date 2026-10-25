@@ -68,7 +68,7 @@ and others, tails `~/.local/share/hum/log/*.log`. Subset selection via
 ### `doctor`
 One-shot full dump for bug reports: versions, config, env, the
 `claude` binary status, every bee and service state, recent daemon
-logs and worker logs with warnings highlighted. Run it first; paste
+logs and nurse logs with warnings highlighted. Run it first; paste
 the output into a github issue.
 
 ### `ensemble`

@@ -1,12 +1,17 @@
-//! hum's hive-side kernel. The worker contract ([`Worker`], [`Egg`],
-//! [`Cell`], [`Propensity`], tone encoders), the process
+//! hum's hive-side kernel for a nurse. The nurse contract ([`Nurse`],
+//! [`Egg`], [`Cell`], [`Propensity`], tone encoders), the process
 //! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
-//! sampling / [`limits`] rlimits), and the wire-semantics loop that
-//! wraps [`hum-thrum`] for a worker: [`serve`] (`serve_worker`).
+//! sampling / [`limits`] rlimits), the [`mcp`] its cells reach their
+//! tools through, and the wire-semantics loop that wraps [`hum-thrum`]
+//! for a nurse: [`serve`] (`serve_nurse`).
 //!
 //! One crate, no `nest`-common indirection: a hive that needs the nest
 //! lives here; a remote hive that only needs the wire takes the leaf
-//! crates ([`hum-thrum`], [`hum-identity`], [`hum-mcp`]) directly.
+//! crates ([`hum-thrum`], [`hum-identity`]) directly.
+//!
+//! A cell never works a host of its own. It runs in its nest's directory,
+//! and whatever it does to the world it does through a tendril, `bash` to
+//! a builder above all, so the kernel sees every reach.
 //!
 //! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
 //! also lives here (patterns for chat-LLM context-loss detection).
@@ -18,7 +23,7 @@
 //! - `StatefulSession` — the bee process retains conversation state in
 //!   its own memory across multiple prompts that share a sid. Foragers
 //!   should derive a stable sid per external conversation and send only
-//!   the *new* prompt each bloom; the worker keeps prior history.
+//!   the *new* prompt each bloom; the nurse keeps prior history.
 //! - `StatelessPerCall` — the bee treats every call as a fresh
 //!   self-contained request. Foragers should send the full transcript
 //!   every time; pooling buys nothing.
@@ -54,14 +59,15 @@ use tokio_util::sync::CancellationToken;
 
 pub mod lifecycle;
 pub mod limits;
+pub mod mcp;
 pub mod metrics;
 pub mod nest;
 pub mod serve;
 pub mod suspicion_regex;
 
-pub use hum_mcp::protocol::{ToolDef, ToolResult};
+pub use mcp::{ToolDef, ToolResult};
 pub use nest::NestConfig;
-pub use serve::{serve_worker, WorkerAdvert};
+pub use serve::{serve_nurse, NurseAdvert};
 pub use suspicion_regex::RegexClassifier;
 
 #[derive(Debug, Clone)]
@@ -164,7 +170,7 @@ impl Classifier for NoopClassifier {
 }
 
 #[async_trait]
-pub trait Worker: Send + Sync {
+pub trait Nurse: Send + Sync {
     fn ephemeral(&self) -> bool;
     fn propensity(&self) -> Propensity {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }

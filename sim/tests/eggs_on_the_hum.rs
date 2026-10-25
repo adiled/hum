@@ -1,8 +1,14 @@
 //! eggs-on-the-hum — the role-distributed bloom.
 //!
 //! The prose spec is [`scenarios/eggs-on-the-hum.md`](../../../scenarios/eggs-on-the-hum.md).
+//! A forager on the laptop opens a bloom that builds on the workstation;
+//! the nurse that grows it is on the server; the phone watches. The
+//! nurse's `bash` crosses to the workstation's builder and comes back.
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn eggs_on_the_hum() {
@@ -22,65 +28,60 @@ async fn eggs_on_the_hum() {
     sim.wire_unauthenticated(server.id, phone.id).expect("S↔P");
     sim.wire_unauthenticated(workstation.id, phone.id).expect("W↔P");
 
-    sim.attach_mock_tools(
-        workstation.id,
-        "humfs",
-        vec!["humfs_read".into(), "humfs_do_code".into()],
-        |name, _args| match name {
-            "humfs_read" => "[mock humfs on workstation] auth.ts contents".to_string(),
-            "humfs_do_code" => "Edited (1 occurrence replaced)".to_string(),
-            other => format!("(unhandled tool {other})"),
-        },
-    )
+    let ran: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let ran_on_workstation = ran.clone();
+    sim.attach_mock_builder(workstation.id, move |cwd, command| {
+        ran_on_workstation.lock().push((cwd.to_string(), command.to_string()));
+        ("export function auth() {}".to_string(), 0)
+    })
     .await
-    .expect("mock humfs attaches to workstation");
+    .expect("a builder lends the workstation");
 
     let server_thrum = server.thrum.clone();
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
-    let worker_hello = serde_json::json!({
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut nurse_rx = server.thrum.register_synthetic(nurse_cid.clone());
+    let nurse_hello = serde_json::json!({
         "chi": "hello",
-        "roles": ["worker"],
+        "role": "nurse",
         "hive": "claude-cli",
         "version": "0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
         "models": ["claude-opus-4-7"],
         "chis": ["hello", "prompt", "unfurl", "tendril-reach", "wilt"],
     });
-    server.thrum.inject_tone(&worker_cid, server.signed_hello(worker_hello)).await;
+    server.thrum.inject_tone(&nurse_cid, server.signed_hello(nurse_hello)).await;
 
-    let worker_cid_for_pump = worker_cid.clone();
+    let grasped: Arc<Mutex<Option<serde_json::Value>>> = Arc::default();
+    let grasped_by_nurse = grasped.clone();
+    let nurse_cid_for_pump = nurse_cid.clone();
     let server_thrum_for_pump = server_thrum.clone();
     tokio::spawn(async move {
-        while let Some(tone) = worker_rx.recv().await {
+        while let Some(tone) = nurse_rx.recv().await {
             let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("");
-            match chi {
-                "prompt" => {
-                    let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    for tone in [
-                        serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text"}),
-                        serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":"reading file…"}),
-                        serde_json::json!({
-                            "chi":"tendril-reach","sid":&sid,
-                            "callId":"call-eggs-1",
-                            "name":"humfs_read",
-                            "args":{"file_path":"/work/auth.ts"},
-                        }),
-                    ] {
-                        server_thrum_for_pump.inject_tone(&worker_cid_for_pump, tone).await;
-                    }
-                }
+            let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let replies = match chi {
+                "prompt" => vec![
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text"}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":"reading file…"}),
+                    serde_json::json!({
+                        "chi":"tendril-reach","sid":&sid,
+                        "callId":"call-eggs-1",
+                        "name":"bash",
+                        "args":{"command":"cat auth.ts"},
+                    }),
+                ],
                 "tendril-result" => {
-                    let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    for tone in [
+                    *grasped_by_nurse.lock() = Some(tone.clone());
+                    vec![
                         serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":"…done."}),
                         serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","closed":true}),
                         serde_json::json!({"chi":"wilt","sid":&sid,"reason":"end_turn","nectar":{}}),
-                    ] {
-                        server_thrum_for_pump.inject_tone(&worker_cid_for_pump, tone).await;
-                    }
+                    ]
                 }
-                _ => {}
+                _ => vec![],
+            };
+            for tone in replies {
+                server_thrum_for_pump.inject_tone(&nurse_cid_for_pump, tone).await;
             }
         }
     });
@@ -111,8 +112,7 @@ async fn eggs_on_the_hum() {
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let Some(tone) = sim.nestler_recv(phone.id, "hum-eggs", remaining).await else { break };
-        let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if chi == "wilt" {
+        if tone.get("chi").and_then(|v| v.as_str()) == Some("wilt") {
             saw_wilt = true;
             break;
         }
@@ -121,7 +121,15 @@ async fn eggs_on_the_hum() {
     assert!(
         saw_wilt,
         "phone (SMS-relay) never observed chi:wilt for hum-eggs across the 4-humd mesh — \
-         the cross-humd tendril-reach → workstation humfs → tendril-result return path \
+         the cross-humd bash reach → workstation builder → tendril-result return path \
          didn't close."
     );
+    assert_eq!(
+        ran.lock().as_slice(),
+        &[("/work".to_string(), "cat auth.ts".to_string())],
+        "the workstation's builder ran the command where the bloom builds"
+    );
+    let grasped = grasped.lock().clone().expect("the nurse heard what bash grasped");
+    assert_eq!(grasped["output"], "export function auth() {}");
+    assert_eq!(grasped["isError"], false);
 }

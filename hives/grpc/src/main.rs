@@ -34,7 +34,6 @@ async fn bridge(
     out: mpsc::Sender<Result<Tone, Status>>,
 ) -> Result<()> {
     let hello = serde_json::json!({
-        "roles": ["forager"],
         "version": NESTLING_VERSION,
         "propensity": {
             "statefulness": "transport-only",
@@ -43,7 +42,7 @@ async fn bridge(
         },
         "source": "https://github.com/adiled/hum/tree/main/hives/grpc"
     });
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Forager).hello(hello))
         .await
         .context("link the grpc bee")?;
     let sender = bee.sender();

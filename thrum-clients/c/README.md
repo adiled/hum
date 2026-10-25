@@ -23,7 +23,7 @@ static void on_prompt(thrum_bee *bee, const cJSON *tone, void *user) {
     /* build an unfurl and a wilt for the tone's sid, then thrum_bee_send each */
 }
 
-thrum_options opts = {.hive = "my-hive", .as = "main", .hello = hello};
+thrum_options opts = {.hive = "my-hive", .as = "main", .role = THRUM_ROLE_NURSE, .hello = hello};
 thrum_bee *bee = thrum_bee_new(&opts);
 thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, NULL);
 if (thrum_bee_start(bee) != 0) fprintf(stderr, "%s\n", thrum_bee_error(bee));

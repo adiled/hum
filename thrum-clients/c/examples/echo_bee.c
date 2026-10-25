@@ -108,8 +108,6 @@ static int report(thrum_bee *bee, int how) {
 int main(void) {
     const char *model = env_or("ECHO_MODEL", "echo-c");
     cJSON *hello = cJSON_CreateObject();
-    cJSON *roles = cJSON_AddArrayToObject(hello, "roles");
-    cJSON_AddItemToArray(roles, cJSON_CreateString("worker"));
     cJSON_AddStringToObject(hello, "version", "1.0.0");
     cJSON *models = cJSON_AddArrayToObject(hello, "models");
     cJSON_AddItemToArray(models, cJSON_CreateString(model));
@@ -120,6 +118,7 @@ int main(void) {
     thrum_options opts = {
         .hive = env_or("ECHO_HIVE", "echo-c"),
         .as = env_or("ECHO_AS", "main"),
+        .role = THRUM_ROLE_NURSE,
         .hello = hello,
     };
     thrum_bee *bee = thrum_bee_new(&opts);

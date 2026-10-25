@@ -23,9 +23,9 @@ async fn comb_counts_chi_and_measures_nectar() {
     let h = sim.spawn_humd(a).await;
 
     let client_id = sim
-        .attach_mock_worker(a, vec!["claude-haiku-4-5".into()])
+        .attach_mock_nurse(a, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches");
+        .expect("mock nurse attaches");
 
     h.thrum
         .inject_tone(
@@ -69,9 +69,9 @@ async fn comb_attributes_work_to_the_hive_of_the_bee_that_did_it() {
     let h = sim.spawn_humd(a).await;
 
     let client_id = sim
-        .attach_mock_worker(a, vec!["claude-haiku-4-5".into()])
+        .attach_mock_nurse(a, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches");
+        .expect("mock nurse attaches");
 
     h.thrum
         .inject_tone(
@@ -99,9 +99,9 @@ async fn comb_does_not_invent_nectar_it_was_not_told() {
     let h = sim.spawn_humd(a).await;
 
     let client_id = sim
-        .attach_mock_worker(a, vec!["claude-haiku-4-5".into()])
+        .attach_mock_nurse(a, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches");
+        .expect("mock nurse attaches");
 
     h.thrum
         .inject_tone(

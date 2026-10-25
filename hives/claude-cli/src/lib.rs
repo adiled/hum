@@ -1,9 +1,14 @@
-//! claude-cli — the pipe-mode Worker for claude.
+//! claude-cli — the pipe-mode Nurse for claude.
 //!
 //! `claude -p --input-format stream-json --output-format stream-json`.
 //! Takes a [`hum_nest::Egg`], builds the CLI invocation, runs the
 //! subprocess, exposes stdin/stdout/exit through [`hum_nest::Cell`]. The
 //! daemon never sees claude-specific arg shapes — this crate owns them.
+//!
+//! A cell never works the host it runs on. Claude Code's own host tools,
+//! [`HOST_TOOLS`], are always turned off; its shell is the bloom's `bash`,
+//! one of the tools the nest offers it over MCP, which a builder serves
+//! wherever the bloom builds.
 
 pub mod graft;
 
@@ -18,11 +23,17 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{trace, warn};
 
-use hum_nest::{Propensity, Cell, Egg, Worker};
+use hum_nest::{Propensity, Cell, Egg, Nurse};
 
-pub struct ClaudeCliWorker;
+pub const HOST_TOOLS: &[&str] = &[
+    "Bash", "BashOutput", "KillShell", "KillBash",
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "Glob", "Grep", "LS",
+];
 
-impl Default for ClaudeCliWorker {
+pub struct ClaudeCliNurse;
+
+impl Default for ClaudeCliNurse {
     fn default() -> Self { Self }
 }
 
@@ -51,16 +62,14 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
         argv.push(mcp_config);
         argv.push("--strict-mcp-config".into());
     }
-    // Pure pass-through. Worker invents no policy; humd populates these
-    // from the nestler's hello (opt-in). Empty vec = no flag.
     if !spec.allowed_tools.is_empty() {
         argv.push("--allowed-tools".into());
         argv.push(spec.allowed_tools.join(" "));
     }
-    if !spec.disallowed_tools.is_empty() {
-        argv.push("--disallowed-tools".into());
-        argv.push(spec.disallowed_tools.join(" "));
-    }
+    let mut disallowed: Vec<String> = HOST_TOOLS.iter().map(|t| t.to_string()).collect();
+    disallowed.extend(spec.disallowed_tools.iter().filter(|t| !HOST_TOOLS.contains(&t.as_str())).cloned());
+    argv.push("--disallowed-tools".into());
+    argv.push(disallowed.join(" "));
     if let Some(sp) = spec.system_prompt.as_deref() {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
@@ -107,7 +116,7 @@ pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
 }
 
 #[async_trait]
-impl Worker for ClaudeCliWorker {
+impl Nurse for ClaudeCliNurse {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
 
@@ -121,7 +130,7 @@ impl Worker for ClaudeCliWorker {
         let derived = sid.to_uuid_v5(hum_identity::NS_CLAUDE_SESSION).to_string();
         let path = graft::session_path(std::path::Path::new(cwd), &derived);
         if !path.exists() {
-            trace!(sid = %sid, path = %path.display(), "worker.curate.no-transcript");
+            trace!(sid = %sid, path = %path.display(), "nurse.curate.no-transcript");
             return Ok(hum_nest::CurateReport::default());
         }
 
@@ -132,7 +141,7 @@ impl Worker for ClaudeCliWorker {
             stripped = pruned.stripped,
             bytes_before = pruned.bytes_before,
             bytes_after = pruned.bytes_after,
-            "worker.curate.pruned"
+            "nurse.curate.pruned"
         );
 
         Ok(hum_nest::CurateReport {
@@ -149,7 +158,7 @@ impl Worker for ClaudeCliWorker {
         let env = build_env(&spec);
 
         let mut cmd = Command::new(&cli);
-        // Inherit the worker's environment (no env_clear): claude
+        // Inherit the nurse's environment (no env_clear): claude
         // authenticates against the Claude Code Max plan the same
         // implicit way it does interactively — reading ~/.claude
         // credentials on Linux, the login Keychain on macOS. Clearing
@@ -258,6 +267,20 @@ mod tests {
         assert!(argv.contains(&"claude-haiku-4-5".to_string()));
         assert!(argv.contains(&"--dangerously-skip-permissions".to_string()));
         assert!(argv.iter().any(|a| a == "stream-json"));
+    }
+
+    #[test]
+    fn argv_turns_off_the_host_tools_always() {
+        let mut spec = Egg::new(hum_identity::HumId::mint(), "m", "/");
+        spec.disallowed_tools = vec!["WebFetch".into(), "Bash".into()];
+        let argv = build_argv(&spec);
+        let i = argv.iter().position(|a| a == "--disallowed-tools").expect("host tools are always off");
+        let off: Vec<&str> = argv[i + 1].split(' ').collect();
+        for tool in HOST_TOOLS {
+            assert!(off.contains(tool), "{tool} is off");
+        }
+        assert!(off.contains(&"WebFetch"));
+        assert_eq!(off.iter().filter(|t| **t == "Bash").count(), 1);
     }
 
     #[test]

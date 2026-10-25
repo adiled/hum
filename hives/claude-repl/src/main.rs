@@ -1,11 +1,11 @@
-//! claude-repl-worker — standalone worker-bee process for the PTY/REPL
+//! claude-repl — standalone nurse process for the PTY/REPL
 //! variant of claude. Runs as its own process, handshakes with humd
 //! over thrum.
 
 use std::sync::Arc;
 
 use anyhow::Result;
-use hum_nest::{serve_worker, WorkerAdvert};
+use hum_nest::{serve_nurse, NurseAdvert};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let worker = Arc::new(claude_repl::ClaudeReplWorker);
+    let nurse = Arc::new(claude_repl::ClaudeReplNurse);
 
     let models: Vec<String> = std::env::var("CLAUDE_MODELS")
         .ok()
@@ -30,12 +30,13 @@ async fn main() -> Result<()> {
             "claude-haiku-4-5".to_string(),
         ]);
 
-    let advert = WorkerAdvert {
+    let advert = NurseAdvert {
         hive: "claude-repl".to_string(),
+        label: "main".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         models,
         source: Some("https://github.com/adiled/hum/tree/main/hives/claude-repl".to_string()),
     };
 
-    serve_worker(worker, advert).await
+    serve_nurse(nurse, advert).await
 }

@@ -62,7 +62,7 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 200)]
         lines: u32,
     },
-    #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + worker logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
+    #[command(about = "One-shot full diagnostic dump: versions, config, env sanity, the claude binary, every bee + service state, and recent daemon + nurse logs with warnings highlighted. Run this first when something is wrong; paste the output into a bug report")]
     Doctor,
     #[command(about = "Hives: the kinds this humd understands.")]
     #[command(long_about = "Hives: the kinds this humd understands.
@@ -115,6 +115,9 @@ whose hive is installed. hum starts no process.
         #[arg(help = "The label the hive knows this bee by; the same hive and label are always the same bee")]
         #[arg(long = "as")]
         label: Option<String>,
+        #[arg(help = "The one role the bee is entered for: forager | nurse | builder | attendant")]
+        #[arg(long)]
+        role: Option<String>,
         #[arg(help = "List bees")]
         #[arg(long)]
         list: bool,
@@ -239,7 +242,7 @@ fn main() -> Result<()> {
         Some(Cmd::Logs { lines }) => logs(lines),
         Some(Cmd::Doctor) => doctor(),
         Some(Cmd::Hive { target, action, list }) => hive(target, action, list),
-        Some(Cmd::Bee { target, verb, hive, label, list }) => bee(target, verb, hive, label, list),
+        Some(Cmd::Bee { target, verb, hive, label, role, list }) => bee(target, verb, hive, label, role, list),
         Some(Cmd::Comb { hive }) => comb(hive),
         Some(Cmd::Recipes { name }) => recipes(name),
         Some(Cmd::Thehum { verb }) => thehum_cmd(verb),
@@ -684,11 +687,11 @@ fn doctor() -> Result<()> {
     println!("\n[advisories]");
     bees::advice();
 
-    println!("\n[recent humd + worker logs — warnings/errors]");
+    println!("\n[recent humd + nurse logs — warnings/errors]");
     print_recent_logs("hum", 60);
 
     println!("\n{bar}");
-    println!("If a bee shows 0 tokens / a silent wilt, look for `worker.result.error`");
+    println!("If a bee shows 0 tokens / a silent wilt, look for `nurse.result.error`");
     println!("above — claude reports auth/model/credit failures there, not on stderr.");
     Ok(())
 }
@@ -758,31 +761,44 @@ fn hive_list() -> Result<()> {
     Ok(())
 }
 
+fn role_of(role: Option<&str>, usage: &str) -> Result<thrum_core::Role> {
+    let Some(role) = role else { anyhow::bail!("{usage}") };
+    thrum_core::Role::parse(role).ok_or_else(|| {
+        anyhow::anyhow!("{role:?} is not a role: forager | nurse | builder | attendant")
+    })
+}
+
 fn bee(
     target: Option<String>,
     verb: Option<String>,
     hive: Option<String>,
     label: Option<String>,
+    role: Option<String>,
     list: bool,
 ) -> Result<()> {
     if list || (target.is_none() && verb.is_none()) {
         return bees::list();
     }
+    const ENTER: &str = "hum bee enter --hive <hive> --role <role> [--as <label>]";
+    const LINK: &str = "hum bee link --hive <hive> --as <label> --role <role>";
     match (target.as_deref(), verb, hive) {
-        (Some("enter"), None, Some(h)) => bees::enter(&h, label.as_deref()),
-        (Some("enter"), None, None) => anyhow::bail!("hum bee enter --hive <hive>"),
+        (Some("enter"), None, Some(h)) => bees::enter(&h, label.as_deref(), role_of(role.as_deref(), ENTER)?),
+        (Some("enter"), None, None) => anyhow::bail!("{ENTER}"),
         (Some("link"), None, Some(h)) => match label {
-            Some(label) => std::process::exit(link(&h, &label)),
-            None => anyhow::bail!("hum bee link --hive <hive> --as <label>"),
+            Some(label) => {
+                let role = role_of(role.as_deref(), LINK)?;
+                std::process::exit(link(&h, &label, role))
+            }
+            None => anyhow::bail!("{LINK}"),
         },
-        (Some("link"), None, None) => anyhow::bail!("hum bee link --hive <hive> --as <label>"),
+        (Some("link"), None, None) => anyhow::bail!("{LINK}"),
         (Some(id), Some(v), None) => bees::act(id, &v),
         (Some(id), None, _) => anyhow::bail!("hum bee {id} <verb> — exit | reenter"),
-        _ => anyhow::bail!("hum bee enter --hive <hive>, hum bee <id> exit|reenter, or hum bee --list"),
+        _ => anyhow::bail!("{ENTER}, hum bee <id> exit|reenter, or hum bee --list"),
     }
 }
 
-fn link(hive: &str, label: &str) -> i32 {
+fn link(hive: &str, label: &str, role: thrum_core::Role) -> i32 {
     let filter = tracing_subscriber::EnvFilter::try_from_env("HUM_LOG_LEVEL")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,hum_thrum=info"));
     tracing_subscriber::fmt()
@@ -799,7 +815,7 @@ fn link(hive: &str, label: &str) -> i32 {
             return hum_thrum::link::exit::FAILED;
         }
     };
-    let code = runtime.block_on(hum_thrum::link::serve(hive, label, hum_thrum::Endpoint::Resolve));
+    let code = runtime.block_on(hum_thrum::link::serve(hive, label, role, hum_thrum::Endpoint::Resolve));
     runtime.shutdown_background();
     code
 }

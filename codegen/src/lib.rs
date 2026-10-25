@@ -48,6 +48,7 @@ pub struct ChiSpec {
     pub chi: Vec<Variant>,
     pub pulse: Vec<Variant>,
     pub petal: Vec<Variant>,
+    pub role: Vec<Variant>,
 }
 
 pub fn parse(chi_rs: &Path, lib_rs: &Path, wire_md: &Path) -> Result<ChiSpec> {
@@ -83,11 +84,20 @@ pub fn parse(chi_rs: &Path, lib_rs: &Path, wire_md: &Path) -> Result<ChiSpec> {
         };
         v.doc = doc.clone();
     }
+    let mut role = extract_enum(&chi_src, "Role")?;
+    let role_docs = extract_role_docs(&wire_src)?;
+    for v in role.iter_mut() {
+        let Some(doc) = role_docs.get(&v.wire) else {
+            bail!("role `{}` has no row in {}'s roles table", v.wire, paths::WIRE_MD_REL);
+        };
+        v.doc = doc.clone();
+    }
     Ok(ChiSpec {
         version: extract_version(&lib_src)?,
         chi,
         pulse,
         petal,
+        role,
     })
 }
 
@@ -252,6 +262,32 @@ fn extract_kind_docs(wire_md: &str, table: &str) -> Result<HashMap<String, Strin
     Ok(docs)
 }
 
+fn extract_role_docs(wire_md: &str) -> Result<HashMap<String, String>> {
+    let mut docs = HashMap::new();
+    let mut inside = false;
+    for line in wire_md.lines() {
+        let line = line.trim();
+        if line.starts_with("## ") {
+            inside = line == "## Roles";
+            continue;
+        }
+        if !inside || !line.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        let Some(role) = cells.first().and_then(|c| c.strip_prefix("**")).and_then(|c| c.strip_suffix("**")) else {
+            continue;
+        };
+        if let Some(doc) = cells.get(1) {
+            docs.insert(role.to_string(), doc.to_string());
+        }
+    }
+    if docs.is_empty() {
+        bail!("no roles found in WIRE.md's roles table");
+    }
+    Ok(docs)
+}
+
 fn pascal_to_kebab(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for (i, c) in s.chars().enumerate() {
@@ -341,7 +377,17 @@ fn render_ts(spec: &ChiSpec) -> String {
         s.push_str(&format!("  {}: \"{}\",\n", pascal_to_camel(&v.pascal), v.wire));
     }
     s.push_str("} as const;\n");
-    s.push_str("export type PetalKindT = typeof PetalKind[keyof typeof PetalKind];\n");
+    s.push_str("export type PetalKindT = typeof PetalKind[keyof typeof PetalKind];\n\n");
+    s.push_str("// role is the one job a bee does, set when its hive enters it.\n");
+    s.push_str("export const Role = {\n");
+    for v in &spec.role {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("  /** {} */\n", v.doc));
+        }
+        s.push_str(&format!("  {}: \"{}\",\n", pascal_to_camel(&v.pascal), v.wire));
+    }
+    s.push_str("} as const;\n");
+    s.push_str("export type RoleT = typeof Role[keyof typeof Role];\n");
     s
 }
 
@@ -392,6 +438,16 @@ fn render_py(spec: &ChiSpec) -> String {
     s.push_str("class PetalKind:\n");
     s.push_str("    \"\"\"petal.kind: which unit of content a petal is.\"\"\"\n");
     for v in &spec.petal {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("    # {}\n", v.doc));
+        }
+        s.push_str(&format!("    {}: str = \"{}\"\n", pascal_to_screaming_snake(&v.pascal), v.wire));
+    }
+    s.push('\n');
+
+    s.push_str("class Role:\n");
+    s.push_str("    \"\"\"role: the one job a bee does, set when its hive enters it.\"\"\"\n");
+    for v in &spec.role {
         if !v.doc.is_empty() {
             s.push_str(&format!("    # {}\n", v.doc));
         }
@@ -460,6 +516,17 @@ fn render_go(spec: &ChiSpec) -> String {
             v.pascal, v.wire
         ));
     }
+    s.push_str(")\n\n");
+
+    s.push_str("// Role is the one job a bee does, set when its hive enters it.\n");
+    s.push_str("type Role string\n\n");
+    s.push_str("const (\n");
+    for v in &spec.role {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("    // {}\n", v.doc));
+        }
+        s.push_str(&format!("    Role{} Role = \"{}\"\n", v.pascal, v.wire));
+    }
     s.push_str(")\n");
 
     s
@@ -523,6 +590,7 @@ fn render_c(spec: &ChiSpec) -> String {
     render_c_set(&mut s, "CHI", "chi", &spec.chi);
     render_c_set(&mut s, "PULSE", "pulse", &spec.pulse);
     render_c_set(&mut s, "PETAL", "petal", &spec.petal);
+    render_c_set(&mut s, "ROLE", "role", &spec.role);
     s.push_str("#endif\n");
     s
 }
@@ -541,6 +609,7 @@ mod tests {
             ],
             pulse: vec![],
             petal: vec![Variant { pascal: "Pollen".into(), wire: "pollen".into(), doc: String::new() }],
+            role: vec![Variant { pascal: "Nurse".into(), wire: "nurse".into(), doc: String::new() }],
         };
         let c = render_c(&spec);
         assert!(c.contains("#define THRUM_VERSION \"9.9.9\"\n"));
@@ -549,6 +618,7 @@ mod tests {
         assert!(c.contains("#define THRUM_CHI_COUNT 2\n"));
         assert!(c.contains("#define THRUM_PULSE_COUNT 0\n"));
         assert!(c.contains("#define THRUM_PETAL_POLLEN \"pollen\"\n"));
+        assert!(c.contains("#define THRUM_ROLE_NURSE \"nurse\"\n"));
         assert!(c.contains("static inline bool thrum_is_valid_chi(const char *value)"));
     }
 

@@ -15,7 +15,7 @@ fn key() -> BeeKey {
 
 fn core_with(hello: Value) -> Core {
     let Value::Object(hello) = hello else { panic!() };
-    Core::new("dwarfstar", key(), hello, Endpoint::Resolve)
+    Core::new("dwarfstar", thrum_core::Role::Nurse, key(), hello, Endpoint::Resolve)
 }
 
 fn drain(core: &mut Core) -> Vec<Output> {
@@ -73,7 +73,7 @@ fn nestle(core: &mut Core) -> String {
 
 #[test]
 fn the_hello_is_signed_and_carries_what_the_client_owns() {
-    let mut core = core_with(json!({"roles": ["worker"], "models": ["ds4flash"]}));
+    let mut core = core_with(json!({"role": "forager", "models": ["ds4flash"]}));
     core.start();
     drain(&mut core);
     core.connected(NOW);
@@ -82,6 +82,7 @@ fn the_hello_is_signed_and_carries_what_the_client_owns() {
     let sig = key.sign_socket_hello(NOW);
     assert_eq!(hello["chi"], "hello");
     assert_eq!(hello["hive"], "dwarfstar");
+    assert_eq!(hello["role"], "nurse", "the client owns the role it entered for");
     assert_eq!(hello["protoVersion"], thrum_core::THRUM_VERSION);
     assert_eq!(hello["hid"], key.id());
     assert_eq!(hello["pubkey"], sig.pubkey);

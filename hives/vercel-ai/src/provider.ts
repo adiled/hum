@@ -6,11 +6,13 @@
 // settings say how the bloom grows: temperature, topP and topK prune,
 // maxOutputTokens its season, stopSequences its frost, a seed, a JSON
 // response format its trellis, and the tool choice how its tendrils
-// reach. Configuration is intentionally tiny: `cwd` is the working
-// directory humd uses for fs-backed tools, omitted for pure inference,
-// and anything beyond it is left to the consumer or to humd's defaults.
+// reach. Configuration is intentionally tiny: `cwd` is where the bloom
+// builds, a `hum://<humdid>/<path>` address or a path on this host, which
+// becomes `hum:///<path>`; omitted, the bloom builds nowhere and is pure
+// inference. Anything beyond it is left to the consumer or to humd.
 
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
@@ -29,6 +31,10 @@ import { HumTranslator } from "./transform.ts";
 
 export interface HumProviderConfig {
   cwd?: string;
+}
+
+export function buildsAt(cwd: string): string {
+  return cwd.startsWith("hum://") ? cwd : `hum://${resolve(cwd)}`;
 }
 
 function emptyUsage(): LanguageModelV3Usage {
@@ -172,7 +178,7 @@ export class HumModel implements LanguageModelV3 {
           content,
           ...bloomSettings(opts),
           ...(systemPrompt ? { systemPrompt } : {}),
-          ...(this.config.cwd ? { cwd: this.config.cwd } : {}),
+          ...(this.config.cwd ? { cwd: buildsAt(this.config.cwd) } : {}),
           ...(tools ? { tools } : {}),
         });
       },

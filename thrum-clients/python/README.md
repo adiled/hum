@@ -15,10 +15,10 @@ exactly as a Rust, TS, Go or C one.
 
 ```python
 import asyncio
-from thrum import Bee, Chi, PetalKind
+from thrum import Bee, Chi, PetalKind, Role
 
 async def main():
-    bee = Bee(hive="my-hive", as_="main", hello={"roles": ["worker"], "models": ["my-model"]})
+    bee = Bee(hive="my-hive", as_="main", role=Role.NURSE, hello={"models": ["my-model"]})
 
     def on_prompt(tone):
         bee.send({"chi": Chi.UNFURL, "sid": tone["sid"], "petal": 0, "kind": PetalKind.TEXT, "text": "hello"})
@@ -33,7 +33,7 @@ asyncio.run(main())
 
 | | |
 |---|---|
-| `Bee(hive, as_, hello)` | a bee's client; nothing runs until `start` |
+| `Bee(hive, as_, role, hello)` | a bee's client; nothing runs until `start` |
 | `on(chi, fn)`, `on_sid(sid, fn)`, `off_sid(sid)`, `on_any(fn)` | a tone goes to its sid's handler, else its chi's, else `on_any` |
 | `on_nestled(fn)`, `on_astray(fn)`, `on_advisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `await start()` | returns once humd admits the bee; raises `Refused` or `LinkError` |

@@ -17,7 +17,7 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from thrum import Bee, Chi, LinkError, PetalKind, Refused
+from thrum import Bee, Chi, LinkError, PetalKind, Refused, Role
 
 
 def say(line: str) -> None:
@@ -29,7 +29,8 @@ async def main() -> int:
     bee = Bee(
         hive=os.environ.get("ECHO_HIVE") or "echo-py",
         as_=os.environ.get("ECHO_AS") or "main",
-        hello={"roles": ["worker"], "version": "1.0.0", "models": [model],
+        role=Role.NURSE,
+        hello={"version": "1.0.0", "models": [model],
                "headroom": {"freeSlots": 1, "totalSlots": 1}},
     )
 

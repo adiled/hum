@@ -54,7 +54,6 @@ impl Humd {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 let mut cfg = humd::DaemonConfig::from_env();
-                cfg.bind_mcp = false;
                 cfg.humd_key = None;
                 let _ = humd::run(cfg, async {
                     let _ = rx.await;
@@ -251,13 +250,12 @@ fn spawn_process(lang: &'static str, command: &[String], hive: &str, logs: &Path
 async fn spawn_inline(hive: &str) -> EchoBee {
     let model = "echo-rs".to_string();
     let (tx, rx) = mpsc::channel();
-    let opts = Options::new(hive, "main").hello(json!({
-        "roles": ["worker"],
+    let opts = Options::new(hive, "main", thrum_core::Role::Nurse).hello(json!({
         "version": "1.0.0",
         "models": [model],
         "headroom": {"freeSlots": 1, "totalSlots": 1},
     }));
-    let key = hum_identity::enter_as(hive, "main").expect("the rust echo bee enters");
+    let key = hum_identity::enter_as(hive, "main", "nurse").expect("the rust echo bee enters");
     let mut bee = Bee::spawn(opts, key);
     let sender = bee.sender();
     tokio::spawn(async move {
@@ -389,7 +387,7 @@ async fn every_language_is_the_same_bee() {
     let warm = Command::new(env!("CARGO_BIN_EXE_hum")).arg("--version").output();
     assert!(warm.is_ok_and(|o| o.status.success()), "hum does not run");
     let mut humd = Humd::start();
-    let forager_bee = Bee::link(Options::new("forager", "main").hello(json!({"roles": ["forager"]})))
+    let forager_bee = Bee::link(Options::new("forager", "main", thrum_core::Role::Forager))
         .await
         .expect("the forager nestles");
     let mut forager = Forager { bee: forager_bee, asked: 0 };
@@ -411,7 +409,7 @@ async fn every_language_is_the_same_bee() {
         bee.expect("sid cancel");
     }
     for bee in &bees {
-        let id = hum_identity::enter_as(&format!("echo-{}", bee.lang), "main").unwrap().id();
+        let id = hum_identity::enter_as(&format!("echo-{}", bee.lang), "main", "nurse").unwrap().id();
         let deadline = Instant::now() + WAIT;
         while !advised(&id).contains(&"undeclared-key".to_string()) {
             assert!(Instant::now() < deadline, "{}: humd recorded no advisory", bee.lang);
@@ -434,7 +432,7 @@ async fn every_language_is_the_same_bee() {
     }
 
     let mut refused = vec![];
-    let err = Bee::link(Options::new("echo-nope", "main")).await.err().expect("rs is refused");
+    let err = Bee::link(Options::new("echo-nope", "main", thrum_core::Role::Nurse)).await.err().expect("rs is refused");
     assert!(err.downcast_ref::<Refused>().is_some(), "rs: {err}");
     refused.push("rs");
     for lang in &langs {

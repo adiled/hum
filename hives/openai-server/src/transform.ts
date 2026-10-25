@@ -7,7 +7,7 @@
 //   { chi: "error", sid, message }
 //
 // A text petal becomes `content` deltas and a sepal `reasoning_content`
-// deltas. A tendril petal that unfurls is a tool the worker runs in
+// deltas. A tendril petal that unfurls is a tool the nurse runs in
 // itself: its name and sap stream as `tool_calls` deltas and the stream
 // still finishes `stop`, the honest signal that the call happened
 // in-server and the model kept going. A client that gates its tool loop

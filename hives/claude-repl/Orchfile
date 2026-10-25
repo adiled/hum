@@ -5,5 +5,5 @@ RUN ${HUM_SRC}/install
 ONESHOT true
 
 SERVICE claude-repl
-RUN ${HUM_SRC}/target/release/claude-repl-worker
+RUN ${HUM_SRC}/target/release/claude-repl-nurse
 RESTART always

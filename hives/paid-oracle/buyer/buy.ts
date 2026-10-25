@@ -34,7 +34,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { Bee, Chi } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi, Role } from "../../../thrum-clients/ts/index.ts";
 
 const baseDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
 const keysPath = join(baseDir, "hum", "hives", "paid-oracle", "keys.json");
@@ -61,7 +61,8 @@ async function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"
   const bee = new Bee({
     hive: "paid-oracle",
     as: "buyer",
-    hello: { roles: ["forager"], version: "0.0.1", chis: ["hello", Chi.tendrilReach, Chi.tendrilResult, Chi.error] },
+    role: Role.forager,
+    hello: { version: "0.0.1", chis: ["hello", Chi.tendrilReach, Chi.tendrilResult, Chi.error] },
   });
   const callId = `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const sid = `paid-oracle-buyer-${Date.now().toString(36)}`;

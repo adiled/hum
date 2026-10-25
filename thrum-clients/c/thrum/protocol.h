@@ -37,7 +37,8 @@ typedef struct {
 static const thrum_field THRUM_FIELDS_HELLO_BODY[16] = {
     {"protoVersion", THRUM_FIELD_STRING, false},
     {"hive", THRUM_FIELD_STRING, false},
-    {"roles", THRUM_FIELD_ARRAY, true},
+    {"role", THRUM_FIELD_STRING, false},
+    {"builds", THRUM_FIELD_BOOL, true},
     {"version", THRUM_FIELD_STRING, true},
     {"hid", THRUM_FIELD_STRING, false},
     {"pubkey", THRUM_FIELD_STRING, false},
@@ -45,7 +46,6 @@ static const thrum_field THRUM_FIELDS_HELLO_BODY[16] = {
     {"signature", THRUM_FIELD_STRING, false},
     {"models", THRUM_FIELD_ARRAY, true},
     {"tools", THRUM_FIELD_ARRAY, true},
-    {"provides", THRUM_FIELD_ARRAY, true},
     {"chis", THRUM_FIELD_ARRAY, true},
     {"propensity", THRUM_FIELD_ANY, true},
     {"headroom", THRUM_FIELD_OBJECT, true},
@@ -58,16 +58,13 @@ static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
     {"totalSlots", THRUM_FIELD_UINT, false},
 };
 
-static const thrum_field THRUM_FIELDS_PROMPT_BODY[19] = {
+static const thrum_field THRUM_FIELDS_PROMPT_BODY[16] = {
     {"modelId", THRUM_FIELD_STRING, true},
     {"cwd", THRUM_FIELD_STRING, true},
     {"systemPrompt", THRUM_FIELD_STRING, true},
     {"text", THRUM_FIELD_STRING, true},
     {"content", THRUM_FIELD_ARRAY, true},
     {"tools", THRUM_FIELD_ARRAY, true},
-    {"foragerTools", THRUM_FIELD_ARRAY, true},
-    {"provided", THRUM_FIELD_ARRAY, true},
-    {"disallowedTools", THRUM_FIELD_ARRAY, true},
     {"allowedTools", THRUM_FIELD_ARRAY, true},
     {"resume", THRUM_FIELD_STRING, true},
     {"temperature", THRUM_FIELD_NUMBER, true},
@@ -151,10 +148,11 @@ static const thrum_field THRUM_FIELDS_ERROR_BODY[4] = {
     {"nectar", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_TENDRIL_REACH_BODY[3] = {
+static const thrum_field THRUM_FIELDS_TENDRIL_REACH_BODY[4] = {
     {"callId", THRUM_FIELD_STRING, false},
     {"name", THRUM_FIELD_STRING, false},
     {"args", THRUM_FIELD_ANY, true},
+    {"cwd", THRUM_FIELD_STRING, true},
 };
 
 static const thrum_field THRUM_FIELDS_TENDRIL_RESULT_BODY[6] = {
@@ -310,12 +308,12 @@ static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"hello", THRUM_FIELDS_HELLO_BODY, 16},
-    {"prompt", THRUM_FIELDS_PROMPT_BODY, 19},
+    {"prompt", THRUM_FIELDS_PROMPT_BODY, 16},
     {"breath", THRUM_FIELDS_BREATH_BODY, 2},
     {"unfurl", THRUM_FIELDS_UNFURL_BODY, 11},
     {"wilt", THRUM_FIELDS_WILT_BODY, 4},
     {"error", THRUM_FIELDS_ERROR_BODY, 4},
-    {"tendril-reach", THRUM_FIELDS_TENDRIL_REACH_BODY, 3},
+    {"tendril-reach", THRUM_FIELDS_TENDRIL_REACH_BODY, 4},
     {"tendril-result", THRUM_FIELDS_TENDRIL_RESULT_BODY, 6},
     {"tendril-info", THRUM_FIELDS_TENDRIL_INFO_BODY, 5},
     {"tendril-meta", THRUM_FIELDS_TENDRIL_META_BODY, 3},
