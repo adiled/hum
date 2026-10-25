@@ -1,4 +1,20 @@
+# bp7: hum as a DTN endpoint. Set an ARG in the environment of
+# `hum hive bp7 install` to change it, for example
+# BP7_ROUTE=router.local:4556. An empty ARG keeps the forager's own
+# default; the README says what each one is.
+
 ARG HUM_SRC=
+ARG BP7_LISTEN=
+ARG BP7_NODE_EID=
+ARG BP7_LABEL=
+ARG BP7_MODEL=
+ARG BP7_ROUTE=
+ARG BP7_ALLOW=
+ARG BP7_BLOOMS=
+ARG BP7_MTU=
+ARG BP7_SPOOL=
+ARG BP7_HOLD=
+ARG BP7_SWEEP_MS=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -6,4 +22,15 @@ ONESHOT true
 
 SERVICE bp7
 RUN ${HUM_SRC}/target/release/bp7-forager
+ENV BP7_LISTEN=${BP7_LISTEN}
+ENV BP7_NODE_EID=${BP7_NODE_EID}
+ENV BP7_LABEL=${BP7_LABEL}
+ENV BP7_MODEL=${BP7_MODEL}
+ENV BP7_ROUTE=${BP7_ROUTE}
+ENV BP7_ALLOW=${BP7_ALLOW}
+ENV BP7_BLOOMS=${BP7_BLOOMS}
+ENV BP7_MTU=${BP7_MTU}
+ENV BP7_SPOOL=${BP7_SPOOL}
+ENV BP7_HOLD=${BP7_HOLD}
+ENV BP7_SWEEP_MS=${BP7_SWEEP_MS}
 RESTART always
