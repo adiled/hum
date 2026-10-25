@@ -3,7 +3,7 @@ name = "hum-nest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "hum's hive-side kernel — worker contract (WorkerBee/Egg/Cell), process supervision (lifecycle/metrics/limits), and the serve_worker / serve_forager wire loops. One crate, no nest-common indirection."
+description = "hum's hive-side kernel — worker contract (WorkerBee/Egg/Cell), process supervision (lifecycle/metrics/limits), and the serve_worker wire loop. One crate, no nest-common indirection."
 
 [dependencies]
 hum-paths = { path = "../hum-paths" }

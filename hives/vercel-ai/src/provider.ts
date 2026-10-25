@@ -1,9 +1,14 @@
 // hum as a Vercel AI SDK v3 provider.
 //
-// The model talks to a humd daemon over thrum (NDJSON unix socket) and
-// translates daemon tones into a `LanguageModelV3` stream.  Configuration
-// is intentionally tiny — anything beyond `cwd` is left to the consumer
-// or to humd's own defaults.
+// The model prompts a humd daemon over thrum and translates the bloom's
+// tones into a `LanguageModelV3` stream. The last user message becomes
+// the prompt's petals, its text and its files as pollen, and the call's
+// settings say how the bloom grows: temperature, topP and topK prune,
+// maxOutputTokens its season, stopSequences its frost, a seed, a JSON
+// response format its trellis, and the tool choice how its tendrils
+// reach. Configuration is intentionally tiny: `cwd` is the working
+// directory humd uses for fs-backed tools, omitted for pure inference,
+// and anything beyond it is left to the consumer or to humd's defaults.
 
 import { randomUUID } from "node:crypto";
 import type {
@@ -18,15 +23,12 @@ import type {
   LanguageModelV3FunctionTool,
 } from "@ai-sdk/provider";
 
+import { PetalKind, type Petal } from "../../../thrum-clients/ts/index.ts";
 import { getThrum, type Tone } from "./thrum.ts";
 import { HumTranslator } from "./transform.ts";
 
 export interface HumProviderConfig {
-  /** Working directory humd uses for fs-backed tools (JSONL transcripts,
-   *  hum fs MCP). Omit for pure inference. */
   cwd?: string;
-  /** Override the thrum socket path. Defaults to $XDG_RUNTIME_DIR/hum/hum.sock.thrum. */
-  thrumPath?: string;
 }
 
 function emptyUsage(): LanguageModelV3Usage {
@@ -36,16 +38,48 @@ function emptyUsage(): LanguageModelV3Usage {
   };
 }
 
-function lastUserText(prompt: LanguageModelV3Prompt): string {
+function base64Of(data: Uint8Array): string {
+  return Buffer.from(data).toString("base64");
+}
+
+function lastUserPetals(prompt: LanguageModelV3Prompt): Petal[] {
   for (let i = prompt.length - 1; i >= 0; i--) {
     const m = prompt[i];
     if (m.role !== "user") continue;
-    if (typeof m.content === "string") return m.content;
-    if (Array.isArray(m.content)) {
-      return m.content.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n");
+    if (typeof m.content === "string") return [{ kind: PetalKind.text, text: m.content }];
+    const petals: Petal[] = [];
+    for (const part of m.content as any[]) {
+      if (part.type === "text") petals.push({ kind: PetalKind.text, text: part.text ?? "" });
+      if (part.type !== "file") continue;
+      const mediaType: string = part.mediaType ?? "application/octet-stream";
+      const kind = mediaType.startsWith("image/") ? "image" : mediaType.startsWith("audio/") ? "audio" : "file";
+      const data = part.data;
+      const grain = data instanceof URL
+        ? { kind, mediaType, url: data.toString() }
+        : { kind, mediaType, data: typeof data === "string" ? data : base64Of(data) };
+      petals.push({ kind: PetalKind.pollen, grain });
     }
+    return petals;
   }
-  return "";
+  return [{ kind: PetalKind.text, text: "" }];
+}
+
+function bloomSettings(opts: LanguageModelV3CallOptions): Partial<Tone<"prompt">> {
+  const out: Partial<Tone<"prompt">> = {};
+  if (typeof opts.temperature === "number") out.temperature = opts.temperature;
+  if (typeof opts.topP === "number" || typeof opts.topK === "number") {
+    out.prune = {
+      ...(typeof opts.topP === "number" ? { p: opts.topP } : {}),
+      ...(typeof opts.topK === "number" ? { k: opts.topK } : {}),
+    };
+  }
+  if (typeof opts.maxOutputTokens === "number") out.season = opts.maxOutputTokens;
+  if (Array.isArray(opts.stopSequences) && opts.stopSequences.length > 0) out.frost = opts.stopSequences;
+  if (typeof opts.seed === "number") out.seed = opts.seed;
+  if (opts.responseFormat?.type === "json") out.trellis = opts.responseFormat.schema ?? "json";
+  const choice = opts.toolChoice;
+  if (choice) out.tendrils = { reach: choice.type === "tool" ? choice.toolName : choice.type };
+  return out;
 }
 
 function systemFrom(prompt: LanguageModelV3Prompt): string {
@@ -56,16 +90,16 @@ function systemFrom(prompt: LanguageModelV3Prompt): string {
   return out.join("\n\n");
 }
 
-function toolsFor(opts: LanguageModelV3CallOptions): Array<{ name: string; description?: string; parameters?: unknown }> | undefined {
+function toolsFor(opts: LanguageModelV3CallOptions): Array<{ name: string; description?: string; inputSchema?: unknown }> | undefined {
   const tools = opts.tools as LanguageModelV3FunctionTool[] | undefined;
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
-  const out: Array<{ name: string; description?: string; parameters?: unknown }> = [];
+  const out: Array<{ name: string; description?: string; inputSchema?: unknown }> = [];
   for (const t of tools) {
     if (!t || t.type !== "function" || !t.name) continue;
     out.push({
       name: t.name,
       ...(t.description ? { description: t.description } : {}),
-      ...(t.inputSchema ? { parameters: t.inputSchema } : {}),
+      ...(t.inputSchema ? { inputSchema: t.inputSchema } : {}),
     });
   }
   return out.length > 0 ? out : undefined;
@@ -86,7 +120,7 @@ export class HumModel implements LanguageModelV3 {
     await thrum.connect();
 
     const sid = `vai-${randomUUID()}`;
-    const content = lastUserText(opts.prompt);
+    const content = lastUserPetals(opts.prompt);
     const systemPrompt = systemFrom(opts.prompt);
     const tools = toolsFor(opts);
 
@@ -102,9 +136,9 @@ export class HumModel implements LanguageModelV3 {
           closed = true;
           thrum.off(sid);
           for (const part of translator.flush()) {
-            try { controller.enqueue(part); } catch { /* already closed */ }
+            try { controller.enqueue(part); } catch {}
           }
-          try { controller.close(); } catch { /* ignore */ }
+          try { controller.close(); } catch {}
         };
 
         thrum.on(sid, (msg: Tone) => {
@@ -113,7 +147,7 @@ export class HumModel implements LanguageModelV3 {
             if (part.type === "finish" || part.type === "error") {
               closed = true;
               thrum.off(sid);
-              try { controller.close(); } catch { /* ignore */ }
+              try { controller.close(); } catch {}
               return;
             }
           }
@@ -121,12 +155,12 @@ export class HumModel implements LanguageModelV3 {
 
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) {
-            thrum.send({ chi: "cancel", sid, reason: "client-abort" });
+            thrum.send({ chi: "cancel", sid });
             close();
             return;
           }
           opts.abortSignal.addEventListener("abort", () => {
-            thrum.send({ chi: "cancel", sid, reason: "client-abort" });
+            thrum.send({ chi: "cancel", sid });
             close();
           });
         }
@@ -136,6 +170,7 @@ export class HumModel implements LanguageModelV3 {
           sid,
           modelId: this.modelId,
           content,
+          ...bloomSettings(opts),
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(this.config.cwd ? { cwd: this.config.cwd } : {}),
           ...(tools ? { tools } : {}),
@@ -144,7 +179,7 @@ export class HumModel implements LanguageModelV3 {
 
       cancel: () => {
         thrum.off(sid);
-        thrum.send({ chi: "cancel", sid, reason: "client-cancel" });
+        thrum.send({ chi: "cancel", sid });
       },
     });
 

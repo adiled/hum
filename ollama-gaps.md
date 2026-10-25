@@ -130,7 +130,7 @@ Ollama's round-trip behavior.
 ### Metrics/duration in response
 Ollama returns `total_duration`, `load_duration`, `prompt_eval_count`,
 `prompt_eval_duration`, `eval_count`, `eval_duration` in the final chunk.
-The current implementation copies `usage` from humd but the field names
+The current implementation copies humd's `nectar` but the field names
 don't match Ollama's. We should map them and also track these locally.
 
 ## Priority breakdown

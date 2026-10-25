@@ -127,7 +127,7 @@ mod tests {
         let d = state();
         let expired = AtomicU64::new(0);
         let request = json!({"chi": "prompt", "rid": "r-1", "mid": "m-req"});
-        let response = json!({"chi": "chunk", "rid": "r-1", "mid": "m-resp"});
+        let response = json!({"chi": "unfurl", "rid": "r-1", "mid": "m-resp"});
         assert!(dispatchable(&request, &d, &expired));
         assert!(dispatchable(&response, &d, &expired), "same rid, different mid");
     }
@@ -136,7 +136,7 @@ mod tests {
     fn a_retransmitted_mid_is_suppressed() {
         let d = state();
         let expired = AtomicU64::new(0);
-        let tone = json!({"chi": "chunk", "rid": "r-1", "mid": "m-1"});
+        let tone = json!({"chi": "unfurl", "rid": "r-1", "mid": "m-1"});
         assert!(dispatchable(&tone, &d, &expired));
         assert!(!dispatchable(&tone, &d, &expired));
         assert_eq!(expired.load(Ordering::SeqCst), 0, "not a dusk drop");
@@ -146,7 +146,7 @@ mod tests {
     fn a_past_dusk_is_dropped_and_counted() {
         let d = state();
         let expired = AtomicU64::new(0);
-        let tone = json!({"chi": "chunk", "rid": "r-1", "mid": "m-1", "dusk": crate::now_ms() - 1});
+        let tone = json!({"chi": "unfurl", "rid": "r-1", "mid": "m-1", "dusk": crate::now_ms() - 1});
         assert!(!dispatchable(&tone, &d, &expired));
         assert_eq!(expired.load(Ordering::SeqCst), 1);
         assert_eq!(d.len(), 0, "a dead tone must not occupy seen capacity");
@@ -156,7 +156,7 @@ mod tests {
     fn a_future_dusk_is_delivered() {
         let d = state();
         let expired = AtomicU64::new(0);
-        let tone = json!({"chi": "chunk", "rid": "r-1", "mid": "m-1", "dusk": crate::now_ms() + 60_000});
+        let tone = json!({"chi": "unfurl", "rid": "r-1", "mid": "m-1", "dusk": crate::now_ms() + 60_000});
         assert!(dispatchable(&tone, &d, &expired));
         assert_eq!(expired.load(Ordering::SeqCst), 0);
     }
@@ -202,9 +202,9 @@ mod tests {
     fn a_dead_mid_does_not_evict_a_live_one() {
         let d = state();
         let expired = AtomicU64::new(0);
-        let live = json!({"chi": "chunk", "rid": "r", "mid": "live"});
+        let live = json!({"chi": "unfurl", "rid": "r", "mid": "live"});
         assert!(dispatchable(&live, &d, &expired));
-        let dead = json!({"chi": "chunk", "rid": "r", "mid": "dead", "dusk": crate::now_ms() - 1});
+        let dead = json!({"chi": "unfurl", "rid": "r", "mid": "dead", "dusk": crate::now_ms() - 1});
         assert!(!dispatchable(&dead, &d, &expired));
         assert_eq!(d.len(), 1);
         assert!(!dispatchable(&live, &d, &expired), "the live mid is still remembered");

@@ -5,16 +5,15 @@
 //! sends is forwarded to humd. Nothing is translated — gRPC is the
 //! transport, thrum is still the protocol.
 //!
-//! Each bidi stream opens its own thrum connection so concurrent gRPC
-//! clients can use overlapping sids without colliding handler state.
+//! Each bidi stream links its own bee connection through hum's client, so
+//! concurrent gRPC clients can use overlapping sids without colliding
+//! handler state.
 
-use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Context, Result};
-use hum_thrum as thrum;
+use hum_thrum::{Bee, Event, Options, Refused};
 use serde_json::Value;
-use thrum_core::{Chi, THRUM_VERSION};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{Stream, StreamExt};
@@ -30,27 +29,13 @@ use hum::{hum_server::{Hum, HumServer}, Tone};
 const HIVE_NAME: &str = "grpc";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn humd_sock_path() -> String {
-    hum_paths::thrum_sock_resolved().to_string_lossy().into_owned()
-}
-
 async fn bridge(
     mut incoming: Streaming<Tone>,
     out: mpsc::Sender<Result<Tone, Status>>,
 ) -> Result<()> {
-    let (reader, write_half) = thrum::connect(Path::new(&humd_sock_path())).await
-        .with_context(|| format!("connect {}", humd_sock_path()))?;
-
-    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
-
-    let mut hello = serde_json::json!({
-        "chi": Chi::Hello,
-        "rid": hum_identity::HumId::mint().to_string(),
-        "from": HIVE_NAME,
+    let hello = serde_json::json!({
         "roles": ["forager"],
-        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
-        "protoVersion": THRUM_VERSION,
         "propensity": {
             "statefulness": "transport-only",
             "richness": "opaque",
@@ -58,8 +43,10 @@ async fn bridge(
         },
         "source": "https://github.com/adiled/hum/tree/main/hives/grpc"
     });
-    bee.sign_hello(&mut hello);
-    thrum::send_json(&write_half, &hello).await?;
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+        .await
+        .context("link the grpc bee")?;
+    let sender = bee.sender();
 
     let to_thrum = tokio::spawn(async move {
         while let Some(item) = incoming.next().await {
@@ -83,30 +70,35 @@ async fn bridge(
                 }))
                 .unwrap_or_default()
             };
-            let tone: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if thrum::send_json(&write_half, &tone).await.is_err() {
-                break;
+            if let Ok(tone) = serde_json::from_str::<Value>(&line) {
+                sender.send(tone);
             }
         }
+        sender.close();
     });
 
-    thrum::read_tones(reader, |tone| {
-        let out = out.clone();
-        tokio::spawn(async move {
-            let wire = Tone {
-                chi: tone.get("chi").and_then(Value::as_str).unwrap_or("").into(),
-                sid: tone.get("sid").and_then(Value::as_str).unwrap_or("").into(),
-                rid: tone.get("rid").and_then(Value::as_str).unwrap_or("").into(),
-                body: tone.to_string().into_bytes(),
-            };
-            if out.send(Ok(wire)).await.is_err() {}
-        });
-    })
-    .await?;
-    let _ = to_thrum.await;
+    while let Some(event) = bee.next().await {
+        match event {
+            Event::Tone(tone) => {
+                let wire = Tone {
+                    chi: tone.get("chi").and_then(Value::as_str).unwrap_or("").into(),
+                    sid: tone.get("sid").and_then(Value::as_str).unwrap_or("").into(),
+                    rid: tone.get("rid").and_then(Value::as_str).unwrap_or("").into(),
+                    body: tone.to_string().into_bytes(),
+                };
+                if out.send(Ok(wire)).await.is_err() {
+                    break;
+                }
+            }
+            Event::Refused(why) => {
+                to_thrum.abort();
+                return Err(Refused(why).into());
+            }
+            Event::Nestled | Event::Astray | Event::Advisory(_) => {}
+        }
+    }
+    bee.close();
+    to_thrum.abort();
     Ok(())
 }
 

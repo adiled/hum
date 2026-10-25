@@ -48,7 +48,7 @@ the *same* humd talk, they're already on `thrum`. When nestlers on
 |---|---|
 | where does the conversation live? | content-addressable `Hid` (sha256 of Ed25519 pubkey). Hums roam between humds without changing identity. |
 | how does humd A reach humd B? | `Transport` trait + a `peers.json` of known addresses, or `kad_find(target)` for discovery among peers already known. |
-| how do messages flow? | `chi:"prompt"` / `chi:"chunk"` / `chi:"finish"` between humds via `route(tone)` (unicast) or `publish(topic, …)` (gossip). |
+| how do messages flow? | `chi:"prompt"` / `chi:"unfurl"` / `chi:"wilt"` between humds via `route(tone)` (unicast) or `publish(topic, …)` (gossip). |
 | how do you trust a stranger? | Ed25519-signed `hello` handshake. `Hid` = hash(pubkey), so the signature proves identity. |
 | who handles NAT, firewalls, dynamic IPs? | `IrohEndpoint::bind_relayed()`, which is QUIC + Noise + hole-punching via the public iroh relay mesh. The daemon binds direct-only; the relay path lives in the crate and needs a network that can reach the relay servers. |
 
@@ -276,7 +276,7 @@ laptop humd          phone humd
   ●                   ●
   hum-X hosted here   nestler attaches:
                       send chi:"prompt", sid:"hum-X", to: laptop
-                      ← chi:"chunk" / "finish" routed back
+                      ← chi:"unfurl" / "wilt" routed back
 ```
 
 Identity is a key in `$XDG_STATE_HOME/hum/humd.key` on each device.
@@ -391,7 +391,7 @@ speaks. The surface today, THRUM_VERSION 0.8.0:
 | chi | direction | use |
 |---|---|---|
 | `hello` | both | Ed25519-signed handshake. Identity proof. |
-| `prompt` / `chunk` / `finish` | both | Inference round-trip routed across humds. |
+| `prompt` / `unfurl` / `wilt` | both | Inference round-trip routed across humds. |
 | `gossip-publish` | both | Mesh-wide pub-sub. Topic + payload + dedup msg_id. |
 | `kad-find-node` / `kad-find-node-resp` | both | DHT lookups for `Hid`s. |
 | `peer-add` / `peer-remove` | both | A peer joined or left. The receiver re-advertises its manifests to a newcomer. |

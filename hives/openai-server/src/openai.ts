@@ -1,4 +1,4 @@
-import type { ThrumClient, Tone } from "./thrum.ts";
+import { PetalKind, type Bee, type Petal, type PetalKindT, type Tone } from "../../../thrum-clients/ts/index.ts";
 
 const API_BASE = process.env.OPENAI_API_BASE
   ?? "https://api.openai.com/v1";
@@ -27,23 +27,23 @@ function toolMessage(name: string, callId: string, output: string): Record<strin
   return { role: "tool", tool_call_id: callId, content: `[tool ${name}] ${output}` };
 }
 
-interface Session {
+interface Sigil {
   sid: string;
   model: string;
   messages: Array<Record<string, unknown>>;
   tools?: ToolDef[];
   pending: Map<string, { name: string; args: string }>;
   generation: number;
-  finished: boolean;
+  wilted: boolean;
 }
 
 export class OpenAIWorker {
-  private thrum: ThrumClient;
-  private sessions = new Map<string, Session>();
-  private static readonly MAX_SESSIONS = 32;
+  private thrum: Bee;
+  private sigils = new Map<string, Sigil>();
+  private static readonly MAX_SIGILS = 32;
   private discovered: string[] = [];
 
-  constructor(thrum: ThrumClient) {
+  constructor(thrum: Bee) {
     this.thrum = thrum;
   }
 
@@ -69,55 +69,57 @@ export class OpenAIWorker {
     return this.discovered.slice();
   }
 
-  async handlePrompt(msg: Tone): Promise<void> {
-    const sid = (msg.sid as string) ?? "";
+  async handlePrompt(msg: Tone<"prompt">): Promise<void> {
+    const sid = msg.sid ?? "";
     if (!sid) return;
 
-    const modelId = (msg.modelId as string) ?? "";
+    const modelId = msg.modelId ?? "";
     if (!this.discovered.includes(modelId)) {
       this.error(sid, "unknown_model", `worker does not serve model '${modelId}'`);
       return;
     }
 
-    const sess = this.sessionFor(sid);
-    sess.model = modelId;
+    const sigil = this.sigilFor(sid);
+    sigil.model = modelId;
     const tools = msg.tools as ToolDef[] | undefined;
-    if (Array.isArray(tools) && tools.length > 0) sess.tools = tools;
+    if (Array.isArray(tools) && tools.length > 0) sigil.tools = tools;
 
-    const systemPrompt = msg.systemPrompt as string | undefined;
-    if (systemPrompt) sess.messages.push({ role: "system", content: systemPrompt });
-    const content = (msg.content as string) ?? (msg.text as string) ?? "";
-    if (content) sess.messages.push({ role: "user", content });
+    const systemPrompt = msg.systemPrompt;
+    if (systemPrompt) sigil.messages.push({ role: "system", content: systemPrompt });
+    const content = petalText(msg.content) || msg.text || "";
+    if (content) sigil.messages.push({ role: "user", content });
 
-    await this.streamTurn(sess, sid);
+    await this.grow(sigil, sid);
   }
 
-  async handleToolResult(msg: Tone): Promise<void> {
-    const sid = (msg.sid as string) ?? "";
-    const callId = (msg.callId as string) ?? "";
-    const sess = this.sessions.get(sid);
-    if (!sess || !callId) return;
+  async handleTendrilResult(msg: Tone<"tendril-result">): Promise<void> {
+    const sid = msg.sid ?? "";
+    const callId = msg.callId;
+    const sigil = this.sigils.get(sid);
+    if (!sigil || !callId) return;
 
-    const call = sess.pending.get(callId);
+    const call = sigil.pending.get(callId);
     if (!call) return;
-    sess.pending.delete(callId);
-    const output = (msg.output as string) ?? (msg.result as string) ?? "";
+    sigil.pending.delete(callId);
+    const grasped = msg.output ?? msg.result ?? "";
+    const output = typeof grasped === "string" ? grasped : JSON.stringify(grasped);
 
-    sess.messages.push(toolMessage(call.name, callId, output));
-    await this.streamTurn(sess, sid);
+    sigil.messages.push(toolMessage(call.name, callId, output));
+    await this.grow(sigil, sid);
   }
 
-  private async streamTurn(sess: Session, sid: string): Promise<void> {
-    sess.finished = false;
-    const gen = ++sess.generation;
+  private async grow(sigil: Sigil, sid: string): Promise<void> {
+    sigil.wilted = false;
+    const gen = ++sigil.generation;
 
     const body: Record<string, unknown> = {
-      model: sess.model,
-      messages: sess.messages,
+      model: sigil.model,
+      messages: sigil.messages,
       stream: true,
+      stream_options: { include_usage: true },
     };
-    if (sess.tools && sess.tools.length > 0) {
-      body.tools = functionTools(sess.tools);
+    if (sigil.tools && sigil.tools.length > 0) {
+      body.tools = functionTools(sigil.tools);
     }
 
     let resp: Response;
@@ -131,13 +133,13 @@ export class OpenAIWorker {
         body: JSON.stringify(body),
       });
     } catch (e) {
-      if (gen !== sess.generation) return;
+      if (gen !== sigil.generation) return;
       this.error(sid, "upstream_error", (e as Error).message ?? "upstream failed");
       return;
     }
 
     if (!resp.ok || !resp.body) {
-      if (gen !== sess.generation) return;
+      if (gen !== sigil.generation) return;
       const detail = await resp.text().catch(() => "");
       this.error(sid, "upstream_error", `OpenAI API ${resp.status}: ${detail.slice(0, 500)}`);
       return;
@@ -146,9 +148,15 @@ export class OpenAIWorker {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let textBlock = 0;
-    let reasoningBlock = 0;
-    const toolArgs = new Map<number, { name: string; args: string; callId: string }>();
+    const petals = new Map<string, { petal: number; kind: PetalKindT }>();
+    const petalOf = (key: string, kind: PetalKindT): number => {
+      const known = petals.get(key);
+      if (known) return known.petal;
+      const petal = petals.size;
+      petals.set(key, { petal, kind });
+      return petal;
+    };
+    const tendrils = new Map<number, { name: string; args: string; callId: string }>();
     let inputTokens = 0;
     let outputTokens = 0;
 
@@ -156,7 +164,7 @@ export class OpenAIWorker {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (gen !== sess.generation) { reader.cancel(); return; }
+        if (gen !== sigil.generation) { reader.cancel(); return; }
         buf += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf("\n")) >= 0) {
@@ -167,23 +175,33 @@ export class OpenAIWorker {
           if (data === "[DONE]") continue;
           let ev: any;
           try { ev = JSON.parse(data); } catch { continue; }
-          const choice = ev.choices?.[0];
-          const delta = choice?.delta;
-          if (delta?.content) {
-            this.chunk(sid, "text_delta", { blockIdx: textBlock, delta: delta.content });
-          }
+          const delta = ev.choices?.[0]?.delta;
           if (delta?.reasoning_content) {
-            this.chunk(sid, "reasoning_delta", { blockIdx: reasoningBlock, delta: delta.reasoning_content });
+            const petal = petalOf("sepal", PetalKind.sepal);
+            this.thrum.send({ chi: "unfurl", sid, petal, kind: PetalKind.sepal, text: delta.reasoning_content });
+          }
+          if (delta?.content) {
+            const petal = petalOf("text", PetalKind.text);
+            this.thrum.send({ chi: "unfurl", sid, petal, kind: PetalKind.text, text: delta.content });
           }
           if (Array.isArray(delta?.tool_calls)) {
             for (const tc of delta.tool_calls) {
               const idx = tc.index ?? 0;
-              const slot = toolArgs.get(idx) ?? { name: "", args: "", callId: tc.id ?? "" };
-              if (tc.function?.name) slot.name = tc.function.name;
-              if (tc.function?.arguments) slot.args += tc.function.arguments;
-              if (tc.id) slot.callId = tc.id;
-              toolArgs.set(idx, slot);
-              this.chunk(sid, "tool_input_delta", { blockIdx: idx, partialJson: slot.args });
+              const tendril = tendrils.get(idx) ?? { name: "", args: "", callId: tc.id ?? "" };
+              if (tc.function?.name) tendril.name = tc.function.name;
+              if (tc.function?.arguments) tendril.args += tc.function.arguments;
+              if (tc.id) tendril.callId = tc.id;
+              tendrils.set(idx, tendril);
+              const petal = petalOf(`tendril:${idx}`, PetalKind.tendril);
+              this.thrum.send({
+                chi: "unfurl",
+                sid,
+                petal,
+                kind: PetalKind.tendril,
+                ...(tc.id ? { callId: tc.id } : {}),
+                ...(tc.function?.name ? { name: tc.function.name } : {}),
+                ...(tc.function?.arguments ? { sap: tc.function.arguments } : {}),
+              });
             }
           }
           if (ev.usage) {
@@ -194,28 +212,26 @@ export class OpenAIWorker {
       }
       buf += decoder.decode();
     } catch (e) {
-      if (gen !== sess.generation) return;
+      if (gen !== sigil.generation) return;
       this.error(sid, "upstream_error", (e as Error).message ?? "upstream failed");
       return;
     }
 
-    if (gen !== sess.generation) return;
+    if (gen !== sigil.generation) return;
 
-    if (toolArgs.size > 0) {
+    for (const { petal, kind } of petals.values()) {
+      this.thrum.send({ chi: "unfurl", sid, petal, kind, closed: true });
+    }
+
+    if (tendrils.size > 0) {
       const calls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = [];
-      for (const [, tc] of toolArgs) {
-        const callId = tc.callId || `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        calls.push({ id: callId, type: "function", function: { name: tc.name, arguments: tc.args } });
-        sess.pending.set(callId, { name: tc.name, args: tc.args });
-        this.thrum.send({
-          chi: "tool-call",
-          sid,
-          callId,
-          toolName: tc.name,
-          args: tc.args,
-        } as Tone);
+      for (const [, tendril] of tendrils) {
+        const callId = tendril.callId || `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        calls.push({ id: callId, type: "function", function: { name: tendril.name, arguments: tendril.args } });
+        sigil.pending.set(callId, { name: tendril.name, args: tendril.args });
+        this.thrum.send({ chi: "tendril-reach", sid, callId, name: tendril.name, args: argsOf(tendril.args) });
       }
-      sess.messages.push({
+      sigil.messages.push({
         role: "assistant",
         content: null,
         tool_calls: calls,
@@ -223,53 +239,43 @@ export class OpenAIWorker {
       return;
     }
 
-    this.chunk(sid, "content_block_stop", { blockIdx: textBlock });
-    this.finish(sid, "stop", inputTokens, outputTokens);
+    this.wilt(sid, "stop", inputTokens, outputTokens);
   }
 
-  private sessionFor(sid: string): Session {
-    const existing = this.sessions.get(sid);
+  private sigilFor(sid: string): Sigil {
+    const existing = this.sigils.get(sid);
     if (existing) return existing;
-    if (this.sessions.size >= OpenAIWorker.MAX_SESSIONS) {
-      const oldest = this.sessions.keys().next().value as string | undefined;
-      if (oldest !== undefined) this.sessions.delete(oldest);
+    if (this.sigils.size >= OpenAIWorker.MAX_SIGILS) {
+      const oldest = this.sigils.keys().next().value as string | undefined;
+      if (oldest !== undefined) this.sigils.delete(oldest);
     }
-    const fresh: Session = {
+    const fresh: Sigil = {
       sid,
       model: "",
       messages: [],
       pending: new Map(),
       generation: 0,
-      finished: false,
+      wilted: false,
     };
-    this.sessions.set(sid, fresh);
+    this.sigils.set(sid, fresh);
     return fresh;
   }
 
-  private chunk(sid: string, chunkType: string, payload: Record<string, unknown>): void {
+  private wilt(sid: string, reason: string, inputTokens: number, outputTokens: number): void {
     this.thrum.send({
-      chi: "chunk",
+      chi: "wilt",
       sid,
-      chunkType,
-      ...payload,
-    } as Tone);
+      reason,
+      nectar: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
+    });
   }
 
-  private finish(sid: string, reason: string, inputTokens: number, outputTokens: number): void {
-    this.thrum.send({
-      chi: "finish",
-      sid,
-      finishReason: reason,
-      usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
-    } as Tone);
-  }
-
-  cancel(msg: Tone): void {
-    const sid = (msg.sid as string) ?? "";
-    const sess = this.sessions.get(sid);
-    if (!sess) return;
-    sess.generation++;
-    sess.finished = true;
+  cancel(msg: Tone<"cancel">): void {
+    const sid = msg.sid ?? "";
+    const sigil = this.sigils.get(sid);
+    if (!sigil) return;
+    sigil.generation++;
+    sigil.wilted = true;
   }
 
   private error(sid: string, code: string, message: string): void {
@@ -279,6 +285,18 @@ export class OpenAIWorker {
       code,
       subtype: "error",
       message,
-    } as Tone);
+    });
   }
+}
+
+function argsOf(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { return raw; }
+}
+
+function petalText(content: Petal[] | undefined): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((p) => p.kind === PetalKind.text && typeof p.text === "string")
+    .map((p) => p.text as string)
+    .join("\n");
 }

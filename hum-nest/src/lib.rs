@@ -1,9 +1,8 @@
 //! hum's hive-side kernel. The worker contract ([`Worker`], [`Egg`],
-//! [`Cell`], [`Propensity`], [`Pollen`], tone encoders), the process
+//! [`Cell`], [`Propensity`], tone encoders), the process
 //! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
-//! sampling / [`limits`] rlimits), and the wire-semantics loops that
-//! wrap [`hum-thrum`] for the two bee shapes — [`serve`] (`serve_worker`)
-//! and [`forager`] (`serve_forager`).
+//! sampling / [`limits`] rlimits), and the wire-semantics loop that
+//! wraps [`hum-thrum`] for a worker: [`serve`] (`serve_worker`).
 //!
 //! One crate, no `nest`-common indirection: a hive that needs the nest
 //! lives here; a remote hive that only needs the wire takes the leaf
@@ -19,7 +18,7 @@
 //! - `StatefulSession` — the bee process retains conversation state in
 //!   its own memory across multiple prompts that share a sid. Foragers
 //!   should derive a stable sid per external conversation and send only
-//!   the *new* user turn each request; the worker keeps prior history.
+//!   the *new* prompt each bloom; the worker keeps prior history.
 //! - `StatelessPerCall` — the bee treats every call as a fresh
 //!   self-contained request. Foragers should send the full transcript
 //!   every time; pooling buys nothing.
@@ -34,7 +33,7 @@
 //! evaluator and swallows immediately.
 //!
 //! [`Classifier`] is the context-loss heuristic seam. The drone calls
-//! it on `TurnEnd` and during `assess` to score the accumulated
+//! it when a bloom wilts and during `assess` to score the accumulated
 //! response text. Implementations decide which patterns are which
 //! severity; the drone only branches on the returned [`Suspicion`].
 //! The default is [`NoopClassifier`], which makes the drone a pure
@@ -49,10 +48,10 @@ use async_trait::async_trait;
 use hum_identity::HumId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thrum_core::{Grain, Petal, PetalKind};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-pub mod forager;
 pub mod lifecycle;
 pub mod limits;
 pub mod metrics;
@@ -60,7 +59,6 @@ pub mod nest;
 pub mod serve;
 pub mod suspicion_regex;
 
-pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
 pub use hum_mcp::protocol::{ToolDef, ToolResult};
 pub use nest::NestConfig;
 pub use serve::{serve_worker, WorkerAdvert};
@@ -178,44 +176,21 @@ pub trait Worker: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Pollen {
-    pub kind: String,
-    pub media_type: String,
-    pub data: Option<String>,
-    pub url: Option<String>,
-}
-
 pub fn encode_prompt(text: &str) -> String {
-    encode_prompt_with_pollen(text, &[])
+    encode_petals(&[Petal {
+        kind: PetalKind::Text.as_str().into(),
+        text: Some(text.into()),
+        ..Petal::default()
+    }])
 }
 
-pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
-    let mut content: Vec<Value> = vec![serde_json::json!({"type": "text", "text": text})];
-    for grain in pollen {
-        match grain.kind.as_str() {
-            "image" => {
-                if let Some(data) = grain.data.as_ref() {
-                    content.push(serde_json::json!({
-                        "type": "image",
-                        "source": { "type": "base64", "media_type": grain.media_type, "data": data }
-                    }));
-                } else if let Some(url) = grain.url.as_ref() {
-                    content.push(serde_json::json!({
-                        "type": "image",
-                        "source": { "type": "url", "url": url }
-                    }));
-                }
-            }
-            other => {
-                let where_clause = grain.url.as_deref()
-                    .map(|u| format!(" ({u})"))
-                    .unwrap_or_default();
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": format!("[attachment: kind={other} media_type={}{where_clause}]", grain.media_type)
-                }));
-            }
+pub fn encode_petals(petals: &[Petal]) -> String {
+    let mut content: Vec<Value> = Vec::new();
+    for petal in petals {
+        match (petal.kind.as_str(), &petal.text, &petal.grain) {
+            ("text", Some(text), _) => content.push(serde_json::json!({"type": "text", "text": text})),
+            ("pollen", _, Some(grain)) => content.push(grain_block(grain)),
+            _ => {}
         }
     }
     serde_json::json!({
@@ -223,6 +198,26 @@ pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
         "message": { "role": "user", "content": content }
     })
     .to_string()
+}
+
+fn grain_block(grain: &Grain) -> Value {
+    match (grain.kind.as_str(), &grain.data, &grain.url) {
+        ("image", Some(data), _) => serde_json::json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": grain.media_type, "data": data }
+        }),
+        ("image", None, Some(url)) => serde_json::json!({
+            "type": "image",
+            "source": { "type": "url", "url": url }
+        }),
+        (kind, _, url) => {
+            let at = url.as_deref().map(|u| format!(" ({u})")).unwrap_or_default();
+            serde_json::json!({
+                "type": "text",
+                "text": format!("[attachment: kind={kind} media_type={}{at}]", grain.media_type)
+            })
+        }
+    }
 }
 
 pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {

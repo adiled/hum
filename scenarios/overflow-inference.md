@@ -45,9 +45,9 @@ behalf of routed prompts.
 4. humd-B accepts, spawns the brood on its local `claude-cli` nest,
    begins blooming. Every outbound petal is routed to humd-A as well
    as kept locally; humd-A forwards them onto the originating
-   nestler's stream so the HTTPS client sees real-time chunks.
-5. `chi:"finish"` lands on humd-B; it forwards to humd-A; humd-A
-   closes the SSE/HTTP response with matching `usage`.
+   nestler's stream so the HTTPS client sees real-time unfurls.
+5. `chi:"wilt"` lands on humd-B; it forwards to humd-A; humd-A
+   closes the SSE/HTTP response, its nectar as the `usage`.
 6. After close, humd-A still holds the full transcript replicated
    from humd-B — the gateway has a local copy for audit/retry, not
    just for live forwarding.
@@ -59,11 +59,11 @@ behalf of routed prompts.
   `qualifier:"overflow.no-capacity"` and either retry against another
   peer or fail the client cleanly — never hang.
 - **Drop mid-stream.** humd-B's link to humd-A drops between
-  `chi:"chunk"` 5 and 6. The test must catch this as a routed-bloom
+  `chi:"unfurl"` 5 and 6. The test must catch this as a routed-bloom
   error surfaced to humd-A's nestler, not a silent truncation. Bonus:
   on heal, wane allows humd-A to fetch the missing slice without
   re-prompting.
-- **Replication gap.** humd-A receives the live chunks but the
+- **Replication gap.** humd-A receives the live unfurls but the
   post-close audit copy is incomplete (missing tool-calls, missing
   drone, missing perf-marks). Test asserts the replicated transcript
   on humd-A is byte-equivalent to humd-B's local hum log for the
@@ -79,14 +79,14 @@ behalf of routed prompts.
 ## The success criteria
 
 - humd-A emits exactly one trace `nest.overflow.routed` naming the
-  chosen `HumdId` before the first chunk is requested upstream.
+  chosen `HumdId` before the first unfurl is requested upstream.
 - humd-B's local tap receives `chi:"prompt"` with `origin =
   humd-A.id` within `RTT + 50ms` of step 1.
 - The HTTPS client connected to humd-A receives the first SSE chunk
   within `RTT_AB + RTT_AB + first-token-latency + 100ms` (one RTT to
   humd-B, one back for the first petal).
 - The client's terminal SSE event carries `usage.output_tokens > 0`
-  and matches the `usage` on humd-B's local `chi:"finish"` exactly.
+  and matches the `nectar` on humd-B's local `chi:"wilt"` exactly.
 - After close, humd-A's hum store for the routed sigil contains the
   full ordered petal log; comparison against humd-B's store yields
   zero diff. `WaneTracker::is_behind` on humd-A reads false against

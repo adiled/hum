@@ -99,11 +99,13 @@ whose hive is installed. hum starts no process.
   hum bee --list                            bees entered here, and which have nestled
   hum bee enter --hive <hive> [--as <l>]    sign a bee in; prints its id
                                             (the same bee every time for one label)
+  hum bee link --hive <hive> --as <l>       be that bee's client on stdio
+                                            (spawned by a bee's thrum client)
   hum bee <id> exit            sign it out; humd refuses its next hello
   hum bee <id> reenter         sign it back in")]
     #[command(verbatim_doc_comment)]
     Bee {
-        #[arg(help = "`enter`, or the id of an entered bee")]
+        #[arg(help = "`enter`, `link`, or the id of an entered bee")]
         target: Option<String>,
         #[arg(help = "Verb for a bee id: exit | reenter")]
         verb: Option<String>,
@@ -679,11 +681,14 @@ fn doctor() -> Result<()> {
     println!("\n[bees]");
     let _ = bees::list();
 
+    println!("\n[advisories]");
+    bees::advice();
+
     println!("\n[recent humd + worker logs — warnings/errors]");
     print_recent_logs("hum", 60);
 
     println!("\n{bar}");
-    println!("If a bee shows 0 tokens / silent finish, look for `worker.result.error`");
+    println!("If a bee shows 0 tokens / a silent wilt, look for `worker.result.error`");
     println!("above — claude reports auth/model/credit failures there, not on stderr.");
     Ok(())
 }
@@ -766,10 +771,61 @@ fn bee(
     match (target.as_deref(), verb, hive) {
         (Some("enter"), None, Some(h)) => bees::enter(&h, label.as_deref()),
         (Some("enter"), None, None) => anyhow::bail!("hum bee enter --hive <hive>"),
+        (Some("link"), None, Some(h)) => match label {
+            Some(label) => std::process::exit(link(&h, &label)),
+            None => anyhow::bail!("hum bee link --hive <hive> --as <label>"),
+        },
+        (Some("link"), None, None) => anyhow::bail!("hum bee link --hive <hive> --as <label>"),
         (Some(id), Some(v), None) => bees::act(id, &v),
         (Some(id), None, _) => anyhow::bail!("hum bee {id} <verb> — exit | reenter"),
         _ => anyhow::bail!("hum bee enter --hive <hive>, hum bee <id> exit|reenter, or hum bee --list"),
     }
+}
+
+fn link(hive: &str, label: &str) -> i32 {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("HUM_LOG_LEVEL")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,hum_thrum=info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .compact()
+        .init();
+    ignore_stop_signals();
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("hum bee link: {e}");
+            return hum_thrum::link::exit::FAILED;
+        }
+    };
+    let code = runtime.block_on(hum_thrum::link::serve(hive, label, hum_thrum::Endpoint::Resolve));
+    runtime.shutdown_background();
+    code
+}
+
+fn ignore_stop_signals() {
+    let _ = std::thread::Builder::new().name("link-signals".into()).spawn(|| {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+        let Ok(rt) = rt else { return };
+        rt.block_on(async {
+            use tokio::signal::unix::{SignalKind, signal};
+            let (Ok(mut int), Ok(mut term), Ok(mut hup)) = (
+                signal(SignalKind::interrupt()),
+                signal(SignalKind::terminate()),
+                signal(SignalKind::hangup()),
+            ) else {
+                return;
+            };
+            loop {
+                tokio::select! {
+                    _ = int.recv() => {}
+                    _ = term.recv() => {}
+                    _ = hup.recv() => {}
+                }
+            }
+        });
+    });
 }
 
 fn comb_key(key: &str) -> std::borrow::Cow<'_, str> {

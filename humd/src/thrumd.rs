@@ -199,7 +199,11 @@ impl Thrum {
     }
 
     pub fn thrum_close(&self, client_id: &str) {
-        self.inner.clients.write().remove(client_id);
+        let mut reg = self.inner.clients.write();
+        if let Some(reach) = reg.get(client_id) {
+            reach.close();
+        }
+        reg.remove(client_id);
     }
 
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
@@ -298,11 +302,11 @@ pub(crate) fn tone_is_dusk(tone: &Value) -> bool {
     false
 }
 
-pub fn breath_tone(sessions: Value) -> Tone {
+pub fn breath_tone(sigils: Value) -> Tone {
     json!({
         "chi": "breath",
         "from": "daemon",
-        "sessions": sessions,
+        "sigils": sigils,
         "protoVersion": THRUM_VERSION,
     })
 }

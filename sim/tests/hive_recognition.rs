@@ -16,7 +16,7 @@ async fn prompt_reaches_the_remote_worker(
             "rid": format!("{sid}-1"),
             "sid": sid,
             "modelId": "far-model",
-            "content": "anyone of that kind out there?",
+            "text": "anyone of that kind out there?",
         }),
     )
     .expect("laptop nestler sends prompt");
@@ -65,7 +65,7 @@ async fn a_remote_bee_is_routed_to_only_once_its_hive_is_installed_here() {
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["far-model"],
-                "chis": ["hello", "prompt", "chunk", "finish"],
+                "chis": ["hello", "prompt", "unfurl", "wilt"],
             })),
         )
         .await;

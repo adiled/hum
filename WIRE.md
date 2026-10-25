@@ -7,11 +7,12 @@ description: "the language-neutral protocol bees speak to humd. Implementable in
 
 > _the language-neutral protocol bees speak to humd. Implementable in any language with an NDJSON parser and a Unix socket library._
 
-This is the **canonical wire spec**. Rust (`thrum-core`), TypeScript
-(`thrum-clients/ts`), Python (`thrum-clients/python`), Go
-(`thrum-clients/go`) and C (`thrum-clients/c`) are reference clients — they all conform to the
-rules below. If a client disagrees with this document, the document
-wins.
+This is the **canonical wire spec**. hum speaks it through one client,
+`hum-thrum`, in Rust: a Rust bee holds it in-process, and a bee in TS,
+Python, Go or C reaches it through `hum bee link` with the client
+codegen emits for its language (`thrum-clients/`). A language hum does
+not generate a client for can speak [the link](#the-link) or the wire
+itself. If a client disagrees with this document, the document wins.
 
 ## Transport
 
@@ -19,14 +20,14 @@ wins.
   separated by `\n` (`0x0A`). No CRLF, no trailing whitespace,
   no leading BOM. Lines that don't parse as JSON are dropped silently
   by humd; clients should do the same.
-- **Socket**: Unix stream socket at one of (in priority order)
-  - `$HUM_THRUM_SOCK` (explicit override)
+- **Socket**: Unix stream socket at the first of
+  - `$HUM_THRUM_SOCK` (explicit override), then `$HUM_SOCKET`
+  - the `socket` named in `$XDG_STATE_HOME/hum/runtime.json`
   - `$XDG_STATE_HOME/hum/thrum.sock`
-  - `/run/user/<uid>/hum/thrum.sock`
 - **Encoding**: UTF-8. Keys are case-sensitive, camelCase by
   convention (the wire uses `protoVersion`, `sentAt`, etc.). The
   `chi` discriminator and all chi values are **kebab-case**
-  (`"tool-call"`, `"release-permit"`).
+  (`"tendril-reach"`, `"release-permit"`).
 - **Backpressure**: humd reads at line rate; if a writer can't keep up,
   the receiver drops oldest unsent frames. Clients SHOULD assume
   at-most-once delivery of any single tone.
@@ -42,11 +43,11 @@ Every tone is a JSON object with these top-level fields:
 | key | type | required | meaning |
 |---|---|---|---|
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
-| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; reference clients use `"{base36-ms-timestamp}-{base36-counter}"`. **Not a dedup key** — see [Identity](#identity). |
-| `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
+| `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; hum's client mints a HumId (52 Crockford base32 characters) when a bee sends none. **Not a dedup key** — see [Identity](#identity). |
+| `sid` | string | situational | The string a [sigil](#sigilsid) is drawn from: blooms whose tones carry it share that sigil. Required for `prompt`, `unfurl`, `wilt`, `tendril-reach`, and the like. The forager picks it. |
 | `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
-| `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same (nest, sid). |
+| `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same sid. |
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
 | `dusk` | integer | optional | Absolute ms expiry. humd drops a tone arriving with `now > dusk`, and counts it — see [Identity](#identity). |
@@ -101,9 +102,9 @@ single protocol.
   "propensity": {
     "statefulness": "stateless | convention-stateful | stateful | transport-only",
     "richness":     "rich | medium | lean | opaque",
-    "wire":         "<freeform tag, e.g. 'openai/chat-completions' or 'x402/tool-call'>"
+    "wire":         "<freeform tag, e.g. 'openai/chat-completions' or 'x402/tendril'>"
   },
-  "chis": ["hello", "prompt", "chunk", "finish"],
+  "chis": ["hello", "prompt", "unfurl", "wilt"],
   "source": "https://github.com/...optional pointer to your repo..."
 }
 ```
@@ -155,13 +156,13 @@ Direction is sacred. Two ends of the same connection, two roles:
 
 | who | sends | receives |
 |---|---|---|
-| **asker side** (a nestler when pre-handshake, a nestled after) | `chi:"hello"` (first ask), then `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"` — keeps asking the whole lifetime | `chi:"breath"` (accepting the handshake), `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"`, `chi:"session-ready"`, `chi:"pulse"` |
-| **cell side** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cancel"` |
+| **forager side**, the bee that prompts (a nestler before its hello is accepted, a nestled after) | `chi:"hello"` first, then `chi:"prompt"`, `chi:"cancel"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"`, for the whole of its life | `chi:"breath"` (accepting the hello), `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"`, `chi:"pulse"` |
+| **cell side** (compute) | `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cancel"` |
 
-The asker is the same actor throughout — a **nestler** before its
+The forager is the same bee throughout: a **nestler** before its
 hello is accepted, a **nestled** after. The role doesn't flip when
 the state changes; "hello" is just the first of many asks the
-connection will carry. Cancels, prompts, tool-results, cleanups all
+connection will carry. Cancels, prompts, tendril-results, cleanups all
 flow from the nestled state, not just hello from the nestler.
 
 A cell is always answerer. **Nobody is both on the same connection.**
@@ -173,7 +174,7 @@ advertise.
 The wire is **opaque to the cell's implementation.** A cell might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
-the wire sees identical chunks coming back either way. The kind of
+the wire sees the same petals unfurl back either way. The kind of
 cell (`Worker` impl, in Rust terms) is the hive's concern,
 exposed to the wire only via `hive: "<kind>"` on hello.
 
@@ -182,14 +183,14 @@ What the wire *does* see, at the humd level:
 - Each humd advertises in its `PeerCapabilities.nests` (gossiped via
   the ensemble) which **kinds** of hive its nest is configured to
   host (e.g. `["claude-cli", "ollama-local"]`).
-- Each `chi:"prompt"` carries a `modelId` — the asker says which
+- Each `chi:"prompt"` carries a `modelId`: the forager says which
   model it wants. humd's routing picks an appropriate worker bee
   (a local one over thrum, or routes to a peer humd whose advertised
   hives can serve it).
 
 That's the whole "compute discovery" mechanism. No `provides_nest`
 field on a bee's hello — the kind is `hive: "<name>"` + bee role flag.
-**The advertise lives on the humd, not invented per-asker.**
+**The advertise lives on the humd, not invented per forager.**
 
 If you want to add a new kind of compute to the mesh, you ship a
 `Worker` impl (any process speaking thrum), point it at a humd, and
@@ -212,35 +213,34 @@ clients carry as their doc comment. They are the same contract stated
 at two lengths — `description` is the one the clients quote, so a chi
 with no description here has none in the clients either.
 
-### Nestler → daemon
+### Nestler → humd
 
 | chi | body fields | meaning | description |
 |---|---|---|
 | `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
-| `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn | start a turn — content, system, tools |
-| `cancel` | `sid` | interrupt the current turn for this sid | interrupt mid-turn |
-| `cleanup` | `sid` | drop daemon state for this session | session deleted, drop daemon state |
+| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd`/`systemPrompt`/`tools`, and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal` | open a bloom | open a bloom: its petals, and how the cell should grow it |
+| `cancel` | `sid` | stop the open bloom of this sigil | stop the open bloom |
+| `cleanup` | `sid` | drop humd's state for this sigil | drop humd's state for a sigil |
 | `curate` | `sid` | manual compaction request | manual compaction request |
 | `release-permit` | `callId`, `ok`, optional `error` | answer a `permission-ask` | resolve an earlier permission-ask |
-| `tendril-result` | `sid`, `callId`, `result` | task subagent answered | task subagent answered |
-| `tool-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | nestler-declared tool answered | nestler-declared tool answered |
+| `scout-result` | `sid`, `callId`, `output` | a scout came back | a scout came back |
+| `tendril-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | what a tendril grasped | what a tendril grasped |
 | `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) | OC message-graph update (graft hint) |
 
-### Daemon → nestler
+### humd → nestler
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `breath` | (state snapshot, usually `{}`) | reply to hello — handshake, full state sync on connect | handshake — full state sync on connect |
-| `chunk` | `chunkType`, `blockIdx`, `delta`, `partialJson` | streamed model output, partwise (text/reasoning/tool) | model output partwise (text/reasoning/tool) |
-| `finish` | `finishReason`, `usage`, optional `exitCode`, `subtype` | turn complete | turn complete — finishReason + usage |
-| `error` | `message`, `code`, optional `subtype`, `usage` | turn aborted / hard error | turn aborted |
-| `session-ready` | `nestId`, `model`, `tools` | nest spawned, ready for prompts | nest spawned, claude session id known |
-| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), optional `pid`/`headroom` | cell lifecycle event, with the worker's headroom after it | cell lifecycle event and headroom |
-| `permission-ask` | `callId`, `toolName`, `message`, `arg` | mid-stream permission needed | mid-stream permission needed |
-| `tendril-reach` | `task`, `tools` | task subagent dispatch | task subagent dispatch |
-| `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch | nestler-declared tool dispatch |
-| `tool-meta` | `callId`, `toolName`, `metadata` | out-of-band metadata for a tool result | out-of-band metadata for a tool result |
-| `tool-info` | `callId`, `name`, `args`, `result` | completed-in-server tool execution, purely informational. Carries the full pair as one tone. Unlike `tool-call`/`tool-result`, which form a two-phase handoff requiring the recipient to execute and reply, `tool-info` says "this tool ran upstream, here's everything." Consumers render it without taking action. | completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event. |
+| `breath` | `sigils` (state per sigil, usually `{}`), optional `protoVersion` | reply to hello: accepts it, and syncs state on connect | accept a hello, sync state on connect |
+| `unfurl` | `petal` (its index in the bloom), `kind`, and what grew: `text`, `sap`, `callId`/`name`, `grain`, `propolis`, `source`, `brix`; `closed` once the petal is whole | one petal of a bloom growing | a petal growing |
+| `wilt` | `reason`, `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
+| `error` | `message`, `code`, optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
+| `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the worker's headroom after it | a cell's life, and headroom |
+| `permission-ask` | `callId`, `name`, `message`, `arg` | a tendril needs leave to reach | a tendril needs leave to reach |
+| `scout` | `task`, `tools` | send a scout out | send a scout out |
+| `tendril-reach` | `sid`, `callId`, `name`, `args` | a brokered tool call reaching | a tendril reaching |
+| `tendril-meta` | `callId`, `name`, `metadata` | what a tendril carries besides its result | what a tendril carries besides its result |
+| `tendril-info` | `callId`, `name`, `args`, `result`, `isError` | a tendril that already reached and came back, told whole. Unlike `tendril-reach` and `tendril-result`, a two-phase handoff the receiver acts on, `tendril-info` says "this ran upstream, here is all of it", and a receiver only shows it. | a tendril that already came back, told whole, for showing only |
 
 ### Either direction
 
@@ -276,10 +276,63 @@ See [`ensemble/README.md`](../ensemble/README.md).
 | kind | description |
 |---|---|
 | `cell-spawned` | process created |
-| `cell-ready` | system init received, accepting input |
-| `cell-idle` | turn complete, no listeners |
+| `cell-ready` | brooded: accepting prompts, its id, model and tools known |
+| `cell-idle` | the bloom wilted, no listeners |
 | `cell-died` | process exited |
 | `cell-evicted` | killed to make room |
+
+### `petal.kind`
+
+A petal is one unit of content: in a prompt's `content`, and as it grows
+in an `unfurl`.
+
+| kind | description |
+|---|---|
+| `text` | words, in `text` |
+| `tendril` | a brokered tool call: `callId`, `name`, `args`; its input grows as `sap` |
+| `grasp` | what a tendril came back with: `callId`, `result`, `isError` |
+| `pollen` | a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url` |
+| `sepal` | the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom |
+| `waggle` | where a petal's words came from: `source` |
+| `thorn` | the cell declining, or a filter acting: `text` says why |
+| `brix` | how likely each token was: `brix` |
+| `bouquet` | several candidate petals for one prompt: `bouquet` |
+
+### How a bloom grows
+
+A prompt says how the cell should grow its bloom.
+
+| field | meaning |
+|---|---|
+| `temperature` | how warm the sampling is |
+| `prune` | `p` and `k`: cut the unlikely tail |
+| `season` | how many tokens the bloom may grow |
+| `frost` | where the bloom stops |
+| `seed` | a seed, for a bloom grown again the same |
+| `trellis` | the shape the answer grows along: a schema, or `"json"` |
+| `tendrils` | `reach` (`auto`, `none`, `required`, or a tendril's name) and `parallel` |
+| `sepal` | how much the cell reasons first: `effort`, or a `budget` |
+
+### Advisories
+
+humd refuses what it must (an unsigned hello, a bee its hive did not
+enter, a revoked key, an incompatible protocol) and advises on the rest.
+An advisory reaches the bee as a `log` tone whose `fields.advisory` is
+one of these codes, and hum's client raises some itself before a tone
+leaves the bee. humd keeps them per bee in `advisories.json` in the state
+root, and `hum doctor` lists them.
+
+| code | raised by | meaning |
+|---|---|---|
+| `undeclared-key` | client, humd | a tone carries keys the thrum does not declare for its chi |
+| `unknown-chi` | client | a tone's chi is not in the thrum |
+| `not-a-tone` | client | a line from the bee is not a JSON object with a chi, and was dropped |
+| `client-owned` | client | the bee set a hello field the client owns, and it was ignored |
+| `tone-refused` | client | humd refused a tone under a rid the client gave it |
+| `dropped-while-away` | client | tones sent while humd was away were dropped |
+| `proto-drift` | humd | the bee speaks another minor version of the thrum |
+| `reconnect-storm` | humd | the bee said hello 10 times within 10 minutes |
+| `did-not-return` | humd | the bee was nestled when humd stopped and had not come back 2 minutes after humd started |
 
 **Send deadline.** Every inter-humd send is bounded at 5s
 (`ensemble::SEND_TIMEOUT`). A peer that stops reading fills its socket
@@ -294,8 +347,8 @@ one.
 
 ## Helpers
 
-The reference clients ship three deterministic helpers. Algorithms
-are pinned by the protocol — any client implementation MUST match
+Three deterministic helpers are pinned by the protocol. `thrum-core`
+holds them, and anything else that computes them MUST match
 byte-for-byte.
 
 ### `sigil(sid)`
@@ -304,19 +357,19 @@ byte-for-byte.
 sigil = lowercase_hex(sha256("sigil:" + sid)[..6])      // 12 chars
 ```
 
-Stable identifier for a session, the same on every humd. Used by humd's
-WaneTracker keys and by drift detection; `sid` is the session id the
-asker chose.
+What ties a run of blooms together, the same on every humd. humd routes a
+bloom's tones by it and keys its wane by it; `sid` is the string the
+forager chose to draw it from.
 
 ### `rid()`
 
 ```
-rid = base36(now_ms) + "-" + base36(counter++)
+rid = crockford_base32(now_ms[48 bits] ++ random[208 bits])   // 52 chars, a HumId
 ```
 
-Monotonic correlation id. Counter is per-process and starts at 0.
-Format-agnostic on receive — only the originator's correlation logic
-cares about the exact format.
+Correlation id, ordered by when it was minted. Format-agnostic on
+receive: only the originator's correlation logic cares about the exact
+format.
 
 ### Identity
 
@@ -327,7 +380,7 @@ are load-bearing:
   is the ack *for* an `rid`, so a receiver that deduped on `rid` would
   drop every response as a duplicate of its request.
 - `rid` is explicitly format-agnostic and per-originator, so two humds
-  can mint the same value. Reference clients mint per-session values
+  can mint the same value. Some bees mint per-session values
   (`p-<sid>`, `prompt-<sid>`) that recur across restarts.
 - A sender that means to publish the same content twice is not
   transmitting a duplicate. Repeats are ordinary for the tones gossip
@@ -401,56 +454,90 @@ if remote_wane > local_wane[sigil]:
 
 Both ends converge in O(1) round-trips after the link heals.
 
-## Tool-call extension
+## Tendrils
 
-A nestler-declared tool is an arbitrary callable the bee exposes
-to the model via `chi:"prompt"` `tools` array. When the model picks
-it, humd emits `chi:"tool-call"`; the nestler answers with
-`chi:"tool-result"` carrying the same `callId`.
+A nestler-declared tool is an arbitrary callable the bee offers the
+cell in its prompt's `tools`. When the cell picks it, a tendril
+reaches: humd emits `chi:"tendril-reach"`, and the nestler answers with
+`chi:"tendril-result"` carrying the same `callId`.
 
 ```
-nestler → daemon: chi:"prompt" { tools: [{ name, description, input_schema }, ...] }
-daemon → nestler: chi:"tool-call" { sid, callId, name, args }
-nestler → daemon: chi:"tool-result" { sid, callId, result }
+nestler → humd: chi:"prompt" { tools: [{ name, description, input_schema }, ...] }
+humd → nestler: chi:"tendril-reach" { sid, callId, name, args }
+nestler → humd: chi:"tendril-result" { sid, callId, result }
 ```
 
-Errors set `result.error` and humd surfaces them as a model error
-turn. Timeouts: if no `tool-result` arrives within the nestler-side
-timeout, send `chi:"tool-result"` with `result.error = "timeout"` so
-the model unblocks.
+Errors set `result.error`, and humd surfaces them as an error in the
+bloom. If no `tendril-result` arrives within the nestler's own timeout,
+it sends `chi:"tendril-result"` with `result.error = "timeout"` so the
+cell does not wait forever.
 
-## Implementing a client — checklist
+## The client
 
-A clean port to a new language takes ~80 LoC. The minimum:
+A bee does not implement this wire; it uses hum's client. In Rust that
+is `hum_thrum::Bee::link`. In TS, Python, Go and C it is the client in
+`thrum-clients/<lang>`, generated from the Rust, which runs
+`hum bee link --hive <hive> --as <label>` and talks to it over two
+pipes. Either way the same Rust decides everything below, so every
+language behaves the same, and `cargo test -p hum --test conform` holds
+each of them to it against a real humd.
 
-1. Resolve the socket path: `HUM_THRUM_SOCK`, then `HUM_SOCKET`, then the
-   `socket` named in `$XDG_STATE_HOME/hum/runtime.json`, then
-   `$XDG_STATE_HOME/hum/thrum.sock`.
-2. `connect()` over a Unix stream socket. Buffer incoming bytes,
-   split on `\n`, JSON-parse each line, drop on parse error.
-3. Send `chi:"hello"` immediately after connect. Buffer subsequent
-   writes until connect resolves.
-4. Multiplex by `sid`: keep a `Map<sid, handler>` plus one catch-all
-   handler for tones without a sid (breath, echo, pulse).
-5. Serialize outbound tones with newline termination (`json.dumps(t) + "\n"`).
-6. On close: drop any pending writes, surface the disconnect to handlers.
-7. Outlive humd. humd restarts (an upgrade, a crash, a reboot), so when
-   the socket closes, reconnect with backoff (250 ms, doubling to 30 s)
-   and send a freshly signed hello. A refused hello is final. A bee that
-   does not reconnect must exit non-zero, so whatever supervises it
-   starts it again; exiting 0 reads as done.
+### The link
 
-Reference: [`thrum-core`](../thrum-core),
-[`thrum-clients/ts`](../thrum-clients/ts),
-[`thrum-clients/python`](../thrum-clients/python),
-[`thrum-clients/go`](../thrum-clients/go),
-[`thrum-clients/c`](../thrum-clients/c).
+One JSON object per line, each way. A line with a `chi` is a tone and
+passes through unchanged; a line without one is the link's own.
+
+| direction | line | meaning |
+|---|---|---|
+| link to bee | `{"link":"ready","linkVersion":1,"thrum":..,"bee":..,"hive":..,"as":..}` | first: the bee is entered; a client of another `linkVersion` stops here |
+| bee to link | `{"hello":{..}}` | first: the bee's own hello fields; the link connects once it has them |
+| link to bee | `{"link":"nestled"}` | humd admitted the bee, at start and after every reconnect |
+| link to bee | `{"link":"astray"}` | humd went away; the link is dialing again |
+| link to bee | `{"link":"advisory","code":..,"message":..,"from":..,"fields":{..}}` | something to fix ([Advisories](#advisories)) |
+| bee to link | `{"hello":{..}}` | later: a change to the hello; a null drops a field |
+| link to bee | `{"link":"refused","error":..}` | last: humd refused the bee, or its hive is not installed |
+
+The link owns the hello's `chi`, `rid`, `hive`, `protoVersion`, `hid`,
+`from`, `pubkey`, `signedAt` and `signature`, gives a tone without a
+`rid` one, and swallows humd's acknowledgements of the rids it minted.
+It exits 0 when the bee closes its stdin, 3 when the bee is refused, 2
+on a first line that is not a hello, and 1 otherwise. It ignores
+interrupts and terminations: its life is the pipe's.
+
+### Speaking the wire yourself
+
+A bee in a language hum does not generate a client for can speak the
+link, or the wire itself. The wire, as hum's client speaks it:
+
+1. Resolve the socket as [Transport](#transport) says, afresh on every
+   dial.
+2. Connect. humd breathes once (`sessions: []`) before it has heard
+   anything; that breath admits nothing.
+3. Send the hello, signed as a key the bee's hive entered, under a fresh
+   `rid`. humd acknowledges it (`echo`, `ok: true`), then gives its
+   verdict: a breath (`sessions: {}`) admits the bee, an `echo` with
+   `ok: false` under the hello's `rid` refuses it. A refusal is final,
+   even one that comes after admission. A change to the hello is a
+   fresh signed hello on the same connection: at once while nestled,
+   and the moment the bee is admitted when the change came while the
+   verdict was pending.
+4. Split incoming bytes on `\n`, parse each line, drop what does not
+   parse. Dispatch by `sid`, then by `chi`.
+5. Send tones one per line. Give every tone a `rid`. Check it against
+   the views first: humd advises on what it does not declare.
+6. Outlive humd. When the socket closes, reconnect with backoff (250 ms,
+   doubling to 30 s, with jitter) and send a freshly signed hello,
+   carrying the latest `headroom`, including any the bee claimed while
+   humd was away. Drop the rest of what the bee sends while humd is
+   away. A bee that will not reconnect must exit non-zero, so its
+   supervisor starts it again; humd advises `did-not-return` on a bee
+   that does neither.
 
 ## Version history
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells |
+| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |
@@ -460,10 +547,9 @@ Reference: [`thrum-core`](../thrum-core),
 
 ## See also
 
-- [`thrum-core`](../thrum-core) — Rust source of truth (chi enum, helpers).
-- [`thrum-clients/ts`](../thrum-clients/ts) — TypeScript reference client.
-- [`thrum-clients/python`](../thrum-clients/python), [`thrum-clients/go`](../thrum-clients/go) — Python + Go reference clients.
-- [`thrum-clients/c`](../thrum-clients/c): the C reference client, over libsodium and cJSON.
+- [`thrum-core`](../thrum-core): the Rust source of truth (chi enum, views, helpers).
+- [`hum-thrum`](../hum-thrum): the client, sans-IO at its core, and the link.
+- [`thrum-clients`](../thrum-clients): the generated client for TS, Python, Go and C.
 - [`ensemble/README.md`](../ensemble/README.md) — inter-humd routing.
 - [`hives/foragers.md`](../hives/foragers.md) — typology + propensity axes.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

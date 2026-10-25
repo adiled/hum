@@ -3,12 +3,12 @@
 //! A comb is a ledger of quantities: a flat map of named counters that
 //! accumulates for the life of the install. Two families live in it.
 //!
-//! **Activity** — what crossed the kernel, by chi: `chi:finish`,
-//! `chi:tool-call`, and `hive:claude-cli:chi:finish` for the same count
+//! **Activity** — what crossed the kernel, by chi: `chi:wilt`,
+//! `chi:tendril-reach`, and `hive:claude-cli:chi:wilt` for the same count
 //! scoped to the hive of the bee that did the work. The scoped counts
-//! cover the work chis: a
-//! turn finished, a tool was called, a tool answered, something went
-//! wrong, because those are the ones that name what was done.
+//! cover the work chis: a bloom wilted, a tendril reached, a tendril
+//! answered, something went wrong, because those are the ones that name
+//! what was done.
 //!
 //! **Nectar** — what was consumed, by metric: `nectar:in`, `nectar:out`,
 //! `nectar:cacheRead`, `nectar:cacheCreate`, and the same scoped to a hive
@@ -22,11 +22,12 @@
 //! crosses it, so the measure is observed rather than self-reported: a bee
 //! metering itself would be reporting on itself. A tone that crossed the
 //! mesh has no bee here to answer for it, so it lands in the global family
-//! alone. Each humd keeps its own comb, so a session that touches two
+//! alone. Each humd keeps its own comb, so a sigil that touches two
 //! humds is accounted by each of them rather than counted once.
 //!
-//! Nothing is measured that was not measured: a hive that reports no
-//! usage is measured as having used nothing.
+//! A wilt carries its bloom's nectar, and nectar is read from nothing
+//! else. Nothing is measured that was not measured: a hive that reports
+//! no nectar is measured as having used nothing.
 //!
 //! The scope is the hive, not the bee: bees come and go and rename
 //! themselves, while the kind is what an operator asks about. Older
@@ -45,7 +46,7 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use tracing::{trace, warn};
 
-pub const WORK_CHIS: [&str; 4] = ["finish", "tool-call", "tool-result", "error"];
+pub const WORK_CHIS: [&str; 4] = ["wilt", "tendril-reach", "tendril-result", "error"];
 
 pub const TOKEN_METRICS: [(&str, &[&str]); 4] = [
     (
@@ -103,8 +104,8 @@ fn rescoped(key: String) -> String {
     }
 }
 
-pub fn usage_of(usage: Option<&Value>) -> Vec<(&'static str, u64)> {
-    let Some(obj) = usage.and_then(Value::as_object) else {
+pub fn nectar_of(nectar: Option<&Value>) -> Vec<(&'static str, u64)> {
+    let Some(obj) = nectar.and_then(Value::as_object) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -131,10 +132,10 @@ impl Comb {
         })
     }
 
-    pub fn record(&self, chi: &str, hive: Option<&str>, usage: Option<&Value>) {
+    pub fn record(&self, chi: &str, hive: Option<&str>, nectar: Option<&Value>) {
         self.incr(&chi_key(chi));
-        let tokens = if chi == "finish" {
-            usage_of(usage)
+        let tokens = if chi == "wilt" {
+            nectar_of(nectar)
         } else {
             Vec::new()
         };
@@ -244,35 +245,35 @@ mod tests {
     #[test]
     fn record_counts_chi_globally() {
         let c = Comb::new();
-        c.record("finish", None, None);
-        c.record("finish", None, None);
+        c.record("wilt", None, None);
+        c.record("wilt", None, None);
         c.record("prompt", None, None);
         let snap = c.snapshot();
-        assert_eq!(snap.get("chi:finish"), Some(&2));
+        assert_eq!(snap.get("chi:wilt"), Some(&2));
         assert_eq!(snap.get("chi:prompt"), Some(&1));
     }
 
     #[test]
     fn record_attributes_work_to_the_hive() {
         let c = Comb::new();
-        c.record("finish", Some("claude-cli"), None);
-        c.record("tool-call", Some("claude-cli"), None);
-        c.record("chunk", Some("claude-cli"), None);
+        c.record("wilt", Some("claude-cli"), None);
+        c.record("tendril-reach", Some("claude-cli"), None);
+        c.record("unfurl", Some("claude-cli"), None);
         let snap = c.snapshot();
-        assert_eq!(snap.get("hive:claude-cli:chi:finish"), Some(&1));
-        assert_eq!(snap.get("hive:claude-cli:chi:tool-call"), Some(&1));
-        assert_eq!(snap.get("hive:claude-cli:chi:chunk"), None);
+        assert_eq!(snap.get("hive:claude-cli:chi:wilt"), Some(&1));
+        assert_eq!(snap.get("hive:claude-cli:chi:tendril-reach"), Some(&1));
+        assert_eq!(snap.get("hive:claude-cli:chi:unfurl"), None);
     }
 
     #[test]
-    fn record_measures_nectar_from_usage() {
+    fn record_measures_nectar_from_a_wilt() {
         let c = Comb::new();
-        let usage = json!({
+        let nectar = json!({
             "input_tokens": 1200,
             "output_tokens": 34,
             "cache_read_input_tokens": 900,
         });
-        c.record("finish", Some("claude-cli"), Some(&usage));
+        c.record("wilt", Some("claude-cli"), Some(&nectar));
         let snap = c.snapshot();
         assert_eq!(snap.get("nectar:in"), Some(&1200));
         assert_eq!(snap.get("nectar:out"), Some(&34));
@@ -282,20 +283,20 @@ mod tests {
     }
 
     #[test]
-    fn openai_usage_names_measure_the_same_way() {
+    fn openai_token_names_measure_the_same_way() {
         let c = Comb::new();
-        let usage = json!({ "prompt_tokens": 10, "completion_tokens": 2 });
-        c.record("finish", None, Some(&usage));
+        let nectar = json!({ "prompt_tokens": 10, "completion_tokens": 2 });
+        c.record("wilt", None, Some(&nectar));
         let snap = c.snapshot();
         assert_eq!(snap.get("nectar:in"), Some(&10));
         assert_eq!(snap.get("nectar:out"), Some(&2));
     }
 
     #[test]
-    fn usage_is_only_read_on_finish() {
+    fn nectar_is_only_read_on_a_wilt() {
         let c = Comb::new();
-        let usage = json!({ "input_tokens": 5 });
-        c.record("chunk", Some("claude-cli"), Some(&usage));
+        let nectar = json!({ "input_tokens": 5 });
+        c.record("unfurl", Some("claude-cli"), Some(&nectar));
         let snap = c.snapshot();
         assert_eq!(snap.get("nectar:in"), None);
     }
@@ -303,10 +304,10 @@ mod tests {
     #[test]
     fn mesh_tones_count_globally_but_are_not_attributed() {
         let c = Comb::new();
-        let usage = json!({ "input_tokens": 7 });
-        c.record("finish", None, Some(&usage));
+        let nectar = json!({ "input_tokens": 7 });
+        c.record("wilt", None, Some(&nectar));
         let snap = c.snapshot();
-        assert_eq!(snap.get("chi:finish"), Some(&1));
+        assert_eq!(snap.get("chi:wilt"), Some(&1));
         assert_eq!(snap.get("nectar:in"), Some(&7));
         assert_eq!(
             snap.keys().filter(|k| k.starts_with("hive:")).count(),
@@ -321,13 +322,13 @@ mod tests {
         let path = tmp.path().join("comb.json");
         std::fs::write(
             &path,
-            r#"{"bee:claude-cli:chi:finish":3,"hive:claude-cli:chi:finish":2,"chi:finish":5}"#,
+            r#"{"bee:claude-cli:chi:wilt":3,"hive:claude-cli:chi:wilt":2,"chi:wilt":5}"#,
         )
         .unwrap();
         let snap = Comb::load(&path).snapshot();
-        assert_eq!(snap.get("hive:claude-cli:chi:finish"), Some(&5));
-        assert_eq!(snap.get("bee:claude-cli:chi:finish"), None);
-        assert_eq!(snap.get("chi:finish"), Some(&5));
+        assert_eq!(snap.get("hive:claude-cli:chi:wilt"), Some(&5));
+        assert_eq!(snap.get("bee:claude-cli:chi:wilt"), None);
+        assert_eq!(snap.get("chi:wilt"), Some(&5));
     }
 
     #[test]

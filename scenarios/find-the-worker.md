@@ -38,11 +38,11 @@ holds the manifest under humd-S's Hid.
 4. humd-S sees the prompt with `client_id == "ensemble"`, reads
    `from` as its `origin`, and runs its **own** local worker selection —
    the same by-model lookup it would run for a local nestler.
-5. The worker emits `chi:"chunk"` then `chi:"finish"`. humd-S routes
+5. The worker emits `chi:"unfurl"` then `chi:"wilt"`. humd-S routes
    each one to `sid_origins[sid]` (humd-L) *and* broadcasts locally.
 6. humd-L receives each tone with `client_id == "ensemble"`, matches on
    `sid`, and broadcasts onto its nestler's stream. The nestler sees
-   `finish` and the turn closes.
+   `wilt` and the bloom closes.
 
 ## The failure modes
 
@@ -69,13 +69,13 @@ holds the manifest under humd-S's Hid.
 
 ## The success criteria
 
-- The nestler's tone carries no `to`, and humd-S still runs the turn.
+- The nestler's tone carries no `to`, and humd-S still grows the bloom.
 - Exactly one `prompt.forward.remote` trace, naming the humd chosen.
-- `chi:"finish"` reaches the originating nestler on humd-L.
+- `chi:"wilt"` reaches the originating nestler on humd-L.
 - Every reply carries `to: <humd-L Hid>` — the return path is explicit,
   not ambient broadcast.
 - Without the discovery feed the same tone yields
-  `no worker bee advertises model 'claude-opus-4-7'` and no `finish`.
+  `no worker bee advertises model 'claude-opus-4-7'` and no `wilt`.
 
 ## What this scenario validates
 

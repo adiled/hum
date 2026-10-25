@@ -1,100 +1,71 @@
-// Minimal thrum client for the Vercel AI bee.
-// Mirrors the openai-server client: connect to hum's NDJSON socket, send
-// framed tones, dispatch incoming tones to per-sid subscribers.
+// The provider's bee, over the thrum client.
+//
+// One bee for the process, a forager, started on first use. A generation
+// prompts under a sigil of its own and follows it by sid. When humd goes
+// away mid-bloom, every open sigil hears an error and its stream ends,
+// and a new generation waits briefly for humd to return before it fails.
+// The bee connects once humd hears it.
 
-import { createConnection, type Socket } from "node:net";
-import { enter, signedAs } from "./identity";
+import { Bee, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
 
-export const THRUM_VERSION = "0.8.0";
 export const HIVE_NAME = "vercel-ai";
-export const BEE_VERSION = pkg.version;
+const READY_MS = 10_000;
 
-export type Tone = Record<string, unknown>;
+export type { Tone };
 export type SidHandler = (msg: Tone) => void;
 
-function defaultThrumPath(): string {
-  const sock = process.env.HUM_THRUM_SOCK ?? process.env.HUM_THRUM_PATH;
-  if (sock) return sock;
-  const runtime = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`;
-  return `${runtime}/hum/thrum.sock`;
-}
+class ProviderBee {
+  #bee = new Bee({
+    hive: HIVE_NAME,
+    as: "main",
+    hello: { roles: ["forager"], version: pkg.version },
+  });
+  #started: Promise<void> | undefined;
+  #open = new Map<string, SidHandler>();
+  #up = false;
+  #waiting: Array<() => void> = [];
 
-export class ThrumClient {
-  private sock: Socket | null = null;
-  private buf = "";
-  private byId = new Map<string, SidHandler>();
-  private path: string;
-  private connected = false;
-  private pending: string[] = [];
-  private connecting: Promise<void> | null = null;
-
-  constructor(path?: string) {
-    this.path = path ?? process.env.HUM_THRUM_PATH ?? defaultThrumPath();
+  constructor() {
+    this.#bee.onNestled(() => {
+      this.#up = true;
+      for (const wake of this.#waiting.splice(0)) wake();
+    });
+    this.#bee.onAstray(() => {
+      this.#up = false;
+      for (const [sid, fn] of [...this.#open]) fn({ chi: "error", sid, message: "humd went away mid-bloom" });
+    });
   }
 
   async connect(): Promise<void> {
-    if (this.connected) return;
-    if (this.connecting) return this.connecting;
-    this.connecting = new Promise<void>((resolve, reject) => {
-      const s = createConnection(this.path);
-      s.on("connect", () => {
-        this.sock = s;
-        this.connected = true;
-        this.connecting = null;
-        s.write(JSON.stringify({
-          chi: "hello",
-          rid: `hello-${Date.now().toString(36)}`,
-          ...signedAs(enter(HIVE_NAME, "main")),
-          roles: ["forager"],
-          hive: HIVE_NAME,
-          provides: ["session"],
-          version: BEE_VERSION,
-          protoVersion: THRUM_VERSION,
-        }) + "\n");
-        for (const line of this.pending) s.write(line);
-        this.pending = [];
+    await (this.#started ??= this.#bee.start());
+    if (this.#up) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("humd is away")), READY_MS);
+      this.#waiting.push(() => {
+        clearTimeout(timer);
         resolve();
       });
-      s.on("data", (chunk: Buffer) => {
-        this.buf += chunk.toString();
-        let nl: number;
-        while ((nl = this.buf.indexOf("\n")) >= 0) {
-          const line = this.buf.slice(0, nl);
-          this.buf = this.buf.slice(nl + 1);
-          if (!line) continue;
-          try {
-            const msg = JSON.parse(line) as Tone;
-            const sid = (msg.sid as string) ?? "";
-            const handler = this.byId.get(sid);
-            if (handler) handler(msg);
-          } catch { /* malformed — ignore */ }
-        }
-      });
-      s.on("error", (err) => {
-        this.connecting = null;
-        if (!this.connected) reject(err);
-      });
-      s.on("close", () => {
-        this.connected = false;
-        this.sock = null;
-      });
     });
-    return this.connecting;
   }
 
-  send(msg: Tone): void {
-    const line = JSON.stringify(msg) + "\n";
-    if (this.connected && this.sock) this.sock.write(line);
-    else this.pending.push(line);
+  on(sid: string, fn: SidHandler): void {
+    this.#open.set(sid, fn);
+    this.#bee.onSid(sid, fn);
   }
 
-  on(sid: string, handler: SidHandler): void { this.byId.set(sid, handler); }
-  off(sid: string): void { this.byId.delete(sid); }
+  off(sid: string): void {
+    this.#open.delete(sid);
+    this.#bee.offSid(sid);
+  }
+
+  send(tone: Tone): void {
+    this.#bee.send(tone);
+  }
 }
 
-let shared: ThrumClient | null = null;
-export function getThrum(): ThrumClient {
-  if (!shared) shared = new ThrumClient();
-  return shared;
+let shared: ProviderBee | undefined;
+
+export function getThrum(): ProviderBee {
+  return (shared ??= new ProviderBee());
 }

@@ -144,8 +144,8 @@ mod tests {
         let t = mk_thehum(tmp.path());
         let rid = crate::HumId::mint();
         let s1 = t.append("prompt", None, rid.clone(), json!({"text": "hi"})).await.unwrap();
-        let s2 = t.append("chunk",  None, rid.clone(), json!({"delta": "ok"})).await.unwrap();
-        let s3 = t.append("finish", None, rid,         json!({"reason": "end"})).await.unwrap();
+        let s2 = t.append("unfurl",  None, rid.clone(), json!({"text": "ok"})).await.unwrap();
+        let s3 = t.append("wilt", None, rid,         json!({"reason": "end"})).await.unwrap();
         assert_eq!((s1, s2, s3), (1, 2, 3));
     }
 

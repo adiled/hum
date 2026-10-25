@@ -15,7 +15,7 @@ async fn answer(sim: &sim::Sim, humd: ensemble::Hid, sid: &str) -> Option<String
             "sid": sid,
             "modelId": MODEL,
             "cwd": "/tmp",
-            "content": "Say who you are.",
+            "text": "Say who you are.",
         }),
     )
     .expect("nestler accepts prompt");
@@ -25,10 +25,13 @@ async fn answer(sim: &sim::Sim, humd: ensemble::Hid, sid: &str) -> Option<String
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let Some(tone) = sim.nestler_recv(humd, sid, remaining).await else { break };
         let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("");
-        if chi == "chunk" && tone.get("chunkType").and_then(|v| v.as_str()) == Some("text_delta") {
-            said = tone.get("delta").and_then(|v| v.as_str()).map(str::to_string);
+        if chi == "unfurl"
+            && tone.get("kind").and_then(|v| v.as_str()) == Some("text")
+            && let Some(text) = tone.get("text").and_then(|v| v.as_str())
+        {
+            said = Some(text.to_string());
         }
-        if chi == "finish" {
+        if chi == "wilt" {
             break;
         }
     }

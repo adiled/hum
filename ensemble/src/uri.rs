@@ -4,19 +4,18 @@
 //! the mesh — cwd, file paths in tool args, attach targets, etc.
 //! The URI host segment is, in resolution order:
 //!
-//! 1. **alias** — a name registered in the asker humd's local
-//!    resolver (today: `peers.json`; future: ENS / HNS / DID
+//! 1. **alias** — a name registered in the local resolver of the humd
+//!    the URI came from (today: `peers.json`; future: ENS / HNS / DID
 //!    adapters slotting into the same trait).
 //! 2. **shortid** — `<prefix>_<12hex>` form of a [`Hid`].
 //! 3. **full hid** — `<prefix>_<64hex>` form.
 //!
 //! Schemes other than `hum://` are rejected. Path component is
-//! arbitrary opaque text (left to the resolver / forager to
-//! interpret — humfs treats it as a local-fs absolute path).
+//! arbitrary opaque text, left to whoever serves it to interpret.
 //!
-//! Canonicalization: the asker humd resolves aliases to full
-//! [`Hid`]s before forwarding any tone downstream, so peer humds
-//! never need to consult the asker's local registry. The URI shape
+//! Canonicalization: the humd the URI came from resolves aliases to
+//! full [`Hid`]s before forwarding any tone downstream, so peer humds
+//! never need to consult its local registry. The URI shape
 //! stays the same; only the host segment narrows to a hid.
 //!
 //! ```text

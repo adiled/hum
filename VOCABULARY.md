@@ -13,9 +13,9 @@ like the thing — readers and writers share the same mental model.
 
 - **thrum** — the bidirectional NDJSON socket between humd and any nestler.
 - **tone** — one message frame on the thrum. Envelope (chi/rid/sid/…) plus body.
-- **chi** — the tone's discriminator. `prompt`, `chunk`, `finish`, `gossip-publish`, …
+- **chi** — the tone's discriminator. `prompt`, `unfurl`, `wilt`, `gossip-publish`, …
 - **chis** — the *list* of chi values a bee speaks. Advertised in the hello.
-- **sigil** — content-addressable session pairing hash. Stable across reconnects.
+- **sigil** — what ties a run of blooms together: a hash of their `sid`. Stable across reconnects.
 - **wane** — Lamport-clock per sigil. Increments on every state mutation.
 - **dusk** — absolute ms expiry on a tone. Past dusk, drop.
 
@@ -25,13 +25,12 @@ like the thing — readers and writers share the same mental model.
   node: it admits bees, routes between them and gossips with its peers.
   It hosts no cells.
 - **HumdId**: sha256 of the humd's Ed25519 public key.
-- **hum**: one conversation. Has a hum_id, lives on a humd.
 - **nest**: the cells a hive hosts and the limits it keeps them under. A
   hive turns it on by using hum-nest, and the limits (`maxCells`,
   `idleMs`, cell `bounds`) are its own, in the `nest` section of its
   `hives/<hive>.json`. A humd hosts no nest.
 - **cell**: one live LLM subprocess in a hive's nest. The compute itself,
-  what turns a `chi:"prompt"` into `chi:"chunk"` + `chi:"finish"`.
+  what grows a `chi:"prompt"` into `chi:"unfurl"`s and a `chi:"wilt"`.
   Fungible: spawn, kill, respawn.
 - **headroom**: how many more cells a worker can take, which it claims on
   its hello and on each cell pulse. humd sends a prompt to a worker with
@@ -40,14 +39,31 @@ like the thing — readers and writers share the same mental model.
 
 ## Conversation
 
-- **petal** — one unit of content (text, image, tool_use, tool_result).
+- **petal** — one unit of content. Its kind says which: **text**, a
+  **tendril**, the **grasp** a tendril came back with, **pollen**, a
+  **sepal**, a **waggle**, a **thorn**, **brix**, a **bouquet**.
 - **petal-cell** — a nestler's view of one petal in its own conversation graph.
-- **bloom** — one turn of conversation. Starts with a prompt, ends with a finish.
-- **wilt** — close the bloom.
+- **bloom** — one turn of conversation. Opens with a `prompt`, closes with a `wilt`.
+- **unfurl** — a petal growing, one tone at a time, until it is closed.
+- **wilt** — close the bloom. It carries the bloom's nectar.
 - **buds** — buffered tool events not yet committed.
 - **shed** — flush the buds.
-- **tendril** — brokered tool call. Reaches across the wire for execution.
-- **sap** — accumulated tool input being assembled.
+- **tendril** — brokered tool call. Reaches across the wire for execution
+  (`tendril-reach`), and comes back with what it grasped (`tendril-result`).
+- **sap** — accumulated tool input being assembled; it grows in an unfurl.
+- **pollen** — media carried as a petal: one **grain** of image, audio or file.
+- **sepal** — the cell's reasoning, wrapped around the bloom before it opens.
+- **propolis** — the seal on a sepal, so the reasoning carries into the next bloom.
+- **waggle** — where a petal's words came from, as a dance points to a source.
+- **thorn** — the cell declining, or a filter acting.
+- **brix** — how likely each token was, as sugar is read in nectar.
+- **bouquet** — several candidate petals gathered for one prompt.
+- **scout** — a subagent sent out to explore, which comes back with what it found.
+
+How a bloom grows is said on its prompt: its **temperature**, **prune**
+(cut the unlikely tail), **season** (how long it may grow), **frost**
+(where it stops), **seed**, **trellis** (the shape it grows along),
+**tendrils** (which may reach) and **sepal** (how much it reasons first).
 
 ## Ensemble
 
@@ -68,9 +84,9 @@ like the thing — readers and writers share the same mental model.
   `hive` it belongs to and the `roles` it claims:
   - **worker**: produces compute. Implements the `Worker` trait (or
     its non-Rust equivalent), accepts `chi:"prompt"` for advertised
-    models and emits `chi:"chunk"` / `chi:"finish"` / `chi:"tool-call"`.
-  - **forager**: translates outside wire ↔ thrum. Implements
-    `ToolDispatcher`, wrapping an HTTP / gRPC / stdio surface into thrum tones.
+    models and emits `chi:"unfurl"` / `chi:"wilt"` / `chi:"tendril-reach"`.
+  - **forager**: the bee that prompts. It brings the outside world into
+    the thrum, an HTTP / gRPC / SMS / stdio surface, and opens blooms.
 
   A role is a claim, never part of who the bee is; a bee may claim both,
   or a role a future hive invents.
@@ -85,7 +101,7 @@ like the thing — readers and writers share the same mental model.
   that accepts `chi:"hello"`. Verb-state of the same participant.
 - **nestled**: a bee's lifecycle phase: post-handshake, registered, with
   a nestledId. The bee keeps asking (`chi:"prompt"`, `chi:"cancel"`,
-  `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
+  `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
   `chi:"curate"`) for the rest of the connection.
 
 The vocabulary stacks as: **hive** = kind, installed on a humd; **bee** =
@@ -101,7 +117,7 @@ live there.
 ## Measure
 
 - **comb** — the kernel's ledger of what crossed it. Lifetime counters: tone
-  counts per chi (`chi:finish`), and **nectar** — the raw intake, tokens in
+  counts per chi (`chi:wilt`), and **nectar** — the raw intake, tokens in
   and out, cache reads and writes, per hive (`hive:claude-cli:nectar:in`).
   Only the kernel writes the comb, so the measure is observed rather than
   self-reported. What the kernel *produces* is honey, and that side belongs

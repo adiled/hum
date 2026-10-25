@@ -59,15 +59,15 @@ class GoldenWireTest(unittest.TestCase):
         self.assertEqual(hello.proto_version, "0.8.0")
         self.assertEqual(hello.hive, "claude-cli")
         self.assertEqual(hello.roles, ["worker"])
-        chunk = p.from_wire(
-            p.ChunkBody, {k: v for k, v in tones["chunk"].items() if k not in ENV_KEYS}
+        unfurl = p.from_wire(
+            p.UnfurlBody, {k: v for k, v in tones["unfurl"].items() if k not in ENV_KEYS}
         )
-        self.assertEqual(chunk.chunk_type, "tool_input_delta")
-        self.assertEqual(chunk.block_idx, 2)
-        self.assertEqual(chunk.partial_json, '{"a":')
+        self.assertEqual(unfurl.kind, "tendril")
+        self.assertEqual(unfurl.petal, 2)
+        self.assertEqual(unfurl.sap, '{"a":')
         result = p.from_wire(
-            p.ToolResultBody,
-            {k: v for k, v in tones["tool-result"].items() if k not in ENV_KEYS},
+            p.TendrilResultBody,
+            {k: v for k, v in tones["tendril-result"].items() if k not in ENV_KEYS},
         )
         self.assertEqual(result.output, "file contents")
         self.assertEqual(result.is_error, False)

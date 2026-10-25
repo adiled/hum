@@ -1,21 +1,21 @@
 {
   "name": "thrum",
-  "version": "0.7.0",
-  "description": "Wire-protocol primitives for thrum, the NDJSON socket between humd and bees.",
+  "version": "0.8.0",
+  "description": "Thrum for a bee written in TS: the generated registry and views, and the client end of `hum bee link`.",
   "type": "module",
   "main": "./index.ts",
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
     "./chi": "./chi.ts",
-    "./helpers": "./helpers.ts",
-    "./protocol": "./protocol.ts"
+    "./protocol": "./protocol.ts",
+    "./link": "./link.ts"
   },
   "files": [
     "index.ts",
     "chi.ts",
-    "helpers.ts",
     "protocol.ts",
+    "link.ts",
     "README.md"
   ],
   "keywords": [
@@ -33,5 +33,12 @@
   "homepage": "https://adiled.github.io/hum/",
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "check": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "typescript": "^5.9.3"
   }
 }

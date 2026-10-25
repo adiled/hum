@@ -21,13 +21,13 @@ hum's clients AND consumes OpenAI's API for hum's daemons.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
+| convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, scout, permission-ask, tendril-meta |
 
 Forager half: convention-stateful — no server-side hum tracking; the
-OpenAI `user` field is a session continuation hint. Worker half:
+OpenAI `user` field is the hint that continues a sigil. Worker half:
 stateless-per-call (OpenAI's API is stateless — every request carries
-full history), with a per-sid session object so tool results resume the
-thread.
+full history), keeping each sid's history so a tendril's result resumes
+the thread.
 
 ## What it does
 
@@ -41,11 +41,11 @@ client                           openai-server                       humd
   │                                   ├───────────────────────────────►│
   │                                   │  chi:"prompt"                  │
   │                                   ├───────────────────────────────►│
-  │                                   │  chi:"chunk" (text fragments)  │
+  │                                   │  chi:"unfurl" (text petals)    │
   │                                   │◄───────────────────────────────┤
   │   data: {...}\n\n (SSE)           │                                │
   │◄──────────────────────────────────┤                                │
-  │                                   │  chi:"finish"                  │
+  │                                   │  chi:"wilt"                    │
   │                                   │◄───────────────────────────────┤
   │   data: [DONE]\n\n                │                                │
   │◄──────────────────────────────────┤                                │
@@ -56,7 +56,7 @@ client                           openai-server                       humd
 Each HTTP requester is fingerprinted by a hash of its bearer token, its
 `X-Tenant` and the request's `user`, and entered as its own bee of this
 hive (`hum bee enter --hive openai-server --as requester-<fingerprint>`,
-role `asker`). Its requests go to humd over its own socket, signed by its
+role `forager`). Its requests go to humd over its own socket, signed by its
 own key, so humd sees, logs and accounts each requester apart, and
 `hum bee <id> exit` shuts one out without touching the rest. The
 fingerprint is the only trace of the token on disk. A requester's socket
@@ -67,7 +67,7 @@ closes after ten idle minutes and reopens on its next request.
 Same bee also answers `chi:"prompt"` tones humd routes to it. humd
 matches `modelId` against the models this bee advertises; when a
 caller asks for one, humd forwards the prompt right back here. The
-worker calls the upstream OpenAI API and streams chunks back — so a
+worker calls the upstream OpenAI API and unfurls the bloom back — so a
 daemon in another hive can ask **this** hive to generate, and it
 consumes OpenAI's real API.
 
@@ -79,17 +79,21 @@ humd                          openai-server                    OpenAI API
   │                                ├───────────────────────────────►│
   │                                │◄─────────────── SSE deltas ────┤
   │                                │                                │
-  │  chi:"chunk" (text_delta)      │                                │
+  │  chi:"unfurl" (petals)         │                                │
   │◄───────────────────────────────┤                                │
-  │  chi:"finish" (usage)          │                                │
+  │  chi:"wilt" (nectar)           │                                │
   │◄───────────────────────────────┤                                │
 ```
 
 Tools loop exactly like the Rust workers: when OpenAI returns
-`tool_calls`, the worker emits `chi:"tool-call"` tones instead of
-finishing; humd routes them to the owning forager, which returns
-`chi:"tool-result"`; the worker feeds the output back into the OpenAI
-conversation and continues streaming. Everything gets hummed.
+`tool_calls`, the worker unfurls each as a tendril petal and reaches
+with `chi:"tendril-reach"` instead of wilting; humd routes it to the bee
+that serves the tool, or back to the forager that declared it, which
+answers `chi:"tendril-result"`; the worker feeds the output back into
+the OpenAI conversation and grows on. Sampling settings (`temperature`,
+`top_p`, `max_tokens`, `stop`, `seed`, `tool_choice`,
+`response_format`, `reasoning.effort`) ride on the prompt as how the
+bloom grows, and images as pollen petals. Everything gets hummed.
 
 ## Configure
 
@@ -164,7 +168,7 @@ const r = await client.chat.completions.create({
 ## Status
 
 Reference implementation. Tools / function-calling map onto thrum's
-`chi:"tool-call"` / `chi:"tool-result"` pair; lots of OpenAI surface
+`chi:"tendril-reach"` / `chi:"tendril-result"` pair; lots of OpenAI surface
 (images, audio, fine-tuning) is intentionally not implemented — file
 an issue if you need a specific endpoint.
 

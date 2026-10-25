@@ -5,14 +5,14 @@
  * unloads it with ds4_bridge_unload before letting the GPU go. Loading
  * first checks ds4's own lock (DS4_LOCK_FILE), because ds4 exits when
  * another process holds it; a held lock is an error here instead. The
- * loaded engine keeps one session, and every turn syncs that session to
- * the turn's whole prompt, so ds4 evaluates only the part the KV cache
+ * loaded engine keeps one session, and every bloom syncs that session to
+ * the bloom's whole prompt, so ds4 evaluates only the part the KV cache
  * does not already hold. The generation loop is ds4-server's: sync,
  * sample, stop check, eval, detokenize, emit.
  *
  * Load, unload and generate run on one thread. ds4_bridge_arm,
  * ds4_bridge_cancel and ds4_bridge_cancelled may be called from any
- * thread: arm clears the cancel before a turn starts, cancel asks the turn
+ * thread: arm clears the cancel before a bloom starts, cancel asks the bloom
  * in flight to stop, including one still waiting for the GPU.
  */
 
@@ -34,8 +34,8 @@ typedef struct {
 typedef struct {
     int tokens_in;
     int tokens_out;
-    const char *finish;
-} ds4_turn;
+    const char *reason;
+} ds4_wilt;
 
 typedef struct {
     int ctx_size;
@@ -57,6 +57,6 @@ bool ds4_bridge_cancelled(ds4_bridge *bridge);
 
 int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
                         size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
-                        void *user, ds4_turn *turn, char *err, size_t errlen);
+                        void *user, ds4_wilt *wilt, char *err, size_t errlen);
 
 #endif

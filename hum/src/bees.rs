@@ -4,6 +4,9 @@
 //! in under the hive by a label of its choosing when it wants to find the
 //! same bee again, and whatever acts as that bee signs its hello with the
 //! key. Exiting signs it out; humd refuses its next hello.
+//!
+//! What humd advised a bee (WIRE.md, Advisories) is listed with it, and
+//! `hum doctor` says what each advisory means.
 
 use anyhow::{Result, bail};
 use hum_identity::Hid;
@@ -66,9 +69,35 @@ pub fn act(id: &str, verb: &str) -> Result<()> {
     Ok(())
 }
 
+fn ago(ms: i64) -> String {
+    let secs = (thrum_core::now_ms() - ms).max(0) / 1000;
+    match secs {
+        s if s < 120 => format!("{s}s ago"),
+        s if s < 7200 => format!("{}m ago", s / 60),
+        s if s < 172_800 => format!("{}h ago", s / 3600),
+        s => format!("{}d ago", s / 86_400),
+    }
+}
+
+pub fn advice() {
+    let book = humd::advise::read(&hum_paths::advisories());
+    if book.is_empty() {
+        println!("  none: every bee speaks the thrum as it declares");
+        return;
+    }
+    for (id, page) in &book {
+        let short: String = id.chars().take(16).collect();
+        for e in &page.advisories {
+            let times = if e.count > 1 { format!(", {} times", e.count) } else { String::new() };
+            println!("  {} {short}  {}: {} ({}{times})", page.hive, e.code, e.message, ago(e.last));
+        }
+    }
+}
+
 pub fn list() -> Result<()> {
     let entered = hum_identity::entered();
     let nestled = nestled();
+    let book = humd::advise::read(&hum_paths::advisories());
     if entered.is_empty() && nestled.is_empty() {
         println!("no bee has entered this humd.");
         println!("a hive enters one: hum bee enter --hive <hive>");
@@ -112,6 +141,14 @@ pub fn list() -> Result<()> {
             if !version.is_empty() {
                 println!("    version:  {version}");
             }
+        }
+        if let Some(page) = book.get(id) {
+            let codes: Vec<String> = page
+                .advisories
+                .iter()
+                .map(|e| if e.count > 1 { format!("{} ({}x)", e.code, e.count) } else { e.code.clone() })
+                .collect();
+            println!("    advised:  {}  (hum doctor says what)", codes.join(", "));
         }
         println!();
     }

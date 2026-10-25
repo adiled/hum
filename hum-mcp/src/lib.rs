@@ -3,9 +3,11 @@
 //! Each worker bee that needs to expose tools to its compute via MCP
 //! spawns one of these. The bridge serves JSON-RPC at
 //! `/s/<session_id>`, mapping `tools/list` to the worker's current
-//! catalogue and `tools/call` to a thrum `chi:"tool-call"` tone
-//! through humd. Tool results return as `chi:"tool-result"` tones
-//! the worker pumps into the bridge by callId.
+//! catalogue and `tools/call` to a thrum `chi:"tendril-reach"` tone
+//! through humd. What the tendril grasped returns as a
+//! `chi:"tendril-result"` tone the worker pumps into the bridge by
+//! callId, and the bridge tells the bloom the whole of it as a
+//! `chi:"tendril-info"`.
 //!
 //! The modules under `src/` (`protocol`, `capability`, `translate`,
 //! `catalogue`) are the pure data-mapping layer; this file is the
@@ -14,7 +16,7 @@
 //! tree.
 //!
 //! The worker updates the catalogue on each chi:"prompt" arrival and
-//! resolves pending tool-calls when a chi:"tool-result" lands.
+//! resolves pending tendrils when a chi:"tendril-result" lands.
 
 pub mod capability;
 pub mod catalogue;
@@ -133,7 +135,7 @@ async fn handle(
             bridge.pending.lock().insert(call_id.clone(), tx);
             let tone = translate::mcp_call_to_tone(&sid, &call_id, &params);
             (bridge.ship_tool_call)(tone);
-            trace!(%sid, %name, %call_id, "mcp.bridge.tool-call.shipped");
+            trace!(%sid, %name, %call_id, "mcp.bridge.tendril-reach.shipped");
             match tokio::time::timeout(Duration::from_secs(300), rx).await {
                 Ok(Ok(tone)) => {
                     let body = translate::tone_to_mcp_result(&tone);
@@ -145,23 +147,21 @@ async fn handle(
                         .unwrap_or("")
                         .to_string();
                     let is_error = body.get("isError").and_then(Value::as_bool).unwrap_or(false);
-                    let chunk = serde_json::json!({
-                        "chi": "chunk",
+                    (bridge.ship_tool_call)(serde_json::json!({
+                        "chi": "tendril-info",
                         "sid": sid,
-                        "chunkType": "tool_executed",
                         "callId": call_id,
-                        "toolName": name,
-                        "arguments": arguments,
-                        "output": output_text,
+                        "name": name,
+                        "args": arguments,
+                        "result": output_text,
                         "isError": is_error,
-                    });
-                    (bridge.ship_tool_call)(chunk);
+                    }));
                     (StatusCode::OK, Json(Some(JsonRpcResponse::ok(id, body))))
                 }
                 _ => {
                     bridge.pending.lock().remove(&call_id);
                     (StatusCode::OK, Json(Some(JsonRpcResponse::err(
-                        id, -32000, format!("tool-result for callId {call_id} timed out"),
+                        id, -32000, format!("tendril-result for callId {call_id} timed out"),
                     ))))
                 }
             }
@@ -188,7 +188,7 @@ mod tests {
         let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
         let shipped_for_closure = shipped.clone();
         let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
-        bridge.set_catalogue(vec![def("humfs_read")], vec![], &["fs".into()]);
+        bridge.set_catalogue(vec![def("read")], vec![], &["fs".into()]);
         let addr = spawn_local_mcp(bridge).await.expect("bind");
         let client = reqwest_get_post();
         let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
@@ -197,7 +197,7 @@ mod tests {
         let v: Value = resp.json().await.expect("json");
         let names: Vec<&str> = v["result"]["tools"].as_array().unwrap()
             .iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"humfs_read"));
+        assert!(names.contains(&"read"));
     }
 
     #[tokio::test]
@@ -205,12 +205,12 @@ mod tests {
         let shipped = Arc::new(PlMutex::new(Vec::<Value>::new()));
         let shipped_for_closure = shipped.clone();
         let bridge = McpBridge::new(Arc::new(move |t| shipped_for_closure.lock().push(t)));
-        bridge.set_catalogue(vec![def("humfs_read")], vec![], &["fs".into()]);
+        bridge.set_catalogue(vec![def("read")], vec![], &["fs".into()]);
         let addr = spawn_local_mcp(bridge.clone()).await.expect("bind");
         let client = reqwest_get_post();
         let url = format!("http://{}/s/hum-test", addr);
         let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
-            "params":{"name":"humfs_read","arguments":{"file_path":"/x"}}});
+            "params":{"name":"read","arguments":{"file_path":"/x"}}});
         let call_task = tokio::spawn(async move {
             client.post(url).json(&body).send().await.unwrap().json().await.unwrap()
         });
@@ -221,9 +221,9 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.expect("tool-call shipped");
+        }).await.expect("tendril-reach shipped");
         let fake_result = json!({
-            "chi":"tool-result","sid":"hum-test","callId":call_id,
+            "chi":"tendril-result","sid":"hum-test","callId":call_id,
             "output":"file body"
         });
         assert!(bridge.resolve(&call_id, fake_result), "callId resolved");

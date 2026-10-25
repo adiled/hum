@@ -25,6 +25,7 @@ type HelloBody struct {
 	Propensity json.RawMessage `json:"propensity,omitempty"`
 	Headroom *Headroom `json:"headroom,omitempty"`
 	Source *string `json:"source,omitempty"`
+	Bind json.RawMessage `json:"bind,omitempty"`
 }
 
 type Headroom struct {
@@ -37,28 +38,83 @@ type PromptBody struct {
 	Cwd *string `json:"cwd,omitempty"`
 	SystemPrompt *string `json:"systemPrompt,omitempty"`
 	Text *string `json:"text,omitempty"`
-	Content []json.RawMessage `json:"content,omitempty"`
+	Content []Petal `json:"content,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
 	ForagerTools []json.RawMessage `json:"foragerTools,omitempty"`
 	Provided []string `json:"provided,omitempty"`
 	DisallowedTools []string `json:"disallowedTools,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty"`
+	Resume *string `json:"resume,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	Prune *Prune `json:"prune,omitempty"`
+	Season *uint64 `json:"season,omitempty"`
+	Frost []string `json:"frost,omitempty"`
+	Seed *int64 `json:"seed,omitempty"`
+	Trellis json.RawMessage `json:"trellis,omitempty"`
+	Tendrils *Tendrils `json:"tendrils,omitempty"`
+	Sepal *Sepal `json:"sepal,omitempty"`
+}
+
+type Petal struct {
+	Kind string `json:"kind"`
+	Role *string `json:"role,omitempty"`
+	Text *string `json:"text,omitempty"`
+	Grain *Grain `json:"grain,omitempty"`
+	CallId *string `json:"callId,omitempty"`
+	Name *string `json:"name,omitempty"`
+	Args json.RawMessage `json:"args,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	IsError *bool `json:"isError,omitempty"`
+	Propolis *string `json:"propolis,omitempty"`
+	Source json.RawMessage `json:"source,omitempty"`
+	Brix json.RawMessage `json:"brix,omitempty"`
+	Bouquet []json.RawMessage `json:"bouquet,omitempty"`
+}
+
+type Grain struct {
+	Kind string `json:"kind"`
+	MediaType string `json:"mediaType"`
+	Data *string `json:"data,omitempty"`
+	Url *string `json:"url,omitempty"`
+}
+
+type Prune struct {
+	P *float64 `json:"p,omitempty"`
+	K *uint64 `json:"k,omitempty"`
+}
+
+type Tendrils struct {
+	Reach *string `json:"reach,omitempty"`
+	Parallel *bool `json:"parallel,omitempty"`
+}
+
+type Sepal struct {
+	Effort *string `json:"effort,omitempty"`
+	Budget *uint64 `json:"budget,omitempty"`
 }
 
 type BreathBody struct {
-	Sessions json.RawMessage `json:"sessions"`
+	Sigils json.RawMessage `json:"sigils"`
 	ProtoVersion *string `json:"protoVersion,omitempty"`
 }
 
-type ChunkBody struct {
-	ChunkType string `json:"chunkType"`
-	BlockIdx *uint64 `json:"blockIdx,omitempty"`
-	Delta json.RawMessage `json:"delta,omitempty"`
-	PartialJson *string `json:"partialJson,omitempty"`
+type UnfurlBody struct {
+	Petal uint64 `json:"petal"`
+	Kind string `json:"kind"`
+	Text *string `json:"text,omitempty"`
+	Sap *string `json:"sap,omitempty"`
+	CallId *string `json:"callId,omitempty"`
+	Name *string `json:"name,omitempty"`
+	Grain *Grain `json:"grain,omitempty"`
+	Propolis *string `json:"propolis,omitempty"`
+	Source json.RawMessage `json:"source,omitempty"`
+	Brix json.RawMessage `json:"brix,omitempty"`
+	Closed *bool `json:"closed,omitempty"`
 }
 
-type FinishBody struct {
-	FinishReason string `json:"finishReason"`
-	Usage json.RawMessage `json:"usage,omitempty"`
+type WiltBody struct {
+	Reason string `json:"reason"`
+	Nectar json.RawMessage `json:"nectar,omitempty"`
 	ExitCode *int64 `json:"exitCode,omitempty"`
 	Subtype *string `json:"subtype,omitempty"`
 }
@@ -67,41 +123,35 @@ type ErrorBody struct {
 	Message string `json:"message"`
 	Code *string `json:"code,omitempty"`
 	Subtype *string `json:"subtype,omitempty"`
-	Usage json.RawMessage `json:"usage,omitempty"`
+	Nectar json.RawMessage `json:"nectar,omitempty"`
 }
 
-type SessionReadyBody struct {
-	NestId string `json:"nestId"`
-	Model string `json:"model"`
-	Tools []json.RawMessage `json:"tools,omitempty"`
-}
-
-type ToolCallBody struct {
+type TendrilReachBody struct {
 	CallId string `json:"callId"`
-	ToolName string `json:"toolName"`
-	Name *string `json:"name,omitempty"`
+	Name string `json:"name"`
 	Args json.RawMessage `json:"args,omitempty"`
 }
 
-type ToolResultBody struct {
+type TendrilResultBody struct {
 	CallId string `json:"callId"`
 	Output *string `json:"output,omitempty"`
-	Result *string `json:"result,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
 	IsError *bool `json:"isError,omitempty"`
 	Title *string `json:"title,omitempty"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
-type ToolInfoBody struct {
+type TendrilInfoBody struct {
 	CallId string `json:"callId"`
 	Name *string `json:"name,omitempty"`
 	Args json.RawMessage `json:"args,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
+	IsError *bool `json:"isError,omitempty"`
 }
 
-type ToolMetaBody struct {
+type TendrilMetaBody struct {
 	CallId *string `json:"callId,omitempty"`
-	ToolName *string `json:"toolName,omitempty"`
+	Name *string `json:"name,omitempty"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
@@ -109,11 +159,14 @@ type PulseBody struct {
 	Kind string `json:"kind"`
 	Pid *int64 `json:"pid,omitempty"`
 	Headroom *Headroom `json:"headroom,omitempty"`
+	Cell *string `json:"cell,omitempty"`
+	Model *string `json:"model,omitempty"`
+	Tools []json.RawMessage `json:"tools,omitempty"`
 }
 
 type PermissionAskBody struct {
 	CallId *string `json:"callId,omitempty"`
-	ToolName *string `json:"toolName,omitempty"`
+	Name *string `json:"name,omitempty"`
 	Message *string `json:"message,omitempty"`
 	Arg json.RawMessage `json:"arg,omitempty"`
 }
@@ -210,12 +263,12 @@ type CleanupBody struct {
 type CurateBody struct {
 }
 
-type TendrilResultBody struct {
+type ScoutResultBody struct {
 	CallId *string `json:"callId,omitempty"`
 	Output json.RawMessage `json:"output,omitempty"`
 }
 
-type TendrilReachBody struct {
+type ScoutBody struct {
 	Task *string `json:"task,omitempty"`
 	Tools []json.RawMessage `json:"tools,omitempty"`
 }
@@ -243,14 +296,13 @@ var ToneViews = map[Chi]any{
 	ChiHello: HelloBody{},
 	ChiPrompt: PromptBody{},
 	ChiBreath: BreathBody{},
-	ChiChunk: ChunkBody{},
-	ChiFinish: FinishBody{},
+	ChiUnfurl: UnfurlBody{},
+	ChiWilt: WiltBody{},
 	ChiError: ErrorBody{},
-	ChiSessionReady: SessionReadyBody{},
-	ChiToolCall: ToolCallBody{},
-	ChiToolResult: ToolResultBody{},
-	ChiToolInfo: ToolInfoBody{},
-	ChiToolMeta: ToolMetaBody{},
+	ChiTendrilReach: TendrilReachBody{},
+	ChiTendrilResult: TendrilResultBody{},
+	ChiTendrilInfo: TendrilInfoBody{},
+	ChiTendrilMeta: TendrilMetaBody{},
 	ChiPulse: PulseBody{},
 	ChiPermissionAsk: PermissionAskBody{},
 	ChiReleasePermit: ReleasePermitBody{},
@@ -271,7 +323,7 @@ var ToneViews = map[Chi]any{
 	ChiCancel: CancelBody{},
 	ChiCleanup: CleanupBody{},
 	ChiCurate: CurateBody{},
-	ChiTendrilResult: TendrilResultBody{},
-	ChiTendrilReach: TendrilReachBody{},
+	ChiScoutResult: ScoutResultBody{},
+	ChiScout: ScoutBody{},
 	ChiPetalCell: PetalCellBody{},
 }

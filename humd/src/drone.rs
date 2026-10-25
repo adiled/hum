@@ -16,7 +16,7 @@
 //! `Resync` means wane drifted and the host should resync state.
 //! `TearDown` means missed beats passed the threshold and the channel
 //! should come down. `Suspect` means a suspicious response was detected
-//! and the host should retry the last turn. `EchoTimeout` means the echo
+//! and the host should retry the last bloom. `EchoTimeout` means the echo
 //! never came back and the tracked tone should be re-sent.
 
 use std::collections::HashMap;
@@ -126,21 +126,21 @@ pub fn create_drone_state(sigil: impl Into<String>) -> DroneState {
 
 #[derive(Debug, Clone)]
 pub enum Observed {
-    ToolStart {
+    TendrilReach {
         name: Option<String>,
     },
-    ToolEnd {
+    TendrilResult {
         name: Option<String>,
     },
-    Tokens {
+    Nectar {
         delta: u64,
     },
     PermissionAsk,
     PermissionResolved,
-    TextDelta {
+    Unfurl {
         text: String,
     },
-    TurnEnd,
+    Wilt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,7 +252,7 @@ impl Drone {
                 tone.rid().to_string(),
                 PendingEcho {
                     rid: tone.rid().to_string(),
-                    chi: chi_label(tone.chi()).to_string(),
+                    chi: tone.chi().as_str().to_string(),
                     time_ms: now_ms(),
                     retries: 0,
                 },
@@ -311,19 +311,19 @@ impl Drone {
             .entry(sigil.to_string())
             .or_insert_with(|| create_drone_state(sigil.to_string()));
         match event {
-            Observed::ToolStart { .. } => state.inflight_tools += 1,
-            Observed::ToolEnd { .. } => {
+            Observed::TendrilReach { .. } => state.inflight_tools += 1,
+            Observed::TendrilResult { .. } => {
                 state.inflight_tools = state.inflight_tools.saturating_sub(1);
             }
-            Observed::Tokens { delta } => {
+            Observed::Nectar { delta } => {
                 state.tokens_burned = state.tokens_burned.saturating_add(delta)
             }
             Observed::PermissionAsk => state.pending_permissions += 1,
             Observed::PermissionResolved => {
                 state.pending_permissions = state.pending_permissions.saturating_sub(1);
             }
-            Observed::TextDelta { text } => state.response_text.push_str(&text),
-            Observed::TurnEnd => {
+            Observed::Unfurl { text } => state.response_text.push_str(&text),
+            Observed::Wilt => {
                 if state.response_text.len() > 20 {
                     state.suspicious = self.inner.classifier.classify(&state.response_text);
                 }
@@ -501,45 +501,6 @@ fn derive_health(state: &DroneState) -> Health {
     Health::Serene
 }
 
-fn chi_label(chi: Chi) -> &'static str {
-    match chi {
-        Chi::Hello => "hello",
-        Chi::Prompt => "prompt",
-        Chi::Cancel => "cancel",
-        Chi::Cleanup => "cleanup",
-        Chi::Curate => "curate",
-        Chi::ReleasePermit => "release-permit",
-        Chi::TendrilResult => "tendril-result",
-        Chi::ToolResult => "tool-result",
-        Chi::PetalCell => "petal-cell",
-        Chi::Breath => "breath",
-        Chi::Chunk => "chunk",
-        Chi::Finish => "finish",
-        Chi::Error => "error",
-        Chi::SessionReady => "session-ready",
-        Chi::Pulse => "pulse",
-        Chi::PermissionAsk => "permission-ask",
-        Chi::TendrilReach => "tendril-reach",
-        Chi::ToolCall => "tool-call",
-        Chi::ToolMeta => "tool-meta",
-        Chi::Echo => "echo",
-        Chi::PerfMark => "perf-mark",
-        Chi::Log => "log",
-        Chi::Drone => "drone",
-        Chi::DroneRetrofit => "drone-retrofit",
-        Chi::PeerAdd => "peer-add",
-        Chi::PeerRemove => "peer-remove",
-        Chi::Attach => "attach",
-        Chi::Detach => "detach",
-        Chi::WaneSync => "wane-sync",
-        Chi::GossipPublish => "gossip-publish",
-        Chi::KadFindNode => "kad-find-node",
-        Chi::KadFindNodeResp => "kad-find-node-resp",
-        Chi::ToolInfo => "tool-info",
-        Chi::Backfill => "backfill",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,11 +569,11 @@ mod tests {
         let d = Drone::with_classifier(Arc::new(AlwaysCritical));
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::Critical);
@@ -623,11 +584,11 @@ mod tests {
         let d = Drone::with_classifier(Arc::new(AlwaysSoft));
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::Soft);
@@ -646,11 +607,11 @@ mod tests {
             Drone::with_classifier_and_evaluator(Arc::new(AlwaysSoft), Arc::new(YesEvaluator), 0.7);
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
     }
@@ -660,11 +621,11 @@ mod tests {
         let d = Drone::new();
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "I don't have any previous context — could you share more?".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::None);
@@ -685,8 +646,8 @@ mod tests {
     #[test]
     fn pulse_death_resets_inflight() {
         let d = Drone::new();
-        d.observed("s1", Observed::ToolStart { name: None });
-        d.observed("s1", Observed::ToolStart { name: None });
+        d.observed("s1", Observed::TendrilReach { name: None });
+        d.observed("s1", Observed::TendrilReach { name: None });
         let mut env = Envelope::new(Chi::Pulse, "rid-p");
         env.sigil = Some("s1".into());
         let mut t = Tone::new(env);

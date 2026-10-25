@@ -69,7 +69,11 @@ impl BeeKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let sig = self.sign_socket_hello(now);
+        self.sign_hello_at(hello, now);
+    }
+
+    pub fn sign_hello_at(&self, hello: &mut serde_json::Value, now_ms: i64) {
+        let sig = self.sign_socket_hello(now_ms);
         if let Some(obj) = hello.as_object_mut() {
             obj.insert("hid".into(), self.id().into());
             obj.insert("from".into(), self.id().into());

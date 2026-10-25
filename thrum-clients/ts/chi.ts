@@ -11,44 +11,42 @@ export const THRUM_VERSION = "0.8.0" as const;
 export const Chi = {
   /** announce self: hive, roles, signed identity */
   hello: "hello",
-  /** start a turn — content, system, tools */
+  /** open a bloom: its petals, and how the cell should grow it */
   prompt: "prompt",
-  /** interrupt mid-turn */
+  /** stop the open bloom */
   cancel: "cancel",
-  /** session deleted, drop daemon state */
+  /** drop humd's state for a sigil */
   cleanup: "cleanup",
   /** manual compaction request */
   curate: "curate",
   /** resolve an earlier permission-ask */
   releasePermit: "release-permit",
-  /** task subagent answered */
+  /** a scout came back */
+  scoutResult: "scout-result",
+  /** what a tendril grasped */
   tendrilResult: "tendril-result",
-  /** nestler-declared tool answered */
-  toolResult: "tool-result",
   /** OC message-graph update (graft hint) */
   petalCell: "petal-cell",
-  /** handshake — full state sync on connect */
+  /** accept a hello, sync state on connect */
   breath: "breath",
-  /** model output partwise (text/reasoning/tool) */
-  chunk: "chunk",
-  /** turn complete — finishReason + usage */
-  finish: "finish",
-  /** turn aborted */
+  /** a petal growing */
+  unfurl: "unfurl",
+  /** close the bloom, with its nectar */
+  wilt: "wilt",
+  /** the bloom broke off */
   error: "error",
-  /** nest spawned, claude session id known */
-  sessionReady: "session-ready",
-  /** cell lifecycle event and headroom */
+  /** a cell's life, and headroom */
   pulse: "pulse",
-  /** mid-stream permission needed */
+  /** a tendril needs leave to reach */
   permissionAsk: "permission-ask",
-  /** task subagent dispatch */
+  /** send a scout out */
+  scout: "scout",
+  /** a tendril reaching */
   tendrilReach: "tendril-reach",
-  /** nestler-declared tool dispatch */
-  toolCall: "tool-call",
-  /** out-of-band metadata for a tool result */
-  toolMeta: "tool-meta",
-  /** completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event. */
-  toolInfo: "tool-info",
+  /** what a tendril carries besides its result */
+  tendrilMeta: "tendril-meta",
+  /** a tendril that already came back, told whole, for showing only */
+  tendrilInfo: "tendril-info",
   /** delivery ack for a rid */
   echo: "echo",
   /** a timing measurement — measured both ways */
@@ -87,9 +85,9 @@ export function isValidChi(s: string): s is ChiKind { return ALL_CHI.has(s as Ch
 export const PulseKind = {
   /** process created */
   cellSpawned: "cell-spawned",
-  /** system init received, accepting input */
+  /** brooded: accepting prompts, its id, model and tools known */
   cellReady: "cell-ready",
-  /** turn complete, no listeners */
+  /** the bloom wilted, no listeners */
   cellIdle: "cell-idle",
   /** process exited */
   cellDied: "cell-died",
@@ -98,32 +96,25 @@ export const PulseKind = {
 } as const;
 export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];
 
-// Fields every tone may carry. `chi` and `rid` are required; the rest
-// are situational. `ext` is the bee-private extension bag — thrum
-// core ignores it, each bee owns its own key.
-export interface Envelope {
-  chi: ChiKind;
-  rid: string;
-  from?: string;
-  to?: string;
-  sigil?: string;
-  sid?: string;
-  wane?: number;
-  sentAt?: number;
-  dusk?: number;
-  ext?: Record<string, Record<string, unknown>>;
-}
-
-export type Tone = Envelope & Record<string, unknown>;
-
-export function isEnvelope(x: unknown): x is Envelope {
-  if (!x || typeof x !== "object") return false;
-  const o = x as Record<string, unknown>;
-  return typeof o.chi === "string"
-    && (typeof o.rid === "string" || o.rid === undefined)
-    && (o.sid === undefined || typeof o.sid === "string");
-}
-
-export function isKnownTone(x: unknown): x is Tone {
-  return isEnvelope(x) && isValidChi((x as Envelope).chi as string);
-}
+// petal.kind says which unit of content a petal is.
+export const PetalKind = {
+  /** words, in `text` */
+  text: "text",
+  /** a brokered tool call: `callId`, `name`, `args`; its input grows as `sap` */
+  tendril: "tendril",
+  /** what a tendril came back with: `callId`, `result`, `isError` */
+  grasp: "grasp",
+  /** a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url` */
+  pollen: "pollen",
+  /** the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom */
+  sepal: "sepal",
+  /** where a petal's words came from: `source` */
+  waggle: "waggle",
+  /** the cell declining, or a filter acting: `text` says why */
+  thorn: "thorn",
+  /** how likely each token was: `brix` */
+  brix: "brix",
+  /** several candidate petals for one prompt: `bouquet` */
+  bouquet: "bouquet",
+} as const;
+export type PetalKindT = typeof PetalKind[keyof typeof PetalKind];

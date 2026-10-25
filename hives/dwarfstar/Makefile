@@ -14,7 +14,7 @@
 # Metal backend is what is wired, so the bee builds on macOS.
 #
 # The thrum side is the C client in thrum-clients/c, through thrum.mk,
-# which brings libsodium and cJSON in through pkg-config.
+# which brings cJSON in through pkg-config.
 
 DS4_REPO ?= antirez/ds4
 DS4_SHA  ?= 5379c1c9ac315f1540371b06a3db88491d4059ff

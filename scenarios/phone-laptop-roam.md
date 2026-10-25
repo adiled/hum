@@ -39,7 +39,7 @@ stateful. It speaks every chi the openai-shape preserves.
    humd-P doesn't host the hum, so it routes the attach request to
    humd-L over the ensemble link, naming the target by `HumdId`.
 4. humd-L recognises the sibling identity, grants attach, and begins
-   replicating its bloom: every fresh `chi:"chunk"` is also routed to
+   replicating its bloom: every fresh `chi:"unfurl"` is also routed to
    humd-P, which fans it out to the phone's nestler.
 5. The operator now sees the same petals on the phone, in order, with
    no replay of the petals they already saw on the laptop (cursor
@@ -56,7 +56,7 @@ stateful. It speaks every chi the openai-shape preserves.
   must refuse attach with `RouteError`-style rejection and never leak a
   petal. Test asserts zero tones reach humd-P after the bad handshake.
 - **Late attach loses petals.** Without wane the phone would either
-  miss the chunks emitted between walk-away and attach, or get a flood
+  miss the unfurls emitted between walk-away and attach, or get a flood
   of duplicates. Test must catch both: attach replays exactly the
   petals humd-P has not yet seen, and replays them in sigil-order.
 - **Divergent wane.** If humd-L advances wane locally while humd-P's
@@ -71,12 +71,12 @@ stateful. It speaks every chi the openai-shape preserves.
 
 - After step 4, humd-P's nestler tap receives `chi:"hello"` referencing
   the same `sigil` humd-L holds, within `RTT + 50ms`.
-- humd-P observes the full ordered sequence of `chi:"chunk"` petals
+- humd-P observes the full ordered sequence of `chi:"unfurl"` petals
   from prompt-start to current-tip; the concatenated text equals
   humd-L's. No petal appears twice; no petal is missing.
 - After step 6, humd-L's tap receives `chi:"prompt"` originated by
   humd-P within `RTT + 50ms`, with `from` set to humd-P's `HumdId`.
-- The final `chi:"finish"` arrives on both taps with
+- The final `chi:"wilt"` arrives on both taps with
   `usage.output_tokens > 0` and matching token counts.
 - `ensemble.peers()` on humd-L lists humd-P throughout; on humd-P,
   lists humd-L. Neither registry shows stale entries after step 7.
@@ -93,5 +93,5 @@ stateful. It speaks every chi the openai-shape preserves.
   missing slice. No bespoke catch-up protocol — the wane cursor does
   the work.
 - **Routing surface.** `Ensemble::route` carries `chi:"prompt"` from
-  humd-P to humd-L, and `chi:"chunk"` from humd-L to humd-P, both
+  humd-P to humd-L, and `chi:"unfurl"` from humd-L to humd-P, both
   addressed by `to: <HumdId>`.

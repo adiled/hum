@@ -19,6 +19,7 @@ pub enum Repr {
     Int {
         unsigned: bool,
     },
+    Float,
     Bool,
     Json,
     Map(Box<Repr>),
@@ -125,6 +126,7 @@ fn repr_of(ty: &Type) -> Repr {
         "String" => Repr::Str,
         "i64" | "i32" | "i16" => Repr::Int { unsigned: false },
         "u64" | "u32" | "u16" => Repr::Int { unsigned: true },
+        "f64" | "f32" => Repr::Float,
         "bool" => Repr::Bool,
         "Value" => Repr::Json,
         "Vec" => {
@@ -232,7 +234,7 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
     ));
     s.push_str("export type { ChiKind } from \"./chi.ts\";\n");
-    s.push_str("import type { Chi } from \"./chi.ts\";\n\n");
+    s.push_str("import { isValidChi, type ChiKind } from \"./chi.ts\";\n\n");
 
     for t in &spec.types {
         s.push_str(&format!("export interface {} {{\n", t.name));
@@ -253,7 +255,17 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         s.push_str(&format!("  \"{}\": {};\n", wire, t.name));
     }
     s.push_str("}\n\n");
-    s.push_str("export type ToneView<C extends keyof ToneViews> = Envelope & ToneViews[C];\n");
+    s.push_str("// A tone: the envelope and its chi's declared body, the same tone\n");
+    s.push_str("// whether a bee sends it or hears it. Its rid may be left out; hum's\n");
+    s.push_str("// client gives a tone one when it has none, and humd's breath has none.\n");
+    s.push_str("export type Tone<C extends keyof ToneViews = keyof ToneViews> = {\n");
+    s.push_str("  [K in C]: { chi: K; rid?: string } & Omit<Envelope, \"chi\" | \"rid\"> & ToneViews[K];\n");
+    s.push_str("}[C];\n\n");
+    s.push_str("export function isTone(x: unknown): x is Tone {\n");
+    s.push_str("  if (!x || typeof x !== \"object\") return false;\n");
+    s.push_str("  const chi = (x as { chi?: unknown }).chi;\n");
+    s.push_str("  return typeof chi === \"string\" && isValidChi(chi);\n");
+    s.push_str("}\n");
     write_out(output, &s)
 }
 
@@ -280,11 +292,12 @@ fn body_chi(name: &str) -> String {
 fn ts_repr(r: &Repr) -> String {
     match r {
         Repr::Str => "string".into(),
-        Repr::Int { .. } => "number".into(),
+        Repr::Int { .. } | Repr::Float => "number".into(),
         Repr::Bool => "boolean".into(),
         Repr::Json => "unknown".into(),
         Repr::Map(inner) => format!("Record<string, {}>", ts_repr(inner)),
         Repr::Arr(inner) => format!("{}[]", ts_repr(inner)),
+        Repr::Ref(name) if name == "Chi" => "ChiKind".into(),
         Repr::Ref(name) => name.clone(),
     }
 }
@@ -371,6 +384,7 @@ fn py_repr(r: &Repr, optional: bool) -> String {
     let base = match r {
         Repr::Str => "str",
         Repr::Int { .. } => "int",
+        Repr::Float => "float",
         Repr::Bool => "bool",
         Repr::Json => "Any",
         Repr::Map(inner) => {
@@ -461,6 +475,7 @@ fn render_protocol_c(spec: &ProtocolSpec) -> String {
          \x20   THRUM_FIELD_STRING,\n\
          \x20   THRUM_FIELD_INT,\n\
          \x20   THRUM_FIELD_UINT,\n\
+         \x20   THRUM_FIELD_NUMBER,\n\
          \x20   THRUM_FIELD_BOOL,\n\
          \x20   THRUM_FIELD_ARRAY,\n\
          \x20   THRUM_FIELD_OBJECT,\n\
@@ -538,6 +553,7 @@ fn c_kind(r: &Repr, spec: &ProtocolSpec) -> &'static str {
         Repr::Str => "THRUM_FIELD_STRING",
         Repr::Int { unsigned: false } => "THRUM_FIELD_INT",
         Repr::Int { unsigned: true } => "THRUM_FIELD_UINT",
+        Repr::Float => "THRUM_FIELD_NUMBER",
         Repr::Bool => "THRUM_FIELD_BOOL",
         Repr::Json => "THRUM_FIELD_ANY",
         Repr::Map(_) => "THRUM_FIELD_OBJECT",
@@ -566,13 +582,14 @@ fn go_repr(r: &Repr, optional: bool) -> String {
                 "int64".into()
             }
         }
+        Repr::Float => "float64".to_string(),
         Repr::Bool => "bool".to_string(),
         Repr::Json => "json.RawMessage".to_string(),
         Repr::Map(inner) => format!("map[string]{}", go_repr(inner, false)),
         Repr::Arr(inner) => format!("[]{}", go_repr(inner, false)),
         Repr::Ref(name) => name.clone(),
     };
-    if optional && matches!(r, Repr::Str | Repr::Int { .. } | Repr::Bool | Repr::Ref(_)) {
+    if optional && matches!(r, Repr::Str | Repr::Int { .. } | Repr::Float | Repr::Bool | Repr::Ref(_)) {
         format!("*{base}")
     } else {
         base
@@ -607,7 +624,7 @@ mod tests {
     fn kebab_of_body() {
         assert_eq!(body_chi("HelloBody"), "hello");
         assert_eq!(body_chi("KadFindNodeRespBody"), "kad-find-node-resp");
-        assert_eq!(body_chi("ToolCallBody"), "tool-call");
+        assert_eq!(body_chi("TendrilReachBody"), "tendril-reach");
     }
 
     #[test]
@@ -621,27 +638,29 @@ mod tests {
     fn parses_views_slice() {
         let src = r#"
             #[derive(Serialize, Deserialize)]
-            pub struct ChunkBody {
-                #[serde(rename = "chunkType")]
-                pub chunk_type: String,
+            pub struct UnfurlBody {
+                #[serde(rename = "callId")]
+                pub call_id: String,
                 #[serde(skip_serializing_if = "Option::is_none")]
-                pub delta: Option<serde_json::Value>,
+                pub grain: Option<serde_json::Value>,
                 #[serde(skip_serializing_if = "Option::is_none")]
                 pub tools: Option<Vec<String>>,
                 #[serde(skip_serializing_if = "Option::is_none")]
                 pub load: Option<BTreeMap<String, u64>>,
+                pub temperature: f64,
             }
         "#;
         let ts = structs_in(src, |_| true).unwrap();
         assert_eq!(ts.len(), 1);
         let f = &ts[0].fields;
-        assert_eq!(f.len(), 4);
-        assert_eq!(f[0].json, "chunkType");
+        assert_eq!(f.len(), 5);
+        assert_eq!(f[0].json, "callId");
         assert!(f[0].repr.matches(&Repr::Str));
         assert!(f[1].optional);
         assert!(matches!(f[1].repr, Repr::Json));
         assert!(matches!(f[2].repr, Repr::Arr(_)));
         assert!(matches!(f[3].repr, Repr::Map(_)));
+        assert!(matches!(f[4].repr, Repr::Float));
     }
 
     #[test]
@@ -649,7 +668,8 @@ mod tests {
         let spec =
             protocol_spec(&paths::views_rs(), &paths::envelope_rs(), &paths::lib_rs()).unwrap();
         let c = render_protocol_c(&spec);
-        assert!(c.contains("{\"chunkType\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"kind\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"temperature\", THRUM_FIELD_NUMBER, true},"));
         assert!(c.contains("{\"signedAt\", THRUM_FIELD_INT, false},"));
         assert!(c.contains("{\"chi\", THRUM_FIELD_STRING, false},"));
         assert!(c.contains("{\"ext\", THRUM_FIELD_OBJECT, true},"));
@@ -663,20 +683,17 @@ mod tests {
     fn parses_real_views_renames() {
         let spec =
             protocol_spec(&paths::views_rs(), &paths::envelope_rs(), &paths::lib_rs()).unwrap();
-        let chunk = spec
+        let unfurl = spec
             .types
             .iter()
-            .find(|t| t.name == "ChunkBody")
-            .expect("ChunkBody in spec");
-        for f in &chunk.fields {
-            match f.rust.as_str() {
-                "chunk_type" => assert_eq!(f.json, "chunkType"),
-                "block_idx" => assert_eq!(f.json, "blockIdx"),
-                "partial_json" => assert_eq!(f.json, "partialJson"),
-                "delta" => assert_eq!(f.json, "delta"),
-                other => panic!("unexpected ChunkBody field {other}"),
+            .find(|t| t.name == "UnfurlBody")
+            .expect("UnfurlBody in spec");
+        for f in &unfurl.fields {
+            if f.rust == "call_id" {
+                assert_eq!(f.json, "callId");
             }
         }
+        assert!(unfurl.fields.iter().any(|f| f.json == "sap"));
         let prompt = spec.types.iter().find(|t| t.name == "PromptBody").unwrap();
         for f in &prompt.fields {
             if f.rust == "model_id" {

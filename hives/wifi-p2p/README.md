@@ -14,7 +14,7 @@ no cellular, no internet.
 
 Each phone runs its own local humd (in Termux or on a companion
 machine). The bee translates incoming P2P messages into `chi:"prompt"`
-to humd and routes `chunk`/`finish` replies back over the P2P link.
+to humd and routes the bloom's `unfurl`/`wilt` back over the P2P link.
 Conversations are continuous per peer — the sid is keyed off the
 peer's Ed25519 identity (its hid), stable across link drops and
 reconnects.
@@ -36,7 +36,7 @@ reconnects.
 │                          ▼               │
 │                        humd              │
 │                          │               │
-│                          │ chunk/finish  │
+│                          │ unfurl/wilt   │
 │                          ▼               │
 │  Peer ◄── TCP :4377 ──── wifi-p2p bee    │
 │  (Phone B)     p2p0      │               │
@@ -123,8 +123,8 @@ adb shell am start-foreground-service \
 | P2P tone | hum chi |
 |---|---|
 | `{"chi":"prompt","sid":"<peer-hid>","text":"..."}` | `chi:"prompt"` to humd (sid keyed off peer hid) |
-| humd's `chi:"chunk"` text parts | collected into one reply buffer |
-| humd's `chi:"finish"` | `{"chi":"finish","sid":"<peer-hid>","reply":"..."}` over P2P TCP |
+| humd's `chi:"unfurl"` text petals | collected into one reply |
+| humd's `chi:"wilt"` | the reply as one text petal, `{"chi":"unfurl","sid":"<peer-hid>","petal":0,"kind":"text","text":"..."}`, then `{"chi":"wilt","sid":"<peer-hid>","reason":"stop"}` over P2P TCP |
 
 The P2P wire uses the same NDJSON framing as thrum, so a peer that
 also runs humd can forward tones directly. The bee is the translator

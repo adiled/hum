@@ -16,7 +16,7 @@ solar system: one-way delays measured in minutes (Mars) to hours
 A bundle addressed to `dtn://hum.local/inference` arrives over UDP
 (or any other convergence layer your DTN router provides). We decode,
 extract the payload, hand it to humd as `chi:"prompt"`, collect the
-chunks, wrap the answer in a reply bundle, and send it back to the
+bloom's text, wrap the answer in a reply bundle, and send it back to the
 bundle's source EID. Real protocol; works today against a real DTN
 router on your laptop.
 
@@ -31,7 +31,7 @@ router on your laptop.
 ```
 DTN peer ──BP7 bundle (CBOR over UDP:4556)──► bp7-forager ──chi:"prompt"──► humd
                                                                                 │
-DTN peer ◄──BP7 bundle (CBOR over UDP)──── bp7-forager ◄──chi:"finish"────────┘
+DTN peer ◄──BP7 bundle (CBOR over UDP)──── bp7-forager ◄──chi:"wilt"──────────┘
 ```
 
 Payload may be:
@@ -40,7 +40,7 @@ Payload may be:
 - **JSON** — `{ "text": "...", "modelId": "claude-sonnet-4", "system": "..." }`
 
 The bundle's source EID is reused as the reply destination. Reply
-payload is the collected `chunk` text concatenated into a single
+payload is the bloom's unfurled text concatenated into a single
 UTF-8 body. No SSE re-framing — DTN replies are *messages*, not
 streams.
 
@@ -85,7 +85,7 @@ hop: ~600ms. Real Mars round-trip: 5–24 minutes.
 - **Route**. Bundles addressed to other EIDs get dropped, not forwarded. Run a real DTN router (ION / µPCN / hDTN) alongside this bee and point its routing table at our UDP port if you want routing.
 - **Authenticate**. BP7 has security extensions (BPSec); this v1 doesn't use them. Anyone reachable on UDP:4556 can prompt your humd.
 - **Custody transfer**. We acknowledge a bundle by replying — that's the only signal upstream gets. A real DTN deployment layers custody on top.
-- **Stream**. DTN is store-and-forward, not streaming. Your `chi:"chunk"` tones get collected into one reply bundle. If you want progress-via-bundle, send multiple intermediate bundles — that's a future extension.
+- **Stream**. DTN is store-and-forward, not streaming. Your `chi:"unfurl"` tones get collected into one reply bundle. If you want progress-via-bundle, send multiple intermediate bundles — that's a future extension.
 
 ## Why this is the right kind of unhinged
 

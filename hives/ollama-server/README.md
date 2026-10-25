@@ -35,11 +35,11 @@ client                              ollama-server                     humd
   │   { model, messages, stream:true,     │                            │
   │     tools? }                          │  chi:"prompt"              │
   │                                       ├───────────────────────────►│
-  │                                       │  chi:"chunk"               │
+  │                                       │  chi:"unfurl"              │
   │                                       │◄───────────────────────────┤
   │  {"message":{"content":"Hi"},"done":false}                         │
   │◄──────────────────────────────────────┤                            │
-  │                                       │  chi:"finish"              │
+  │                                       │  chi:"wilt"                │
   │                                       │◄───────────────────────────┤
   │  {"done":true,...}                    │                            │
   │◄──────────────────────────────────────┤                            │
@@ -49,7 +49,7 @@ client                              ollama-server                     humd
 
 | route | what |
 |---|---|
-| `POST /api/chat` | multi-message turn; NDJSON streaming |
+| `POST /api/chat` | multi-message chat; NDJSON streaming |
 | `POST /api/generate` | single prompt; NDJSON streaming |
 | `GET /api/tags` | list of available models (synthesized) |
 | `GET /` | health probe — returns `"Ollama is running"` like the real Ollama |
@@ -128,9 +128,9 @@ print(llm.invoke("ping"))
 | POST `/api/chat` | `chi:"prompt"` |
 | messages[].role=system | `prompt.systemPrompt` |
 | tools[] (function) | `prompt.tools[]` |
-| streamed `message.content` | `chi:"chunk"` (text part) |
-| streamed `message.tool_calls` | `chi:"chunk"` (tool_use part) |
-| `done:true` line | `chi:"finish"` |
+| streamed `message.content` | `chi:"unfurl"` (a text petal) |
+| streamed `message.tool_calls` | `chi:"tendril-reach"` |
+| `done:true` line | `chi:"wilt"` |
 | `error` line | `chi:"error"` |
 
 ## Status

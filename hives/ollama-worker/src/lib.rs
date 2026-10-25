@@ -1,7 +1,13 @@
 //! ollama-worker — Worker that calls Ollama's HTTP API.
 //!
 //! Sends prompts to Ollama's `/api/chat` endpoint and streams the
-//! response back over thrum. Run any local LLM Ollama supports.
+//! response back over thrum: Ollama's content unfurls as one text
+//! petal, and its final counts wilt the bloom as nectar. Run any local
+//! LLM Ollama supports.
+//!
+//! The Ollama API is stateless per call, so every request carries the
+//! full history; the cell lives for one streaming response, and humd
+//! can reuse it for the next prompt of the same sid.
 //!
 //! Environment:
 //!   OLLAMA_WORKER_URL      — Ollama API base URL (default: http://127.0.0.1:11434)
@@ -18,8 +24,25 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use hum_nest::{Cell, Egg, Propensity, Worker};
+use thrum_core::PetalKind;
 
-/// Ollama chat request body — the exact shape Ollama's API expects.
+fn petal_text(fed: &str) -> String {
+    let Ok(message) = serde_json::from_str::<Value>(fed) else {
+        return fed.to_string();
+    };
+    message
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct OllamaRequest {
     model: String,
@@ -69,9 +92,6 @@ impl Worker for OllamaWorker {
     fn ephemeral(&self) -> bool { false }
 
     fn propensity(&self) -> Propensity {
-        // Ollama API is stateless per call — every request carries full history.
-        // The cell lives for one streaming response; humd can reuse it
-        // for follow-up turns in the same sid.
         Propensity::StatefulSession
     }
 
@@ -111,7 +131,7 @@ impl Worker for OllamaWorker {
             }
             msgs.push(OllamaMessage {
                 role: "user".to_string(),
-                content: prompt,
+                content: petal_text(&prompt),
             });
 
             let request = OllamaRequest {
@@ -163,12 +183,13 @@ impl Worker for OllamaWorker {
                                     .unwrap_or("");
 
                                 if !content.is_empty() {
-                                    let delta = json!({
-                                        "chi": "chunk",
-                                        "chunkType": "text_delta",
-                                        "delta": content,
+                                    let unfurl = json!({
+                                        "chi": "unfurl",
+                                        "petal": 0,
+                                        "kind": PetalKind::Text.as_str(),
+                                        "text": content,
                                     });
-                                    let _ = tx_mmm_wire.send(delta).await;
+                                    let _ = tx_mmm_wire.send(unfurl).await;
                                 }
 
                                 if done {
@@ -179,15 +200,15 @@ impl Worker for OllamaWorker {
                                         .and_then(|c| c.as_u64())
                                         .unwrap_or(0);
 
-                                    let finish = json!({
-                                        "chi": "finish",
-                                        "finishReason": "stop",
-                                        "usage": {
+                                    let wilt = json!({
+                                        "chi": "wilt",
+                                        "reason": "stop",
+                                        "nectar": {
                                             "input_tokens": prompt_eval_count,
                                             "output_tokens": eval_count,
                                         },
                                     });
-                                    let _ = tx_mmm_wire.send(finish).await;
+                                    let _ = tx_mmm_wire.send(wilt).await;
                                     return;
                                 }
                             }

@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::{
-    BEES_SNAPSHOT_BASENAME, COMB_BASENAME, HTTP_SOCK_BASENAME, HUMD_KEY_BASENAME,
+    ADVISORIES_BASENAME, BEES_SNAPSHOT_BASENAME, COMB_BASENAME, HTTP_SOCK_BASENAME, HUMD_KEY_BASENAME,
     HUM_JSON_BASENAME, PEERS_JSON_BASENAME, REVOKED_BEES_BASENAME, ROUTING_JSON_BASENAME,
     RUNTIME_INFO_BASENAME, THRUM_SOCK_BASENAME,
 };
@@ -124,6 +124,7 @@ pub const LAYOUT: &[Entry] = &[
     file(Root::State, ROUTING_JSON_BASENAME, "peer addresses kept across restarts"),
     file(Root::State, BEES_SNAPSHOT_BASENAME, "the bees last seen"),
     file(Root::State, REVOKED_BEES_BASENAME, "the revoked bees"),
+    file(Root::State, ADVISORIES_BASENAME, "what humd advised each bee"),
     shaped(Root::State, BEES_SUBDIR, is_bee_key_name, "bee keys, <id>.key"),
     shaped(Root::State, ENTERED_SUBDIR, is_bee_entry_name, "entered bees, <id>.json"),
     free(Root::State, THEHUM_SUBDIR, "the persistent chi log"),

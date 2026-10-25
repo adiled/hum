@@ -27,6 +27,7 @@ class HelloBody:
     propensity: Optional[Any] = None
     headroom: Optional[Headroom] = None
     source: Optional[str] = None
+    bind: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -45,6 +46,7 @@ class HelloBody:
         "propensity": "propensity",
         "headroom": "headroom",
         "source": "source",
+        "bind": "bind",
     }
 
 @dataclass
@@ -64,11 +66,21 @@ class PromptBody:
     cwd: Optional[str] = None
     system_prompt: Optional[str] = None
     text: Optional[str] = None
-    content: Optional[list[Any]] = None
+    content: Optional[list[Petal]] = None
     tools: Optional[list[Any]] = None
     forager_tools: Optional[list[Any]] = None
     provided: Optional[list[str]] = None
     disallowed_tools: Optional[list[str]] = None
+    allowed_tools: Optional[list[str]] = None
+    resume: Optional[str] = None
+    temperature: Optional[float] = None
+    prune: Optional[Prune] = None
+    season: Optional[int] = None
+    frost: Optional[list[str]] = None
+    seed: Optional[int] = None
+    trellis: Optional[Any] = None
+    tendrils: Optional[Tendrils] = None
+    sepal: Optional[Sepal] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -81,45 +93,150 @@ class PromptBody:
         "forager_tools": "foragerTools",
         "provided": "provided",
         "disallowed_tools": "disallowedTools",
+        "allowed_tools": "allowedTools",
+        "resume": "resume",
+        "temperature": "temperature",
+        "prune": "prune",
+        "season": "season",
+        "frost": "frost",
+        "seed": "seed",
+        "trellis": "trellis",
+        "tendrils": "tendrils",
+        "sepal": "sepal",
+    }
+
+@dataclass
+class Petal:
+    kind: str
+    role: Optional[str] = None
+    text: Optional[str] = None
+    grain: Optional[Grain] = None
+    call_id: Optional[str] = None
+    name: Optional[str] = None
+    args: Optional[Any] = None
+    result: Optional[Any] = None
+    is_error: Optional[bool] = None
+    propolis: Optional[str] = None
+    source: Optional[Any] = None
+    brix: Optional[Any] = None
+    bouquet: Optional[list[Any]] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "kind": "kind",
+        "role": "role",
+        "text": "text",
+        "grain": "grain",
+        "call_id": "callId",
+        "name": "name",
+        "args": "args",
+        "result": "result",
+        "is_error": "isError",
+        "propolis": "propolis",
+        "source": "source",
+        "brix": "brix",
+        "bouquet": "bouquet",
+    }
+
+@dataclass
+class Grain:
+    kind: str
+    media_type: str
+    data: Optional[str] = None
+    url: Optional[str] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "kind": "kind",
+        "media_type": "mediaType",
+        "data": "data",
+        "url": "url",
+    }
+
+@dataclass
+class Prune:
+    p: Optional[float] = None
+    k: Optional[int] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "p": "p",
+        "k": "k",
+    }
+
+@dataclass
+class Tendrils:
+    reach: Optional[str] = None
+    parallel: Optional[bool] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "reach": "reach",
+        "parallel": "parallel",
+    }
+
+@dataclass
+class Sepal:
+    effort: Optional[str] = None
+    budget: Optional[int] = None
+
+    # rust field name -> wire key (single source in views.rs)
+    _wire: ClassVar[dict[str, str]] = {
+        "effort": "effort",
+        "budget": "budget",
     }
 
 @dataclass
 class BreathBody:
-    sessions: Any
+    sigils: Any
     proto_version: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
-        "sessions": "sessions",
+        "sigils": "sigils",
         "proto_version": "protoVersion",
     }
 
 @dataclass
-class ChunkBody:
-    chunk_type: str
-    block_idx: Optional[int] = None
-    delta: Optional[Any] = None
-    partial_json: Optional[str] = None
+class UnfurlBody:
+    petal: int
+    kind: str
+    text: Optional[str] = None
+    sap: Optional[str] = None
+    call_id: Optional[str] = None
+    name: Optional[str] = None
+    grain: Optional[Grain] = None
+    propolis: Optional[str] = None
+    source: Optional[Any] = None
+    brix: Optional[Any] = None
+    closed: Optional[bool] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
-        "chunk_type": "chunkType",
-        "block_idx": "blockIdx",
-        "delta": "delta",
-        "partial_json": "partialJson",
+        "petal": "petal",
+        "kind": "kind",
+        "text": "text",
+        "sap": "sap",
+        "call_id": "callId",
+        "name": "name",
+        "grain": "grain",
+        "propolis": "propolis",
+        "source": "source",
+        "brix": "brix",
+        "closed": "closed",
     }
 
 @dataclass
-class FinishBody:
-    finish_reason: str
-    usage: Optional[Any] = None
+class WiltBody:
+    reason: str
+    nectar: Optional[Any] = None
     exit_code: Optional[int] = None
     subtype: Optional[str] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
-        "finish_reason": "finishReason",
-        "usage": "usage",
+        "reason": "reason",
+        "nectar": "nectar",
         "exit_code": "exitCode",
         "subtype": "subtype",
     }
@@ -129,49 +246,34 @@ class ErrorBody:
     message: str
     code: Optional[str] = None
     subtype: Optional[str] = None
-    usage: Optional[Any] = None
+    nectar: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "message": "message",
         "code": "code",
         "subtype": "subtype",
-        "usage": "usage",
+        "nectar": "nectar",
     }
 
 @dataclass
-class SessionReadyBody:
-    nest_id: str
-    model: str
-    tools: Optional[list[Any]] = None
-
-    # rust field name -> wire key (single source in views.rs)
-    _wire: ClassVar[dict[str, str]] = {
-        "nest_id": "nestId",
-        "model": "model",
-        "tools": "tools",
-    }
-
-@dataclass
-class ToolCallBody:
+class TendrilReachBody:
     call_id: str
-    tool_name: str
-    name: Optional[str] = None
+    name: str
     args: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "call_id": "callId",
-        "tool_name": "toolName",
         "name": "name",
         "args": "args",
     }
 
 @dataclass
-class ToolResultBody:
+class TendrilResultBody:
     call_id: str
     output: Optional[str] = None
-    result: Optional[str] = None
+    result: Optional[Any] = None
     is_error: Optional[bool] = None
     title: Optional[str] = None
     metadata: Optional[Any] = None
@@ -187,11 +289,12 @@ class ToolResultBody:
     }
 
 @dataclass
-class ToolInfoBody:
+class TendrilInfoBody:
     call_id: str
     name: Optional[str] = None
     args: Optional[Any] = None
     result: Optional[Any] = None
+    is_error: Optional[bool] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
@@ -199,18 +302,19 @@ class ToolInfoBody:
         "name": "name",
         "args": "args",
         "result": "result",
+        "is_error": "isError",
     }
 
 @dataclass
-class ToolMetaBody:
+class TendrilMetaBody:
     call_id: Optional[str] = None
-    tool_name: Optional[str] = None
+    name: Optional[str] = None
     metadata: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "call_id": "callId",
-        "tool_name": "toolName",
+        "name": "name",
         "metadata": "metadata",
     }
 
@@ -219,25 +323,31 @@ class PulseBody:
     kind: str
     pid: Optional[int] = None
     headroom: Optional[Headroom] = None
+    cell: Optional[str] = None
+    model: Optional[str] = None
+    tools: Optional[list[Any]] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "kind": "kind",
         "pid": "pid",
         "headroom": "headroom",
+        "cell": "cell",
+        "model": "model",
+        "tools": "tools",
     }
 
 @dataclass
 class PermissionAskBody:
     call_id: Optional[str] = None
-    tool_name: Optional[str] = None
+    name: Optional[str] = None
     message: Optional[str] = None
     arg: Optional[Any] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "call_id": "callId",
-        "tool_name": "toolName",
+        "name": "name",
         "message": "message",
         "arg": "arg",
     }
@@ -434,7 +544,7 @@ class CurateBody:
     pass
 
 @dataclass
-class TendrilResultBody:
+class ScoutResultBody:
     call_id: Optional[str] = None
     output: Optional[Any] = None
 
@@ -445,7 +555,7 @@ class TendrilResultBody:
     }
 
 @dataclass
-class TendrilReachBody:
+class ScoutBody:
     task: Optional[str] = None
     tools: Optional[list[Any]] = None
 
@@ -518,14 +628,13 @@ TONE_VIEWS: dict[str, type] = {
     "hello": HelloBody,
     "prompt": PromptBody,
     "breath": BreathBody,
-    "chunk": ChunkBody,
-    "finish": FinishBody,
+    "unfurl": UnfurlBody,
+    "wilt": WiltBody,
     "error": ErrorBody,
-    "session-ready": SessionReadyBody,
-    "tool-call": ToolCallBody,
-    "tool-result": ToolResultBody,
-    "tool-info": ToolInfoBody,
-    "tool-meta": ToolMetaBody,
+    "tendril-reach": TendrilReachBody,
+    "tendril-result": TendrilResultBody,
+    "tendril-info": TendrilInfoBody,
+    "tendril-meta": TendrilMetaBody,
     "pulse": PulseBody,
     "permission-ask": PermissionAskBody,
     "release-permit": ReleasePermitBody,
@@ -546,7 +655,7 @@ TONE_VIEWS: dict[str, type] = {
     "cancel": CancelBody,
     "cleanup": CleanupBody,
     "curate": CurateBody,
-    "tendril-result": TendrilResultBody,
-    "tendril-reach": TendrilReachBody,
+    "scout-result": ScoutResultBody,
+    "scout": ScoutBody,
     "petal-cell": PetalCellBody,
 }

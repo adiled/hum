@@ -7,7 +7,7 @@ description: "x402-style paid oracle bee — sells one price per USDC payment, v
 
 > _x402-style paid oracle bee — sells one price per USDC payment, verified on-chain_
 
-A minimal **paid bee** for hum. Listens for `chi:"tool-call"`
+A minimal **paid bee** for hum. Listens for `chi:"tendril-reach"`
 with `name: "quote"`, replies with an HTTP-402-style payment
 challenge, accepts retries carrying a transaction hash, verifies the
 payment on-chain, then returns the price.
@@ -19,7 +19,7 @@ want to ship the **simplest possible monetized agent** running on hum.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| stateless (per-call) | lean | x402-over-tool-call | everything except hello/tool-call/tool-result/error |
+| stateless (per-call) | lean | x402-over-tendril | everything except hello/tendril-reach/tendril-result/error |
 
 ## What it sells
 
@@ -30,21 +30,21 @@ HTTP with a single GET works.
 ## Wire
 
 ```
-counterparty  ──── chi:tool-call { name:"quote", args:{ pair:"ETH/USDC" } } ───►  paid-oracle
+forager  ──── chi:tendril-reach { name:"quote", args:{ pair:"ETH/USDC" } } ───►  paid-oracle
 
-              ◄─── chi:error    { code:402, x402:{ chain, pay_to, asset,
-                                                    asset_kind:"erc20",
-                                                    price_atomic, nonce, memo } }
+         ◄─── chi:error { code:"402", ext:{ "paid-oracle":{ x402:{ chain, pay_to, asset,
+                                                                  asset_kind:"erc20",
+                                                                  price_atomic, nonce, memo } } } }
 
-  (counterparty pays USDC on Base / Arc / configured chain. The transfer's
+  (the forager pays USDC on Base / Arc / configured chain. The transfer's
    input data MUST contain the nonce bytes, so we can bind the payment
    to this specific quote — single payment can't claim two quotes.)
 
-              ──── chi:tool-call { name:"quote",
-                                   args:{ pair:"ETH/USDC" },
-                                   paymentProof:{ txHash:"0x…", nonce } } ───►
+         ──── chi:tendril-reach { name:"quote",
+                                  args:{ pair:"ETH/USDC",
+                                         paymentProof:{ txHash:"0x…", nonce } } } ───►
 
-              ◄─── chi:tool-result { result:{ pair, px, source, expires_at_ms } }
+         ◄─── chi:tendril-result { result:{ pair, px, source, expires_at_ms } }
 ```
 
 ## Configure
@@ -103,7 +103,7 @@ while let Some((humd_id, manifest)) = found.recv().await {
 
 - **No on-chain writes.** Read-only RPC for `eth_getTransactionByHash`.
 - **No LLM.** Pure data resale. Plug in `chi:"prompt"` instead of
-  `chi:"tool-call"` and you have `paid-prompt` — inference-for-pay.
+  `chi:"tendril-reach"` and you have `paid-prompt` — inference-for-pay.
 - **No facilitator.** Verifies the tx itself. Drop in
   [x402 facilitator](https://github.com/coinbase/x402) verification by
   POSTing the proof to a facilitator URL and trusting its signature.
@@ -117,9 +117,9 @@ while let Some((humd_id, manifest)) = found.recv().await {
 
 x402 was designed for HTTP. We re-use the *semantics* (402 challenge,
 retry with proof) but transport them over thrum's `chi:"error"` /
-`chi:"tool-call"` pair. Same idea, no new protocol element required.
-A bee that already knew how to do `chi:"tool-call"` can become
-paid by adding one branch in its handler.
+`chi:"tendril-reach"` pair. Same idea, no new protocol element required.
+A bee that already answers a tendril can become paid by adding one
+branch in its handler.
 
 ## Status
 

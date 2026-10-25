@@ -1,5 +1,5 @@
-//! Build script — keeps generated SDKs in `thrum-clients/{ts,python,go,c}/`
-//! in lockstep with the wire contract.
+//! Build script: keeps the generated clients in `thrum-clients/{ts,python,go,c}/`
+//! in lockstep with the wire contract and the link.
 //!
 //! Cargo reruns this whenever the listed files change. We parse the
 //! Rust enums and `WIRE.md` via the `codegen` library and regenerate
@@ -21,6 +21,9 @@ fn main() {
     println!("cargo:rerun-if-changed={}", wire_md.display());
     println!("cargo:rerun-if-changed={}", views_rs.display());
     println!("cargo:rerun-if-changed={}", envelope_rs.display());
+    println!("cargo:rerun-if-changed={}", paths::link_rs().display());
+    println!("cargo:rerun-if-changed={}", paths::core_rs().display());
+    println!("cargo:rerun-if-changed={}", paths::templates().display());
     println!("cargo:rerun-if-changed=build.rs");
 
     let spec = match codegen::parse(&chi_rs, &lib_rs, &wire_md) {
@@ -42,41 +45,46 @@ fn main() {
         return;
     }
 
-    let emits: [(&str, std::path::PathBuf, &dyn Fn() -> codegen::Result<()>); 11] = [
-        ("emit_ts", paths::ts_chi(), &|| {
-            codegen::emit_ts(&spec, &paths::ts_chi())
-        }),
-        ("emit_helpers", paths::ts_helpers(), &|| {
-            codegen::emit_helpers(&paths::ts_helpers())
-        }),
-        ("emit_protocol_ts", paths::ts_protocol(), &|| {
+    let link = match codegen::link::link_spec(
+        &paths::link_rs(),
+        &paths::core_rs(),
+        &chi_rs,
+        &lib_rs,
+        &wire_md,
+    ) {
+        Ok(l) => l,
+        Err(e) => {
+            println!("cargo:warning=thrum-core build.rs: link parse failed: {e}");
+            return;
+        }
+    };
+
+    let mut emits: Vec<(String, std::path::PathBuf, Box<dyn Fn() -> codegen::Result<()> + '_>)> = vec![
+        ("emit_ts".into(), paths::ts_chi(), Box::new(|| codegen::emit_ts(&spec, &paths::ts_chi()))),
+        ("emit_protocol_ts".into(), paths::ts_protocol(), Box::new(|| {
             codegen::protocol::emit_protocol_ts(&proto, &paths::ts_protocol())
-        }),
-        ("emit_py", paths::py_chi(), &|| {
-            codegen::emit_py(&spec, &paths::py_chi())
-        }),
-        ("emit_py_helpers", paths::py_helpers(), &|| {
-            codegen::emit_py_helpers(&paths::py_helpers())
-        }),
-        ("emit_protocol_py", paths::py_protocol(), &|| {
+        })),
+        ("emit_py".into(), paths::py_chi(), Box::new(|| codegen::emit_py(&spec, &paths::py_chi()))),
+        ("emit_protocol_py".into(), paths::py_protocol(), Box::new(|| {
             codegen::protocol::emit_protocol_py(&proto, &paths::py_protocol())
-        }),
-        ("emit_go", paths::go_chi(), &|| {
-            codegen::emit_go(&spec, &paths::go_chi())
-        }),
-        ("emit_go_helpers", paths::go_helpers(), &|| {
-            codegen::emit_go_helpers(&paths::go_helpers())
-        }),
-        ("emit_protocol_go", paths::go_protocol(), &|| {
+        })),
+        ("emit_go".into(), paths::go_chi(), Box::new(|| codegen::emit_go(&spec, &paths::go_chi()))),
+        ("emit_protocol_go".into(), paths::go_protocol(), Box::new(|| {
             codegen::protocol::emit_protocol_go(&proto, &paths::go_protocol())
-        }),
-        ("emit_c", paths::c_chi(), &|| {
-            codegen::emit_c(&spec, &paths::c_chi())
-        }),
-        ("emit_protocol_c", paths::c_protocol(), &|| {
+        })),
+        ("emit_c".into(), paths::c_chi(), Box::new(|| codegen::emit_c(&spec, &paths::c_chi()))),
+        ("emit_protocol_c".into(), paths::c_protocol(), Box::new(|| {
             codegen::protocol::emit_protocol_c(&proto, &paths::c_protocol())
-        }),
+        })),
     ];
+    for client in paths::CLIENTS {
+        let link = &link;
+        emits.push((
+            format!("emit_client {}", client.output),
+            client.output_path(),
+            Box::new(move || codegen::link::emit_client(link, client, &client.output_path())),
+        ));
+    }
     for (label, _out, emit) in &emits {
         if let Err(e) = emit() {
             println!("cargo:warning=thrum-core build.rs: {label}: {e}");

@@ -35,8 +35,6 @@ describe("toolsFromOpenAI", () => {
       { type: "function", function: { name: "ping" } } as any,
     ])!;
     expect(out[0].inputSchema).toEqual({});
-    // Belt-and-suspenders: never null. claude-cli's mcp client
-    // zod-validates inputSchema and rejects null.
     expect(out[0].inputSchema).not.toBeNull();
   });
 

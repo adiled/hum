@@ -58,20 +58,19 @@ pub fn body_keys(chi: Chi) -> &'static [&'static str] {
         Chi::Cleanup => fields_of::<CleanupBody>(),
         Chi::Curate => fields_of::<CurateBody>(),
         Chi::ReleasePermit => fields_of::<ReleasePermitBody>(),
+        Chi::ScoutResult => fields_of::<ScoutResultBody>(),
         Chi::TendrilResult => fields_of::<TendrilResultBody>(),
-        Chi::ToolResult => fields_of::<ToolResultBody>(),
         Chi::PetalCell => fields_of::<PetalCellBody>(),
         Chi::Breath => fields_of::<BreathBody>(),
-        Chi::Chunk => fields_of::<ChunkBody>(),
-        Chi::Finish => fields_of::<FinishBody>(),
+        Chi::Unfurl => fields_of::<UnfurlBody>(),
+        Chi::Wilt => fields_of::<WiltBody>(),
         Chi::Error => fields_of::<ErrorBody>(),
-        Chi::SessionReady => fields_of::<SessionReadyBody>(),
         Chi::Pulse => fields_of::<PulseBody>(),
         Chi::PermissionAsk => fields_of::<PermissionAskBody>(),
+        Chi::Scout => fields_of::<ScoutBody>(),
         Chi::TendrilReach => fields_of::<TendrilReachBody>(),
-        Chi::ToolCall => fields_of::<ToolCallBody>(),
-        Chi::ToolMeta => fields_of::<ToolMetaBody>(),
-        Chi::ToolInfo => fields_of::<ToolInfoBody>(),
+        Chi::TendrilMeta => fields_of::<TendrilMetaBody>(),
+        Chi::TendrilInfo => fields_of::<TendrilInfoBody>(),
         Chi::Echo => fields_of::<EchoBody>(),
         Chi::PerfMark => fields_of::<PerfMarkBody>(),
         Chi::Log => fields_of::<LogBody>(),
@@ -118,7 +117,7 @@ mod tests {
 
     #[test]
     fn every_chi_has_a_struct_shape() {
-        for chi in [Chi::Hello, Chi::Prompt, Chi::Chunk, Chi::Finish, Chi::ToolCall, Chi::Breath] {
+        for chi in [Chi::Hello, Chi::Prompt, Chi::Unfurl, Chi::Wilt, Chi::TendrilReach, Chi::Breath] {
             assert!(!body_keys(chi).is_empty(), "{chi:?} has no declared body");
         }
     }

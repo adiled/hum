@@ -36,17 +36,17 @@ async fn full_session_lifecycle_replays_to_same_state() {
         t.append("prompt", Some(sid.clone()), rid_prompt.clone(), json!({"text": "hi there"}))
             .await
             .unwrap();
-        t.append("chunk", Some(sid.clone()), rid_prompt.clone(), json!({"delta": "he"}))
+        t.append("unfurl", Some(sid.clone()), rid_prompt.clone(), json!({"text": "he"}))
             .await
             .unwrap();
-        t.append("chunk", Some(sid.clone()), rid_prompt.clone(), json!({"delta": "llo"}))
+        t.append("unfurl", Some(sid.clone()), rid_prompt.clone(), json!({"text": "llo"}))
             .await
             .unwrap();
-        t.append("chunk", Some(sid.clone()), rid_prompt.clone(), json!({"delta": "!"}))
+        t.append("unfurl", Some(sid.clone()), rid_prompt.clone(), json!({"text": "!"}))
             .await
             .unwrap();
         t.append(
-            "tool-call",
+            "tendril-reach",
             Some(sid.clone()),
             rid_tool.clone(),
             json!({"name": "fs.read", "args": {"path": "/tmp/x"}}),
@@ -54,14 +54,14 @@ async fn full_session_lifecycle_replays_to_same_state() {
         .await
         .unwrap();
         t.append(
-            "tool-result",
+            "tendril-result",
             Some(sid.clone()),
             rid_tool,
             json!({"ok": true, "bytes": 42}),
         )
         .await
         .unwrap();
-        t.append("finish", Some(sid.clone()), rid_prompt, json!({"reason": "end"}))
+        t.append("wilt", Some(sid.clone()), rid_prompt, json!({"reason": "end"}))
             .await
             .unwrap();
 
@@ -96,8 +96,8 @@ async fn cross_session_replay_isolates_correctly() {
     let sid_a = HumId::mint();
     let sid_b = HumId::mint();
 
-    let order_a = vec!["hello", "prompt", "chunk", "chunk", "finish"];
-    let order_b = vec!["hello", "prompt", "tool-call", "tool-result", "finish"];
+    let order_a = vec!["hello", "prompt", "unfurl", "unfurl", "wilt"];
+    let order_b = vec!["hello", "prompt", "tendril-reach", "tendril-result", "wilt"];
 
     for i in 0..order_a.len().max(order_b.len()) {
         if i < order_a.len() {
@@ -186,7 +186,7 @@ async fn snapshot_root_is_stable_across_runs() {
     let t2 = TheHum::open(tmp2.path(), fresh_key(), Config::default()).unwrap();
 
     let rid = HumId::mint();
-    for chi in ["hello", "prompt", "chunk", "finish"] {
+    for chi in ["hello", "prompt", "unfurl", "wilt"] {
         t1.append(chi, None, rid.clone(), json!({"chi": chi})).await.unwrap();
         t2.append(chi, None, rid.clone(), json!({"chi": chi})).await.unwrap();
     }

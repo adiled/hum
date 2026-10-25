@@ -1,11 +1,11 @@
 [project]
 name = "thrum"
-version = "0.7.0"
-description = "Wire-protocol primitives for thrum, the NDJSON socket between humd and bees."
+version = "0.8.0"
+description = "Thrum for a bee written in Python: the generated registry and views, and the client end of `hum bee link`."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "hum contributors" }]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 keywords = ["thrum", "hum", "p2p", "agents", "ndjson"]
 classifiers = [
     "License :: OSI Approved :: MIT License",

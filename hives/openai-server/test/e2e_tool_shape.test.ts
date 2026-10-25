@@ -28,10 +28,6 @@ interface FakeHumd {
   shutdown: () => Promise<void>;
 }
 
-// Bind a UDS server that accepts ONE openai-server connection,
-// captures the hello + every chi:"prompt" tone, and on each
-// prompt replies with a minimal chunk + finish sequence so the
-// HTTP response can complete.
 async function startFakeHumd(): Promise<FakeHumd> {
   const dir = mkdtempSync(join(tmpdir(), "hum-e2e-"));
   const sockPath = join(dir, "thrum.sock");
@@ -46,6 +42,7 @@ async function startFakeHumd(): Promise<FakeHumd> {
     active = sock;
     let buf = "";
     let bee = "";
+    sock.write(JSON.stringify({ chi: "breath", sigils: [] }) + "\n");
     sock.on("data", (chunk) => {
       buf += chunk.toString();
       let nl: number;
@@ -58,6 +55,8 @@ async function startFakeHumd(): Promise<FakeHumd> {
           if (tone.chi === "hello") {
             hellos.push(tone);
             bee = String(tone.hid ?? "");
+            sock.write(JSON.stringify({ chi: "echo", rid: tone.rid, ok: true }) + "\n");
+            sock.write(JSON.stringify({ chi: "breath", sigils: {} }) + "\n");
             helloResolve(tone);
             continue;
           }
@@ -65,19 +64,16 @@ async function startFakeHumd(): Promise<FakeHumd> {
             capturedPrompts.push(tone);
             promptBees.push(bee);
             const sid = String(tone.sid ?? "");
-            // Reply with the minimum frame set translator.ingest
-            // needs to produce a completed response: an init
-            // session, one text delta, then a finish.
             const frames: Tone[] = [
-              { chi: "session-ready", sid, nestId: "fake-nest", model: tone.modelId, tools: [] },
-              { chi: "chunk", sid, chunkType: "text_start", blockIdx: 0 },
-              { chi: "chunk", sid, chunkType: "text_delta", delta: "ok" },
-              { chi: "chunk", sid, chunkType: "content_block_stop", blockIdx: 0 },
-              { chi: "finish", sid, finishReason: "stop", usage: { input_tokens: 1, output_tokens: 1 } },
+              { chi: "pulse", sid, kind: "cell-ready", cell: "fake-cell", model: tone.modelId, tools: [] },
+              { chi: "unfurl", sid, petal: 0, kind: "text" },
+              { chi: "unfurl", sid, petal: 0, kind: "text", text: "ok" },
+              { chi: "unfurl", sid, petal: 0, kind: "text", closed: true },
+              { chi: "wilt", sid, reason: "stop", nectar: { input_tokens: 1, output_tokens: 1 } },
             ];
             for (const f of frames) sock.write(JSON.stringify(f) + "\n");
           }
-        } catch { /* ignore parse */ }
+        } catch {}
       }
     });
   });
@@ -106,7 +102,7 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(500) });
       if (r.status < 500) return;
-    } catch { /* not up yet */ }
+    } catch {}
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`server at ${url} never came up`);
@@ -114,7 +110,7 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
 
 let humd: FakeHumd;
 let server: Subprocess<"ignore", "pipe", "pipe">;
-const PORT = 14629; // unlikely to clash with the deployed 14620
+const PORT = 14629;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 beforeAll(async () => {
@@ -133,7 +129,7 @@ beforeAll(async () => {
       XDG_STATE_HOME: join(xdg, "state"),
       PATH: `${humBin}:${process.env.PATH ?? ""}`,
       OPENAI_SERVER_PORT: String(PORT),
-      OPENAI_SERVER_API_KEY: "", // disable auth
+      OPENAI_SERVER_API_KEY: "",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -174,13 +170,12 @@ describe("openai-server → humd tools wire shape", () => {
           },
           {
             type: "function",
-            function: { name: "ping" }, // no parameters — must still emit a schema
+            function: { name: "ping" },
           },
         ],
       }),
     });
     expect(res.status).toBe(200);
-    // Wait briefly for thrum-side prompt capture.
     const deadline = Date.now() + 3000;
     while (humd.capturedPrompts.length === before && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 20));
@@ -194,10 +189,8 @@ describe("openai-server → humd tools wire shape", () => {
 
     for (const t of tools!) {
       expect(t).toHaveProperty("inputSchema");
-      // Anything-but-null. claude's mcp client zod-validates.
       expect(t.inputSchema).not.toBeNull();
       expect(typeof t.inputSchema).toBe("object");
-      // Bug guard: the legacy field name MUST be gone.
       expect((t as Record<string, unknown>).parameters).toBeUndefined();
     }
 
@@ -223,7 +216,7 @@ describe("every requester is a bee", () => {
     await r.text();
   }
 
-  test("two requesters are two asker bees, and one requester stays one bee", async () => {
+  test("two requesters are two forager bees, and one requester stays one bee", async () => {
     const before = humd.promptBees.length;
     await ask("alice");
     await ask("bob");
@@ -235,8 +228,8 @@ describe("every requester is a bee", () => {
     expect(a1).not.toBe(b);
     expect(a2).toBe(a1);
     expect(a1).not.toBe(main);
-    const askers = humd.hellos.filter((h) => JSON.stringify(h.roles) === JSON.stringify(["asker"]));
-    expect(askers.length).toBeGreaterThanOrEqual(2);
+    const foragers = humd.hellos.filter((h) => JSON.stringify(h.roles) === JSON.stringify(["forager"]));
+    expect(foragers.length).toBeGreaterThanOrEqual(2);
     for (const h of humd.hellos) expect(typeof h.signature).toBe("string");
   });
 });

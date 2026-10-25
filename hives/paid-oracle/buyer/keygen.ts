@@ -4,7 +4,7 @@
 //
 // Receiver = where paid-oracle expects USDC to land. Address only;
 // private key is included for completeness but never used.
-// Buyer    = the asker's wallet. Needs testnet ETH (gas) + USDC
+// Buyer    = the forager's wallet. Needs testnet ETH (gas) + USDC
 // (price). Fund manually at https://faucet.circle.com (Base Sepolia
 // USDC) and a Base Sepolia ETH faucet.
 
@@ -46,7 +46,7 @@ console.log("");
 console.log("  RECEIVER (paid-oracle's pay_to)");
 console.log(`    address: ${receiver.address}`);
 console.log("");
-console.log("  BUYER (your asker's wallet)");
+console.log("  BUYER (your forager's wallet)");
 console.log(`    address: ${buyer.address}`);
 console.log("");
 console.log("Next:");

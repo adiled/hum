@@ -15,44 +15,42 @@
 
 // announce self: hive, roles, signed identity
 #define THRUM_CHI_HELLO "hello"
-// start a turn — content, system, tools
+// open a bloom: its petals, and how the cell should grow it
 #define THRUM_CHI_PROMPT "prompt"
-// interrupt mid-turn
+// stop the open bloom
 #define THRUM_CHI_CANCEL "cancel"
-// session deleted, drop daemon state
+// drop humd's state for a sigil
 #define THRUM_CHI_CLEANUP "cleanup"
 // manual compaction request
 #define THRUM_CHI_CURATE "curate"
 // resolve an earlier permission-ask
 #define THRUM_CHI_RELEASE_PERMIT "release-permit"
-// task subagent answered
+// a scout came back
+#define THRUM_CHI_SCOUT_RESULT "scout-result"
+// what a tendril grasped
 #define THRUM_CHI_TENDRIL_RESULT "tendril-result"
-// nestler-declared tool answered
-#define THRUM_CHI_TOOL_RESULT "tool-result"
 // OC message-graph update (graft hint)
 #define THRUM_CHI_PETAL_CELL "petal-cell"
-// handshake — full state sync on connect
+// accept a hello, sync state on connect
 #define THRUM_CHI_BREATH "breath"
-// model output partwise (text/reasoning/tool)
-#define THRUM_CHI_CHUNK "chunk"
-// turn complete — finishReason + usage
-#define THRUM_CHI_FINISH "finish"
-// turn aborted
+// a petal growing
+#define THRUM_CHI_UNFURL "unfurl"
+// close the bloom, with its nectar
+#define THRUM_CHI_WILT "wilt"
+// the bloom broke off
 #define THRUM_CHI_ERROR "error"
-// nest spawned, claude session id known
-#define THRUM_CHI_SESSION_READY "session-ready"
-// cell lifecycle event and headroom
+// a cell's life, and headroom
 #define THRUM_CHI_PULSE "pulse"
-// mid-stream permission needed
+// a tendril needs leave to reach
 #define THRUM_CHI_PERMISSION_ASK "permission-ask"
-// task subagent dispatch
+// send a scout out
+#define THRUM_CHI_SCOUT "scout"
+// a tendril reaching
 #define THRUM_CHI_TENDRIL_REACH "tendril-reach"
-// nestler-declared tool dispatch
-#define THRUM_CHI_TOOL_CALL "tool-call"
-// out-of-band metadata for a tool result
-#define THRUM_CHI_TOOL_META "tool-meta"
-// completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event.
-#define THRUM_CHI_TOOL_INFO "tool-info"
+// what a tendril carries besides its result
+#define THRUM_CHI_TENDRIL_META "tendril-meta"
+// a tendril that already came back, told whole, for showing only
+#define THRUM_CHI_TENDRIL_INFO "tendril-info"
 // delivery ack for a rid
 #define THRUM_CHI_ECHO "echo"
 // a timing measurement — measured both ways
@@ -82,7 +80,7 @@
 // thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author.
 #define THRUM_CHI_BACKFILL "backfill"
 
-#define THRUM_CHI_COUNT 34
+#define THRUM_CHI_COUNT 33
 
 static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_HELLO,
@@ -91,20 +89,19 @@ static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_CLEANUP,
     THRUM_CHI_CURATE,
     THRUM_CHI_RELEASE_PERMIT,
+    THRUM_CHI_SCOUT_RESULT,
     THRUM_CHI_TENDRIL_RESULT,
-    THRUM_CHI_TOOL_RESULT,
     THRUM_CHI_PETAL_CELL,
     THRUM_CHI_BREATH,
-    THRUM_CHI_CHUNK,
-    THRUM_CHI_FINISH,
+    THRUM_CHI_UNFURL,
+    THRUM_CHI_WILT,
     THRUM_CHI_ERROR,
-    THRUM_CHI_SESSION_READY,
     THRUM_CHI_PULSE,
     THRUM_CHI_PERMISSION_ASK,
+    THRUM_CHI_SCOUT,
     THRUM_CHI_TENDRIL_REACH,
-    THRUM_CHI_TOOL_CALL,
-    THRUM_CHI_TOOL_META,
-    THRUM_CHI_TOOL_INFO,
+    THRUM_CHI_TENDRIL_META,
+    THRUM_CHI_TENDRIL_INFO,
     THRUM_CHI_ECHO,
     THRUM_CHI_PERF_MARK,
     THRUM_CHI_LOG,
@@ -132,9 +129,9 @@ static inline bool thrum_is_valid_chi(const char *value) {
 
 // process created
 #define THRUM_PULSE_CELL_SPAWNED "cell-spawned"
-// system init received, accepting input
+// brooded: accepting prompts, its id, model and tools known
 #define THRUM_PULSE_CELL_READY "cell-ready"
-// turn complete, no listeners
+// the bloom wilted, no listeners
 #define THRUM_PULSE_CELL_IDLE "cell-idle"
 // process exited
 #define THRUM_PULSE_CELL_DIED "cell-died"
@@ -156,6 +153,48 @@ static inline bool thrum_is_valid_pulse(const char *value) {
     if (!value) return false;
     for (i = 0; i < THRUM_PULSE_COUNT; i++) {
         if (strcmp(THRUM_ALL_PULSE[i], value) == 0) return true;
+    }
+    return false;
+}
+
+// words, in `text`
+#define THRUM_PETAL_TEXT "text"
+// a brokered tool call: `callId`, `name`, `args`; its input grows as `sap`
+#define THRUM_PETAL_TENDRIL "tendril"
+// what a tendril came back with: `callId`, `result`, `isError`
+#define THRUM_PETAL_GRASP "grasp"
+// a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url`
+#define THRUM_PETAL_POLLEN "pollen"
+// the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom
+#define THRUM_PETAL_SEPAL "sepal"
+// where a petal's words came from: `source`
+#define THRUM_PETAL_WAGGLE "waggle"
+// the cell declining, or a filter acting: `text` says why
+#define THRUM_PETAL_THORN "thorn"
+// how likely each token was: `brix`
+#define THRUM_PETAL_BRIX "brix"
+// several candidate petals for one prompt: `bouquet`
+#define THRUM_PETAL_BOUQUET "bouquet"
+
+#define THRUM_PETAL_COUNT 9
+
+static const char *const THRUM_ALL_PETAL[THRUM_PETAL_COUNT] = {
+    THRUM_PETAL_TEXT,
+    THRUM_PETAL_TENDRIL,
+    THRUM_PETAL_GRASP,
+    THRUM_PETAL_POLLEN,
+    THRUM_PETAL_SEPAL,
+    THRUM_PETAL_WAGGLE,
+    THRUM_PETAL_THORN,
+    THRUM_PETAL_BRIX,
+    THRUM_PETAL_BOUQUET,
+};
+
+static inline bool thrum_is_valid_petal(const char *value) {
+    size_t i;
+    if (!value) return false;
+    for (i = 0; i < THRUM_PETAL_COUNT; i++) {
+        if (strcmp(THRUM_ALL_PETAL[i], value) == 0) return true;
     }
     return false;
 }

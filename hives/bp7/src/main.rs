@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
-use thrum_core::{Chi, THRUM_VERSION};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UdpSocket, UnixStream};
+use hum_thrum::{Bee, Event, Options, Refused};
+use thrum_core::{Chi, PetalKind};
+use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
 const HIVE_NAME: &str = "bp7";
@@ -21,7 +21,6 @@ struct Config {
     listen: SocketAddr,
     node_eid: String,
     model: String,
-    sock_path: String,
 }
 
 impl Config {
@@ -31,7 +30,6 @@ impl Config {
             listen: listen_str.parse().with_context(|| format!("parse BP7_LISTEN={listen_str}"))?,
             node_eid: std::env::var("BP7_NODE_EID").unwrap_or_else(|_| DEFAULT_NODE_EID.into()),
             model: std::env::var("BP7_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
-            sock_path: hum_paths::thrum_sock_resolved().to_string_lossy().into_owned(),
         })
     }
 }
@@ -121,12 +119,11 @@ fn parse_payload(payload: &[u8], default_model: &str) -> Payload {
     }
 }
 
-fn chunk_text(tone: &Value) -> Option<&str> {
-    let part = tone.get("part")?;
-    if part.get("type").and_then(Value::as_str) != Some("text") {
+fn unfurled_text(tone: &Value) -> Option<&str> {
+    if tone.get("kind").and_then(Value::as_str) != Some(PetalKind::Text.as_str()) {
         return None;
     }
-    part.get("text").and_then(Value::as_str)
+    tone.get("text").and_then(Value::as_str)
 }
 
 fn build_reply(my_eid: &str, source_eid: &str, payload: &[u8]) -> bundle_protocol::Bundle {
@@ -138,32 +135,21 @@ fn build_reply(my_eid: &str, source_eid: &str, payload: &[u8]) -> bundle_protoco
     bundle_protocol::bundle::new_std_payload_bundle(src, dst, payload.to_vec())
 }
 
-async fn run_prompt(cfg: &Config, payload: &Payload) -> Result<String> {
-    let stream = UnixStream::connect(&cfg.sock_path).await
-        .with_context(|| format!("connect {}", cfg.sock_path))?;
-    let (rd, mut wr) = stream.into_split();
-    let mut lines = BufReader::new(rd).lines();
-
-    let bee = hum_identity::enter_as(HIVE_NAME, "main")?;
-
-    let mut hello = json!({
-        "chi": Chi::Hello,
-        "rid": hum_identity::HumId::mint().to_string(),
-        "from": HIVE_NAME,
+async fn run_prompt(_cfg: &Config, payload: &Payload) -> Result<String> {
+    let hello = json!({
         "roles": ["forager"],
-        "hive": HIVE_NAME,
         "version": NESTLING_VERSION,
-        "protoVersion": THRUM_VERSION,
         "propensity": {
             "statefulness": "stateless",
             "richness":     "lean",
             "wire":         "bp7/dtn-udpcl",
         },
-        "chis": ["hello", "prompt", "chunk", "finish", "error"],
+        "chis": ["hello", "prompt", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/bp7",
     });
-    bee.sign_hello(&mut hello);
-    write_line(&mut wr, &hello).await?;
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+        .await
+        .context("link the bp7 bee")?;
 
     let sid = format!("bp7-{}", now_ms());
     let mut prompt = serde_json::Map::new();
@@ -176,42 +162,36 @@ async fn run_prompt(cfg: &Config, payload: &Payload) -> Result<String> {
     if let Some(system) = payload.system.as_ref() {
         prompt.insert("systemPrompt".into(), Value::String(system.clone()));
     }
-    write_line(&mut wr, &Value::Object(prompt)).await?;
+    bee.send(Value::Object(prompt));
 
     let mut collected = String::new();
-    while let Some(line) = lines.next_line().await? {
-        if line.is_empty() {
-            continue;
-        }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
+    let answer = loop {
+        let tone = match bee.next().await {
+            Some(Event::Tone(tone)) => tone,
+            Some(Event::Astray) => break Err(anyhow!("humd went away mid-bloom")),
+            Some(Event::Refused(why)) => break Err(Refused(why).into()),
+            Some(Event::Nestled | Event::Advisory(_)) => continue,
+            None => break Err(anyhow!("the client stopped mid-bloom")),
         };
         if tone.get("sid").and_then(Value::as_str) != Some(sid.as_str()) {
             continue;
         }
         match tone.get("chi").and_then(Value::as_str) {
-            Some("chunk") => {
-                if let Some(text) = chunk_text(&tone) {
+            Some("unfurl") => {
+                if let Some(text) = unfurled_text(&tone) {
                     collected.push_str(text);
                 }
             }
-            Some("finish") => break,
+            Some("wilt") => break Ok(collected),
             Some("error") => {
                 let msg = tone.get("message").and_then(Value::as_str).unwrap_or("stream error");
-                return Err(anyhow!("humd error: {msg}"));
+                break Err(anyhow!("humd error: {msg}"));
             }
             _ => {}
         }
-    }
-    Ok(collected)
-}
-
-async fn write_line(wr: &mut tokio::net::unix::OwnedWriteHalf, tone: &Value) -> Result<()> {
-    let mut buf = serde_json::to_string(tone)?;
-    buf.push('\n');
-    wr.write_all(buf.as_bytes()).await?;
-    Ok(())
+    };
+    bee.close();
+    answer
 }
 
 fn now_ms() -> i64 {

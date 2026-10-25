@@ -63,7 +63,7 @@ Refer to hum.schema.json
 | **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
 | **Trust / Risk modeling** | ✅ (`strict_auth` + T1→T4 trust via `Transport` + `Ensemble` hello handshake) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Roaming inference** | ✅ (`Chi::Attach` + `wane` cursor replay) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Roaming filesystems** | ✅ (`humfs` forager hive + `hum://` URI routing) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Roaming filesystems** | ✅ (`hum://` URI routing; `fs` being formalized, [#92](https://github.com/adiled/hum/issues/92)) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Multi-party gamification** | ✅ (multiple nestlers per bloom via `observers[sid]` roster) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + headroom-aware routing to workers with room) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Zero-trust access control** | ✅ (scoped capability grants + revocation via `federation.*` error chi) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |

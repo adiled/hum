@@ -31,11 +31,11 @@ async fn comb_counts_chi_and_measures_nectar() {
         .inject_tone(
             &client_id,
             serde_json::json!({
-                "chi": "finish",
+                "chi": "wilt",
                 "rid": "f1",
                 "sid": "test-hum-1",
-                "finishReason": "end_turn",
-                "usage": { "input_tokens": 1200, "output_tokens": 34 },
+                "reason": "end_turn",
+                "nectar": { "input_tokens": 1200, "output_tokens": 34 },
             }),
         )
         .await;
@@ -43,7 +43,7 @@ async fn comb_counts_chi_and_measures_nectar() {
         .inject_tone(
             &client_id,
             serde_json::json!({
-                "chi": "tool-call",
+                "chi": "tendril-reach",
                 "rid": "t1",
                 "sid": "test-hum-1",
                 "callId": "c1",
@@ -56,8 +56,8 @@ async fn comb_counts_chi_and_measures_nectar() {
     sim.shutdown().await;
 
     let comb = read_comb(&a);
-    assert_eq!(comb.get("chi:finish"), Some(&1));
-    assert_eq!(comb.get("chi:tool-call"), Some(&1));
+    assert_eq!(comb.get("chi:wilt"), Some(&1));
+    assert_eq!(comb.get("chi:tendril-reach"), Some(&1));
     assert_eq!(comb.get("nectar:in"), Some(&1200));
     assert_eq!(comb.get("nectar:out"), Some(&34));
 }
@@ -77,10 +77,10 @@ async fn comb_attributes_work_to_the_hive_of_the_bee_that_did_it() {
         .inject_tone(
             &client_id,
             serde_json::json!({
-                "chi": "finish",
+                "chi": "wilt",
                 "rid": "f1",
                 "sid": "test-hum-1",
-                "usage": { "input_tokens": 900 },
+                "nectar": { "input_tokens": 900 },
             }),
         )
         .await;
@@ -88,7 +88,7 @@ async fn comb_attributes_work_to_the_hive_of_the_bee_that_did_it() {
     sim.shutdown().await;
 
     let comb = read_comb(&a);
-    assert_eq!(comb.get("hive:claude-repl:chi:finish"), Some(&1));
+    assert_eq!(comb.get("hive:claude-repl:chi:wilt"), Some(&1));
     assert_eq!(comb.get("hive:claude-repl:nectar:in"), Some(&900));
 }
 
@@ -107,10 +107,10 @@ async fn comb_does_not_invent_nectar_it_was_not_told() {
         .inject_tone(
             &client_id,
             serde_json::json!({
-                "chi": "finish",
+                "chi": "wilt",
                 "rid": "f1",
                 "sid": "test-hum-1",
-                "usage": {},
+                "nectar": {},
             }),
         )
         .await;
@@ -118,6 +118,6 @@ async fn comb_does_not_invent_nectar_it_was_not_told() {
     sim.shutdown().await;
 
     let comb = read_comb(&a);
-    assert_eq!(comb.get("chi:finish"), Some(&1));
+    assert_eq!(comb.get("chi:wilt"), Some(&1));
     assert_eq!(comb.get("nectar:in"), None);
 }

@@ -247,7 +247,7 @@ mod tests {
             .map(|c| {
                 (
                     c.clone() as Arc<dyn PeerConnection>,
-                    serde_json::json!({"chi": "chunk"}),
+                    serde_json::json!({"chi": "unfurl"}),
                 )
             })
             .collect();
@@ -279,7 +279,7 @@ mod tests {
             Duration::from_secs(10),
             send_bounded_with(
                 &as_conn(&c),
-                serde_json::json!({"chi": "chunk"}),
+                serde_json::json!({"chi": "unfurl"}),
                 &stats,
                 short,
             ),
@@ -301,7 +301,7 @@ mod tests {
         let stats = SendStats::new();
         let _ = send_bounded_with(
             &as_conn(&c),
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             Duration::from_millis(50),
         )
@@ -319,7 +319,7 @@ mod tests {
         let stats = SendStats::new();
         let got = send_bounded_with(
             &as_conn(&c),
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             SEND_TIMEOUT,
         )
@@ -362,7 +362,7 @@ mod tests {
         let stats = SendStats::new();
         let got = send_bounded_with(
             &c,
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             SEND_TIMEOUT,
         )

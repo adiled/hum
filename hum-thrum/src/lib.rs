@@ -1,119 +1,30 @@
-//! `hum-thrum` — the thrum wire client for bees.
+//! `hum-thrum`: the thrum client, the one every bee uses whatever it is
+//! written in.
 //!
-//! A bee is a kind + a binary. Its *runtime* only needs the wire:
-//! dial the Unix socket humd binds, send a `chi:"hello"`, read NDJSON
-//! tones, ship results, and reconnect forever. It does **not** need
-//! the daemon's in-memory nest, drone, or ensemble machinery.
+//! Three layers, one behaviour:
 //!
-//! This crate factors the wire loop out of `serve_worker` /
-//! `serve_forager` into a transport-agnostic seam, so a remote hive
-//! can depend on it without pulling the daemon tree:
+//! - [`core`]: the client with no I/O. Every decision about a bee's
+//!   connection to humd (the signed hello, humd's verdict, reconnecting,
+//!   the spec check on what the bee sends, advisories) is made here, and
+//!   only here.
+//! - [`drive`]: the core over tokio and a Unix socket. A Rust bee holds a
+//!   [`Bee`] from [`Bee::link`].
+//! - [`link`]: the same [`Bee`] on stdio, run as `hum bee link`. A bee in
+//!   TS, Python, Go or C spawns it, and its generated client is the other
+//!   end of the pipes, so every language gets the same client because
+//!   there is only one.
 //!
-//! - [`connect`] — dial + split the socket, returning a write half.
-//! - [`send_json`] — write one NDJSON line (a tone).
-//! - [`read_tones`] — read NDJSON lines, parse each into a [`Value`],
-//!   and hand it to a caller-supplied per-chi dispatcher.
-//! - [`serve_forever`] — the reconnect loop with jittered backoff.
-//!   The jitter keeps parallel boot races with humd quiet, matching
-//!   serve_worker's grace window.
-//!
-//! The chi *semantics* (what a `tool-call`, `prompt`, or `cancel`
-//! actually does) stay in the caller — that's worker/forager-specific
-//! state. What's shared is the wire mechanics.
+//! The core takes its [`Endpoint`] as a parameter. Today a bee reaches
+//! its own humd over the Unix socket; another transport would be another
+//! endpoint and another driver arm, and no bee would change.
 
-use std::path::Path;
-use std::sync::Arc;
+pub mod core;
+pub mod drive;
+pub mod link;
 
-use anyhow::{Context, Result};
-use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::net::UnixStream;
-use tokio::sync::Mutex;
-use tracing::{trace, warn};
-
-pub async fn connect(
-    path: &Path,
-) -> Result<(Lines<BufReader<tokio::net::unix::OwnedReadHalf>>, Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>)> {
-    let stream = UnixStream::connect(path).await
-        .with_context(|| format!("connect to thrum at {}", path.display()))?;
-    let (read_half, write_half) = stream.into_split();
-    let write_half = Arc::new(Mutex::new(write_half));
-    let reader = BufReader::new(read_half).lines();
-    Ok((reader, write_half))
-}
-
-pub async fn send_json(write: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>, tone: &Value) -> Result<()> {
-    let line = format!("{}\n", tone);
-    write.lock().await.write_all(line.as_bytes()).await?;
-    Ok(())
-}
-
-pub async fn read_tones<F>(mut reader: Lines<BufReader<tokio::net::unix::OwnedReadHalf>>, on_tone: F) -> Result<()>
-where
-    F: Fn(Value),
-{
-    while let Some(line) = reader.next_line().await? {
-        if line.is_empty() { continue; }
-        let tone: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => { trace!(err = %e, "thrum.parse.skip"); continue; }
-        };
-        on_tone(tone);
-    }
-    Ok(())
-}
-
-pub async fn serve_forever<F, Fut>(dial: F) -> !
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<()>>,
-{
-    let mut consecutive_fails = 0u32;
-    loop {
-        match dial().await {
-            Ok(()) => {
-                consecutive_fails = 0;
-                trace!("thrum: clean exit, reconnecting");
-            }
-            Err(e) => {
-                consecutive_fails += 1;
-                warn!(err = %e, attempts = consecutive_fails, "thrum: connection failed, retrying");
-            }
-        }
-        let jitter = rand::random::<f32>() * 0.75;
-        tokio::time::sleep(std::time::Duration::from_secs_f32(2.0 + jitter)).await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use tokio::net::UnixListener;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    #[tokio::test]
-    async fn wire_round_trip() {
-        let dir = std::env::temp_dir().join(format!("hum-thrum-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let sock = dir.join("thrum.sock");
-        let listener = UnixListener::bind(&sock).unwrap();
-
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = String::new();
-            let mut r = BufReader::new(&mut stream);
-            r.read_line(&mut buf).await.unwrap();
-            let tone: Value = serde_json::from_str(&buf).unwrap();
-            assert_eq!(tone["chi"], "hello");
-            assert_eq!(tone["roles"][0], "forager");
-        });
-
-        let (_, write) = connect(&sock).await.unwrap();
-        let hello = json!({ "chi": "hello", "roles": ["forager"], "hid": "bee_abcd" });
-        send_json(&write, &hello).await.unwrap();
-
-        server.await.unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-}
+pub use crate::core::{
+    Advisory, BACKOFF_FIRST, BACKOFF_MOST, CLIENT_OWNED, Core, Endpoint, Output, QUIET_TRIES,
+    Timer, VERDICT,
+};
+pub use drive::{Bee, Event, Options, Refused, Sender};
+pub use link::LINK_VERSION;

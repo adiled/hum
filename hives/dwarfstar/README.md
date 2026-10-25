@@ -5,7 +5,7 @@ description: "The DwarfStar engine linked into hum worker bees, one bee per mode
 
 # dwarfstar
 
-> _Worker bees with the DwarfStar engine inside them, one per model. A prompt tone goes into the model's token stream, and the answer comes back as chunk tones._
+> _Worker bees with the DwarfStar engine inside them, one per model. A prompt tone goes into the model's token stream, and the answer unfurls back as a bloom._
 
 [DwarfStar](https://github.com/antirez/ds4) (ds4) is a narrow, fast
 local inference engine for a few open-weight models: DeepSeek V4 and
@@ -20,7 +20,7 @@ back: the engine's session, KV cache and token stream are the bee's own.
 ## Install
 
 ```sh
-brew install pkgconf libsodium cjson
+brew install pkgconf cjson
 DWARFSTAR_DIR=~/ds4 hum hive ./hives/dwarfstar install
 ```
 
@@ -65,30 +65,33 @@ as their engine is loaded:
 - A bee that needs the GPU while another holds it files a want beside the
   lock and waits up to `DWARFSTAR_WAIT_MS`. A cancel ends the wait.
 - The holder gives the GPU back when it is idle and someone wants it,
-  after its current turn when a want has waited a minute, and on its own
+  after its current bloom when a want has waited a minute, and on its own
   after `DWARFSTAR_IDLE_MS` idle.
 - Loading also checks ds4's own lock (`DS4_LOCK_FILE`), so a ds4 started
-  outside the hive is an error on the turn, not a dead bee.
+  outside the hive is an error on the bloom, not a dead bee.
 - Each bee claims one slot of headroom while the GPU is its own or free,
   and none while another model holds it, so a peer routes to the model
   that can start now. A local prompt still runs; it waits for the
   handoff. The claim changes with a `pulse` only when it changes.
 
-## How a turn runs
+## How a bloom grows
 
-- The engine keeps one session while it is loaded. Every turn syncs it
-  to the turn's whole prompt, and ds4 evaluates only what the KV cache
+- The engine keeps one session while it is loaded. Every bloom syncs it
+  to the bloom's whole prompt, and ds4 evaluates only what the KV cache
   does not already hold.
-- Turns run one at a time, in order. A `cancel` stops its sid's turn,
-  waiting or in flight, and drops its sid's queued turns, each answered
-  with `finish` `cancelled`.
-- A turn ends in `finish` with `stop`, `length` (`DWARFSTAR_MAX_TOKENS`
-  or the context is full), `cancelled`, or `error` after an `error` tone.
-- Chunks carry whole UTF-8 characters, even when a token ends inside one.
+- Blooms grow one at a time, in order. A `cancel` stops its sid's bloom,
+  waiting or in flight, and drops its sid's queued blooms, each wilting
+  `cancelled`.
+- The answer unfurls as one `text` petal. A bloom wilts with `stop`,
+  `length` (`DWARFSTAR_MAX_TOKENS` or the context is full), `cancelled`,
+  or `error` after an `error` tone, and its nectar is the tokens in and
+  out.
+- An unfurl carries whole UTF-8 characters, even when a token ends inside
+  one.
 - The bee outlives humd: when humd restarts, it reconnects and nestles
-  again with its model still loaded, dropping the turns the old humd gave.
-- The bee is stateless: a prompt's `text`, or its `content` petals, are
-  the conversation. Petals with roles become chat turns.
+  again with its model still loaded, dropping the blooms the old humd gave.
+- The bee is stateless: a prompt's text petals, else its `text` field,
+  are the conversation. Petals with roles become chat messages.
 
 ## Build
 
@@ -114,12 +117,12 @@ way the real ones do.
 | `DWARFSTAR_LABEL` | the label the bee enters as | `main` |
 | `DWARFSTAR_DIR` | where the GGUFs live | `~/ds4` |
 | `DWARFSTAR_CTX` | context size in tokens | `32768` |
-| `DWARFSTAR_MAX_TOKENS` | cap on one turn | `4096` |
+| `DWARFSTAR_MAX_TOKENS` | cap on one bloom | `4096` |
 | `DWARFSTAR_TEMPERATURE` | sampling temperature | ds4's default |
 | `DWARFSTAR_THREADS` | engine CPU threads | ds4's default |
 | `DWARFSTAR_SSD_STREAMING` | `1` streams experts from SSD | off |
 | `DWARFSTAR_IDLE_MS` | give the GPU back after this long idle | `300000` |
-| `DWARFSTAR_WAIT_MS` | how long a turn waits for the GPU | `300000` |
+| `DWARFSTAR_WAIT_MS` | how long a bloom waits for the GPU | `300000` |
 | `DWARFSTAR_GPU_LOCK` | the hive-wide GPU lock | under the hive's state dir |
 | `DWARFSTAR_METAL_DIR` | the `.metal` kernels | `metal/` beside the bee |
 | `DS4_LOCK_FILE` | ds4's own lock | `/tmp/ds4.lock` |

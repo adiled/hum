@@ -69,13 +69,13 @@ fn chi_release_permit_round_trips() {
 }
 
 #[test]
-fn chi_tendril_result_round_trips() {
-    assert_chi_round_trips(Chi::TendrilResult);
+fn chi_scout_result_round_trips() {
+    assert_chi_round_trips(Chi::ScoutResult);
 }
 
 #[test]
-fn chi_tool_result_round_trips() {
-    assert_chi_round_trips(Chi::ToolResult);
+fn chi_tendril_result_round_trips() {
+    assert_chi_round_trips(Chi::TendrilResult);
 }
 
 #[test]
@@ -89,23 +89,18 @@ fn chi_breath_round_trips() {
 }
 
 #[test]
-fn chi_chunk_round_trips() {
-    assert_chi_round_trips(Chi::Chunk);
+fn chi_unfurl_round_trips() {
+    assert_chi_round_trips(Chi::Unfurl);
 }
 
 #[test]
-fn chi_finish_round_trips() {
-    assert_chi_round_trips(Chi::Finish);
+fn chi_wilt_round_trips() {
+    assert_chi_round_trips(Chi::Wilt);
 }
 
 #[test]
 fn chi_error_round_trips() {
     assert_chi_round_trips(Chi::Error);
-}
-
-#[test]
-fn chi_session_ready_round_trips() {
-    assert_chi_round_trips(Chi::SessionReady);
 }
 
 #[test]
@@ -119,18 +114,18 @@ fn chi_permission_ask_round_trips() {
 }
 
 #[test]
+fn chi_scout_round_trips() {
+    assert_chi_round_trips(Chi::Scout);
+}
+
+#[test]
 fn chi_tendril_reach_round_trips() {
     assert_chi_round_trips(Chi::TendrilReach);
 }
 
 #[test]
-fn chi_tool_call_round_trips() {
-    assert_chi_round_trips(Chi::ToolCall);
-}
-
-#[test]
-fn chi_tool_meta_round_trips() {
-    assert_chi_round_trips(Chi::ToolMeta);
+fn chi_tendril_meta_round_trips() {
+    assert_chi_round_trips(Chi::TendrilMeta);
 }
 
 #[test]
@@ -265,7 +260,7 @@ fn thrum_version_is_pinned() {
 #[test]
 fn tone_with_body_round_trips_via_json_string() {
     let wire = json!({
-        "chi": "tool-call",
+        "chi": "tendril-reach",
         "rid": "abc-1",
         "sid": "session-x",
         "from": "humd",
@@ -274,7 +269,7 @@ fn tone_with_body_round_trips_via_json_string() {
     });
     let s = serde_json::to_string(&wire).unwrap();
     let tone: Tone = serde_json::from_str(&s).expect("parse from string");
-    assert_eq!(tone.chi(), Chi::ToolCall);
+    assert_eq!(tone.chi(), Chi::TendrilReach);
     assert_eq!(tone.rid(), "abc-1");
     let back: Value = serde_json::from_str(&serde_json::to_string(&tone).unwrap()).unwrap();
     assert_eq!(back, wire);

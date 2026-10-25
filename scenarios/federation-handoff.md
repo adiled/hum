@@ -60,7 +60,7 @@ B1 sends and verified on every tone A1 receives.
   or with a tampered scope. humd-A1 must refuse on first tone and
   never emit a petal toward humd-B1. Test asserts zero leak.
 - **Scope creep.** humd-B1 emits a chi outside the granted set
-  (`permission-response`, `tool-result` for a tool it didn't own).
+  (`permission-response`, `tendril-result` for a tool it didn't own).
   humd-A1 must drop and surface `federation.scope.denied`; the hum's
   on-disk transcript must show no record of the rejected tone.
 - **Stale token.** humd-B1 keeps using a token past expiry. humd-A1
@@ -87,7 +87,7 @@ B1 sends and verified on every tone A1 receives.
   `federation.revoked` on humd-B1's tap and a `RouteError`-equivalent
   on humd-A1's side. `Ensemble::peers()` on humd-A1 either drops
   humd-B1 entirely or marks it `caps.scope=empty` for the sigil.
-- The terminal `chi:"finish"` on the non-revoked sigil arrives on
+- The terminal `chi:"wilt"` on the non-revoked sigil arrives on
   both taps with `usage.output_tokens > 0` and identical token
   counts.
 - All admitted tones from humd-B1 carry a verifiable signature chain;

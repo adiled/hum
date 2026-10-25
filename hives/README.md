@@ -9,7 +9,7 @@ description: "how to build a hive, install it on a humd, and the bees that humd 
 
 ## The vocabulary, once
 
-A humd is a coordination node: it admits bees, routes between them and gossips with its peers, and hosts no cells. A **nest** is the cells a hive hosts, which it turns on by using [`hum-nest`](../hum-nest). A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A humd is a coordination node: it admits bees, routes between them and gossips with its peers, and hosts no cells. A **nest** is the cells a hive hosts, which it turns on by using [`hum-nest`](../hum-nest). A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and unfurls the bloom until it wilts. A **forager** prompts: it brings work in from an outside wire, whether that wire is HTTP, SMS, a smart contract, or a paid API, and carries the bloom back. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
 A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees, signing them in one key each, and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
 
@@ -19,12 +19,11 @@ A honeybee on the plant pot by your bed is still a bee; you just need to know wh
 |---|---|---|---|
 | [`claude-cli`](claude-cli) | worker | `claude-cli-worker` | `claude -p` stream-json over a pipe |
 | [`claude-repl`](claude-repl) | worker | `claude-repl-worker` | claude REPL over a PTY |
-| [`humfs`](humfs) | forager | `humfs-forager` | local filesystem (`fs` capability) |
-| [`openai-server`](openai-server) | forager | `openai-server` | OpenAI `/v1/chat/completions` |
+| [`openai-server`](openai-server) | worker, forager | `openai-server` | OpenAI `/v1/chat/completions` |
 | [`anthropic-server`](anthropic-server) | forager | `anthropic-server` | Anthropic `/v1/messages` |
 | [`ollama-server`](ollama-server) | forager | `ollama-server` | Ollama `/api/chat` |
 | [`vercel-ai`](vercel-ai) | forager | `vercel-ai` | Vercel AI SDK `LanguageModelV3` |
-| [`paid-oracle`](paid-oracle) | forager | `paid-oracle` | x402 over tool-call, USDC per call |
+| [`paid-oracle`](paid-oracle) | — | `paid-oracle` | x402 over a tendril, USDC per call |
 | [`grpc`](grpc) | forager | `grpc-forager` | gRPC bidi stream |
 | [`twilio-sms`](twilio-sms) | forager | `twilio-sms` | Twilio Messaging webhook |
 | [`gsm-modem`](gsm-modem) | forager | `gsm-modem` | GSM AT-command serial SMS |
@@ -41,7 +40,7 @@ The first axis is **statefulness**. A `stateful` bee holds its own session graph
 
 The second axis is **richness**. A `rich` bee hands humd cwd, permissions, MCP configs, and prior petals. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
 
-The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tool-call`, or `grpc/bidi`.
+The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tendril`, or `grpc/bidi`.
 
 A forager picks a contract that already exists in the wild and hides the rest of thrum behind it. A lean bee drops the tones it cannot express, while a rich one forwards everything.
 
@@ -49,7 +48,7 @@ A forager picks a contract that already exists in the wild and hides the rest of
 
 ### 0. Be a hive
 
-Put an `Orchfile` at the root of your hive's directory. That is what makes it a hive, and the directory's name is the hive's name. hum recognises one unit in it, `hive-install`, and nothing else. `hum hive <ref> install` records the hive on the humd and then runs that unit in the foreground, with `HUM_SRC` set to your directory, `HUM_HIVE` to your hive's name, and `hum` on its `PATH`; if the unit fails, the hive is not installed.
+Put an `Orchfile` at the root of your hive's directory. That is what makes it a hive, and the directory's name is the hive's name. hum recognises one unit in it, `hive-install`, and nothing else. `hum hive <ref> install` records the hive on the humd and then runs that unit in the foreground, with `HUM_SRC` set to your directory, `HUM_HIVE` to your hive's name, `HUM_HIVE_STATE` to your hive's state directory, and `hum` on its `PATH`; if the unit fails, the hive is not installed. The installed Orchfile carries the same three as `ARG`s, so a unit can say `${HUM_HIVE_STATE}`.
 
 What the unit does is yours: build, fetch a model, start processes and keep them alive with whatever supervisor you like. The bundled hives use one small `install` script each that builds and runs their process under [orchd](https://github.com/adiled/orchd) in their own namespace; the process enters its own bee when it starts. Every other unit in the Orchfile is only what your own tooling makes of it.
 
@@ -67,25 +66,25 @@ RESTART always
 
 A hive whose bees live elsewhere (a phone, another machine) can have an Orchfile with no units at all; installing it still teaches the humd the kind, and its bees are entered on the humd they land on.
 
-A hive keeps its state in `$XDG_STATE_HOME/hum/hives/<hive>/` and its config in `$XDG_CONFIG_HOME/hum/hives/<hive>.json`; anything else it writes under a hum root is moved to that root's `tmp/` while humd runs.
+A hive keeps its state in `$XDG_STATE_HOME/hum/hives/<hive>/` (`${HUM_HIVE_STATE}`) and its config in `$XDG_CONFIG_HOME/hum/hives/<hive>.json`; anything else it writes under a hum root is moved to that root's `tmp/` while humd runs.
 
 ### 1. Speak thrum
 
-Connect to the humd socket at `$XDG_STATE_HOME/hum/thrum.sock`, with the env override `HUM_THRUM_SOCK`, and exchange newline-delimited JSON tones. The reference clients are about ninety lines each. In Rust, `hum_nest::serve_worker` and `serve_forager` run the whole loop for you, covering hello, prompt dispatch, chunk fan-out, and reconnect, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, and Go, copy any of [`thrum-clients/ts`](../thrum-clients/ts), [`thrum-clients/python`](../thrum-clients/python), or [`thrum-clients/go`](../thrum-clients/go). humd does not care what language the process is written in.
+Use hum's client; a hive writes only what its bee does. In Rust that is `hum_thrum::Bee::link`, or `hum_nest::serve_worker` and `serve_forager`, which run a worker or a forager on it, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go and C it is the client in [`thrum-clients/<lang>`](../thrum-clients), which runs `hum bee link` for you. Either way the client enters the bee, signs its hello, reads humd's verdict, reconnects when humd restarts, and checks every tone against the thrum, the same in every language ([WIRE.md, The client](../WIRE.md#the-client)).
 
 ### 2. Handshake, the hello contract
 
-On connect, send `chi:"hello"` with these fields.
+Give the client your hello's own fields. It adds `hive`, `protoVersion` and the signature itself.
 
 | field | meaning |
 |---|---|
-| `hive` | the hive you belong to, for example `"openai-server"`; it must be installed on the humd you land on |
+| `hive` | the hive you belong to, for example `"openai-server"`; it must be installed on the humd you land on; the client sets it |
 | `roles` | what you claim to do: `["worker"]`, `["forager"]`, both, or a role of your own |
-| `hid`, `pubkey`, `signedAt`, `signature` | who you are, proven: the id your hive entered you as, and a signature by its key (below); mandatory |
+| `hid`, `pubkey`, `signedAt`, `signature` | who you are, proven: the id your hive entered you as, and a signature by its key (below); the client sets them |
 | `models` | model ids a worker serves; foragers may omit it |
 | `tools` | tool defs a forager exposes, each `{name, description, inputSchema}` |
 | `provides` | capability tags such as `["fs"]` or `["session"]` |
-| `version`, `protoVersion` | your release, and the `THRUM_VERSION` you target |
+| `version`, `protoVersion` | your release, and the `THRUM_VERSION` the client speaks, which it sets |
 | `chis` | the chi values you speak; advisory |
 | `source` | URL to your hive's repo; informational, for humans only |
 
@@ -95,7 +94,7 @@ On connect, send `chi:"hello"` with these fields.
 >
 > On every hello, load the key filed under your id and send `hid` (your id), `pubkey` (hex), `signedAt` (unix ms) and `signature` (hex ed25519 over `hum-bee-socket-v1:<hid>:<signedAt>`). humd admits the hello only if the signature verifies, `signedAt` is fresh, the id is entered and not exited, and it entered under the `hive` you name. `hum bee <id> exit` signs you out, so humd refuses your next hello, and `reenter` signs you back in.
 >
-> Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. The reference implementations all sign the same way. In Rust, `hum_identity::enter_as(hive, "main")?.sign_hello(&mut hello)`, or `hum_nest::serve_worker` / `serve_forager`, which do it for you. In TypeScript see `enter` and `signedAs` in [`hives/openai-server/src/identity.ts`](openai-server/src/identity.ts). In Go see `signedAs` in [`hives/twilio-sms/main.go`](twilio-sms/main.go).
+> Whoever can read the key file is the bee, so the key is the trust boundary. Two processes signing with one key are one bee: the newer connection replaces the older. hum's client does all of this: it enters the bee under its hive and label and signs every hello, in every language.
 
 Once the hello is accepted you are nestled.
 
@@ -111,11 +110,11 @@ A worker that runs its own model processes (cells) uses `hum_nest::serve_worker`
 
 ### 3. Translate, or transport
 
-A forager maps incoming tones into its outside contract and back, as in `vercel-ai/src/transform.ts`. A transport simply forwards bytes, as in `grpc`. A worker turns `chi:"prompt"` into `chunk` and `finish` from whatever produces its tokens.
+A forager maps incoming tones into its outside contract and back, as in `vercel-ai/src/transform.ts`. A transport simply forwards bytes, as in `grpc`. A worker turns `chi:"prompt"` into `unfurl`s and a `wilt` from whatever produces its tokens.
 
 ### 4. Tools
 
-Forward each incoming `chi:"tool-call"` to your tool surface, then reply with `chi:"tool-result"` carrying the same `callId`, and humd resumes the parked model. humd already suppresses built-in tools that overlap a capability you list in `provides`, and an asker can also pass `disallowedTools` on the prompt.
+A bee that serves tools lists them in its hello's `tools`, and humd routes each `chi:"tendril-reach"` for one of them to it. Answer it with `chi:"tendril-result"` carrying the same `callId`, and humd resumes the parked model. humd already suppresses built-in tools that overlap a capability you list in `provides`, and a forager can also pass `disallowedTools` on the prompt.
 
 ### chi cheatsheet
 
@@ -123,10 +122,10 @@ Forward each incoming `chi:"tool-call"` to your tool surface, then reply with `c
 
 | subset | chi values |
 |---|---|
-| inference only | `prompt`, `chunk`, `finish`, `error`, `cancel` |
-| plus tools | `tool-call`, `tool-result` |
+| inference only | `prompt`, `unfurl`, `wilt`, `error`, `cancel` |
+| plus tendrils | `tendril-reach`, `tendril-result`, `tendril-info`, `tendril-meta` |
 | plus permissions | `permission-ask`, `release-permit` |
-| plus state sync | `hello`, `breath`, `session-ready`, `pulse`, `cleanup` |
+| plus state sync | `hello`, `breath`, `pulse`, `cleanup` |
 | plus observability | `perf-mark`, `drone`, `echo`, `log` |
 
 A lean bee drops the tones it cannot express, while a rich one forwards everything and leans on consumer-side machinery to make sense of it.

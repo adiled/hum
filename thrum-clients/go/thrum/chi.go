@@ -16,44 +16,42 @@ type Chi string
 const (
     // announce self: hive, roles, signed identity
     ChiHello Chi = "hello"
-    // start a turn — content, system, tools
+    // open a bloom: its petals, and how the cell should grow it
     ChiPrompt Chi = "prompt"
-    // interrupt mid-turn
+    // stop the open bloom
     ChiCancel Chi = "cancel"
-    // session deleted, drop daemon state
+    // drop humd's state for a sigil
     ChiCleanup Chi = "cleanup"
     // manual compaction request
     ChiCurate Chi = "curate"
     // resolve an earlier permission-ask
     ChiReleasePermit Chi = "release-permit"
-    // task subagent answered
+    // a scout came back
+    ChiScoutResult Chi = "scout-result"
+    // what a tendril grasped
     ChiTendrilResult Chi = "tendril-result"
-    // nestler-declared tool answered
-    ChiToolResult Chi = "tool-result"
     // OC message-graph update (graft hint)
     ChiPetalCell Chi = "petal-cell"
-    // handshake — full state sync on connect
+    // accept a hello, sync state on connect
     ChiBreath Chi = "breath"
-    // model output partwise (text/reasoning/tool)
-    ChiChunk Chi = "chunk"
-    // turn complete — finishReason + usage
-    ChiFinish Chi = "finish"
-    // turn aborted
+    // a petal growing
+    ChiUnfurl Chi = "unfurl"
+    // close the bloom, with its nectar
+    ChiWilt Chi = "wilt"
+    // the bloom broke off
     ChiError Chi = "error"
-    // nest spawned, claude session id known
-    ChiSessionReady Chi = "session-ready"
-    // cell lifecycle event and headroom
+    // a cell's life, and headroom
     ChiPulse Chi = "pulse"
-    // mid-stream permission needed
+    // a tendril needs leave to reach
     ChiPermissionAsk Chi = "permission-ask"
-    // task subagent dispatch
+    // send a scout out
+    ChiScout Chi = "scout"
+    // a tendril reaching
     ChiTendrilReach Chi = "tendril-reach"
-    // nestler-declared tool dispatch
-    ChiToolCall Chi = "tool-call"
-    // out-of-band metadata for a tool result
-    ChiToolMeta Chi = "tool-meta"
-    // completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event.
-    ChiToolInfo Chi = "tool-info"
+    // what a tendril carries besides its result
+    ChiTendrilMeta Chi = "tendril-meta"
+    // a tendril that already came back, told whole, for showing only
+    ChiTendrilInfo Chi = "tendril-info"
     // delivery ack for a rid
     ChiEcho Chi = "echo"
     // a timing measurement — measured both ways
@@ -92,20 +90,19 @@ var AllChi = map[Chi]struct{}{
     ChiCleanup: {},
     ChiCurate: {},
     ChiReleasePermit: {},
+    ChiScoutResult: {},
     ChiTendrilResult: {},
-    ChiToolResult: {},
     ChiPetalCell: {},
     ChiBreath: {},
-    ChiChunk: {},
-    ChiFinish: {},
+    ChiUnfurl: {},
+    ChiWilt: {},
     ChiError: {},
-    ChiSessionReady: {},
     ChiPulse: {},
     ChiPermissionAsk: {},
+    ChiScout: {},
     ChiTendrilReach: {},
-    ChiToolCall: {},
-    ChiToolMeta: {},
-    ChiToolInfo: {},
+    ChiTendrilMeta: {},
+    ChiTendrilInfo: {},
     ChiEcho: {},
     ChiPerfMark: {},
     ChiLog: {},
@@ -134,12 +131,36 @@ type PulseKind string
 const (
     // process created
     PulseKindCellSpawned PulseKind = "cell-spawned"
-    // system init received, accepting input
+    // brooded: accepting prompts, its id, model and tools known
     PulseKindCellReady PulseKind = "cell-ready"
-    // turn complete, no listeners
+    // the bloom wilted, no listeners
     PulseKindCellIdle PulseKind = "cell-idle"
     // process exited
     PulseKindCellDied PulseKind = "cell-died"
     // killed to make room
     PulseKindCellEvicted PulseKind = "cell-evicted"
+)
+
+// PetalKind is the kind field of a petal, and of an unfurl.
+type PetalKind string
+
+const (
+    // words, in `text`
+    PetalKindText PetalKind = "text"
+    // a brokered tool call: `callId`, `name`, `args`; its input grows as `sap`
+    PetalKindTendril PetalKind = "tendril"
+    // what a tendril came back with: `callId`, `result`, `isError`
+    PetalKindGrasp PetalKind = "grasp"
+    // a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url`
+    PetalKindPollen PetalKind = "pollen"
+    // the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom
+    PetalKindSepal PetalKind = "sepal"
+    // where a petal's words came from: `source`
+    PetalKindWaggle PetalKind = "waggle"
+    // the cell declining, or a filter acting: `text` says why
+    PetalKindThorn PetalKind = "thorn"
+    // how likely each token was: `brix`
+    PetalKindBrix PetalKind = "brix"
+    // several candidate petals for one prompt: `bouquet`
+    PetalKindBouquet PetalKind = "bouquet"
 )

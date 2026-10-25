@@ -32,7 +32,7 @@ humd-A and continues producing petals during the partition.
 ## The happy path
 
 1. Hum opens. Both nestlers see `chi:"hello"`, then a clean prefix of
-   `chi:"chunk"` petals. Wanes on both sides advance in lockstep up
+   `chi:"unfurl"` petals. Wanes on both sides advance in lockstep up
    to tick `N`.
 2. Sim partitions the link between humd-A and humd-B. From this
    moment, no tones cross. Both daemons trace
@@ -87,7 +87,7 @@ humd-A and continues producing petals during the partition.
 ## The success criteria
 
 - During the partition window, humd-B's tap receives zero
-  `chi:"chunk"` tones. humd-A's tap receives the live stream
+  `chi:"unfurl"` tones. humd-A's tap receives the live stream
   uninterrupted.
 - During the partition window, both humds trace
   `ensemble.peer.unreachable` exactly once per direction; neither
@@ -101,7 +101,7 @@ humd-A and continues producing petals during the partition.
 - For every `rid` produced by the brood during the entire run, both
   humds' final transcripts contain it exactly once. Set-equality
   with multiplicity asserted programmatically.
-- The terminal `chi:"finish"` arrives on both taps with
+- The terminal `chi:"wilt"` arrives on both taps with
   `usage.output_tokens > 0` and identical counts.
 
 ## What this scenario validates

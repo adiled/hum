@@ -30,37 +30,37 @@ async fn phone_laptop_roam() {
             "from": phone.id.to_hex(),
             "modelId": "claude-haiku-4-5",
             "cwd": "/tmp",
-            "content": "Say HELLO.",
+            "text": "Say HELLO.",
         }),
     )
     .expect("phone nestler accepts outbound roam prompt");
 
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let mut saw_text_delta = false;
-    let mut finish: Option<serde_json::Value> = None;
+    let mut saw_text = false;
+    let mut wilt: Option<serde_json::Value> = None;
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let Some(tone) = sim.nestler_recv(phone.id, "hum-X", remaining).await else { break };
         let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if chi == "chunk"
-            && tone.get("chunkType").and_then(|v| v.as_str()) == Some("text_delta")
-            && tone.get("delta").and_then(|v| v.as_str()) == Some("HELLO")
+        if chi == "unfurl"
+            && tone.get("kind").and_then(|v| v.as_str()) == Some("text")
+            && tone.get("text").and_then(|v| v.as_str()) == Some("HELLO")
         {
-            saw_text_delta = true;
+            saw_text = true;
         }
-        if chi == "finish" {
-            finish = Some(tone);
+        if chi == "wilt" {
+            wilt = Some(tone);
             break;
         }
     }
 
-    assert!(saw_text_delta, "phone should see a text_delta chunk with HELLO routed back");
-    let f = finish.expect("phone should receive chi:finish for hum-X within 2s");
-    assert_eq!(f.get("chi").and_then(|v| v.as_str()), Some("finish"));
+    assert!(saw_text, "phone should see an unfurl of HELLO routed back");
+    let f = wilt.expect("phone should receive chi:wilt for hum-X within 2s");
+    assert_eq!(f.get("chi").and_then(|v| v.as_str()), Some("wilt"));
     assert_eq!(f.get("sid").and_then(|v| v.as_str()), Some("hum-X"));
     assert_eq!(
         f.get("to").and_then(|v| v.as_str()),
         Some(phone.id.to_hex().as_str()),
-        "finish tone should be addressed at the originating humd"
+        "wilt tone should be addressed at the originating humd"
     );
 }

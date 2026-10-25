@@ -31,6 +31,7 @@ fn the_paths_hum_hands_out_are_the_layout() {
         hum_paths::routing_json(),
         hum_paths::bees_snapshot(),
         hum_paths::revoked_bees(),
+        hum_paths::advisories(),
         hum_paths::bee_key(&id),
         hum_paths::bee_entry(&id),
         hum_paths::thehum_seq_file(&hum_paths::thehum_dir()),
