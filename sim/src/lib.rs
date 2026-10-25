@@ -104,6 +104,16 @@ impl Default for Sim {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Trust {
+    pub nurses: bool,
+    pub attendants: bool,
+}
+
+impl Trust {
+    pub const ALL: Trust = Trust { nurses: true, attendants: true };
+}
+
 impl Sim {
     pub fn new() -> Self {
         Self {
@@ -113,27 +123,31 @@ impl Sim {
     }
 
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
-        self.spawn_humd_inner(id, true).await
+        self.spawn_humd_trusting(id, Trust::ALL).await
     }
 
     pub async fn spawn_humd_not_trusting_remote_nurses(&self, id: Hid) -> Arc<SimHumd> {
-        self.spawn_humd_inner(id, false).await
+        self.spawn_humd_trusting(id, Trust { nurses: false, ..Trust::ALL }).await
+    }
+
+    pub async fn spawn_humd_not_trusting_remote_attendants(&self, id: Hid) -> Arc<SimHumd> {
+        self.spawn_humd_trusting(id, Trust { attendants: false, ..Trust::ALL }).await
     }
 
     pub async fn spawn_humd_revoking(&self, id: Hid, revoked: &[&str]) -> Arc<SimHumd> {
-        self.spawn_humd_inner_with_revocations(id, true, revoked)
+        self.spawn_humd_inner_with_revocations(id, Trust::ALL, revoked)
             .await
     }
 
-    async fn spawn_humd_inner(&self, id: Hid, trust_remote_nurses: bool) -> Arc<SimHumd> {
-        self.spawn_humd_inner_with_revocations(id, trust_remote_nurses, &[])
+    pub async fn spawn_humd_trusting(&self, id: Hid, trust: Trust) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, trust, &[])
             .await
     }
 
     async fn spawn_humd_inner_with_revocations(
         &self,
         id: Hid,
-        trust_remote_nurses: bool,
+        trust: Trust,
         revoked: &[&str],
     ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
@@ -179,7 +193,8 @@ impl Sim {
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
-            trust_remote_nurses,
+            trust_remote_nurses: trust.nurses,
+            trust_remote_attendants: trust.attendants,
             hives: hives.clone(),
             bees: bees.clone(),
         };
@@ -297,6 +312,7 @@ impl Sim {
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
             trust_remote_nurses: true,
+            trust_remote_attendants: true,
             hives: hives.clone(),
             bees: bees.clone(),
         };
