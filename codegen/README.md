@@ -87,6 +87,7 @@ codegen/
 └─ src/
    ├─ thrum.rs    the reader: hum.thrum -> Thrum, and its projections
    ├─ rust.rs     the gate: thrum-core's Rust, held to the Thrum
+   ├─ wire.rs     the spec: hum.thrum read out as Markdown into WIRE.md
    ├─ lib.rs      the chi emitters, one per language
    ├─ protocol.rs the views, one emitter per language; the Rust structs, parsed
    ├─ link.rs     the link's constants, rendered into the templates
@@ -132,6 +133,17 @@ the Rust disagrees with hum.thrum:
   `PromptBody.season` is `uint?` in hum.thrum, `int?` in thrum-core/src/views.rs
 ```
 
+### `src/wire.rs`
+
+[WIRE.md](../WIRE.md) is prose, hand-written, with regions between
+`<!-- thrum: NAME -->` and `<!-- /thrum -->` that codegen fills from the
+file: `envelope`, `range`, `roles`, `chis`, `shapes`, `kinds`,
+`patterns` and `advisories`. `fill` rewrites what lies between the
+markers and leaves every other line as it was, so the prose stays the
+document's and the tables stay the file's. Every region must appear
+exactly once. The roles table is the range read by role: a role sounds
+every chi whose EMITS names it, and hears every chi whose HEARS does.
+
 ### `src/lib.rs`
 
 | function | purpose |
@@ -152,9 +164,9 @@ caller's job: the canonical sites come from `paths::*`.
 CLI dispatcher. No-arg invocation regenerates all four targets:
 
 ```bash
-cargo run -p codegen              # ts + python + go + c
+cargo run -p codegen              # ts + python + go + c, then WIRE.md's regions
 cargo run -p codegen -- ts        # one target
-cargo run -p codegen -- --check   # exit non-zero if the Rust or any target drifted
+cargo run -p codegen -- --check   # exit non-zero if the Rust, any target or WIRE.md drifted
 ```
 
 Every run holds the Rust to the file first and stops on a difference: a
@@ -175,7 +187,8 @@ cargo build -p thrum-core
    ├─ codegen::thrum::parse reads it
    ├─ codegen::rust::check compares chi.rs, views.rs, envelope.rs, lib.rs
    │     (a difference is a cargo warning here; CI fails on it)
-   └─ the emitters write thrum-clients/{ts,python,go,c}/
+   ├─ the emitters write thrum-clients/{ts,python,go,c}/
+   └─ codegen::wire::emit fills WIRE.md's marked regions
 ```
 
 Every source file of every client is generated. The registry and the
@@ -196,7 +209,8 @@ A new chi, field, kind value or advisory starts in `hum.thrum`. Then the
 Rust follows: the variant in `chi.rs`, the struct or field in `views.rs`,
 the arm in `spec.rs`. Until both agree, `cargo build -p thrum-core` warns
 and `cargo run -p codegen -- --check` fails, naming what differs. The
-clients follow on the next build.
+clients and WIRE.md's tables follow on the next build; what a party does
+with the new tone is prose, written into WIRE.md by hand.
 
 ## Output anatomy
 

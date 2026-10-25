@@ -30,8 +30,9 @@
 # range.
 #
 # For what a tone is, this file wins: thrum-core's Rust is held to it,
-# and the TS, Python, Go and C clients are emitted from it. For what a
-# party does with a tone, WIRE.md wins.
+# the TS, Python, Go and C clients are emitted from it, and WIRE.md's
+# tables are read out of it. For what a party does with a tone, WIRE.md
+# wins.
 
 THRUM 0.8.0
 
@@ -68,20 +69,23 @@ DOC announce self: hive, role, signed identity
 EMITS bee
 HEARS humd
 FIELD protoVersion string
-DOC the THRUM version the bee speaks
+DOC the THRUM version the bee speaks; another major is refused, another minor advised
 FIELD hive string
-DOC the hive the bee belongs to
+DOC the hive the bee belongs to; it must be installed on the humd
 FIELD role role
 DOC the one job it was entered for
 FIELD builds bool?
 DOC a forager whose blooms build where it is
 FIELD version string?
+DOC the bee's own version, semver
 FIELD hid string
 DOC who the bee is: the hash of its key
 FIELD pubkey string
+DOC the bee's ed25519 public key, hex
 FIELD signedAt int
+DOC when it signed, ms UTC; a stale signature is refused
 FIELD signature string
-DOC from the key that hashes to hid
+DOC over hid and signedAt, from the key that hashes to hid
 FIELD models [string]?
 DOC a nurse: the models it grows; an attendant: the models it distils a scent of
 FIELD tools [any]?
@@ -89,10 +93,13 @@ DOC an attendant: the fixed, named tools it serves
 FIELD chis [string]?
 DOC the chi values the bee speaks
 FIELD propensity any?
+DOC the bee's typology: statefulness, richness, wire
 FIELD headroom headroom?
 DOC a nurse: how many more cells it can take
 FIELD source string?
+DOC where the bee's source lives, a URL
 FIELD bind any?
+DOC an address the bee may be reached at, for the ensemble's manifest of it
 
 CHI prompt
 DOC open a bloom: its petals, the blooms before it, and how the cell should grow it
@@ -100,18 +107,21 @@ EMITS forager
 HEARS nurse
 CARRIES ensemble
 FIELD modelId string?
-DOC the model to grow it
+DOC the model to grow it; any nurse with room, growing with a model of its own, when absent
 FIELD cwd string?
 DOC where the bloom builds: hum://<humdid>/<path>
 FIELD systemPrompt string?
+DOC the words the cell is given before the bloom's
 FIELD text string?
 DOC the words, when the bloom is only words
 FIELD content [petal]?
 DOC the petals the bloom opens with
 FIELD tools [any]?
-DOC the tools the bloom may reach
+DOC the tools the bloom may reach; humd fills it before a nurse sees it
 FIELD allowedTools [string]?
+DOC of those, the names the bloom may use; all when absent
 FIELD resume string?
+DOC a cell's own session to grow on, where the hive keeps one
 FIELD temperature float?
 DOC how warm the sampling is
 FIELD prune prune?
@@ -155,7 +165,9 @@ DOC a scout came back
 EMITS forager
 HEARS nurse
 FIELD callId string?
+DOC the scout it answers
 FIELD output any?
+DOC what it brought back
 
 CHI tendril-result
 DOC what a tendril grasped
@@ -165,10 +177,15 @@ CARRIES ensemble
 FIELD callId string
 DOC the reach it answers
 FIELD output string?
+DOC what it grasped, as text
 FIELD result any?
+DOC what it grasped, as JSON
 FIELD isError bool?
+DOC the grasp failed, and output or result says why
 FIELD title string?
+DOC a line to show for the grasp
 FIELD metadata any?
+DOC what else it carries: exitCode on a bash grasp
 
 CHI breath
 DOC accept a hello, and keep the bee in step
@@ -193,15 +210,23 @@ CARRIES ensemble
 FIELD petal uint
 DOC its index in the bloom
 FIELD kind petal-kind
+DOC which unit of content is growing
 FIELD text string?
+DOC words: of a text, sepal or thorn petal
 FIELD sap string?
 DOC a tendril's input, as it grows
 FIELD callId string?
+DOC of a tendril petal: the reach it opens
 FIELD name string?
+DOC of a tendril petal: the tool
 FIELD grain grain?
+DOC of a pollen petal
 FIELD propolis string?
+DOC sealing a sepal petal, so it can carry into the next bloom
 FIELD source any?
+DOC of a waggle petal: where the words came from
 FIELD brix any?
+DOC of a brix petal: how likely each token was
 FIELD closed bool?
 DOC once the petal is whole
 
@@ -215,7 +240,9 @@ DOC stop; max_tokens when its season ran out; refusal; cancel; or the cell's own
 FIELD nectar any?
 DOC what the bloom took: tokens in and out, cache reads and writes
 FIELD exitCode int?
+DOC the cell process's exit code, when it had one
 FIELD subtype string?
+DOC the cell's own word for how it closed
 
 CHI error
 DOC the bloom broke off
@@ -223,10 +250,13 @@ EMITS nurse attendant humd
 HEARS forager
 CARRIES ensemble
 FIELD message string
+DOC what broke
 FIELD code string?
 DOC no-nurse when no nurse here or on a trusted peer grows the model; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft
 FIELD subtype string?
+DOC the cell's own word for what broke
 FIELD nectar any?
+DOC what the bloom took before it broke off
 
 CHI pulse
 DOC a cell's life, and headroom
@@ -234,7 +264,9 @@ EMITS nurse
 HEARS forager humd
 CARRIES ensemble
 FIELD kind pulse-kind
+DOC the moment in the cell's life
 FIELD pid int?
+DOC the cell's process
 FIELD headroom headroom?
 DOC the nurse's headroom after this
 FIELD cell string?
@@ -249,7 +281,9 @@ DOC send a scout out
 EMITS nurse
 HEARS forager
 FIELD task string?
+DOC what the scout is sent to do
 FIELD tools [any]?
+DOC what it may reach
 
 CHI tendril-reach
 DOC a tendril reaching
@@ -257,8 +291,11 @@ EMITS nurse forager
 HEARS forager builder attendant
 CARRIES ensemble
 FIELD callId string
+DOC minted by the reacher; the result carries it back
 FIELD name string
+DOC the tool
 FIELD args any?
+DOC its input, as the tool's schema says
 FIELD cwd string?
 DOC on a bash reach to a builder: where its shell starts; its host's home directory when absent
 
@@ -268,24 +305,33 @@ EMITS nurse
 HEARS forager
 CARRIES ensemble
 FIELD callId string?
+DOC the reach it is about
 FIELD name string?
+DOC the tool
 FIELD metadata any?
+DOC what it carries
 
 CHI tendril-info
 DOC a tendril that already came back, told whole, for showing only
 EMITS nurse
 HEARS forager
 FIELD callId string
+DOC the reach, already answered
 FIELD name string?
+DOC the tool
 FIELD args any?
+DOC what it was given
 FIELD result any?
+DOC what came back
 FIELD isError bool?
+DOC it failed
 
 CHI echo
 DOC delivery ack for a rid
 EMITS humd bee
 HEARS bee humd
 FIELD ok bool
+DOC the tone under this rid was taken
 FIELD error string?
 DOC why not, when ok is false
 
@@ -295,16 +341,20 @@ EMITS bee humd
 HEARS bee humd
 CARRIES ensemble
 FIELD at int?
+DOC when, ms UTC
 FIELD note string?
+DOC what was measured
 
 CHI log
 DOC structured log forwarding
 EMITS bee humd
 HEARS bee humd
 FIELD level string?
+DOC trace, debug, info, warn or error
 FIELD message string?
+DOC the line
 FIELD fields any?
-DOC from humd, an advisory: fields.advisory is its code
+DOC structured fields; from humd, an advisory: fields.advisory is its code
 
 CHI drone
 DOC drone heartbeat
@@ -312,9 +362,13 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD health string
+DOC the drone's own word for how it is
 FIELD rhythm_ms uint?
+DOC ms between beats
 FIELD pending_echoes [any]?
+DOC rids sounded and not yet echoed
 FIELD load drone-load?
+DOC what it is carrying
 
 CHI drone-retrofit
 DOC drone swallow + retry signal
@@ -322,7 +376,9 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD sigil string?
+DOC the sigil to retry
 FIELD reason string?
+DOC why
 
 # Between humds. A humd sounds these to its peers, or to itself.
 
@@ -340,6 +396,7 @@ DOC drop a peer humd
 EMITS humd
 HEARS humd
 FIELD humd_id string
+DOC the peer, in hex
 
 CHI attach
 DOC observe a sid hosted on another humd: its reply tones then fan out to the observer too
@@ -347,6 +404,7 @@ EMITS forager
 HEARS humd
 CARRIES ensemble
 FIELD hearOnly bool?
+DOC hear the sid's tones without taking part
 
 CHI detach
 DOC stop observing a sid
@@ -368,7 +426,9 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD topic string
+DOC what the message is about; subscribers listen by it
 FIELD payload any
+DOC the message
 FIELD from string?
 DOC the originator
 FIELD msg_id string
@@ -380,6 +440,7 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD query_id string
+DOC matches the answer to its query
 FIELD target string
 DOC a hid, in hex
 
@@ -389,6 +450,7 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD query_id string
+DOC the query it answers
 FIELD closest [any]
 DOC HumdAddrs, closest in XOR distance to the target
 
@@ -408,68 +470,98 @@ EMITS humd
 HEARS humd
 CARRIES ensemble
 FIELD event any
+DOC the event, as thehum logged it
 
 # Shapes nested in bodies.
 
 SHAPE headroom
 DOC how many more cells a nurse can take
 FIELD freeSlots uint
+DOC cells it can still take
 FIELD totalSlots uint
+DOC cells it can hold at most
 
 SHAPE petal
 DOC one unit of content: in a prompt's content, and in a graft
 FIELD kind petal-kind
+DOC which unit of content it is
 FIELD text string?
+DOC words: of a text, sepal or thorn petal
 FIELD grain grain?
+DOC of a pollen petal
 FIELD callId string?
+DOC of a tendril or grasp petal: the reach
 FIELD name string?
+DOC of a tendril petal: the tool
 FIELD args any?
+DOC of a tendril petal: its input
 FIELD result any?
+DOC of a grasp petal: what came back
 FIELD isError bool?
+DOC of a grasp petal: it failed
 FIELD propolis string?
+DOC sealing a sepal petal
 FIELD source any?
+DOC of a waggle petal: where the words came from
 FIELD brix any?
+DOC of a brix petal: how likely each token was
 FIELD bouquet [any]?
+DOC of a bouquet petal: the candidates
 
 SHAPE grain
 DOC a grain of media
 FIELD kind string
 DOC image, audio or file
 FIELD mediaType string
+DOC its media type, image/png and the like
 FIELD data string?
+DOC the bytes, inline
 FIELD url string?
+DOC or where to fetch them
 
 SHAPE prune
 DOC cut the unlikely tail
 FIELD p float?
+DOC the nucleus: the likeliest tokens whose likelihood sums to p
 FIELD k uint?
+DOC the k likeliest tokens
 
 SHAPE tendrils
 DOC how a bloom reaches its tendrils
 FIELD reach string?
 DOC auto, none, required, or a tendril's name
 FIELD parallel bool?
+DOC whether the bloom may reach several at once
 
 SHAPE sepal
 DOC how much the cell reasons first
 FIELD effort string?
+DOC how hard, on the cell's own scale
 FIELD budget uint?
+DOC how many tokens of reasoning
 
 SHAPE bloom
 DOC one bloom of a graft: what its prompt carried, and what grew
 FIELD content [petal]?
+DOC what its prompt carried
 FIELD grew [petal]?
+DOC what grew
 
 SHAPE model
 DOC a model, and the hive that grows it
 FIELD id string
+DOC the model, as its hive names it
 FIELD hive string
+DOC the hive that grows it
 
 SHAPE drone-load
 DOC what a drone is carrying
 FIELD active_sigils uint?
+DOC sigils with a bloom open
 FIELD inflight_tools uint?
+DOC tendrils reaching
 FIELD tokens_burned uint?
+DOC nectar so far
 
 # Kinds: closed sets of strings a field is drawn from.
 

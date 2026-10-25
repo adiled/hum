@@ -14,7 +14,8 @@
 //! A target is the files it owns: the registry and the views projected
 //! from `hum.thrum`, and the client itself, each language's template
 //! from `codegen/templates/` with the link's constants read from
-//! hum-thrum. Every source file of every client is generated.
+//! hum-thrum. Every source file of every client is generated. After the
+//! targets, WIRE.md's marked regions are filled from the same file.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -65,6 +66,24 @@ fn run() -> Result<()> {
 
     for t in &targets {
         run_target(t, &spec, &proto, &link, check)?;
+    }
+    run_wire(&thrum, check)
+}
+
+fn run_wire(thrum: &codegen::thrum::Thrum, check: bool) -> Result<()> {
+    let out = paths::wire_md();
+    let emit: Emit = Box::new(move |p| codegen::wire::emit(thrum, &paths::wire_md(), p));
+    if check {
+        check_against(&out, &emit)?;
+        eprintln!("codegen: {} up to date", out.display());
+    } else {
+        emit(&out)?;
+        eprintln!(
+            "codegen wire: {} regions of {} filled from {}",
+            codegen::wire::REGIONS.len(),
+            out.display(),
+            paths::HUM_THRUM_REL
+        );
     }
     Ok(())
 }

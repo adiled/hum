@@ -1,13 +1,13 @@
 //! Build script: keeps the generated clients in `thrum-clients/{ts,python,go,c}/`
-//! in lockstep with `hum.thrum`, and says when this crate's own Rust is
-//! not.
+//! and WIRE.md's generated regions in lockstep with `hum.thrum`, and says
+//! when this crate's own Rust is not.
 //!
 //! Cargo reruns this whenever the listed files change. The `codegen`
 //! library reads the thrum, compares `chi.rs`, `views.rs`, `envelope.rs`
 //! and `lib.rs` with it (a difference is a cargo warning here, and a
-//! failure of `cargo run -p codegen -- --check` in CI), and regenerates
-//! every target. Output paths live in `codegen::paths`; never hand-write
-//! them here.
+//! failure of `cargo run -p codegen -- --check` in CI), regenerates
+//! every target, and fills WIRE.md. Output paths live in
+//! `codegen::paths`; never hand-write them here.
 
 use codegen::paths;
 
@@ -19,6 +19,7 @@ fn main() {
     let envelope_rs = paths::envelope_rs();
 
     println!("cargo:rerun-if-changed={}", hum_thrum.display());
+    println!("cargo:rerun-if-changed={}", paths::wire_md().display());
     println!("cargo:rerun-if-changed={}", chi_rs.display());
     println!("cargo:rerun-if-changed={}", lib_rs.display());
     println!("cargo:rerun-if-changed={}", views_rs.display());
@@ -79,6 +80,10 @@ fn main() {
             Box::new(move || codegen::link::emit_client(link, client, &client.output_path())),
         ));
     }
+    emits.push((
+        format!("fill {}", paths::WIRE_MD_REL),
+        Box::new(|| codegen::wire::emit(&thrum, &paths::wire_md(), &paths::wire_md())),
+    ));
     for (label, emit) in &emits {
         if let Err(e) = emit() {
             warn(&format!("{label}: {e:#}"));
