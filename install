@@ -119,7 +119,6 @@ ensure_hum_config() {
   cat > "$CFG" <<JSON
 {
   "\$schema": "https://adiled.github.io/hum/hum.schema.json",
-  "humd": { "permissionDuskMs": 60000 },
   "fs": {
     "roots": [
       { "path": "~/code", "mode": "rw" },

@@ -24,7 +24,7 @@ router on your laptop.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| stateless per-call | lean | RFC 9171 BP7 over UDPCL | tools, system, perf, drone, breath, permission-ask |
+| stateless per-call | lean | RFC 9171 BP7 over UDPCL | tools, system, perf, drone, breath |
 
 ## Wire
 

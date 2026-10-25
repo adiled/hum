@@ -161,19 +161,6 @@ export interface PulseBody {
   tools?: unknown[];
 }
 
-export interface PermissionAskBody {
-  callId?: string;
-  name?: string;
-  message?: string;
-  arg?: unknown;
-}
-
-export interface ReleasePermitBody {
-  callId?: string;
-  ok?: boolean;
-  error?: string;
-}
-
 export interface EchoBody {
   ok: boolean;
   error?: string;
@@ -194,7 +181,6 @@ export interface DroneBody {
 
 export interface DroneLoad {
   active_sigils?: number;
-  pending_permissions?: number;
   inflight_tools?: number;
   tokens_burned?: number;
 }
@@ -301,8 +287,6 @@ export interface ToneViews {
   "tendril-info": TendrilInfoBody;
   "tendril-meta": TendrilMetaBody;
   "pulse": PulseBody;
-  "permission-ask": PermissionAskBody;
-  "release-permit": ReleasePermitBody;
   "echo": EchoBody;
   "log": LogBody;
   "drone": DroneBody;

@@ -20,7 +20,7 @@ member of the main hum repo.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| convention-stateful | medium | Ollama `/api/chat` + `/api/generate` NDJSON | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
+| convention-stateful | medium | Ollama `/api/chat` + `/api/generate` NDJSON | pulse, breath, drone, perf-mark, tendril, tool-meta |
 
 Ollama's streaming response is already line-delimited JSON — it
 maps to thrum's frame format 1:1. No SSE re-framing.

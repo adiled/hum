@@ -19,8 +19,6 @@ export const Chi = {
   cleanup: "cleanup",
   /** manual compaction request */
   curate: "curate",
-  /** resolve an earlier permission-ask */
-  releasePermit: "release-permit",
   /** a scout came back */
   scoutResult: "scout-result",
   /** what a tendril grasped */
@@ -37,8 +35,6 @@ export const Chi = {
   error: "error",
   /** a cell's life, and headroom */
   pulse: "pulse",
-  /** a tendril needs leave to reach */
-  permissionAsk: "permission-ask",
   /** send a scout out */
   scout: "scout",
   /** a tendril reaching */

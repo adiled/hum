@@ -39,7 +39,7 @@ Every bee sits somewhere on three orthogonal axes, declared in its hello's `prop
 
 The first axis is **statefulness**. A `stateful` bee holds its own session graph. A `convention-stateful` bee keeps no server state but speaks a protocol that implies continuation. A `stateless` bee treats each call as a fresh sid. A `transport-only` bee is pure bytes in and bytes out.
 
-The second axis is **richness**. A `rich` bee hands humd cwd, permissions, MCP configs, and prior petals. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
+The second axis is **richness**. A `rich` bee hands humd cwd, MCP configs, and prior petals. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
 
 The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tendril`, or `grpc/bidi`.
 
@@ -125,7 +125,6 @@ An attendant lists the tools it serves in its hello's `tools`; humd hands them t
 |---|---|
 | inference only | `prompt`, `unfurl`, `wilt`, `error`, `cancel` |
 | plus tendrils | `tendril-reach`, `tendril-result`, `tendril-info`, `tendril-meta` |
-| plus permissions | `permission-ask`, `release-permit` |
 | plus state sync | `hello`, `breath`, `pulse`, `cleanup` |
 | plus observability | `perf-mark`, `drone`, `echo`, `log` |
 

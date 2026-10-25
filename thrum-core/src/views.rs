@@ -302,28 +302,6 @@ pub struct PulseBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionAskBody {
-    #[serde(rename = "callId")]
-    pub call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arg: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReleasePermitBody {
-    #[serde(rename = "callId")]
-    pub call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ok: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EchoBody {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -355,8 +333,6 @@ pub struct DroneBody {
 pub struct DroneLoad {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_sigils: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_permissions: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inflight_tools: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

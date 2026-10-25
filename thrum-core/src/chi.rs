@@ -2,7 +2,7 @@
 //!
 //! Every wire-known chi value. Adding a new variant bumps the protocol
 //! minor version. `serde(rename_all = "kebab-case")` keeps the wire
-//! format speaking kebabs (`"tendril-reach"`, `"release-permit"`).
+//! format speaking kebabs (`"tendril-reach"`, `"drone-retrofit"`).
 //!
 //! The wire contract — which chi exists, what it carries, and which way
 //! it flows — lives in [`WIRE.md`](../../WIRE.md). This enum is its
@@ -32,7 +32,6 @@ pub enum Chi {
     Cancel,
     Cleanup,
     Curate,
-    ReleasePermit,
     ScoutResult,
     TendrilResult,
     PetalCell,
@@ -41,7 +40,6 @@ pub enum Chi {
     Wilt,
     Error,
     Pulse,
-    PermissionAsk,
     Scout,
     TendrilReach,
     TendrilMeta,
@@ -156,7 +154,6 @@ mod tests {
         assert_eq!(serde_json::to_string(&Chi::Unfurl).unwrap(), "\"unfurl\"");
         assert_eq!(serde_json::to_string(&Chi::Wilt).unwrap(), "\"wilt\"");
         assert_eq!(PetalKind::Sepal.as_str(), "sepal");
-        assert_eq!(serde_json::to_string(&Chi::ReleasePermit).unwrap(), "\"release-permit\"");
         assert_eq!(serde_json::to_string(&Chi::DroneRetrofit).unwrap(), "\"drone-retrofit\"");
         assert_eq!(serde_json::to_string(&Chi::WaneSync).unwrap(), "\"wane-sync\"");
         let parsed: Chi = serde_json::from_str("\"petal-cell\"").unwrap();

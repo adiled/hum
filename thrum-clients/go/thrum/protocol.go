@@ -162,19 +162,6 @@ type PulseBody struct {
 	Tools []json.RawMessage `json:"tools,omitempty"`
 }
 
-type PermissionAskBody struct {
-	CallId *string `json:"callId,omitempty"`
-	Name *string `json:"name,omitempty"`
-	Message *string `json:"message,omitempty"`
-	Arg json.RawMessage `json:"arg,omitempty"`
-}
-
-type ReleasePermitBody struct {
-	CallId *string `json:"callId,omitempty"`
-	Ok *bool `json:"ok,omitempty"`
-	Error *string `json:"error,omitempty"`
-}
-
 type EchoBody struct {
 	Ok bool `json:"ok"`
 	Error *string `json:"error,omitempty"`
@@ -195,7 +182,6 @@ type DroneBody struct {
 
 type DroneLoad struct {
 	ActiveSigils *uint64 `json:"active_sigils,omitempty"`
-	PendingPermissions *uint64 `json:"pending_permissions,omitempty"`
 	InflightTools *uint64 `json:"inflight_tools,omitempty"`
 	TokensBurned *uint64 `json:"tokens_burned,omitempty"`
 }
@@ -302,8 +288,6 @@ var ToneViews = map[Chi]any{
 	ChiTendrilInfo: TendrilInfoBody{},
 	ChiTendrilMeta: TendrilMetaBody{},
 	ChiPulse: PulseBody{},
-	ChiPermissionAsk: PermissionAskBody{},
-	ChiReleasePermit: ReleasePermitBody{},
 	ChiEcho: EchoBody{},
 	ChiLog: LogBody{},
 	ChiDrone: DroneBody{},

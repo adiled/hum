@@ -26,7 +26,7 @@ and pinned them in their respective config (`config::federation.peers`).
 
 The handshake produces a **scoped capability grant**: a signed token
 naming the sigil to be shared, the chi subset humd-B1 may emit
-(`prompt`, `cancel` allowed; `permission-response` denied), an expiry
+(`prompt`, `cancel` allowed; `tendril-result` denied), an expiry
 timestamp, and a revocation id. The token is presented on every tone
 B1 sends and verified on every tone A1 receives.
 
@@ -42,10 +42,11 @@ B1 sends and verified on every tone A1 receives.
    it to the brood.
 4. humd-B1 emits a `chi:"prompt"`. Token allows it; humd-A1 admits the
    prompt. Bloom proceeds; petals tee to both humds (per `co-pilot`).
-5. humd-B1's nestler tries to answer a `chi:"permission-ask"`. Token
-   denies that chi; humd-A1 drops the response and emits a
-   `chi:"error"` qualified `federation.scope.denied` back to humd-B1.
-   The hold stays open until Operator-A answers locally.
+5. humd-B1's nestler tries to answer a `chi:"tendril-reach"` with a
+   `chi:"tendril-result"`. Token denies that chi; humd-A1 drops the
+   result and emits a `chi:"error"` qualified `federation.scope.denied`
+   back to humd-B1. The model stays parked until Operator-A answers
+   locally.
 6. Operator-A clicks revoke. humd-A1 broadcasts a revocation tone
    naming the revocation-id; humd-B1 immediately tears down its attach
    and surfaces `chi:"error"` qualified `federation.revoked` to its
@@ -60,7 +61,7 @@ B1 sends and verified on every tone A1 receives.
   or with a tampered scope. humd-A1 must refuse on first tone and
   never emit a petal toward humd-B1. Test asserts zero leak.
 - **Scope creep.** humd-B1 emits a chi outside the granted set
-  (`permission-response`, `tendril-result` for a tool it didn't own).
+  (`cleanup`, `tendril-result` for a tool it didn't own).
   humd-A1 must drop and surface `federation.scope.denied`; the hum's
   on-disk transcript must show no record of the rejected tone.
 - **Stale token.** humd-B1 keeps using a token past expiry. humd-A1

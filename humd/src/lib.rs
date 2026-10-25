@@ -1218,7 +1218,6 @@ impl ToneSink for HumdSink {
                     | Some(Chi::Pulse)
                     | Some(Chi::TendrilReach)
                     | Some(Chi::TendrilMeta)
-                    | Some(Chi::PermissionAsk)
             );
             if is_reply {
                 let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
@@ -1919,8 +1918,7 @@ impl ToneSink for HumdSink {
                     }
                 }
             }
-            Some(Chi::ReleasePermit)
-            | Some(Chi::ScoutResult)
+            Some(Chi::ScoutResult)
             | Some(Chi::PetalCell)
             | Some(Chi::Echo)
             | Some(Chi::PerfMark)

@@ -187,19 +187,6 @@ static const thrum_field THRUM_FIELDS_PULSE_BODY[6] = {
     {"tools", THRUM_FIELD_ARRAY, true},
 };
 
-static const thrum_field THRUM_FIELDS_PERMISSION_ASK_BODY[4] = {
-    {"callId", THRUM_FIELD_STRING, true},
-    {"name", THRUM_FIELD_STRING, true},
-    {"message", THRUM_FIELD_STRING, true},
-    {"arg", THRUM_FIELD_ANY, true},
-};
-
-static const thrum_field THRUM_FIELDS_RELEASE_PERMIT_BODY[3] = {
-    {"callId", THRUM_FIELD_STRING, true},
-    {"ok", THRUM_FIELD_BOOL, true},
-    {"error", THRUM_FIELD_STRING, true},
-};
-
 static const thrum_field THRUM_FIELDS_ECHO_BODY[2] = {
     {"ok", THRUM_FIELD_BOOL, false},
     {"error", THRUM_FIELD_STRING, true},
@@ -218,9 +205,8 @@ static const thrum_field THRUM_FIELDS_DRONE_BODY[4] = {
     {"load", THRUM_FIELD_OBJECT, true},
 };
 
-static const thrum_field THRUM_FIELDS_DRONE_LOAD[4] = {
+static const thrum_field THRUM_FIELDS_DRONE_LOAD[3] = {
     {"active_sigils", THRUM_FIELD_UINT, true},
-    {"pending_permissions", THRUM_FIELD_UINT, true},
     {"inflight_tools", THRUM_FIELD_UINT, true},
     {"tokens_burned", THRUM_FIELD_UINT, true},
 };
@@ -304,7 +290,7 @@ static const thrum_field THRUM_FIELDS_ENVELOPE[11] = {
 
 static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 
-#define THRUM_VIEW_COUNT 33
+#define THRUM_VIEW_COUNT 31
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"hello", THRUM_FIELDS_HELLO_BODY, 16},
@@ -318,8 +304,6 @@ static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"tendril-info", THRUM_FIELDS_TENDRIL_INFO_BODY, 5},
     {"tendril-meta", THRUM_FIELDS_TENDRIL_META_BODY, 3},
     {"pulse", THRUM_FIELDS_PULSE_BODY, 6},
-    {"permission-ask", THRUM_FIELDS_PERMISSION_ASK_BODY, 4},
-    {"release-permit", THRUM_FIELDS_RELEASE_PERMIT_BODY, 3},
     {"echo", THRUM_FIELDS_ECHO_BODY, 2},
     {"log", THRUM_FIELDS_LOG_BODY, 3},
     {"drone", THRUM_FIELDS_DRONE_BODY, 4},

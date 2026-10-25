@@ -21,8 +21,6 @@ class Chi:
     CLEANUP: str = "cleanup"
     # manual compaction request
     CURATE: str = "curate"
-    # resolve an earlier permission-ask
-    RELEASE_PERMIT: str = "release-permit"
     # a scout came back
     SCOUT_RESULT: str = "scout-result"
     # what a tendril grasped
@@ -39,8 +37,6 @@ class Chi:
     ERROR: str = "error"
     # a cell's life, and headroom
     PULSE: str = "pulse"
-    # a tendril needs leave to reach
-    PERMISSION_ASK: str = "permission-ask"
     # send a scout out
     SCOUT: str = "scout"
     # a tendril reaching
@@ -84,7 +80,6 @@ ALL_CHI: frozenset[str] = frozenset({
     "cancel",
     "cleanup",
     "curate",
-    "release-permit",
     "scout-result",
     "tendril-result",
     "petal-cell",
@@ -93,7 +88,6 @@ ALL_CHI: frozenset[str] = frozenset({
     "wilt",
     "error",
     "pulse",
-    "permission-ask",
     "scout",
     "tendril-reach",
     "tendril-meta",

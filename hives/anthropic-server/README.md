@@ -17,7 +17,7 @@ knowing thrum exists. Symmetric counterpart to
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, scout, permission-ask, tendril-meta |
+| convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, scout, tendril-meta |
 
 Each request mints a fresh sid; continuation flows through the
 `messages` array as `tool_result` content blocks.

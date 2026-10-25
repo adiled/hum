@@ -95,8 +95,8 @@ How a bloom grows is said on its prompt: its **temperature**, **prune**
   that accepts `chi:"hello"`. Verb-state of the same participant.
 - **nestled**: a bee's lifecycle phase: post-handshake, registered, with
   a nestledId. The bee keeps asking (`chi:"prompt"`, `chi:"cancel"`,
-  `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cleanup"`,
-  `chi:"curate"`) for the rest of the connection.
+  `chi:"tendril-result"`, `chi:"cleanup"`, `chi:"curate"`) for the rest
+  of the connection.
 
 The vocabulary stacks as: **hive** = kind, installed on a humd; **bee** =
 a participant the humd understands through its hive; **role** = the one

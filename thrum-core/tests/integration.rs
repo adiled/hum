@@ -64,11 +64,6 @@ fn chi_curate_round_trips() {
 }
 
 #[test]
-fn chi_release_permit_round_trips() {
-    assert_chi_round_trips(Chi::ReleasePermit);
-}
-
-#[test]
 fn chi_scout_result_round_trips() {
     assert_chi_round_trips(Chi::ScoutResult);
 }
@@ -106,11 +101,6 @@ fn chi_error_round_trips() {
 #[test]
 fn chi_pulse_round_trips() {
     assert_chi_round_trips(Chi::Pulse);
-}
-
-#[test]
-fn chi_permission_ask_round_trips() {
-    assert_chi_round_trips(Chi::PermissionAsk);
 }
 
 #[test]

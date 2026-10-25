@@ -334,34 +334,6 @@ class PulseBody:
     }
 
 @dataclass
-class PermissionAskBody:
-    call_id: Optional[str] = None
-    name: Optional[str] = None
-    message: Optional[str] = None
-    arg: Optional[Any] = None
-
-    # rust field name -> wire key (single source in views.rs)
-    _wire: ClassVar[dict[str, str]] = {
-        "call_id": "callId",
-        "name": "name",
-        "message": "message",
-        "arg": "arg",
-    }
-
-@dataclass
-class ReleasePermitBody:
-    call_id: Optional[str] = None
-    ok: Optional[bool] = None
-    error: Optional[str] = None
-
-    # rust field name -> wire key (single source in views.rs)
-    _wire: ClassVar[dict[str, str]] = {
-        "call_id": "callId",
-        "ok": "ok",
-        "error": "error",
-    }
-
-@dataclass
 class EchoBody:
     ok: bool
     error: Optional[str] = None
@@ -403,14 +375,12 @@ class DroneBody:
 @dataclass
 class DroneLoad:
     active_sigils: Optional[int] = None
-    pending_permissions: Optional[int] = None
     inflight_tools: Optional[int] = None
     tokens_burned: Optional[int] = None
 
     # rust field name -> wire key (single source in views.rs)
     _wire: ClassVar[dict[str, str]] = {
         "active_sigils": "active_sigils",
-        "pending_permissions": "pending_permissions",
         "inflight_tools": "inflight_tools",
         "tokens_burned": "tokens_burned",
     }
@@ -632,8 +602,6 @@ TONE_VIEWS: dict[str, type] = {
     "tendril-info": TendrilInfoBody,
     "tendril-meta": TendrilMetaBody,
     "pulse": PulseBody,
-    "permission-ask": PermissionAskBody,
-    "release-permit": ReleasePermitBody,
     "echo": EchoBody,
     "log": LogBody,
     "drone": DroneBody,
