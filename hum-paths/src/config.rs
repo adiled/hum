@@ -29,8 +29,6 @@ use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumdSection {
-    #[serde(default = "defaults::permission_dusk_ms", rename = "permissionDuskMs")]
-    pub permission_dusk_ms: u64,
     #[serde(default = "defaults::metrics_addr", rename = "metricsAddr")]
     pub metrics_addr: String,
     #[serde(default, rename = "tcpListen")]
@@ -44,7 +42,6 @@ pub struct HumdSection {
 impl Default for HumdSection {
     fn default() -> Self {
         Self {
-            permission_dusk_ms: defaults::permission_dusk_ms(),
             metrics_addr: defaults::metrics_addr(),
             tcp_listen: None,
             iroh_port: defaults::iroh_port(),
@@ -181,7 +178,10 @@ pub fn load() -> HumConfig {
 
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
-pub const RETIRED: &[(&str, &str)] = &[("humd", "driftRetentionDays")];
+pub const RETIRED: &[(&str, &str)] = &[
+    ("humd", "driftRetentionDays"),
+    ("humd", "permissionDuskMs"),
+];
 pub const RETIRED_SECTIONS: &[&str] = &["nest"];
 
 pub fn drop_retired(instance: &mut serde_json::Value) -> Vec<String> {
@@ -277,9 +277,6 @@ pub fn validate_or_exit() {
 mod defaults {
     use std::path::PathBuf;
 
-    pub(crate) fn permission_dusk_ms() -> u64 {
-        60_000
-    }
     pub(crate) fn metrics_addr() -> String {
         "127.0.0.1:9909".into()
     }
@@ -304,7 +301,8 @@ mod tests {
     #[test]
     fn empty_yields_defaults() {
         let cfg: HumConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.humd.permission_dusk_ms, 60_000);
+        assert_eq!(cfg.humd.metrics_addr, "127.0.0.1:9909");
+        assert_eq!(cfg.humd.iroh_port, 41641);
     }
 
     #[test]
@@ -315,7 +313,7 @@ mod tests {
         }"#;
         assert!(validate(old).is_ok(), "a retired nest section must not fail validation: {:?}", validate(old));
         let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
-        assert_eq!(drop_retired(&mut v), ["nest"]);
+        assert_eq!(drop_retired(&mut v), ["nest", "humd.permissionDuskMs"]);
         assert!(v.get("nest").is_none());
     }
 
@@ -323,7 +321,7 @@ mod tests {
     fn schema_accepts_canonical_config() {
         let ok = r#"{
             "$schema": "https://adiled.github.io/hum/hum.schema.json",
-            "humd": { "permissionDuskMs": 60000 },
+            "humd": { "metricsAddr": "127.0.0.1:9909" },
             "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] }
         }"#;
         assert!(validate(ok).is_ok(), "canonical config should validate: {:?}", validate(ok));
@@ -340,15 +338,26 @@ mod tests {
     #[test]
     fn retired_key_does_not_fail_validation() {
         let stale = r#"{
-            "humd": { "permissionDuskMs": 60000, "driftRetentionDays": 30 }
+            "humd": { "metricsAddr": "127.0.0.1:9909", "driftRetentionDays": 30 }
         }"#;
         assert!(validate(stale).is_ok(), "a retired key must not brick the daemon: {:?}", validate(stale));
         assert_eq!(retired_in_raw(stale), vec!["humd.driftRetentionDays".to_string()]);
     }
 
     #[test]
+    fn the_hum_json_install_wrote_still_loads() {
+        let installed = r#"{
+            "$schema": "https://adiled.github.io/hum/hum.schema.json",
+            "humd": { "permissionDuskMs": 60000 },
+            "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] }
+        }"#;
+        assert!(validate(installed).is_ok(), "{:?}", validate(installed));
+        assert_eq!(retired_in_raw(installed), vec!["humd.permissionDuskMs".to_string()]);
+    }
+
+    #[test]
     fn unknown_key_still_fails_validation() {
-        let typo = r#"{ "humd": { "permissionDuskMsec": 60000 } }"#;
+        let typo = r#"{ "humd": { "metricsAdr": "127.0.0.1:9909" } }"#;
         assert!(validate(typo).is_err(), "a key that was never known is still a violation");
     }
 

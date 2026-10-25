@@ -15,7 +15,7 @@ without learning thrum.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| stateless per-call | lean | Vercel AI SDK `LanguageModelV3` | pulse, breath, drone, perf-mark, scout, permission-ask, tendril-meta, log, echo |
+| stateless per-call | lean | Vercel AI SDK `LanguageModelV3` | pulse, breath, drone, perf-mark, scout, tendril-meta, log, echo |
 
 Each call mints a fresh sid; history flows only through what the
 caller re-supplies. No persistent server-side state.
@@ -71,8 +71,8 @@ for await (const chunk of textStream) process.stdout.write(chunk);
 | tool result feedback | `chi:"tendril-result"` |
 
 Everything else thrum carries (pulses, performance marks, drone
-events, permission asks) gets dropped at the boundary — the SDK has no
-place to surface them.
+events) gets dropped at the boundary — the SDK has no place to surface
+them.
 
 ## Status
 

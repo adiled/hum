@@ -27,7 +27,7 @@ itself. If a client disagrees with this document, the document wins.
 - **Encoding**: UTF-8. Keys are case-sensitive, camelCase by
   convention (the wire uses `protoVersion`, `sentAt`, etc.). The
   `chi` discriminator and all chi values are **kebab-case**
-  (`"tendril-reach"`, `"release-permit"`).
+  (`"tendril-reach"`, `"drone-retrofit"`).
 - **Backpressure**: humd reads at line rate; if a writer can't keep up,
   the receiver drops oldest unsent frames. Clients SHOULD assume
   at-most-once delivery of any single tone.
@@ -162,8 +162,8 @@ whole of its life.
 
 | role | does | sends | receives |
 |---|---|---|---|
-| **forager** | opens blooms, bringing the outside world into the thrum | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"release-permit"`, `chi:"scout-result"`, `chi:"tendril-result"` for the tools it put on its prompt, and `chi:"tendril-reach"` straight to an attendant, with no bloom between | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"permission-ask"`, `chi:"scout"`, `chi:"tendril-info"`, and `chi:"tendril-reach"` for its own tools |
-| **nurse** | grows blooms in its cells; all inference is nursing | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"tendril-reach"`, `chi:"tendril-info"`, `chi:"permission-ask"`, `chi:"scout"` | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"scout-result"` |
+| **forager** | opens blooms, bringing the outside world into the thrum | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"scout-result"`, `chi:"tendril-result"` for the tools it put on its prompt, and `chi:"tendril-reach"` straight to an attendant, with no bloom between | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"scout"`, `chi:"tendril-info"`, and `chi:"tendril-reach"` for its own tools |
+| **nurse** | grows blooms in its cells; all inference is nursing | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"tendril-reach"`, `chi:"tendril-info"`, `chi:"scout"` | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"tendril-result"`, `chi:"scout-result"` |
 | **builder** | changes the world: runs what a bloom composes on its host, through [`bash`](#bash) | `chi:"tendril-result"` | `chi:"tendril-reach"` for `bash`, `chi:"cleanup"` |
 | **attendant** | serves the fixed, named tools in its hello's `tools`, and nothing else | `chi:"tendril-result"`, or `chi:"error"` under the reach's `callId` to refuse it | `chi:"tendril-reach"` for its tools |
 
@@ -224,7 +224,6 @@ with no description here has none in the clients either.
 | `cancel` | `sid` | stop the open bloom of this sigil | stop the open bloom |
 | `cleanup` | `sid` | drop humd's state for this sigil | drop humd's state for a sigil |
 | `curate` | `sid` | manual compaction request | manual compaction request |
-| `release-permit` | `callId`, `ok`, optional `error` | answer a `permission-ask` | resolve an earlier permission-ask |
 | `scout-result` | `sid`, `callId`, `output` | a scout came back | a scout came back |
 | `tendril-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | what a tendril grasped | what a tendril grasped |
 | `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) | OC message-graph update (graft hint) |
@@ -238,7 +237,6 @@ with no description here has none in the clients either.
 | `wilt` | `reason`, `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
 | `error` | `message`, `code`, optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
 | `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the nurse's headroom after it | a cell's life, and headroom |
-| `permission-ask` | `callId`, `name`, `message`, `arg` | a tendril needs leave to reach | a tendril needs leave to reach |
 | `scout` | `task`, `tools` | send a scout out | send a scout out |
 | `tendril-reach` | `sid`, `callId`, `name`, `args`, and on a `bash` reach to a builder the `cwd` its shell starts in, its host's home directory when absent | a brokered tool call reaching | a tendril reaching |
 | `tendril-meta` | `callId`, `name`, `metadata` | what a tendril carries besides its result | what a tendril carries besides its result |
@@ -582,7 +580,7 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` and its one `role` (`forager`, `nurse`, `builder`, `attendant`; was `roles`, and before that `bee`), both required, and is signed by a key its hive entered for that role; bee hids are `bee_`; `sigil(sid)` drops its nest; a nurse claims `headroom` on hello and `pulse`; humd hosts no cells. The thrum declares `bash`, which a builder serves; a prompt's `cwd` is where its bloom builds, `hum://`, and a forager's hello may say `builds`; humd hands a nurse the bloom's tools in the prompt's `tools`, so `provides`, `foragerTools`, `provided` and `disallowedTools` are gone. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
+| 0.8.0 | hello names its `hive` and its one `role` (`forager`, `nurse`, `builder`, `attendant`; was `roles`, and before that `bee`), both required, and is signed by a key its hive entered for that role; bee hids are `bee_`; `sigil(sid)` drops its nest; a nurse claims `headroom` on hello and `pulse`; humd hosts no cells; `permission-ask` and `release-permit` are gone, and the drone `load`'s `pending_permissions` with them. The thrum declares `bash`, which a builder serves; a prompt's `cwd` is where its bloom builds, `hum://`, and a forager's hello may say `builds`; humd hands a nurse the bloom's tools in the prompt's `tools`, so `provides`, `foragerTools`, `provided` and `disallowedTools` are gone. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |

@@ -23,8 +23,6 @@
 #define THRUM_CHI_CLEANUP "cleanup"
 // manual compaction request
 #define THRUM_CHI_CURATE "curate"
-// resolve an earlier permission-ask
-#define THRUM_CHI_RELEASE_PERMIT "release-permit"
 // a scout came back
 #define THRUM_CHI_SCOUT_RESULT "scout-result"
 // what a tendril grasped
@@ -41,8 +39,6 @@
 #define THRUM_CHI_ERROR "error"
 // a cell's life, and headroom
 #define THRUM_CHI_PULSE "pulse"
-// a tendril needs leave to reach
-#define THRUM_CHI_PERMISSION_ASK "permission-ask"
 // send a scout out
 #define THRUM_CHI_SCOUT "scout"
 // a tendril reaching
@@ -80,7 +76,7 @@
 // thehum chi-log replay request — `{ author: <hid>, from: <seq> }`. Host humd answers with one `chi:"backfill-event"` tone per event in `[from, ..)` for the named author.
 #define THRUM_CHI_BACKFILL "backfill"
 
-#define THRUM_CHI_COUNT 33
+#define THRUM_CHI_COUNT 31
 
 static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_HELLO,
@@ -88,7 +84,6 @@ static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_CANCEL,
     THRUM_CHI_CLEANUP,
     THRUM_CHI_CURATE,
-    THRUM_CHI_RELEASE_PERMIT,
     THRUM_CHI_SCOUT_RESULT,
     THRUM_CHI_TENDRIL_RESULT,
     THRUM_CHI_PETAL_CELL,
@@ -97,7 +92,6 @@ static const char *const THRUM_ALL_CHI[THRUM_CHI_COUNT] = {
     THRUM_CHI_WILT,
     THRUM_CHI_ERROR,
     THRUM_CHI_PULSE,
-    THRUM_CHI_PERMISSION_ASK,
     THRUM_CHI_SCOUT,
     THRUM_CHI_TENDRIL_REACH,
     THRUM_CHI_TENDRIL_META,

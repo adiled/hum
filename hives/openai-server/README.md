@@ -21,7 +21,7 @@ requester is a forager of its own.
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, scout, permission-ask, tendril-meta |
+| convention-stateful | medium | OpenAI `/v1/chat/completions` SSE | pulse, breath, drone, perf-mark, scout, tendril-meta |
 
 Forager half: convention-stateful — no server-side hum tracking; the
 OpenAI `user` field is the hint that continues a sigil. Nurse half:

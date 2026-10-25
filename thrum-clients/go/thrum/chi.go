@@ -24,8 +24,6 @@ const (
     ChiCleanup Chi = "cleanup"
     // manual compaction request
     ChiCurate Chi = "curate"
-    // resolve an earlier permission-ask
-    ChiReleasePermit Chi = "release-permit"
     // a scout came back
     ChiScoutResult Chi = "scout-result"
     // what a tendril grasped
@@ -42,8 +40,6 @@ const (
     ChiError Chi = "error"
     // a cell's life, and headroom
     ChiPulse Chi = "pulse"
-    // a tendril needs leave to reach
-    ChiPermissionAsk Chi = "permission-ask"
     // send a scout out
     ChiScout Chi = "scout"
     // a tendril reaching
@@ -89,7 +85,6 @@ var AllChi = map[Chi]struct{}{
     ChiCancel: {},
     ChiCleanup: {},
     ChiCurate: {},
-    ChiReleasePermit: {},
     ChiScoutResult: {},
     ChiTendrilResult: {},
     ChiPetalCell: {},
@@ -98,7 +93,6 @@ var AllChi = map[Chi]struct{}{
     ChiWilt: {},
     ChiError: {},
     ChiPulse: {},
-    ChiPermissionAsk: {},
     ChiScout: {},
     ChiTendrilReach: {},
     ChiTendrilMeta: {},

@@ -19,9 +19,8 @@ by manual key exchange:
   full keyboard, full bloom.
 - **humd-B** (observer) — attaches a nestler with the **`hearOnly`**
   propensity. It is allowed to receive every chi but cannot emit
-  `chi:"prompt"`, `chi:"tendril-result"`, `chi:"permission-response"`, or
-  `chi:"cancel"`. The brood enforces this at the humd boundary, not the
-  nestler.
+  `chi:"prompt"`, `chi:"tendril-result"`, or `chi:"cancel"`. The brood
+  enforces this at the humd boundary, not the nestler.
 
 The pair completes a T2 handshake: both sides verify the other's
 pubkey against a circle-of-trust list, agree on `proto_version`, and
@@ -35,21 +34,17 @@ willingness — it is here to listen.
    `nestler.role=hearOnly` and begins teeing every outbound petal to
    the ensemble link addressed to humd-B's `HumdId`.
 3. Every `chi:"unfurl"`, `chi:"tendril-reach"`, `chi:"tendril-result"`,
-   `chi:"permission-ask"`, `chi:"wilt"`, `chi:"breath"`, even
-   `chi:"perf-mark"` and `chi:"drone"`, that humd-A would emit to its
-   own nestler is fan-out'd to humd-B over the wire. humd-B forwards
-   them to its observer nestler in the same order they were emitted
-   on humd-A.
+   `chi:"wilt"`, `chi:"breath"`, even `chi:"perf-mark"` and
+   `chi:"drone"`, that humd-A would emit to its own nestler is
+   fan-out'd to humd-B over the wire. humd-B forwards them to its
+   observer nestler in the same order they were emitted on humd-A.
 4. Operator-A types a prompt. Petals flow on both humds, sigil-ordered.
 5. Operator-B watches their screen update in real time. They try to
    type — their nestler may accept keys locally, but the moment it
    emits `chi:"prompt"` toward humd-A, the brood rejects it with
    `chi:"error"` qualified `hearOnly.denied`, and the prompt never
    reaches the nest.
-6. A `chi:"permission-ask"` lands on both nestlers. Only Operator-A's
-   reply is honoured; if Operator-B's nestler emits a response, humd-A
-   drops it (logged via trace `permission.hold.denied.hearOnly`).
-7. The bloom wilts. Both nestlers receive the same terminal `chi:"wilt"`
+6. The bloom wilts. Both nestlers receive the same terminal `chi:"wilt"`
    with identical `nectar`.
 
 ## The failure modes
@@ -58,7 +53,7 @@ willingness — it is here to listen.
   with a different `rid` namespace, than humd-A's own tap. The test
   must compare the two tap transcripts and fail on any reordering.
 - **hearOnly bypass.** humd-B's nestler successfully drives the hum
-  (prompt accepted, permission-response honoured, cancel taken). The
+  (prompt accepted, tendril-result honoured, cancel taken). The
   test must verify each forbidden chi is dropped at humd-A's boundary
   and that an `error.hearOnly.denied` is observable on humd-B.
 - **Silent drop on the tee.** humd-A's own nestler keeps seeing

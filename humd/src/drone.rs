@@ -52,7 +52,6 @@ pub struct RawAssessment {
     pub suspicion: Suspicion,
     pub missed_beats: u32,
     pub inflight_tools: u32,
-    pub pending_permissions: u32,
     pub pending_echoes: u32,
     pub local_wane: u64,
     pub remote_wane: u64,
@@ -91,7 +90,6 @@ pub struct DroneState {
     pub last_beat_received: i64,
     pub missed_beats: u32,
     pub inflight_tools: u32,
-    pub pending_permissions: u32,
     pub tokens_burned: u64,
     pub response_text: String,
     pub suspicious: Suspicion,
@@ -117,7 +115,6 @@ pub fn create_drone_state(sigil: impl Into<String>) -> DroneState {
         last_beat_received: 0,
         missed_beats: 0,
         inflight_tools: 0,
-        pending_permissions: 0,
         tokens_burned: 0,
         response_text: String::new(),
         suspicious: Suspicion::None,
@@ -135,8 +132,6 @@ pub enum Observed {
     Nectar {
         delta: u64,
     },
-    PermissionAsk,
-    PermissionResolved,
     Unfurl {
         text: String,
     },
@@ -156,7 +151,6 @@ pub struct DroneBeat {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeatLoad {
     pub active_sigils: u32,
-    pub pending_permissions: u32,
     pub inflight_tools: u32,
     pub tokens_burned: u64,
 }
@@ -166,7 +160,7 @@ pub trait Evaluator: Send + Sync {
 }
 
 fn tracked(chi: Chi) -> bool {
-    matches!(chi, Chi::Prompt | Chi::Cancel | Chi::ReleasePermit)
+    matches!(chi, Chi::Prompt | Chi::Cancel)
 }
 
 fn now_ms() -> i64 {
@@ -318,10 +312,6 @@ impl Drone {
             Observed::Nectar { delta } => {
                 state.tokens_burned = state.tokens_burned.saturating_add(delta)
             }
-            Observed::PermissionAsk => state.pending_permissions += 1,
-            Observed::PermissionResolved => {
-                state.pending_permissions = state.pending_permissions.saturating_sub(1);
-            }
             Observed::Unfurl { text } => state.response_text.push_str(&text),
             Observed::Wilt => {
                 if state.response_text.len() > 20 {
@@ -396,7 +386,6 @@ impl Drone {
             suspicion: suspicion_now,
             missed_beats: state.missed_beats,
             inflight_tools: state.inflight_tools,
-            pending_permissions: state.pending_permissions,
             pending_echoes: state.pending_echoes.len() as u32,
             local_wane: state.local_wane,
             remote_wane: state.remote_wane,
@@ -453,7 +442,6 @@ impl Drone {
             pending_echoes: state.pending_echoes.keys().cloned().collect(),
             load: BeatLoad {
                 active_sigils: active,
-                pending_permissions: state.pending_permissions,
                 inflight_tools: state.inflight_tools,
                 tokens_burned: state.tokens_burned,
             },
@@ -489,8 +477,7 @@ fn derive_health(state: &DroneState) -> Health {
         return Health::Critical;
     }
 
-    if state.pending_permissions > 0 || state.inflight_tools > 3 || !state.pending_echoes.is_empty()
-    {
+    if state.inflight_tools > 3 || !state.pending_echoes.is_empty() {
         return Health::Tense;
     }
 

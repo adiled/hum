@@ -31,12 +31,6 @@ describe("e2e-human: working features (manual verification)", () => {
     // 3. Verify: Session title updates from "New session" to a generated title
     // (Requires small_model set — daemon auto-detects free model)
   });
-
-  test.skip("permission prompts appear for restricted operations", () => {
-    // 1. Set permission to "ask" for edit in project config
-    // 2. Ask Claude to edit a file
-    // 3. Verify: OC shows a permission prompt before executing
-  });
 });
 
 describe("e2e-human: requires TUI interaction (blocked)", () => {
