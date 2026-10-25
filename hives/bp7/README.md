@@ -1,109 +1,161 @@
 ---
 title: "bp7-forager (Rust)"
-description: "RFC 9171 Bundle Protocol v7 — interplanetary store-and-forward bridge to hum"
+description: "RFC 9171 Bundle Protocol v7: hum as a DTN endpoint, and space's way into the ensemble"
 ---
 
 # bp7-forager
 
-> _the interplanetary bee — accept BP7 bundles from spacecraft and other DTN nodes; reply via the same store-and-forward path_
+> _the interplanetary bee: take a bundle from any DTN node, hold it until hum can answer, and send the answer home the way bundles go_
 
-Hum, but over **DTN**. The Delay/Disruption-Tolerant Networking
-protocol used by NASA's ION, ESA's tests on the ISS, and the planned
-lunar Gateway. RFC 9171. CBOR on the wire. Designed for the actual
-solar system: one-way delays measured in minutes (Mars) to hours
-(Voyager).
+Hum, but over **DTN**: the Delay/Disruption-Tolerant Networking of NASA's
+ION and HDTN, ESA's tests on the ISS, and the planned lunar Gateway.
+RFC 9171, CBOR on the wire, built for links where one-way delay is
+minutes (Mars) to hours (Voyager) and no end-to-end path exists at any
+given moment.
 
 A bundle addressed to `dtn://hum.local/inference` arrives over UDP
-(or any other convergence layer your DTN router provides). We decode,
-extract the payload, hand it to humd as `chi:"prompt"`, collect the
-bloom's text, wrap the answer in a reply bundle, and send it back to the
-bundle's source EID. Real protocol; works today against a real DTN
-router on your laptop.
+(RFC 7122) from a DTN router or node. The forager holds it on disk, asks
+humd for a bloom, and sends the bloom's text back to the bundle's source
+endpoint as a bundle of its own. The bloom need not grow here: humd hands
+it to whichever nurse grows the model, on this humd or on a trusted peer
+across the ensemble, so a node in space reaches every nurse the
+ensemble has.
 
 ## Propensity
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| stateless per-call | lean | RFC 9171 BP7 over UDPCL | tools, system, perf, drone, breath |
+| holds each ask until it is answered or expires | lean | RFC 9171 BP7 over UDPCL | tools, perf, breath |
 
 ## Wire
 
 ```
-DTN peer ──BP7 bundle (CBOR over UDP:4556)──► bp7-forager ──chi:"prompt"──► humd
-                                                                                │
-DTN peer ◄──BP7 bundle (CBOR over UDP)──── bp7-forager ◄──chi:"wilt"──────────┘
+DTN node ─bundle─► router ─UDP:4556─► bp7-forager ─► spool ─chi:"prompt"─► humd ─► nurse, here or across the ensemble
+                                           │                                │
+DTN node ◄─bundle─ router ◄─BP7_ROUTE─────┘◄──────────── chi:"wilt" ────────┘
 ```
 
-Payload may be:
+**An ask** is a bundle whose payload is either plain UTF-8 text, taken
+as the prompt, or JSON: `{"text": "...", "modelId": "claude-sonnet-4",
+"system": "..."}`.
 
-- **Plain UTF-8 text** — treated as the prompt body
-- **JSON** — `{ "text": "...", "modelId": "claude-sonnet-4", "system": "..." }`
+**The answer** is one bundle to the ask's source endpoint, or several
+fragments of one when it is longer than `BP7_MTU`. Its payload is the
+bloom's text, or what broke when the bloom broke off. Every answer
+carries block 193 (RFC 9171 §4.3.2 leaves 192 to 255 for private use),
+whose data is `{"hum": "reply", "to": "<the ask's bundle id>", "ok":
+true|false}`: a DTN node that knows hum can match an answer to its ask,
+and one that does not can ignore the block. Every block has a CRC-32
+(§4.3.1). The answer lives as long as the ask was given to live, asks
+for no status reports, and carries a hop limit of 32.
 
-The bundle's source EID is reused as the reply destination. Reply
-payload is the bloom's unfurled text concatenated into a single
-UTF-8 body. No SSE re-framing — DTN replies are *messages*, not
-streams.
+## What it holds to
+
+- **Store and forward.** An ask is on disk before anything is done with
+  it, and stays until its answer has gone home. A restart of the forager
+  or of humd loses nothing; the bloom is grown again.
+- **Heard once.** DTN delivers at least once. A bundle's id is its source
+  and creation timestamp, the same in every copy and every fragment, and
+  a copy of an ask held or answered is dropped until the ask expires.
+- **Lifetime.** A bundle past its lifetime is deleted (§5.5), and so is
+  an ask whose lifetime runs out while it waits. A node with no clock
+  sends creation time 0 and a bundle age block (§4.4.2), and its asks
+  expire by their age. The ask's expiry rides on the prompt as `dusk`.
+- **Fragments.** An ask that arrives in pieces, in any order, with
+  overlaps and repeats, is grown once from the whole (§5.9). An answer
+  too long for one datagram is fragmented at the bundle layer, block 193
+  in every fragment (§5.8), so no datagram needs IP fragmentation
+  (RFC 7122 §3.2).
+- **What is not an ask.** A bundle that fails its CRC or RFC 9171's
+  checks, is for another endpoint, is an administrative record, is
+  hum's own answer, or names no source (`dtn:none`) is never grown, so
+  no two hums, and no status report, can keep a loop of blooms going.
+- **No nurse yet.** An ask for a model no nurse grows waits, retried
+  with backoff, until one comes or the ask expires. So does one whose
+  humd is away.
+- **Bounded.** At most `BP7_BLOOMS` blooms at once, and at most
+  `BP7_HOLD` asks held; past that a bundle is dropped, as a node with
+  depleted storage does. An ask is at most 4 MiB, however many pieces
+  it arrives in.
 
 ## Configure
 
 | env | default | what |
 |---|---|---|
-| `BP7_LISTEN` | `0.0.0.0:4556` | UDP convergence-layer address |
-| `BP7_NODE_EID` | `dtn://hum.local/inference` | this node's endpoint id (URI). Bundles addressed elsewhere are dropped |
-| `BP7_MODEL` | `claude-sonnet-4` | model humd spawns when a payload doesn't specify one |
-| `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
+| `BP7_LISTEN` | `0.0.0.0:4556` | the UDP convergence-layer address (IANA's 4556) |
+| `BP7_NODE_EID` | `dtn://hum.local/inference` | this endpoint; a bundle for any other is not ours |
+| `BP7_LABEL` | `main` | the bee's label; give each forager on one humd its own |
+| `BP7_MODEL` | `claude-sonnet-4` | the model when an ask names none |
+| `BP7_ROUTE` | the address the bundle came from | where every answer goes: the router's UDPCL address, `host:port` |
+| `BP7_ALLOW` | anyone | the IPs a bundle is taken from, comma-separated (RFC 7122 §5) |
+| `BP7_BLOOMS` | `4` | blooms grown at once |
+| `BP7_MTU` | `1232` | the largest datagram an answer goes in; 1232 fits any IPv6 path |
+| `BP7_SPOOL` | `$XDG_STATE_HOME/hum/hives/bp7/spool` | where asks are held |
+| `BP7_HOLD` | `10000` | asks held at once |
+| `BP7_SWEEP_MS` | `60000` | how often what has expired is forgotten |
+
+Behind a router, set `BP7_ROUTE`: a router sends from a port of its own
+choosing, not the one it listens on, so the address a bundle came from is
+rarely where an answer can go. Without a router, a node that sends from
+the socket it listens on gets its answer there.
 
 ## Run
 
 ```bash
-cargo run -p bp7 --bin bp7-forager
+hum hive bp7 install                               # build it, enter it, keep it running
+BP7_ROUTE=router.local:4556 hum hive bp7 install   # behind a router
 ```
 
-Hit it from another machine running [NASA's ION](https://sourceforge.net/projects/ion-dtn/),
-[µPCN](https://upcn.eu/), or [hDTN](https://github.com/nasa/HDTN):
+The forager is a forager bee of the hive `bp7`; its hive must be
+installed on the humd it lands on. For the ensemble to grow its asks on
+another humd, that humd must be a peer, its nurse's hive installed here,
+and this humd must trust remote nurses (`trustRemoteNurses` in
+`hum.json`, or `HUM_TRUST_REMOTE_NURSES=1`).
+
+## Test
 
 ```bash
-# example with bp7-rs's own bin from your laptop
-bp7-rs --src dtn://you/ \
-  --dst dtn://hum.local/inference \
-  --listen 0.0.0.0:4557 \
-  --send '{"text":"What is the speed of light in glass?"}'
+cd hives/bp7 && cargo test
 ```
 
-The reply bundle lands on your listening port whenever round-trip
-latency permits. On a LAN: ~milliseconds. Through one TDRS relay
-hop: ~600ms. Real Mars round-trip: 5–24 minutes.
+The tests are the forager as a DTN node meets it, against a real humd:
+`tests/dtn.rs` covers duplicates, bursts, expiry, fragments both ways,
+corruption, status reports, loops, routing and restarts; `tests/outlive.rs`
+covers humd going away; `tests/ensemble.rs` has an ask from space grown by
+a nurse on another humd, over TCP. `tests/common` holds a minimal DTN node,
+which is also the shortest example of speaking to the forager.
 
-## What this actually unlocks
+## What is not yet
 
-- **A hum node addressable from any DTN-speaking peer in the solar system.** A spacecraft on Mars (or its simulation in your lab) can prompt your humd by store-and-forwarding a bundle that includes your EID. The reply rides the same path home.
-- **Hum-the-protocol over physically partitioned links.** thrum was designed assuming local sockets are reliable; DTN was designed assuming *no* path exists at any given moment. The two layered together is a genuine partition-tolerant agent system.
-- **Custody transfer**. A real DTN router holds your bundle, with custody, until the next hop confirms receipt. If a Mars probe drops the link mid-payload, the upstream router resends on the next contact window. The bp7-forager itself doesn't implement custody (we're a leaf node); the surrounding DTN router does.
-
-## What this bee does NOT do
-
-- **Route**. Bundles addressed to other EIDs get dropped, not forwarded. Run a real DTN router (ION / µPCN / hDTN) alongside this bee and point its routing table at our UDP port if you want routing.
-- **Authenticate**. BP7 has security extensions (BPSec); this v1 doesn't use them. Anyone reachable on UDP:4556 can prompt your humd.
-- **Custody transfer**. We acknowledge a bundle by replying — that's the only signal upstream gets. A real DTN deployment layers custody on top.
-- **Stream**. DTN is store-and-forward, not streaming. Your `chi:"unfurl"` tones get collected into one reply bundle. If you want progress-via-bundle, send multiple intermediate bundles — that's a future extension.
-
-## Why this is the right kind of unhinged
-
-Hum was designed for local sockets and millisecond peer-to-peer. DTN
-was designed for one-way delays of minutes to hours, intermittent
-connectivity, and custody-transfer at every hop. Bridging the two
-exposes every assumption hum makes about timing. The drone's `lost`
-threshold fires after 30s; a Mars round trip is 600× that. The wane
-counter ticks for a wall-clock minute and finds nothing. Your humd
-discovers what it actually feels like to be a peer 90M km away.
-
-The thought experiment: aim a humd at an actual Mars rover ground
-station and see what falls off. (Don't — DSN time is contested.)
+- **An ask whose grower leaves the ensemble waits out its lifetime.**
+  When humd hands a bloom to a peer's nurse and that peer goes away
+  mid-bloom, humd removes the peer but never breaks off the blooms it
+  was growing, so the forager hears neither a wilt nor an error and
+  cannot grow the ask again until the bundle expires, which may be days
+  for an ask from deep space. humd also keeps which peer grew each bloom
+  after it wilts. The fix belongs in humd: on losing a peer, send each
+  bloom it was growing an `error` a forager can retry on, and forget a
+  bloom's grower when it wilts. `tests/grower_gone.rs` is the test for
+  it, ignored until then.
+- **No BPSec.** Anyone who can reach the UDP port can prompt this humd;
+  keep it behind a router, and set `BP7_ALLOW`. `bp7` 0.12 signs and
+  verifies BIB-HMAC-SHA2 (RFC 9172, 9173), so authenticated asks are the
+  next step.
+- **No custody, no status reports.** The forager is a leaf: it sends no
+  reception or delivery reports, even when an ask asks for them. The
+  router around it does custody.
+- **UDP only.** TCPCL and LTP are the router's to speak.
+- **One answer per ask.** DTN answers are messages, not streams; the
+  unfurls are gathered into one answer.
+- **humd keeps every sid a connection opens until the connection
+  closes.** The forager holds one connection for its life, so humd's
+  memory grows a little with every bloom it grows.
 
 ## See also
 
-- [RFC 9171 — Bundle Protocol v7](https://datatracker.ietf.org/doc/rfc9171/)
-- [NASA ION](https://sourceforge.net/projects/ion-dtn/) — the reference DTN router
-- [bp7-rs](https://github.com/dtn7/bp7-rs) — the Rust crate this bee uses
-- [Vint Cerf, "An Internet for Mars"](https://www.youtube.com/watch?v=hKt-jK19vHU) — the architecture talk that started this
-- [THRUM.md](../../THRUM.md) — the underlying thrum protocol
+- [RFC 9171](https://datatracker.ietf.org/doc/rfc9171/): Bundle Protocol v7
+- [RFC 7122](https://datatracker.ietf.org/doc/rfc7122/): datagram convergence layers
+- [RFC 9172](https://datatracker.ietf.org/doc/rfc9172/): BPSec
+- [bp7-rs](https://github.com/dtn7/bp7-rs): the Rust crate this bee uses
+- [NASA ION](https://sourceforge.net/projects/ion-dtn/) and [HDTN](https://github.com/nasa/HDTN): DTN routers
+- [THRUM.md](../../THRUM.md): the protocol on humd's side
