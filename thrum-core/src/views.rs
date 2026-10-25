@@ -1,9 +1,10 @@
-//! Canonical per-chi tone bodies.
+//! Per-chi tone bodies, the Rust reading of `hum.thrum`.
 //!
 //! One struct per chi, field names renamed to EXACTLY the wire keys the
-//! runtime produces. This module is the single source of truth for body
-//! shapes; codegen emits the TS/Python/Go/C mirrors from it, and the
-//! golden-message test locks the bytes.
+//! thrum declares. `hum.thrum` is the source of every body shape:
+//! `cargo run -p codegen -- --check` holds these structs to it, field by
+//! field, codegen emits the TS/Python/Go/C mirrors from the same file,
+//! and the golden-message test locks the bytes.
 //!
 //! Optional fields are also `skip_serializing_if` so absent fields are
 //! absent from the wire, mirroring how builders construct tones.
@@ -433,6 +434,11 @@ pub struct BackfillBody {
     pub author: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackfillEventBody {
+    pub event: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

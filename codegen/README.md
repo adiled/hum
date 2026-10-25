@@ -1,37 +1,82 @@
 ---
 title: "codegen"
-description: "Source-tree generator that emits consumer SDKs (TypeScript, Python, Go, C) from the Rust chi registry. No drift possible: every cargo build refreshes the clients."
+description: "Reads hum.thrum, emits the TypeScript, Python, Go and C clients from it, and holds thrum-core's Rust to it. No drift possible: every cargo build refreshes the clients, and CI fails on a Rust that disagrees."
 ---
 
 # codegen
 
-> _the Rust chi registry is canonical; this crate emits its TypeScript, Python, Go and C reflections so consumers in those languages cannot drift._
+> _`hum.thrum` is the thrum; this crate emits its TypeScript, Python, Go and C reflections and holds the Rust to it, so no copy can drift._
 
-`thrum-core/src/chi.rs` is the only place a chi value is defined. The wire spec
-([WIRE.md](../WIRE.md)) is the contract everybody else conforms to, and the chi
-registry lives in Rust because the daemon and the in-process ensemble routing
-already live in Rust. Anyone writing a bee in another language needs the same
-list of chi values, the same `THRUM_VERSION`, the same views, and the same
-client. This crate is what gives them that, by parsing the Rust as plain text
-and emitting every file of every client under `thrum-clients/{ts,python,go,c}/`.
-The client's behaviour is hum-thrum's, behind `hum bee link`, so what is
-emitted per language is the registry, the views, the link's constants, and a
-template that is only the transport to the link.
+[`hum.thrum`](../hum.thrum), at the repo root, is the only place the thrum
+is defined: the envelope, every chi with its body and who sounds and hears
+it, the shapes and kinds bodies carry, the patterns tones make, and the
+advisories. [THRUM.md](../THRUM.md) says what a party does with a tone; the
+file says what a tone is. Anyone writing a bee in another language needs
+the same range, the same `THRUM_VERSION`, the same views, and the same
+client. This crate is what gives them that, by reading the file and
+emitting every source file of every client under
+`thrum-clients/{ts,python,go,c}/`. The client's behaviour is hum-thrum's,
+behind `hum bee link`, so what is emitted per language is the range, the
+views, the link's constants, and a template that is only the transport to
+the link.
+
+thrum-core's own Rust (`chi.rs`, `views.rs`, `envelope.rs`, `lib.rs`) is a
+hand-written reading of the same file. codegen parses it as text and
+compares: every chi, kind value and advisory code, every body field's key,
+type and optionality, and the version. `cargo run -p codegen -- --check`
+fails on any difference and names it in the file's own words;
+`thrum-core/build.rs` warns.
+
+## The `.thrum` language
+
+One declaration per line, KEYWORD first. A DOC line documents the line
+above it. A blank line is nothing; a line starting with `#` is a comment.
+The grammar is the header of `hum.thrum` itself:
+
+```
+THRUM <version>                the range's version
+ENVELOPE                       what every tone carries
+CHI <name>                     one vibration in the range
+  EMITS <party>..              who sounds it: a role, bee (any role), or humd
+  HEARS <party>..              who it is for
+  CARRIES ensemble             it may cross between humds
+SHAPE <name>                   a shape nested in a body, not a chi of its own
+KIND <name>                    a closed set of strings
+  VALUE <name>                 one of them
+FIELD <key> <type>             a wire key and its type; a trailing ? means optional
+PATTERN <name>                 tones that make one figure
+  KEY <field>                  what its tones share; the connection when absent
+  OPEN / STEP / CLOSE <chi>..  how it opens, grows and closes
+ADVISORY <code>                what the thrum tells a bee to fix, without refusing it
+  BY <client|humd>..           who raises it
+```
+
+Types: `string`, `bool`, `int`, `uint`, `float`, `any`; `[t]` a list of
+`t`; `{t}` a map of `t` keyed by string; a KIND or a SHAPE by its name;
+`chi`, a chi of this range. Names are kebab-case, and each language's
+spelling (`KadFindNodeResp`, `kadFindNodeResp`, `KAD_FIND_NODE_RESP`) is
+derived from them. A wire key is written exactly as it goes on the wire.
+
+`src/thrum.rs` reads the file into a `Thrum` and checks every rule the
+grammar states: a type that names no KIND or SHAPE, a party that is no
+role, a CHI without a DOC, a PATTERN that opens on no chi, a body that
+declares a key twice. Each fault names its line or its item.
 
 ## Why a separate crate
 
 Two reasons.
 
-First, **no cycle on `thrum-core`**. If codegen depended on `thrum-core`, then
-`thrum-core/build.rs` could not depend on codegen (cargo refuses circular
-`[build-dependencies]`). So codegen parses `chi.rs` and `lib.rs` as text using
-`regex`. It never `use`s `thrum-core`. That keeps the build graph clean.
+First, **no cycle on `thrum-core`**. If codegen depended on `thrum-core`,
+then `thrum-core/build.rs` could not depend on codegen (cargo refuses
+circular `[build-dependencies]`). So codegen reads `hum.thrum` itself and
+parses thrum-core's Rust as text, `regex` for the enums and `syn` for the
+structs. It never `use`s `thrum-core`. That keeps the build graph clean.
 
 Second, **the binary is for humans, the library is for build.rs**.
-`cargo run -p codegen` is the manual lever for regenerating clients (and for
-`--check` in CI). `thrum-core/build.rs` calls the same library functions on
-every cargo build of `thrum-core`, so the clients refresh automatically as the
-Rust enum changes. Same code path, two entry points.
+`cargo run -p codegen` is the manual lever for regenerating clients (and
+for `--check` in CI). `thrum-core/build.rs` calls the same library
+functions on every cargo build of `thrum-core`, so the clients refresh
+automatically as the file changes. Same code path, two entry points.
 
 ## Layout
 
@@ -40,8 +85,11 @@ codegen/
 ├─ Cargo.toml
 ├─ templates/     each language's client: transport to `hum bee link`
 └─ src/
-   ├─ lib.rs      parse + the chi emitters, one per language
-   ├─ protocol.rs the views, one emitter per language
+   ├─ thrum.rs    the reader: hum.thrum -> Thrum, and its projections
+   ├─ rust.rs     the gate: thrum-core's Rust, held to the Thrum
+   ├─ document.rs the spec: hum.thrum read out as Markdown into THRUM.md
+   ├─ lib.rs      the chi emitters, one per language
+   ├─ protocol.rs the views, one emitter per language; the Rust structs, parsed
    ├─ link.rs     the link's constants, rendered into the templates
    ├─ main.rs     CLI: per-target dispatch, --check drift gate
    └─ paths.rs    every literal repo path lives here (const + helper fn)
@@ -53,8 +101,8 @@ Single source of truth for the repo layout codegen knows about. Two kinds of
 items, paired:
 
 ```rust
-pub const CHI_RS_REL: &str = "thrum-core/src/chi.rs";
-pub fn chi_rs() -> PathBuf { repo_root().join(CHI_RS_REL) }
+pub const HUM_THRUM_REL: &str = "hum.thrum";
+pub fn hum_thrum() -> PathBuf { repo_root().join(HUM_THRUM_REL) }
 ```
 
 The `*_REL` constants are the repo-relative strings, used inside emitted
@@ -63,18 +111,49 @@ The `*_REL` constants are the repo-relative strings, used inside emitted
 `main.rs` both go through these. Nothing in the crate hand-writes
 `"thrum-core/..."` or `"thrum-clients/..."` literals.
 
-### `src/lib.rs`
-
-Public surface:
+### `src/thrum.rs`
 
 | function | purpose |
 |----------|---------|
-| `parse(chi_rs, lib_rs)` | Read chi.rs + lib.rs, return a `ChiSpec` (version, chi variants, pulse variants, doc comments). |
+| `parse(path)` | Read `hum.thrum`, return a `Thrum`: version, envelope, chis, shapes, kinds, patterns, advisories. |
+| `Thrum::chi_spec()` | The registries: the chis, and the `pulse-kind`, `petal-kind` and `role` kinds, each value with its DOC. |
+| `Thrum::protocol_spec()` | The views: the envelope, one `<Chi>Body` per chi, one type per shape. A KIND-typed field is a string on the wire. |
+| `Thrum::advisories()` | The advisory codes, with who raises each, for the link's constants. |
+
+### `src/rust.rs`
+
+`check(thrum, chi_rs, views_rs, envelope_rs, lib_rs)` compares the enums in
+`chi.rs` (`Chi`, `PulseKind`, `PetalKind`, `Role`, `AdvisoryCode`), the
+structs in `views.rs` and `envelope.rs`, and `THRUM_VERSION` in `lib.rs`
+with the file, and returns every difference at once:
+
+```
+the Rust disagrees with hum.thrum:
+  chi `backfill-event` is not in enum Chi (thrum-core/src/chi.rs)
+  `PromptBody.season` is `uint?` in hum.thrum, `int?` in thrum-core/src/views.rs
+```
+
+### `src/document.rs`
+
+[THRUM.md](../THRUM.md) is prose, hand-written, with regions between
+`<!-- thrum: NAME -->` and `<!-- /thrum -->` that codegen fills from the
+file: `envelope`, `range`, `roles`, `chis`, `shapes`, `kinds`,
+`patterns` and `advisories`. `fill` rewrites what lies between the
+markers and leaves every other line as it was, so the prose stays the
+document's and the tables stay the file's. Every region must appear
+exactly once. The roles table is the range read by role: a role sounds
+every chi whose EMITS names it, and hears every chi whose HEARS does.
+
+### `src/lib.rs`
+
+| function | purpose |
+|----------|---------|
 | `emit_ts(spec, out)` | Write `chi.ts` to `out`. |
 | `emit_py(spec, out)` | Write `chi.py` to `out`. |
 | `emit_go(spec, out)` | Write `chi.go` to `out`. |
 | `emit_c(spec, out)` | Write `chi.h` to `out`. |
-| `link::link_spec(..)` | Read the link's version, exit codes and `hum` lookup from `hum-thrum/src/link.rs`, the client-owned hello fields from `hum-thrum/src/core.rs`, and the advisory codes from `chi.rs` with WIRE.md's advisories table. |
+| `protocol::emit_protocol_{ts,py,go,c}(proto, out)` | Write the views. |
+| `link::link_spec(link_rs, core_rs, thrum)` | Read the link's version, exit codes and `hum` lookup from `hum-thrum/src/link.rs`, the client-owned hello fields from `hum-thrum/src/core.rs`, and the advisories from the `Thrum`. |
 | `link::emit_client(spec, client, out)` | Write one client file: a template from `codegen/templates/<lang>/` with the link's constants at its `@constants` line. `paths::CLIENTS` lists them. |
 
 All `emit_*` functions take a destination `Path`. Path resolution is the
@@ -82,60 +161,72 @@ caller's job: the canonical sites come from `paths::*`.
 
 ### `src/main.rs`
 
-CLI dispatcher. No-arg invocation regenerates all three targets:
+CLI dispatcher. No-arg invocation regenerates all four targets:
 
 ```bash
-cargo run -p codegen              # ts + python + go
+cargo run -p codegen              # ts + python + go + c, then THRUM.md's regions
 cargo run -p codegen -- ts        # one target
-cargo run -p codegen -- --check   # exit non-zero if any target drifted
+cargo run -p codegen -- --check   # exit non-zero if the Rust, any target or THRUM.md drifted
 ```
 
-The `--check` path emits to a tempfile and byte-compares against the
+Every run holds the Rust to the file first and stops on a difference: a
+client emitted while the Rust disagrees would be a client of two thrums.
+The `--check` path then emits to a tempfile and byte-compares against the
 checked-in artifact, so CI can gate on it without needing a separate
 manifest of expected outputs.
 
 ## How a generated client gets refreshed
 
 ```
-chi.rs (edit)
+hum.thrum (edit)
    │
    ▼
 cargo build -p thrum-core
    │
-   ├─ build.rs sees chi.rs changed
-   ├─ calls codegen::parse(&paths::chi_rs(), &paths::lib_rs())
-   └─ calls codegen::emit_{ts,py,go,c}, the protocol emitters and
-      link::emit_client for every paths::CLIENTS entry,
-      writing into thrum-clients/{ts,python,go,c}/
+   ├─ build.rs sees hum.thrum changed
+   ├─ codegen::thrum::parse reads it
+   ├─ codegen::rust::check compares chi.rs, views.rs, envelope.rs, lib.rs
+   │     (a difference is a cargo warning here; CI fails on it)
+   ├─ the emitters write thrum-clients/{ts,python,go,c}/
+   └─ codegen::document::emit fills THRUM.md's marked regions
 ```
 
 Every source file of every client is generated. The registry and the
-views are read from thrum-core. The client itself is a template per
+views are projections of the file. The client itself is a template per
 language, `codegen/templates/<lang>/`, holding only the transport to
 `hum bee link`: spawn it, write lines, read lines, dispatch. It knows no
-protocol, since the link is hum's Rust client, so a change to the wire
-touches Rust and the regenerated files, never a template.
+protocol, since the link is hum's Rust client, so a change to the thrum
+touches the file, the Rust and the regenerated files, never a template.
 
 The TypeScript, Python, Go and C files are checked in (not gitignored). That
 keeps consumers of those clients buildable without a Rust toolchain. CI
 drift-checks them with `cargo run -p codegen -- --check` so a missed regen
 fails the build instead of silently rotting.
 
+## Changing the thrum
+
+A new chi, field, kind value or advisory starts in `hum.thrum`. Then the
+Rust follows: the variant in `chi.rs`, the struct or field in `views.rs`,
+the arm in `spec.rs`. Until both agree, `cargo build -p thrum-core` warns
+and `cargo run -p codegen -- --check` fails, naming what differs. The
+clients and THRUM.md's tables follow on the next build; what a party does
+with the new tone is prose, written into THRUM.md by hand.
+
 ## Output anatomy
 
 Each generated chi file carries a header like:
 
 ```
-// @generated by `cargo run -p codegen` from thrum-core/src/chi.rs — DO NOT EDIT.
+// @generated by `cargo run -p codegen` from hum.thrum — DO NOT EDIT.
 //
-// Rust is the canonical home of the wire registry. Hand-edit chi.rs;
-// the file is regenerated on every cargo build of thrum-core (build.rs).
-// Manual regen: `cargo run -p codegen`.
+// hum.thrum is the thrum. Edit it, and this file is regenerated on
+// every cargo build of thrum-core (build.rs). Manual regen:
+// `cargo run -p codegen`.
 ```
 
-The source path in that header comes from `paths::CHI_RS_REL`, so a directory
-rename updates every header on the next build. A client file's header names its
-template and the Rust its constants came from, the same way.
+The source path in that header comes from `paths::HUM_THRUM_REL`, so a
+rename updates every header on the next build. A client file's header
+names its template and the Rust its constants came from, the same way.
 
 ## Adding a target
 
@@ -156,20 +247,20 @@ gates drift on them.
 
 ## What this crate is not
 
-- Not a parser for arbitrary Rust. It pattern-matches enum definitions and a
-  small set of doc comment shapes. If you rewrite `chi.rs` with macros or move
-  the enum to a different file, codegen breaks until updated. Keep `chi.rs`
-  shaped the way the existing parser expects.
+- Not a parser for arbitrary Rust. The gate pattern-matches enum
+  definitions and `serde` struct shapes. If you rewrite `chi.rs` with
+  macros or move the enums to a different file, the gate breaks until
+  updated. Keep thrum-core's Rust shaped the way the parser expects.
 - Not a `thrum-core` consumer. By design, this crate has zero dependency on
-  the Rust runtime types it reflects, so it can sit inside
+  the Rust runtime types it checks, so it can sit inside
   `thrum-core/build.rs`.
 
 ## See also
 
-- [`thrum-core`](../thrum-core): the canonical home of the chi enum and
-  `THRUM_VERSION`.
+- [`hum.thrum`](../hum.thrum): the thrum.
+- [`thrum-core`](../thrum-core): its Rust reading, and `THRUM_VERSION`.
 - [`thrum-clients/ts`](../thrum-clients/ts),
   [`thrum-clients/python`](../thrum-clients/python),
   [`thrum-clients/go`](../thrum-clients/go),
   [`thrum-clients/c`](../thrum-clients/c): the generated reflections.
-- [WIRE.md](../WIRE.md): the language-neutral wire spec the clients implement.
+- [THRUM.md](../THRUM.md): what a party does with a tone.

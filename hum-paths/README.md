@@ -100,7 +100,7 @@ removes it on clean shutdown).
 - **Network addresses.** A socket address is not a filesystem path.
   `humd.tcpListen = "0.0.0.0:14601"` lives in `config`, not here.
 - **Repo-source paths.** [`codegen::paths`](../codegen) owns
-  `thrum-core/src/chi.rs` and `thrum-clients/{ts,python,go}/...` because
+  `hum.thrum`, `thrum-core/src/chi.rs` and `thrum-clients/{ts,python,go,c}/...` because
   those are build-time, repo-local concerns, anchored to
   `CARGO_MANIFEST_DIR`. hum-paths is runtime/user-side, anchored to
   XDG.

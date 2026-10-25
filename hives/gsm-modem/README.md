@@ -134,5 +134,5 @@ similar to this bee but the transport is HTTP, not serial.
 - [`twilio-sms`](../twilio-sms) — same idea but via Twilio webhook
   instead of a physical modem.
 - [`openai-server`](../openai-server), [`anthropic-server`](../anthropic-server) — text-based HTTP surfaces.
-- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
+- [THRUM.md](../../THRUM.md) — the Thrum Protocol.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

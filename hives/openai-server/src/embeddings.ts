@@ -1,7 +1,7 @@
 // POST /v1/embeddings: the scents of texts.
 //
 // An embedding is a text's scent, which an attendant distils by the model
-// it names (WIRE.md, `scent`). The caller's bee reaches for it with no
+// it names (THRUM.md, `scent`). The caller's bee reaches for it with no
 // bloom between, and the scents come back in the order of the input. A
 // model must be one the caller's breath lists among its scents. Scents
 // come back as numbers, or as base64 of their float32s when asked;

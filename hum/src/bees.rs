@@ -5,7 +5,7 @@
 //! same bee again, and whatever acts as that bee signs its hello with the
 //! key. Exiting signs it out; humd refuses its next hello.
 //!
-//! What humd advised a bee (WIRE.md, Advisories) is listed with it, and
+//! What humd advised a bee (THRUM.md, Advisories) is listed with it, and
 //! `hum doctor` says what each advisory means.
 
 use anyhow::{Result, bail};

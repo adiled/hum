@@ -1,10 +1,10 @@
 //! Source-tree paths owned by codegen.
 //!
-//! Every literal path under `thrum-core/src/...` and `thrum-clients/...`
-//! lives in this file. Callers (build.rs, the CLI, the emitters in
-//! lib.rs) MUST go through these constants and functions, never
-//! hand-write the layout. Otherwise the registry will drift the moment
-//! somebody renames a directory.
+//! Every literal path to `hum.thrum`, under `thrum-core/src/...` and
+//! `thrum-clients/...` lives in this file. Callers (build.rs, the CLI,
+//! the emitters in lib.rs) MUST go through these constants and
+//! functions, never hand-write the layout. Otherwise the registry will
+//! drift the moment somebody renames a directory.
 //!
 //! Anchored to this crate's `CARGO_MANIFEST_DIR`. `codegen/` and the
 //! source/output trees are workspace siblings, so `<codegen>/..` is
@@ -18,9 +18,10 @@
 use std::path::PathBuf;
 
 
+pub const HUM_THRUM_REL: &str = "hum.thrum";
+pub const THRUM_MD_REL: &str = "THRUM.md";
 pub const CHI_RS_REL: &str = "thrum-core/src/chi.rs";
 pub const LIB_RS_REL: &str = "thrum-core/src/lib.rs";
-pub const WIRE_MD_REL: &str = "WIRE.md";
 pub const VIEWS_RS_REL: &str = "thrum-core/src/views.rs";
 pub const ENVELOPE_RS_REL: &str = "thrum-core/src/envelope.rs";
 pub const LINK_RS_REL: &str = "hum-thrum/src/link.rs";
@@ -41,14 +42,17 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
+pub fn hum_thrum() -> PathBuf {
+    repo_root().join(HUM_THRUM_REL)
+}
+pub fn thrum_md() -> PathBuf {
+    repo_root().join(THRUM_MD_REL)
+}
 pub fn chi_rs() -> PathBuf {
     repo_root().join(CHI_RS_REL)
 }
 pub fn lib_rs() -> PathBuf {
     repo_root().join(LIB_RS_REL)
-}
-pub fn wire_md() -> PathBuf {
-    repo_root().join(WIRE_MD_REL)
 }
 pub fn views_rs() -> PathBuf {
     repo_root().join(VIEWS_RS_REL)

@@ -72,7 +72,7 @@ A hive keeps its state in `$XDG_STATE_HOME/hum/hives/<hive>/` (`${HUM_HIVE_STATE
 
 ### 1. Speak thrum
 
-Use hum's client; a hive writes only what its bee does. In Rust that is `hum_thrum::Bee::link`, or `hum_nest::serve_nurse`, which runs a nurse on it, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go and C it is the client in [`thrum-clients/<lang>`](../thrum-clients), which runs `hum bee link` for you. Either way the client enters the bee, signs its hello, reads humd's verdict, reconnects when humd restarts, and checks every tone against the thrum, the same in every language ([WIRE.md, The client](../WIRE.md#the-client)).
+Use hum's client; a hive writes only what its bee does. In Rust that is `hum_thrum::Bee::link`, or `hum_nest::serve_nurse`, which runs a nurse on it, so you implement one trait method and ship a `main.rs`. In TypeScript, Python, Go and C it is the client in [`thrum-clients/<lang>`](../thrum-clients), which runs `hum bee link` for you. Either way the client enters the bee, signs its hello, reads humd's verdict, reconnects when humd restarts, and checks every tone against the thrum, the same in every language ([THRUM.md, The client](../THRUM.md#the-client)).
 
 ### 2. Handshake, the hello contract
 
@@ -116,11 +116,11 @@ A forager maps incoming tones into its outside contract and back, as in `vercel-
 
 ### 4. Tools
 
-An attendant lists the tools it serves in its hello's `tools`; humd hands them to every bloom on its humd and routes each `chi:"tendril-reach"` for one of them to it. A builder serves the thrum's own `bash`, for the blooms that build on its host ([WIRE.md, Tendrils](../WIRE.md#tendrils)). Answer a reach with `chi:"tendril-result"` carrying the same `callId`, or `chi:"error"` under it to refuse, and humd resumes the parked model.
+An attendant lists the tools it serves in its hello's `tools`; humd hands them to every bloom on its humd and routes each `chi:"tendril-reach"` for one of them to it. A builder serves the thrum's own `bash`, for the blooms that build on its host ([THRUM.md, Tendrils](../THRUM.md#tendrils)). Answer a reach with `chi:"tendril-result"` carrying the same `callId`, or `chi:"error"` under it to refuse, and humd resumes the parked model.
 
 ### chi cheatsheet
 
-`thrum-clients/ts/chi.ts` owns the full registry (the Rust enum at `thrum-core/src/chi.rs` is the source of truth; codegen emits the rest). Most bees pick a subset.
+`thrum-clients/ts/chi.ts` owns the full registry (`hum.thrum` at the repo root is the source; codegen emits this and the rest from it). Most bees pick a subset.
 
 | subset | chi values |
 |---|---|
@@ -161,10 +161,10 @@ For mesh discovery, the ensemble gossips your manifest on `hum/hives/announce`, 
 
 ## Versioning
 
-`THRUM_VERSION` is defined in `thrum-core/src/lib.rs` (the Rust source of truth) and propagates verbatim through `thrum-clients/{ts,python,go}/chi.*` via codegen on every cargo build. It is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
+`THRUM_VERSION` is the `THRUM` line of `hum.thrum`; `thrum-core/src/lib.rs` is held to it, and it propagates verbatim through `thrum-clients/{ts,python,go,c}/chi.*` via codegen on every cargo build. It is independent of any package version. A patch covers additive optional fields. A minor covers a new chi value or a new field that has a backward-compatible path. A major covers a removed or renamed chi, or changed semantics. Each bee pins the version it targets, and humd traces every mismatch.
 
 ## See also
 
 - [`hum-nest/`](../hum-nest) defines `Nurse`, `Egg`, `Cell`, the MCP its cells reach tools through, and the encoders. Process lifecycle (supervise, tree-kill, reap) lives in `hum_nest::lifecycle`.
-- [WIRE.md](../WIRE.md) explains what the wire sees of nests and cells.
-- [VOCABULARY](../VOCABULARY.md) holds the canonical entries for nest, hive, hive installation, bee, its roles, nestler, and nestled.
+- [THRUM.md](../THRUM.md) explains what the wire sees of nests and cells.
+- [GLOSSARY](../GLOSSARY.md) holds the canonical entries for nest, hive, hive installation, bee, its roles, nestler, and nestled.

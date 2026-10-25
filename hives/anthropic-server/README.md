@@ -133,5 +133,5 @@ not yet wired.
 
 - [`openai-server`](../openai-server) — symmetric OpenAI surface.
 - [`thrum`](../../thrum) — the npm package this bee imports.
-- [WIRE.md](../../WIRE.md) — the language-neutral protocol spec.
+- [THRUM.md](../../THRUM.md) — the Thrum Protocol.
 - [adiled.github.io/hum](https://adiled.github.io/hum/) — docs site.

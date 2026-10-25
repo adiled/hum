@@ -84,7 +84,7 @@ a new bee. Entering a label for another role files it under a new key.
 Be that bee's client on stdio: enter it for its role, sign its hello, keep it
 nestled through humd restarts, and pass its tones over two pipes, one
 JSON object per line. A bee's thrum client in TS, Python, Go or C runs
-this for it; WIRE.md says what the lines are.
+this for it; THRUM.md says what the lines are.
 .br
 .B hum bee \fIid\fR exit
 Sign the bee out; humd refuses its next hello.
@@ -297,14 +297,14 @@ hum hive openai-server install
 hum hive paid-oracle install
 hum bee --list
 .fi
-.SH VOCABULARY
+.SH GLOSSARY
 .PP
 The stack reasons in a "biodiverse" register; names carry meaning beyond
 function:
 .TS
 l l.
-thrum	bidirectional NDJSON socket between humd and any nestler
-tone	one message frame on the thrum (envelope chi/rid/sid plus body)
+thrum	the hum-native vibration protocol, carrying tones across a range of chi (hum.thrum, THRUM.md)
+tone	one vibration on the thrum: the envelope, plus the body its chi declares
 chi	the tone's discriminator (prompt, unfurl, wilt, gossip-publish, ...)
 sigil	the content-addressable hash a sid pairs under, stable across reconnects
 wane	Lamport clock per sigil, incremented on every state mutation

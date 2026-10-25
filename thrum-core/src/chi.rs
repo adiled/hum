@@ -4,21 +4,22 @@
 //! minor version. `serde(rename_all = "kebab-case")` keeps the wire
 //! format speaking kebabs (`"tendril-reach"`, `"drone-retrofit"`).
 //!
-//! The wire contract — which chi exists, what it carries, and which way
-//! it flows — lives in [`WIRE.md`](../../WIRE.md). This enum is its
-//! Rust mirror; the generated TypeScript, Python, Go and C clients are
-//! emitted from that same contract, so the five copies cannot drift.
+//! The thrum, which chi exists, what it carries, who sounds it and who
+//! hears it, is `hum.thrum` at the repo root. These enums are its Rust
+//! reading, and `cargo run -p codegen -- --check` holds them to it,
+//! value for value; the TypeScript, Python, Go and C clients are
+//! emitted from the same file, so no copy can drift.
 //!
 //! A petal is one unit of content, and its kind says which:
-//! [`PetalKind`]. WIRE.md's petals table says what each one carries.
+//! [`PetalKind`]. `KIND petal-kind` says what each one carries.
 //!
 //! A bee does one [`Role`], set when its hive enters it, and its hello
-//! says which. WIRE.md's roles table says what each one sends and hears.
+//! says which. Each chi's EMITS and HEARS say what a role sends and hears.
 //!
 //! An advisory is what the wire tells a bee it should fix without
 //! refusing it: humd sends one as a `log` tone whose `fields.advisory`
 //! is an [`AdvisoryCode`], and the client raises its own under the same
-//! codes. WIRE.md's advisories table says what each one means.
+//! codes. Each ADVISORY says what it means and who raises it.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoStaticStr};
@@ -57,6 +58,7 @@ pub enum Chi {
     KadFindNode,
     KadFindNodeResp,
     Backfill,
+    BackfillEvent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
