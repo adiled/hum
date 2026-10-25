@@ -178,7 +178,10 @@ pub fn load() -> HumConfig {
 
 pub const SCHEMA: &str = include_str!("../../hum.schema.json");
 
-pub const RETIRED: &[(&str, &str)] = &[("humd", "driftRetentionDays")];
+pub const RETIRED: &[(&str, &str)] = &[
+    ("humd", "driftRetentionDays"),
+    ("humd", "permissionDuskMs"),
+];
 pub const RETIRED_SECTIONS: &[&str] = &["nest"];
 
 pub fn drop_retired(instance: &mut serde_json::Value) -> Vec<String> {
@@ -305,12 +308,12 @@ mod tests {
     #[test]
     fn a_config_from_a_humd_that_hosted_cells_still_loads() {
         let old = r#"{
-            "humd": { "metricsAddr": "127.0.0.1:9909" },
+            "humd": { "permissionDuskMs": 60000 },
             "nest": { "maxActiveCells": 4, "cellIdlePruneThresholdMs": 300000, "default": "claude-cli" }
         }"#;
         assert!(validate(old).is_ok(), "a retired nest section must not fail validation: {:?}", validate(old));
         let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
-        assert_eq!(drop_retired(&mut v), ["nest"]);
+        assert_eq!(drop_retired(&mut v), ["nest", "humd.permissionDuskMs"]);
         assert!(v.get("nest").is_none());
     }
 
@@ -339,6 +342,17 @@ mod tests {
         }"#;
         assert!(validate(stale).is_ok(), "a retired key must not brick the daemon: {:?}", validate(stale));
         assert_eq!(retired_in_raw(stale), vec!["humd.driftRetentionDays".to_string()]);
+    }
+
+    #[test]
+    fn the_hum_json_install_wrote_still_loads() {
+        let installed = r#"{
+            "$schema": "https://adiled.github.io/hum/hum.schema.json",
+            "humd": { "permissionDuskMs": 60000 },
+            "fs": { "roots": [ { "path": "~/code", "mode": "rw" } ], "denied": [] }
+        }"#;
+        assert!(validate(installed).is_ok(), "{:?}", validate(installed));
+        assert_eq!(retired_in_raw(installed), vec!["humd.permissionDuskMs".to_string()]);
     }
 
     #[test]
