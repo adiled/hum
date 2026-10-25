@@ -1,0 +1,48 @@
+[package]
+name = "web2"
+version = "0.1.0"
+edition = "2024"
+description = "hum hive: the web2 world as one tendril, wrepl"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "web2"
+path = "src/main.rs"
+
+[dependencies]
+thrum-core = { path = "../../thrum-core" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form", "rustls"] }
+rmcp = { version = "3.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"] }
+shlex = "2"
+jaq-core = "3"
+jaq-std = "3"
+jaq-json = "2"
+strsim = "0.11"
+sha2 = "0.11"
+base64 = "0.23"
+rand = "0.9"
+open = "5"
+rpassword = "7"
+toml = "0.9"
+async-trait = "0.1"
+parking_lot = "0.12"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
+axum = "0.8"
+rmcp = { version = "3.7", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+tokio-util = "0.7"
+tower-service = "0.3"
+
+[workspace]

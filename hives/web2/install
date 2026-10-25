@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Install this hive on a humd: build its bee and keep it running. The bee
+# enters itself under the hive when it starts.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+hive="${HUM_HIVE:-$(basename "$here")}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/hum/hives/$hive"
+orchd="$(command -v orchd || echo "$HOME/.local/bin/orchd")"
+mkdir -p "$state"
+
+"$here/build"
+
+args=(--arg "HUM_SRC=$here")
+while read -r name; do
+  if [ -n "${!name:-}" ]; then args+=(--arg "$name=${!name}"); fi
+done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_HIVE)
+
+run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
+run fell >/dev/null 2>&1 || true
+run grow "$hive"
+echo "web2 for people (wrepl, login, status, import): $here/target/release/web2"
