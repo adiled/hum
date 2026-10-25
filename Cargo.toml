@@ -3,7 +3,6 @@ resolver = "2"
 exclude = [
     "hives/claude-cli",
     "hives/claude-repl",
-    "hives/humfs",
     "hives/grpc",
     "hives/paid-oracle",
     "hives/gsm-modem",

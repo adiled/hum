@@ -13,44 +13,42 @@ class Chi:
     protocol minor; renaming/removing bumps major."""
     # announce self: hive, roles, signed identity
     HELLO: str = "hello"
-    # start a turn — content, system, tools
+    # open a bloom: its petals, and how the cell should grow it
     PROMPT: str = "prompt"
-    # interrupt mid-turn
+    # stop the open bloom
     CANCEL: str = "cancel"
-    # session deleted, drop daemon state
+    # drop humd's state for a sigil
     CLEANUP: str = "cleanup"
     # manual compaction request
     CURATE: str = "curate"
     # resolve an earlier permission-ask
     RELEASE_PERMIT: str = "release-permit"
-    # task subagent answered
+    # a scout came back
+    SCOUT_RESULT: str = "scout-result"
+    # what a tendril grasped
     TENDRIL_RESULT: str = "tendril-result"
-    # nestler-declared tool answered
-    TOOL_RESULT: str = "tool-result"
     # OC message-graph update (graft hint)
     PETAL_CELL: str = "petal-cell"
-    # handshake — full state sync on connect
+    # accept a hello, sync state on connect
     BREATH: str = "breath"
-    # model output partwise (text/reasoning/tool)
-    CHUNK: str = "chunk"
-    # turn complete — finishReason + usage
-    FINISH: str = "finish"
-    # turn aborted
+    # a petal growing
+    UNFURL: str = "unfurl"
+    # close the bloom, with its nectar
+    WILT: str = "wilt"
+    # the bloom broke off
     ERROR: str = "error"
-    # nest spawned, claude session id known
-    SESSION_READY: str = "session-ready"
-    # cell lifecycle event and headroom
+    # a cell's life, and headroom
     PULSE: str = "pulse"
-    # mid-stream permission needed
+    # a tendril needs leave to reach
     PERMISSION_ASK: str = "permission-ask"
-    # task subagent dispatch
+    # send a scout out
+    SCOUT: str = "scout"
+    # a tendril reaching
     TENDRIL_REACH: str = "tendril-reach"
-    # nestler-declared tool dispatch
-    TOOL_CALL: str = "tool-call"
-    # out-of-band metadata for a tool result
-    TOOL_META: str = "tool-meta"
-    # completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event.
-    TOOL_INFO: str = "tool-info"
+    # what a tendril carries besides its result
+    TENDRIL_META: str = "tendril-meta"
+    # a tendril that already came back, told whole, for showing only
+    TENDRIL_INFO: str = "tendril-info"
     # delivery ack for a rid
     ECHO: str = "echo"
     # a timing measurement — measured both ways
@@ -87,20 +85,19 @@ ALL_CHI: frozenset[str] = frozenset({
     "cleanup",
     "curate",
     "release-permit",
+    "scout-result",
     "tendril-result",
-    "tool-result",
     "petal-cell",
     "breath",
-    "chunk",
-    "finish",
+    "unfurl",
+    "wilt",
     "error",
-    "session-ready",
     "pulse",
     "permission-ask",
+    "scout",
     "tendril-reach",
-    "tool-call",
-    "tool-meta",
-    "tool-info",
+    "tendril-meta",
+    "tendril-info",
     "echo",
     "perf-mark",
     "log",
@@ -124,12 +121,33 @@ class PulseKind:
     """pulse.kind enum within chi:'pulse' tones."""
     # process created
     CELL_SPAWNED: str = "cell-spawned"
-    # system init received, accepting input
+    # brooded: accepting prompts, its id, model and tools known
     CELL_READY: str = "cell-ready"
-    # turn complete, no listeners
+    # the bloom wilted, no listeners
     CELL_IDLE: str = "cell-idle"
     # process exited
     CELL_DIED: str = "cell-died"
     # killed to make room
     CELL_EVICTED: str = "cell-evicted"
+
+class PetalKind:
+    """petal.kind: which unit of content a petal is."""
+    # words, in `text`
+    TEXT: str = "text"
+    # a brokered tool call: `callId`, `name`, `args`; its input grows as `sap`
+    TENDRIL: str = "tendril"
+    # what a tendril came back with: `callId`, `result`, `isError`
+    GRASP: str = "grasp"
+    # a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url`
+    POLLEN: str = "pollen"
+    # the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom
+    SEPAL: str = "sepal"
+    # where a petal's words came from: `source`
+    WAGGLE: str = "waggle"
+    # the cell declining, or a filter acting: `text` says why
+    THORN: str = "thorn"
+    # how likely each token was: `brix`
+    BRIX: str = "brix"
+    # several candidate petals for one prompt: `bouquet`
+    BOUQUET: str = "bouquet"
 

@@ -30,7 +30,9 @@ fn peer_reply(chi: &str, sid: &str) -> Value {
         "chi": chi,
         "from": "ensemble",
         "sid": sid,
-        "delta": "hello from the other side",
+        "petal": 0,
+        "kind": "text",
+        "text": "hello from the other side",
     })
 }
 
@@ -67,14 +69,14 @@ async fn a_scoped_client_does_not_receive_an_undeclared_chi() {
         .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt"]))))
         .await;
     humd.thrum
-        .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
+        .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))
         .await;
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let got = drain(&mut rx);
     assert!(
-        !chis_of(&got).contains(&"chunk"),
-        "a client that declared only 'prompt' must not receive a chunk, got {:?}",
+        !chis_of(&got).contains(&"unfurl"),
+        "a client that declared only 'prompt' must not receive an unfurl, got {:?}",
         chis_of(&got)
     );
 }
@@ -86,18 +88,18 @@ async fn a_scoped_client_receives_a_declared_chi() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum
-        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt", "chunk"]))))
+        .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt", "unfurl"]))))
         .await;
 
     humd.thrum
-        .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
+        .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))
         .await;
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let got = drain(&mut rx);
     assert!(
-        chis_of(&got).contains(&"chunk"),
-        "a client that declared 'chunk' must receive it, got {:?}",
+        chis_of(&got).contains(&"unfurl"),
+        "a client that declared 'unfurl' must receive it, got {:?}",
         chis_of(&got)
     );
 }
@@ -111,14 +113,14 @@ async fn a_client_that_declared_nothing_still_receives_everything() {
     humd.thrum.inject_tone(&cid, humd.signed_hello(base_hello(None))).await;
 
     humd.thrum
-        .inject_tone("ensemble", peer_reply("chunk", "sess-1"))
+        .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))
         .await;
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let got = drain(&mut rx);
     assert!(
-        chis_of(&got).contains(&"chunk"),
-        "a client that declared no chis must receive a chunk, got {:?}",
+        chis_of(&got).contains(&"unfurl"),
+        "a client that declared no chis must receive an unfurl, got {:?}",
         chis_of(&got)
     );
 }

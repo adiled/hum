@@ -197,14 +197,14 @@ static uint64_t seed(void) {
 
 int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
                         size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
-                        void *user, ds4_turn *turn, char *err, size_t errlen) {
+                        void *user, ds4_wilt *wilt, char *err, size_t errlen) {
     ds4_tokens tokens;
     uint64_t rng = seed();
     int rc;
 
-    turn->tokens_in = 0;
-    turn->tokens_out = 0;
-    turn->finish = "stop";
+    wilt->tokens_in = 0;
+    wilt->tokens_out = 0;
+    wilt->reason = "stop";
     err[0] = '\0';
     if (!bridge->engine) {
         snprintf(err, errlen, "no model is loaded");
@@ -218,11 +218,11 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
 
     memset(&tokens, 0, sizeof tokens);
     encode(bridge->engine, system, messages, count, &tokens);
-    turn->tokens_in = tokens.len;
+    wilt->tokens_in = tokens.len;
     rc = ds4_session_sync(bridge->session, &tokens, err, errlen);
     ds4_tokens_free(&tokens);
     if (rc == DS4_SESSION_SYNC_INTERRUPTED) {
-        turn->finish = "cancelled";
+        wilt->reason = "cancelled";
         return 0;
     }
     if (rc != 0) {
@@ -236,12 +236,12 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
         char *piece;
 
         if (atomic_load(&bridge->cancelled)) {
-            turn->finish = "cancelled";
+            wilt->reason = "cancelled";
             break;
         }
-        if (turn->tokens_out >= max_tokens ||
+        if (wilt->tokens_out >= max_tokens ||
             ds4_session_pos(bridge->session) >= ds4_session_ctx(bridge->session)) {
-            turn->finish = "length";
+            wilt->reason = "length";
             break;
         }
         token = ds4_session_sample(bridge->session, temperature, 0, DS4_DEFAULT_TOP_P,
@@ -260,7 +260,7 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
             if (len > 0 && on_piece) on_piece(user, piece, len);
             free(piece);
         }
-        turn->tokens_out++;
+        wilt->tokens_out++;
     }
     return 0;
 }

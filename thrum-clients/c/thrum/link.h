@@ -15,14 +15,14 @@
 //   thrum_options opts = { .hive = "dwarfstar", .as = "ds4flash", .hello = hello };
 //   thrum_bee *bee = thrum_bee_new(&opts);
 //   thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, ctx);
-//   thrum_bee_on_lost(bee, on_lost, ctx);
+//   thrum_bee_on_astray(bee, on_astray, ctx);
 //   if (thrum_bee_start(bee) != 0) fprintf(stderr, "%s\n", thrum_bee_error(bee));
 //   int how = thrum_bee_wait(bee); // THRUM_LINK_CLOSED after thrum_bee_close
 //   thrum_bee_free(bee);
 //
 // A tone goes to the handler for its sid if there is one, else to the
-// handler for its chi, else to the any handler: an asker follows each
-// session it opened by sid, a worker takes prompts by chi. Callbacks run
+// handler for its chi, else to the any handler: a forager follows each
+// sigil it opened by sid, a worker takes prompts by chi. Callbacks run
 // one at a time, in the order tones arrive, on the thread
 // reading the link; a tone is valid only during its callback. Hand long
 // work to a thread of its own, so the tone after it (a cancel) is not
@@ -44,33 +44,28 @@
 extern "C" {
 #endif
 
-/* The version of the lines between this client and `hum bee link`. */
 #define THRUM_LINK_VERSION 1
 
-/* How `hum bee link` exits, and what thrum_bee_start and thrum_bee_wait return. */
 #define THRUM_LINK_CLOSED 0
 #define THRUM_LINK_FAILED 1
 #define THRUM_LINK_USAGE 2
 #define THRUM_LINK_REFUSED 3
 
-/* Hello fields the client owns; a bee's own values for them are ignored. */
 #define THRUM_CLIENT_OWNED { "chi", "rid", "hive", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature" }
 
-/* Where `hum` is found: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum. */
 #define THRUM_HUM_CLI_ENV "HUM_CLI"
 #define THRUM_HUM_CLI_NAME "hum"
 #define THRUM_HUM_CLI_DEFAULT ".local/bin/hum"
 
-/* Advisory codes (WIRE.md, Advisories). */
-#define THRUM_ADVISORY_UNDECLARED_KEY "undeclared-key" /* a tone carries keys the thrum does not declare for its chi (client, humd) */
-#define THRUM_ADVISORY_UNKNOWN_CHI "unknown-chi" /* a tone's chi is not in the thrum (client) */
-#define THRUM_ADVISORY_NOT_A_TONE "not-a-tone" /* a line from the bee is not a JSON object with a chi, and was dropped (client) */
-#define THRUM_ADVISORY_CLIENT_OWNED "client-owned" /* the bee set a hello field the client owns, and it was ignored (client) */
-#define THRUM_ADVISORY_TONE_REFUSED "tone-refused" /* humd refused a tone under a rid the client gave it (client) */
-#define THRUM_ADVISORY_DROPPED_WHILE_AWAY "dropped-while-away" /* tones sent while humd was away were dropped (client) */
-#define THRUM_ADVISORY_PROTO_DRIFT "proto-drift" /* the bee speaks another minor version of the thrum (humd) */
-#define THRUM_ADVISORY_RECONNECT_STORM "reconnect-storm" /* the bee said hello 10 times within 10 minutes (humd) */
-#define THRUM_ADVISORY_DID_NOT_RETURN "did-not-return" /* the bee was nestled when humd stopped and had not come back 2 minutes after humd started (humd) */
+#define THRUM_ADVISORY_UNDECLARED_KEY "undeclared-key"
+#define THRUM_ADVISORY_UNKNOWN_CHI "unknown-chi"
+#define THRUM_ADVISORY_NOT_A_TONE "not-a-tone"
+#define THRUM_ADVISORY_CLIENT_OWNED "client-owned"
+#define THRUM_ADVISORY_TONE_REFUSED "tone-refused"
+#define THRUM_ADVISORY_DROPPED_WHILE_AWAY "dropped-while-away"
+#define THRUM_ADVISORY_PROTO_DRIFT "proto-drift"
+#define THRUM_ADVISORY_RECONNECT_STORM "reconnect-storm"
+#define THRUM_ADVISORY_DID_NOT_RETURN "did-not-return"
 
 typedef struct thrum_bee thrum_bee;
 
@@ -88,51 +83,30 @@ typedef void (*thrum_advisory_fn)(thrum_bee *bee, const thrum_advisory *advisory
 typedef struct {
     const char *hive;
     const char *as;
-    // The bee's own hello fields, copied; NULL for none.
     const cJSON *hello;
-    // The `hum` to run; thrum_hum_cli's answer when NULL.
     const char *hum;
 } thrum_options;
 
-// A bee's client; nothing runs until thrum_bee_start. NULL without memory.
 thrum_bee *thrum_bee_new(const thrum_options *opts);
 
-// Handle every tone of one chi; a later handler replaces an earlier. 0, or -1.
 int thrum_bee_on(thrum_bee *bee, const char *chi, thrum_tone_fn fn, void *user);
-// Handle every tone of one session, before any chi handler. 0, or -1.
 int thrum_bee_on_sid(thrum_bee *bee, const char *sid, thrum_tone_fn fn, void *user);
-// Stop following a session.
 void thrum_bee_off_sid(thrum_bee *bee, const char *sid);
-// Handle every tone no sid or chi handler takes.
 void thrum_bee_on_any(thrum_bee *bee, thrum_tone_fn fn, void *user);
-// humd admitted the bee: at start, and after every reconnect. 0, or -1 when full.
 int thrum_bee_on_nestled(thrum_bee *bee, thrum_event_fn fn, void *user);
-// humd went away. The link is dialing again; stop what humd was waiting on.
-int thrum_bee_on_lost(thrum_bee *bee, thrum_event_fn fn, void *user);
-// Something the bee should fix. The link has already logged it.
+int thrum_bee_on_astray(thrum_bee *bee, thrum_event_fn fn, void *user);
 int thrum_bee_on_advisory(thrum_bee *bee, thrum_advisory_fn fn, void *user);
 
-// Run the link; returns once humd has admitted the bee (0), or
-// THRUM_LINK_REFUSED, or THRUM_LINK_FAILED, with thrum_bee_error saying why.
 int thrum_bee_start(thrum_bee *bee);
-// Send a tone; the client gives it a rid when it has none. 0, or -1.
 int thrum_bee_send(thrum_bee *bee, const cJSON *tone);
-// Change the hello; a field set to null is dropped. 0, or -1.
 int thrum_bee_hello(thrum_bee *bee, const cJSON *patch);
-// Close the link: what was sent goes out, then the link exits. Returns as thrum_bee_wait.
 int thrum_bee_close(thrum_bee *bee);
-// Block until the link has exited: THRUM_LINK_CLOSED after thrum_bee_close,
-// else THRUM_LINK_REFUSED or THRUM_LINK_FAILED.
 int thrum_bee_wait(thrum_bee *bee);
 
-// The bee's id once the link has entered it, else "".
 const char *thrum_bee_id(thrum_bee *bee);
-// humd's reason when the bee was refused, why the link failed otherwise, else "".
 const char *thrum_bee_error(thrum_bee *bee);
-// Close the link if it runs, wait for it, and free the client.
 void thrum_bee_free(thrum_bee *bee);
 
-// Where `hum` is: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum. 0, or -1.
 int thrum_hum_cli(char *out, size_t cap);
 
 #ifdef __cplusplus

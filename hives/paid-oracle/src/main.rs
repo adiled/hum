@@ -2,13 +2,15 @@
 //!
 //! Sells one piece of data per USDC payment. Wire:
 //!
-//! 1. Counterparty sends `chi:"tool-call"` `{ name: "quote", args: { pair } }`.
-//! 2. We reply `chi:"error"` with `code: 402` carrying the payment terms
-//!    (price, recipient, chain, nonce) — same shape as HTTP 402 / x402.
-//! 3. Counterparty pays on-chain (Base/Arc/whichever) and resubmits the
-//!    same tool-call with `paymentProof: { txHash, nonce }`.
+//! 1. A forager's tendril reaches: `chi:"tendril-reach"`
+//!    `{ name: "quote", args: { pair } }`.
+//! 2. We reply `chi:"error"` with `code: "402"` and the payment terms
+//!    (price, recipient, chain, nonce) in `ext["paid-oracle"].x402`,
+//!    the same shape as HTTP 402 / x402.
+//! 3. The forager pays on-chain (Base/Arc/whichever) and reaches again
+//!    with `args.paymentProof: { txHash, nonce }`.
 //! 4. We verify the tx on the configured RPC, then reply
-//!    `chi:"tool-result"` with the actual price.
+//!    `chi:"tendril-result"` with the actual price.
 //!
 //! Replay protection: every challenge mints a fresh UUID nonce.
 //! Acceptance requires that nonce to appear in the tx input data
@@ -135,19 +137,19 @@ async fn main() -> Result<()> {
         let tone = match event {
             Event::Tone(tone) => tone,
             Event::Refused(why) => return Err(Refused(why).into()),
-            Event::Nestled | Event::Lost | Event::Advisory(_) => continue,
+            Event::Nestled | Event::Astray | Event::Advisory(_) => continue,
         };
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         match chi {
             "breath" => continue,
-            "tool-call" => {
+            "tendril-reach" => {
                 let st = state.clone();
                 let cfg = cfg.clone();
                 let wr = wr.clone();
                 let http = http.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_tool_call(&cfg, &st, &http, &wr, tone).await {
-                        warn!(error = ?e, "tool-call.handle");
+                    if let Err(e) = handle_tendril(&cfg, &st, &http, &wr, tone).await {
+                        warn!(error = ?e, "tendril-reach.handle");
                     }
                 });
             }
@@ -159,13 +161,12 @@ async fn main() -> Result<()> {
 
 fn hello(cfg: &Config) -> Value {
     json!({
-        "roles": ["forager"],
         "version": BEE_VERSION,
         "provides": [CAPABILITY],
         "tools": [
             {
                 "name": QUOTE_TOOL,
-                "description": "Get a real-time market quote for a token pair (e.g. ETH-USD). Paid per call via on-chain USDC; first call returns chi:error 402 with terms, asker pays + resubmits with paymentProof.",
+                "description": "Get a real-time market quote for a token pair (e.g. ETH-USD). Paid per call via on-chain USDC; first reach returns chi:error 402 with terms; the forager pays and reaches again with paymentProof.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -186,9 +187,9 @@ fn hello(cfg: &Config) -> Value {
         "propensity": {
             "statefulness": "stateless",
             "richness": "lean",
-            "wire": "x402/tool-call"
+            "wire": "x402/tendril"
         },
-        "chis": ["hello", "tool-call", "tool-result", "error"],
+        "chis": ["hello", "tendril-reach", "tendril-result", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/paid-oracle",
         "ext": { "paid-oracle": { "x402": {
             "chain": cfg.chain,
@@ -209,7 +210,7 @@ async fn send(wr: &Sender, tone: &Value) -> Result<()> {
     Ok(())
 }
 
-async fn handle_tool_call(
+async fn handle_tendril(
     cfg: &Config,
     state: &Arc<State>,
     http: &reqwest::Client,
@@ -226,7 +227,7 @@ async fn handle_tool_call(
     let args = tone.get("args").cloned().unwrap_or(json!({}));
     let pair = args.get("pair").and_then(Value::as_str).unwrap_or("ETH/USDC").to_string();
 
-    if let Some(proof) = tone.get("paymentProof") {
+    if let Some(proof) = args.get("paymentProof") {
         let tx = proof.get("txHash").and_then(Value::as_str).unwrap_or("");
         let nonce = proof.get("nonce").and_then(Value::as_str).unwrap_or("");
         if tx.is_empty() || nonce.is_empty() {
@@ -251,7 +252,7 @@ async fn handle_tool_call(
                 "0.0".into()
             });
         let result = json!({
-            "chi": Chi::ToolResult,
+            "chi": Chi::TendrilResult,
             "rid": rid,
             "sid": sid,
             "to": from,
@@ -282,9 +283,9 @@ async fn handle_tool_call(
         "sid": sid,
         "to": from,
         "callId": tone.get("callId").cloned().unwrap_or(Value::Null),
-        "code": 402,
+        "code": "402",
         "message": "payment required",
-        "x402": {
+        "ext": { "paid-oracle": { "x402": {
             "chain": cfg.chain,
             "pay_to": cfg.pay_to,
             "asset": cfg.usdc_contract,
@@ -296,7 +297,7 @@ async fn handle_tool_call(
             "price_atomic": cfg.quote_atomic().to_string(),
             "nonce": nonce,
             "memo": format!("Encode this nonce ({}) in the transfer's input data so we can bind your payment to this quote.", &nonce[..8]),
-        }
+        } } }
     });
     send(wr, &err).await?;
     Ok(())
@@ -315,7 +316,7 @@ async fn reply_error(
         "rid": rid,
         "sid": sid,
         "to": to,
-        "code": code,
+        "code": code.to_string(),
         "message": message,
     });
     send(wr, &err).await?;

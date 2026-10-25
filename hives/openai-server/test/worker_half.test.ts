@@ -9,7 +9,7 @@ import { spawn, type Subprocess } from "bun";
 
 type Tone = Record<string, unknown>;
 
-async function startFakeOpenAI(toolCallsFirstTurn: boolean): Promise<{ port: number; shutdown: () => void }> {
+async function startFakeOpenAI(toolCallsFirst: boolean): Promise<{ port: number; shutdown: () => void }> {
   const server = createHttpServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c.toString(); });
@@ -20,7 +20,7 @@ async function startFakeOpenAI(toolCallsFirstTurn: boolean): Promise<{ port: num
       } else if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const mk = (o: object) => `data: ${JSON.stringify(o)}\n\n`;
-        if (toolCallsFirstTurn && !body.includes('"role":"tool"')) {
+        if (toolCallsFirst && !body.includes('"role":"tool"')) {
           res.write(mk({ choices: [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_abc", type: "function", function: { name: "read", arguments: "{\"path\":\"" } }] } }] }));
           res.write(mk({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "a.txt\"}" } }] } }] }));
         } else {
@@ -58,7 +58,7 @@ async function startFakeHumd(): Promise<{
   const server: Server = createNetServer((sock) => {
     active = sock;
     let buf = "";
-    sock.write(JSON.stringify({ chi: "breath", sessions: [] }) + "\n");
+    sock.write(JSON.stringify({ chi: "breath", sigils: [] }) + "\n");
     sock.on("data", (chunk) => {
       buf += chunk.toString();
       let nl: number;
@@ -70,7 +70,7 @@ async function startFakeHumd(): Promise<{
           const tone = JSON.parse(line) as Tone;
           if (tone.chi === "hello") {
             sock.write(JSON.stringify({ chi: "echo", rid: tone.rid, ok: true }) + "\n");
-            sock.write(JSON.stringify({ chi: "breath", sessions: {} }) + "\n");
+            sock.write(JSON.stringify({ chi: "breath", sigils: {} }) + "\n");
             helloResolve(tone);
             continue;
           }
@@ -122,8 +122,8 @@ let openAI: { port: number; shutdown: () => void };
 let humd: Awaited<ReturnType<typeof startFakeHumd>>;
 let server: Subprocess<"ignore", "pipe", "pipe">;
 
-async function boot(toolCallsFirstTurn: boolean) {
-  openAI = await startFakeOpenAI(toolCallsFirstTurn);
+async function boot(toolCallsFirst: boolean) {
+  openAI = await startFakeOpenAI(toolCallsFirst);
   humd = await startFakeHumd();
   const xdg = mkdtempSync(join(tmpdir(), "hum-worker-xdg-"));
   mkdirSync(join(xdg, "config", "hum", "hives.d"), { recursive: true });
@@ -156,7 +156,7 @@ async function teardown() {
   openAI.shutdown();
 }
 
-describe("openai-server worker half — chi:prompt in, chunk/finish out", () => {
+describe("openai-server worker half — chi:prompt in, a bloom out", () => {
   beforeAll(async () => { await boot(false); });
   afterAll(async () => { await teardown(); });
 
@@ -165,23 +165,24 @@ describe("openai-server worker half — chi:prompt in, chunk/finish out", () => 
     expect(hello.models).toEqual(["gpt-4o"]);
   });
 
-  test("streams text_delta chunks and a finish with usage", async () => {
+  test("unfurls a text petal and wilts with nectar", async () => {
     const sid = "worker-test-sid";
-    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: "hello worker" });
+    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: [{ kind: "text", text: "hello worker" }] });
 
-    await waitFor(() => humd.capturedReplies.some(r => r.chi === "finish"), 5000);
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "wilt"), 5000);
 
-    const textDeltas = humd.capturedReplies.filter(r => r.chi === "chunk" && r.chunkType === "text_delta");
-    expect(textDeltas.length).toBeGreaterThan(0);
-    for (const c of textDeltas) expect(c.sid).toBe(sid);
+    const unfurled = humd.capturedReplies.filter(r => r.chi === "unfurl" && r.kind === "text" && typeof r.text === "string");
+    expect(unfurled.length).toBeGreaterThan(0);
+    for (const u of unfurled) expect(u.sid).toBe(sid);
 
-    const text = textDeltas.map(c => c.delta).join("");
+    const text = unfurled.map(u => u.text).join("");
     expect(text).toBe("saw the file");
+    expect(humd.capturedReplies.some(r => r.chi === "unfurl" && r.closed === true)).toBe(true);
 
-    const finish = humd.capturedReplies.find(r => r.chi === "finish");
-    expect(finish!.sid).toBe(sid);
-    expect(finish!.finishReason).toBe("stop");
-    expect(finish!.usage).toMatchObject({ input_tokens: 3, output_tokens: 2 });
+    const wilt = humd.capturedReplies.find(r => r.chi === "wilt");
+    expect(wilt!.sid).toBe(sid);
+    expect(wilt!.reason).toBe("stop");
+    expect(wilt!.nectar).toMatchObject({ input_tokens: 3, output_tokens: 2 });
   });
 });
 
@@ -189,28 +190,33 @@ describe("openai-server worker half — tool loop", () => {
   beforeAll(async () => { await boot(true); });
   afterAll(async () => { await teardown(); });
 
-  test("tool_calls → chi:tool-call, tool-result → resumes and finishes", async () => {
+  test("tool_calls → chi:tendril-reach, tendril-result → it grows on and wilts", async () => {
     const sid = "worker-tool-sid";
-    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: "read the file", tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] });
+    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: [{ kind: "text", text: "read the file" }], tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] });
 
-    await waitFor(() => humd.capturedReplies.some(r => r.chi === "tool-call"), 5000);
-    expect(humd.capturedReplies.some(r => r.chi === "finish")).toBe(false);
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "tendril-reach"), 5000);
+    expect(humd.capturedReplies.some(r => r.chi === "wilt")).toBe(false);
 
-    const toolCall = humd.capturedReplies.find(r => r.chi === "tool-call")!;
-    expect(toolCall.sid).toBe(sid);
-    expect(toolCall.toolName).toBe("read");
-    expect(toolCall.callId).toBeDefined();
-    expect(toolCall.args).toContain("a.txt");
+    const sap = humd.capturedReplies.filter(r => r.chi === "unfurl" && r.kind === "tendril").map(r => r.sap ?? "").join("");
+    expect(sap).toBe("{\"path\":\"a.txt\"}");
 
-    humd.send({ chi: "tool-result", sid, callId: toolCall.callId, toolName: "read", output: "file contents" });
+    const reach = humd.capturedReplies.find(r => r.chi === "tendril-reach")!;
+    expect(reach.sid).toBe(sid);
+    expect(reach.name).toBe("read");
+    expect(reach.callId).toBeDefined();
+    expect(reach.args).toEqual({ path: "a.txt" });
 
-    await waitFor(() => humd.capturedReplies.some(r => r.chi === "finish"), 5000);
+    humd.send({ chi: "tendril-result", sid, callId: reach.callId, output: "file contents" });
 
-    const textDeltas = humd.capturedReplies.filter(r => r.chi === "chunk" && r.chunkType === "text_delta");
-    const text = textDeltas.map(c => c.delta).join("");
+    await waitFor(() => humd.capturedReplies.some(r => r.chi === "wilt"), 5000);
+
+    const text = humd.capturedReplies
+      .filter(r => r.chi === "unfurl" && r.kind === "text" && typeof r.text === "string")
+      .map(r => r.text)
+      .join("");
     expect(text).toBe("saw the file");
 
-    const finish = humd.capturedReplies.find(r => r.chi === "finish")!;
-    expect(finish.finishReason).toBe("stop");
+    const wilt = humd.capturedReplies.find(r => r.chi === "wilt")!;
+    expect(wilt.reason).toBe("stop");
   });
 });

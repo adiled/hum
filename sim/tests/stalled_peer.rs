@@ -12,11 +12,13 @@ const SETTLE: Duration = Duration::from_secs(20);
 
 fn tone_to(target: Hid, rid: &str) -> Value {
     json!({
-        "chi": "chunk",
+        "chi": "unfurl",
         "rid": rid,
         "from": "test",
         "to": target.to_string(),
-        "delta": "x",
+        "petal": 0,
+        "kind": "text",
+        "text": "x",
     })
 }
 

@@ -76,38 +76,79 @@ fn golden() -> Vec<Value> {
             cwd: Some("/tmp/w".into()),
             system_prompt: Some("be brief".into()),
             text: Some("hi".into()),
-            content: None,
+            content: Some(vec![thrum_core::Petal {
+                kind: "pollen".into(),
+                role: None,
+                text: None,
+                grain: Some(thrum_core::Grain {
+                    kind: "image".into(),
+                    media_type: "image/png".into(),
+                    data: None,
+                    url: Some("https://x/y.png".into()),
+                }),
+                call_id: None,
+                name: None,
+                args: None,
+                result: None,
+                is_error: None,
+                propolis: None,
+                source: None,
+                brix: None,
+                bouquet: None,
+            }]),
             tools: Some(vec![Value::from("builtin")]),
             forager_tools: Some(vec![serde_json::json!({ "name": "Brave" })]),
             provided: Some(vec!["env".into()]),
             disallowed_tools: Some(vec![]),
             allowed_tools: None,
             resume: None,
+            temperature: Some(0.5),
+            prune: Some(thrum_core::Prune { p: Some(0.9), k: None }),
+            season: Some(256),
+            frost: Some(vec!["END".into()]),
+            seed: Some(7),
+            trellis: None,
+            tendrils: Some(thrum_core::Tendrils { reach: Some("auto".into()), parallel: Some(false) }),
+            sepal: Some(thrum_core::Sepal { effort: Some("low".into()), budget: None }),
         }
     );
     push!(
-        Chi::Chunk,
-        thrum_core::ChunkBody {
-            chunk_type: "text_delta".into(),
-            block_idx: Some(0),
-            delta: Some(Value::from("Hello")),
-            partial_json: None,
+        Chi::Unfurl,
+        thrum_core::UnfurlBody {
+            petal: 0,
+            kind: "text".into(),
+            text: Some("Hello".into()),
+            sap: None,
+            call_id: None,
+            name: None,
+            grain: None,
+            propolis: None,
+            source: None,
+            brix: None,
+            closed: None,
         }
     );
     push!(
-        Chi::Chunk,
-        thrum_core::ChunkBody {
-            chunk_type: "tool_input_delta".into(),
-            block_idx: Some(2),
-            delta: None,
-            partial_json: Some("{\"a\":".into()),
+        Chi::Unfurl,
+        thrum_core::UnfurlBody {
+            petal: 2,
+            kind: "tendril".into(),
+            text: None,
+            sap: Some("{\"a\":".into()),
+            call_id: None,
+            name: None,
+            grain: None,
+            propolis: None,
+            source: None,
+            brix: None,
+            closed: None,
         }
     );
     push!(
-        Chi::Finish,
-        thrum_core::FinishBody {
-            finish_reason: "stop".into(),
-            usage: Some(serde_json::json!({
+        Chi::Wilt,
+        thrum_core::WiltBody {
+            reason: "stop".into(),
+            nectar: Some(serde_json::json!({
                 "input_tokens": 12,
                 "output_tokens": 34
             })),
@@ -121,21 +162,20 @@ fn golden() -> Vec<Value> {
             message: "nest crashed".into(),
             code: Some("worker_error".into()),
             subtype: Some("nest_crash".into()),
-            usage: None,
+            nectar: None,
         }
     );
     push!(
-        Chi::ToolCall,
-        thrum_core::ToolCallBody {
+        Chi::TendrilReach,
+        thrum_core::TendrilReachBody {
             call_id: "call-1".into(),
-            tool_name: "Read".into(),
-            name: Some("Read".into()),
+            name: "Read".into(),
             args: Some(serde_json::json!({ "path": "/x" })),
         }
     );
     push!(
-        Chi::ToolResult,
-        thrum_core::ToolResultBody {
+        Chi::TendrilResult,
+        thrum_core::TendrilResultBody {
             call_id: "call-1".into(),
             output: Some("file contents".into()),
             result: None,
@@ -145,17 +185,20 @@ fn golden() -> Vec<Value> {
         }
     );
     push!(
-        Chi::SessionReady,
-        thrum_core::SessionReadyBody {
-            nest_id: "n-1".into(),
-            model: "claude-3-5-sonnet".into(),
+        Chi::Pulse,
+        thrum_core::PulseBody {
+            kind: "cell-ready".into(),
+            pid: None,
+            headroom: None,
+            cell: Some("n-1".into()),
+            model: Some("claude-3-5-sonnet".into()),
             tools: Some(vec![serde_json::json!({ "name": "Read" })]),
         }
     );
     push!(
         Chi::Breath,
         thrum_core::BreathBody {
-            sessions: serde_json::json!([{ "sid": "s1", "model": "claude" }]),
+            sigils: serde_json::json!([{ "sid": "s1", "model": "claude" }]),
             proto_version: Some("0.7.0".into()),
         }
     );
@@ -241,17 +284,14 @@ fn check_round_trip(tone: &Tone) {
     use thrum_core::*;
     let body = &tone.body;
     match tone.chi() {
-        Chi::Chunk => {
-            let v: ChunkBody =
-                serde_json::from_value(Value::clone(&Value::Object(body.clone()))).unwrap();
+        Chi::Unfurl => {
+            let v: UnfurlBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
             assert!(
-                v.chunk_type == "text_delta" || v.chunk_type == "tool_input_delta",
-                "unexpected chunk_type {}",
-                v.chunk_type
+                v.kind == PetalKind::Text.as_str() || v.kind == PetalKind::Tendril.as_str(),
+                "unexpected petal kind {}",
+                v.kind
             );
-            if let Some(b) = v.block_idx {
-                assert!(b == 0 || b == 2);
-            }
+            assert!(v.petal == 0 || v.petal == 2);
         }
         Chi::Hello => {
             let v: HelloBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
@@ -259,8 +299,8 @@ fn check_round_trip(tone: &Tone) {
             assert_eq!(v.hive, "claude-cli");
             assert_eq!(v.roles.as_deref(), Some(&["worker".to_string()][..]));
         }
-        Chi::ToolResult => {
-            let v: ToolResultBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
+        Chi::TendrilResult => {
+            let v: TendrilResultBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
             assert_eq!(v.call_id, "call-1");
             assert_eq!(v.output.as_deref(), Some("file contents"));
             assert_eq!(v.is_error, Some(false));

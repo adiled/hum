@@ -4,10 +4,10 @@
 //
 //	ECHO_HIVE (echo-go), ECHO_AS (main), ECHO_MODEL (echo-go)
 //
-// It prints what happens to it, one line each: nestled, lost,
+// It prints what happens to it, one line each: nestled, astray,
 // advisory <code>, then closed, refused <why> or failed <why>. A prompt
 // whose text is "stray" is answered with a key the thrum does not
-// declare; one whose text is "follow" has the bee follow its session and
+// declare; one whose text is "follow" has the bee follow its sigil and
 // print sid <chi> for the next tone of it. Closing its stdin closes the
 // bee.
 package main
@@ -53,15 +53,15 @@ func main() {
 				bee.OffSid(sid)
 			})
 		}
-		chunk := thrum.Tone{"chi": thrum.ChiChunk, "sid": sid, "chunkType": "text_delta", "delta": "echo: " + text}
+		unfurl := thrum.Tone{"chi": thrum.ChiUnfurl, "sid": sid, "petal": 0, "kind": thrum.PetalKindText, "text": "echo: " + text}
 		if text == "stray" {
-			chunk["stray"] = true
+			unfurl["stray"] = true
 		}
-		_ = bee.Send(chunk)
-		_ = bee.Send(thrum.Tone{"chi": thrum.ChiFinish, "sid": sid, "finishReason": "stop"})
+		_ = bee.Send(unfurl)
+		_ = bee.Send(thrum.Tone{"chi": thrum.ChiWilt, "sid": sid, "reason": "stop"})
 	})
 	bee.OnNestled(func() { say("nestled") })
-	bee.OnLost(func() { say("lost") })
+	bee.OnAstray(func() { say("astray") })
 	bee.OnAdvisory(func(a thrum.Advisory) { say("advisory " + a.Code) })
 
 	go func() {

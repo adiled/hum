@@ -9,7 +9,7 @@ description: "how to build a hive, install it on a humd, and the bees that humd 
 
 ## The vocabulary, once
 
-A humd is a coordination node: it admits bees, routes between them and gossips with its peers, and hosts no cells. A **nest** is the cells a hive hosts, which it turns on by using [`hum-nest`](../hum-nest). A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and emits `chunk` then `finish`. A **forager** translates an outside wire into thrum, whether that wire is HTTP, SMS, a smart contract, or a paid API. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
+A humd is a coordination node: it admits bees, routes between them and gossips with its peers, and hosts no cells. A **nest** is the cells a hive hosts, which it turns on by using [`hum-nest`](../hum-nest). A **hive** is the kind, such as `claude-cli`, `openai-server`, or `paid-oracle`: a directory with an `Orchfile`. It does not run on its own. A **bee** is a participant: a key its hive entered, and whatever signs a hello with that key: a process on this machine, a runtime hosting many bees, a service on a phone. A **worker** produces compute: it accepts `chi:"prompt"` and unfurls the bloom until it wilts. A **forager** prompts: it brings work in from an outside wire, whether that wire is HTTP, SMS, a smart contract, or a paid API, and carries the bloom back. A bee can claim both roles. While a bee is mid-handshake it is a **nestler**, and once registered it is **nestled**.
 
 A honeybee on the plant pot by your bed is still a bee; you just need to know what kind it is to understand it. So it goes here. A humd understands a bee only through its hive, and **installing** a hive on a humd is what teaches the humd that kind. The hive then **enters** bees, signing them in one key each, and a bee nestles by signing its hello with its key, wherever it lands from. humd refuses a hello that is unsigned, from a key never entered, or naming a hive it was never taught. humd never links a hive in at build time and hum never starts a bee; bees attach at runtime, in any language, run however their hive likes.
 
@@ -19,12 +19,11 @@ A honeybee on the plant pot by your bed is still a bee; you just need to know wh
 |---|---|---|---|
 | [`claude-cli`](claude-cli) | worker | `claude-cli-worker` | `claude -p` stream-json over a pipe |
 | [`claude-repl`](claude-repl) | worker | `claude-repl-worker` | claude REPL over a PTY |
-| [`humfs`](humfs) | forager | `humfs-forager` | local filesystem (`fs` capability) |
-| [`openai-server`](openai-server) | forager | `openai-server` | OpenAI `/v1/chat/completions` |
+| [`openai-server`](openai-server) | worker, forager | `openai-server` | OpenAI `/v1/chat/completions` |
 | [`anthropic-server`](anthropic-server) | forager | `anthropic-server` | Anthropic `/v1/messages` |
 | [`ollama-server`](ollama-server) | forager | `ollama-server` | Ollama `/api/chat` |
 | [`vercel-ai`](vercel-ai) | forager | `vercel-ai` | Vercel AI SDK `LanguageModelV3` |
-| [`paid-oracle`](paid-oracle) | forager | `paid-oracle` | x402 over tool-call, USDC per call |
+| [`paid-oracle`](paid-oracle) | — | `paid-oracle` | x402 over a tendril, USDC per call |
 | [`grpc`](grpc) | forager | `grpc-forager` | gRPC bidi stream |
 | [`twilio-sms`](twilio-sms) | forager | `twilio-sms` | Twilio Messaging webhook |
 | [`gsm-modem`](gsm-modem) | forager | `gsm-modem` | GSM AT-command serial SMS |
@@ -41,7 +40,7 @@ The first axis is **statefulness**. A `stateful` bee holds its own session graph
 
 The second axis is **richness**. A `rich` bee hands humd cwd, permissions, MCP configs, and prior petals. A `medium` bee hands tools, system, and content. A `lean` bee hands only content and system. An `opaque` bee passes JSON straight through.
 
-The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tool-call`, or `grpc/bidi`.
+The third axis is **wire**, the outside contract the bee translates to, for example `openai/chat`, `twilio/sms`, `x402/tendril`, or `grpc/bidi`.
 
 A forager picks a contract that already exists in the wild and hides the rest of thrum behind it. A lean bee drops the tones it cannot express, while a rich one forwards everything.
 
@@ -111,11 +110,11 @@ A worker that runs its own model processes (cells) uses `hum_nest::serve_worker`
 
 ### 3. Translate, or transport
 
-A forager maps incoming tones into its outside contract and back, as in `vercel-ai/src/transform.ts`. A transport simply forwards bytes, as in `grpc`. A worker turns `chi:"prompt"` into `chunk` and `finish` from whatever produces its tokens.
+A forager maps incoming tones into its outside contract and back, as in `vercel-ai/src/transform.ts`. A transport simply forwards bytes, as in `grpc`. A worker turns `chi:"prompt"` into `unfurl`s and a `wilt` from whatever produces its tokens.
 
 ### 4. Tools
 
-Forward each incoming `chi:"tool-call"` to your tool surface, then reply with `chi:"tool-result"` carrying the same `callId`, and humd resumes the parked model. humd already suppresses built-in tools that overlap a capability you list in `provides`, and an asker can also pass `disallowedTools` on the prompt.
+A bee that serves tools lists them in its hello's `tools`, and humd routes each `chi:"tendril-reach"` for one of them to it. Answer it with `chi:"tendril-result"` carrying the same `callId`, and humd resumes the parked model. humd already suppresses built-in tools that overlap a capability you list in `provides`, and a forager can also pass `disallowedTools` on the prompt.
 
 ### chi cheatsheet
 
@@ -123,10 +122,10 @@ Forward each incoming `chi:"tool-call"` to your tool surface, then reply with `c
 
 | subset | chi values |
 |---|---|
-| inference only | `prompt`, `chunk`, `finish`, `error`, `cancel` |
-| plus tools | `tool-call`, `tool-result` |
+| inference only | `prompt`, `unfurl`, `wilt`, `error`, `cancel` |
+| plus tendrils | `tendril-reach`, `tendril-result`, `tendril-info`, `tendril-meta` |
 | plus permissions | `permission-ask`, `release-permit` |
-| plus state sync | `hello`, `breath`, `session-ready`, `pulse`, `cleanup` |
+| plus state sync | `hello`, `breath`, `pulse`, `cleanup` |
 | plus observability | `perf-mark`, `drone`, `echo`, `log` |
 
 A lean bee drops the tones it cannot express, while a rich one forwards everything and leans on consumer-side machinery to make sense of it.

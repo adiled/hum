@@ -1,8 +1,8 @@
 //! claude-cli-worker — standalone worker-bee process.
 //!
 //! Runs as its own process, handshakes with humd over thrum, accepts
-//! prompts addressed to claude models, and pipes responses back as
-//! `chi:"chunk"` tones. humd never compiles us in; we register at
+//! prompts addressed to claude models, and pipes each bloom back as
+//! `chi:"unfurl"` tones. humd never compiles us in; we register at
 //! runtime through our hello.
 //!
 //! Env knobs:

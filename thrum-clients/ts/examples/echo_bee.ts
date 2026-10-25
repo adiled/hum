@@ -4,14 +4,14 @@
 //
 //   ECHO_HIVE (echo-ts), ECHO_AS (main), ECHO_MODEL (echo-ts)
 //
-// It prints what happens to it, one line each: nestled, lost,
+// It prints what happens to it, one line each: nestled, astray,
 // advisory <code>, then closed, refused <why> or failed <why>. A prompt
 // whose text is "stray" is answered with a key the thrum does not
-// declare; one whose text is "follow" has the bee follow its session and
+// declare; one whose text is "follow" has the bee follow its sigil and
 // print sid <chi> for the next tone of it. Closing its stdin closes the
 // bee.
 
-import { Bee, Chi, Refused } from "../index.ts";
+import { Bee, Chi, PetalKind, Refused } from "../index.ts";
 
 const say = (line: string) => process.stdout.write(line + "\n");
 const model = process.env.ECHO_MODEL || "echo-ts";
@@ -31,12 +31,12 @@ bee.on(Chi.prompt, (tone) => {
       bee.offSid(sid);
     });
   }
-  const chunk = { chi: Chi.chunk, sid, chunkType: "text_delta", delta: `echo: ${text}` };
-  bee.send(text === "stray" ? ({ ...chunk, stray: true } as typeof chunk) : chunk);
-  bee.send({ chi: Chi.finish, sid, finishReason: "stop" });
+  const unfurl = { chi: Chi.unfurl, sid, petal: 0, kind: PetalKind.text, text: `echo: ${text}` };
+  bee.send(text === "stray" ? ({ ...unfurl, stray: true } as typeof unfurl) : unfurl);
+  bee.send({ chi: Chi.wilt, sid, reason: "stop" });
 });
 bee.onNestled(() => say("nestled"));
-bee.onLost(() => say("lost"));
+bee.onAstray(() => say("astray"));
 bee.onAdvisory((a) => say(`advisory ${a.code}`));
 
 process.stdin.on("end", () => void bee.close());

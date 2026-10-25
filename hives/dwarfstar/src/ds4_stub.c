@@ -1,9 +1,9 @@
 /* dwarfstar stub: the bridge without the engine, for make check.
  *
  * It lets the bee's thrum side and its GPU handoff run with no model and
- * no Metal: entering, the hello, the queue, the shared GPU lock, chunks,
- * finish and cancel. Loading takes a moment, as a real model's does. A
- * turn answers with its last message, a word per piece, then "é" split
+ * no Metal: entering, the hello, the queue, the shared GPU lock, unfurls,
+ * wilts and cancels. Loading takes a moment, as a real model's does. A
+ * bloom answers with its last message, a word per piece, then "é" split
  * across two pieces, so the bee's holding of a character a token ends
  * inside of is exercised too. The shader overrides do nothing.
  */
@@ -81,15 +81,15 @@ bool ds4_bridge_cancelled(ds4_bridge *bridge) {
 
 int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
                         size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
-                        void *user, ds4_turn *turn, char *err, size_t errlen) {
+                        void *user, ds4_wilt *wilt, char *err, size_t errlen) {
     const char *text;
     const char *at;
     (void)system;
     (void)temperature;
 
-    turn->tokens_in = 0;
-    turn->tokens_out = 0;
-    turn->finish = "stop";
+    wilt->tokens_in = 0;
+    wilt->tokens_out = 0;
+    wilt->reason = "stop";
     err[0] = '\0';
     if (!bridge->path[0]) {
         snprintf(err, errlen, "no model is loaded");
@@ -100,26 +100,26 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
         return -1;
     }
     text = messages[count - 1].text;
-    turn->tokens_in = (int)strlen(text);
+    wilt->tokens_in = (int)strlen(text);
     for (at = text; *at;) {
         size_t n = strcspn(at, " ");
         size_t step = n + (at[n] == ' ' ? 1 : 0);
         if (atomic_load(&bridge->cancelled)) {
-            turn->finish = "cancelled";
+            wilt->reason = "cancelled";
             return 0;
         }
-        if (turn->tokens_out >= max_tokens) {
-            turn->finish = "length";
+        if (wilt->tokens_out >= max_tokens) {
+            wilt->reason = "length";
             return 0;
         }
         on_piece(user, at, step);
-        turn->tokens_out++;
+        wilt->tokens_out++;
         at += step;
         sleep_ms(STUB_PIECE_MS);
     }
     on_piece(user, " \xC3", 2);
     on_piece(user, "\xA9", 1);
-    turn->tokens_out += 2;
+    wilt->tokens_out += 2;
     return 0;
 }
 

@@ -688,7 +688,7 @@ fn doctor() -> Result<()> {
     print_recent_logs("hum", 60);
 
     println!("\n{bar}");
-    println!("If a bee shows 0 tokens / silent finish, look for `worker.result.error`");
+    println!("If a bee shows 0 tokens / a silent wilt, look for `worker.result.error`");
     println!("above — claude reports auth/model/credit failures there, not on stderr.");
     Ok(())
 }

@@ -1,60 +1,63 @@
 //! `serve_worker` — wraps a Worker impl into a standalone process
 //! that handshakes with humd via thrum and routes prompts over the wire.
 //!
-//! Mirrors the forager-bee client pattern: the worker process owns its own
-//! lifecycle, humd is just a router. The wire contract:
+//! The worker process owns its own lifecycle; humd is just a router. The
+//! wire contract:
 //!
 //! - **Hello**: announce the hive it belongs to and the models it serves.
 //!   humd routes to it only once that hive is installed there.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
 //!   matches one of the worker's advertised models. The worker calls
 //!   `Worker::raise(egg)`, then feeds the prompt text on `cell.feed`.
-//! - **Chunks out**: each event from `cell.mmm` becomes a
-//!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
+//! - **The bloom out**: each content block from `cell.mmm` unfurls as one
+//!   petal, by its index: text as `text`, thinking as `sepal` sealed by
+//!   its `propolis`. The cell's init is a `cell-ready` pulse, and the
+//!   result wilts the bloom with its nectar.
 //! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
-//! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
+//! - **Tendril result**: `chi:"tendril-result"` feeds into the cell via the
 //!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
 //!
 //! The connection is hum-thrum's: the worker links its `main` bee and
 //! reads events. A humd that goes away takes the worker's cells with it,
-//! since their sessions went with that humd; the client dials again,
+//! since their sigils went with that humd; the client dials again,
 //! quietly while humd is still booting, and the worker carries on. A
 //! refused bee ends `serve_worker` with the refusal, so the process exits
 //! non-zero and its supervisor decides.
 //!
 //! A prompt's model comes from its `modelId`, else the first model the
 //! worker advertises (`CLAUDE_MODELS` leads with the install default),
-//! else opus 4.7. Without a fallback an asker that omits `modelId`
+//! else opus 4.7. Without a fallback a forager that omits `modelId`
 //! would spawn `claude --model ""`.
 //!
 //! `claude -p --input-format stream-json` reads newline-delimited user
-//! messages until stdin EOF, emitting a `result` event per turn, and
-//! exits after each turn. The warm cell is gone by the next prompt, so
+//! messages until stdin EOF, emitting a `result` event per bloom, and
+//! exits after each bloom. The warm cell is gone by the next prompt, so
 //! continuity comes from the sid-derived session UUID that claude-cli
 //! computes from the sid.
 //!
 //! A `result` event flagged `is_error` as the *first* event means a
 //! pre-flight failure — a bad or absent session on `--resume`, an id
-//! clash on `--session-id` — rather than a mid-turn error, which arrives
-//! only after content. On the first turn `--resume` fails fast that
+//! clash on `--session-id` — rather than a mid-bloom error, which arrives
+//! only after content. On the first bloom `--resume` fails fast that
 //! way, so the worker retries with `fresh: true`.
 //!
 //! claude reports failure inside that result event, not on stderr:
 //! `is_error:true` (or an `error_*` subtype) with the human-readable
 //! reason in `result`. Surfacing it is the difference between a visible
-//! auth, model, or credit error and a silent zero-token finish that
+//! auth, model, or credit error and a silent zero-token wilt that
 //! looks like the worker is dead.
 //!
 //! The tool catalogue is MCP: the standard field is `inputSchema`, and
 //! the legacy `parameters` spelling is tolerated on the wire. An entry
 //! with no name or no usable schema is dropped, because claude's mcp
 //! client rejects the entire tools/list if any entry has
-//! `inputSchema: null` — one bad apple kills all tools for the session.
+//! `inputSchema: null` — one bad apple kills all tools for the cell.
 //!
-//! A tool-result whose callId is not pending in the worker MCP bridge
+//! A tendril-result whose callId is not pending in the worker MCP bridge
 //! came from a call the model made outside our catalogue, so it is
 //! forwarded to claude over stdin rather than dropped.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -67,7 +70,8 @@ use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
 use hum_mcp::protocol::ToolDef;
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, NestConfig, Worker};
+use crate::{encode_cancel, encode_petals, encode_tool_result, Cell, Egg, NestConfig, Worker};
+use thrum_core::{Petal, PetalKind};
 use tokio::sync::mpsc;
 
 use hum_thrum::{Bee, Event, Options, Refused};
@@ -94,7 +98,7 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
         "version": &advert.version,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call", "pulse"],
+        "chis": ["hello", "prompt", "cancel", "curate", "tendril-result", "unfurl", "wilt", "error", "tendril-reach", "pulse"],
         "headroom": nest.headroom(0),
         "source": advert.source.clone().unwrap_or_default(),
     });
@@ -122,7 +126,7 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
     while let Some(event) = bee.next().await {
         let tone = match event {
             Event::Tone(tone) => tone,
-            Event::Lost => {
+            Event::Astray => {
                 cells.lock().await.clear();
                 continue;
             }
@@ -155,7 +159,6 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
                 let worker = worker.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
-                let hive = advert.hive.clone();
                 let mcp_url = mcp_url.clone();
                 let sid_cwd = sid_cwd.clone();
                 let nest = nest.clone();
@@ -164,7 +167,7 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
                     if let Some(cwd) = cwd {
                         sid_cwd.lock().await.put(sid2, cwd);
                     }
-                    if let Err(e) = handle_prompt(worker, write_half, cells, nest, hive, mcp_url, tone).await {
+                    if let Err(e) = handle_prompt(worker, write_half, cells, nest, mcp_url, tone).await {
                         warn!(err = %e, "worker.prompt.handle.failed");
                     }
                 });
@@ -209,7 +212,7 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
                     });
                 }
             }
-            "tool-result" => {
+            "tendril-result" => {
                 let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
                 let resolved_by_bridge = call_id.as_deref()
                     .map(|cid| bridge.resolve(cid, tone.clone()))
@@ -243,8 +246,8 @@ pub async fn serve_worker<W: Worker + 'static>(worker: Arc<W>, advert: WorkerAdv
 struct CellBundle {
     stdin: mpsc::Sender<String>,
     cancel: tokio_util::sync::CancellationToken,
-    finish_sent: Arc<AtomicBool>,
-    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
+    wilted: Arc<AtomicBool>,
+    petals: Arc<Mutex<BTreeMap<u64, PetalKind>>>,
     last_touched: Arc<AtomicU64>,
 }
 
@@ -289,10 +292,10 @@ fn is_preflight_error(v: &Value) -> bool {
 async fn attempt_spawn<W: Worker + 'static>(
     worker: &Arc<W>,
     spec: Egg,
-    content: &str,
+    message: &str,
 ) -> Option<(Cell, Value)> {
     let cell = worker.raise(spec).await.ok()?;
-    if cell.feed.send(encode_prompt(content)).await.is_err() {
+    if cell.feed.send(message.to_string()).await.is_err() {
         cell.silence.cancel();
         return None;
     }
@@ -315,7 +318,6 @@ async fn handle_prompt<W: Worker + 'static>(
     write_half: hum_thrum::Sender,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
     nest: Arc<NestConfig>,
-    hive: String,
     mcp_url: String,
     tone: Value,
 ) -> Result<()> {
@@ -329,21 +331,27 @@ async fn handle_prompt<W: Worker + 'static>(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "claude-opus-4-7".into()));
     let cwd = tone.get("cwd").and_then(Value::as_str).unwrap_or("/").to_string();
-    let content = tone.get("content").and_then(Value::as_str)
-        .or_else(|| tone.get("text").and_then(Value::as_str))
-        .unwrap_or("").to_string();
+    let petals: Vec<Petal> = tone.get("content").cloned()
+        .and_then(|c| serde_json::from_value(c).ok())
+        .filter(|p: &Vec<Petal>| !p.is_empty())
+        .unwrap_or_else(|| vec![Petal {
+            kind: PetalKind::Text.as_str().into(),
+            text: tone.get("text").and_then(Value::as_str).map(str::to_string),
+            ..Petal::default()
+        }]);
+    let message = encode_petals(&petals);
     let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
     let explicit_resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
 
     {
         let mut g = cells.lock().await;
         if let Some(bundle) = g.get(&sid) {
-            bundle.finish_sent.store(false, Ordering::SeqCst);
-            bundle.tool_use_blocks.lock().await.clear();
+            bundle.wilted.store(false, Ordering::SeqCst);
+            bundle.petals.lock().await.clear();
             bundle.last_touched.store(now_ms(), Ordering::SeqCst);
             let send = bundle.stdin.clone();
             drop(g);
-            send.send(encode_prompt(&content)).await
+            send.send(message).await
                 .map_err(|e| anyhow::anyhow!("stdin closed on reused cell: {e}"))?;
             trace!(sid = %sid, "worker.cell.reused");
             return Ok(());
@@ -383,13 +391,13 @@ async fn handle_prompt<W: Worker + 'static>(
     let (cell, first_event) = {
         let mut s1 = base.clone();
         s1.resume_id = explicit_resume.clone();
-        match attempt_spawn(&worker, s1, &content).await {
+        match attempt_spawn(&worker, s1, &message).await {
             Some(pair) => pair,
             None => {
                 trace!(sid = %sid, "worker.resume.miss.creating");
                 let mut s2 = base.clone();
                 s2.fresh = true;
-                attempt_spawn(&worker, s2, &content).await
+                attempt_spawn(&worker, s2, &message).await
                     .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
             }
         }
@@ -397,16 +405,15 @@ async fn handle_prompt<W: Worker + 'static>(
     let stdin = cell.feed.clone();
     let events = cell.mmm.clone();
     let cancel = cell.silence.clone();
-    let finish_sent = Arc::new(AtomicBool::new(false));
-    let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let wilted = Arc::new(AtomicBool::new(false));
+    let petals = Arc::new(Mutex::new(BTreeMap::new()));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
 
     let listener = Arc::new(WireListener {
         sid: sid.clone(),
-        hive,
         write_half: write_half.clone(),
-        finish_sent: finish_sent.clone(),
-        tool_use_blocks: tool_use_blocks.clone(),
+        wilted: wilted.clone(),
+        petals: petals.clone(),
         last_touched: last_touched.clone(),
     });
 
@@ -452,8 +459,8 @@ async fn handle_prompt<W: Worker + 'static>(
         g.put(sid.clone(), CellBundle {
             stdin: stdin.clone(),
             cancel: cancel.clone(),
-            finish_sent: finish_sent.clone(),
-            tool_use_blocks: tool_use_blocks.clone(),
+            wilted: wilted.clone(),
+            petals: petals.clone(),
             last_touched: last_touched.clone(),
         });
         g.len()
@@ -465,20 +472,19 @@ async fn handle_prompt<W: Worker + 'static>(
     let cells_for_cleanup = cells.clone();
     let write_for_cleanup = write_half.clone();
     let sid_for_cleanup = sid.clone();
-    let finish_for_cleanup = finish_sent.clone();
+    let wilted_for_cleanup = wilted.clone();
     let nest_for_cleanup = nest.clone();
     tokio::spawn(async move {
         let exit_code = cell.emerged.await.unwrap_or(1);
         let _ = dispatch.await;
         idle_task.abort();
-        if !finish_for_cleanup.load(Ordering::SeqCst) {
-            let finish = json!({
-                "chi": "finish",
+        if !wilted_for_cleanup.load(Ordering::SeqCst) {
+            write_for_cleanup.send(json!({
+                "chi": "wilt",
                 "sid": sid_for_cleanup,
-                "finishReason": if exit_code == 0 { "stop" } else { "error" },
+                "reason": if exit_code == 0 { "stop" } else { "error" },
                 "exitCode": exit_code,
-            });
-            write_for_cleanup.send(finish);
+            }));
         }
         let live = {
             let mut g = cells_for_cleanup.lock().await;
@@ -501,10 +507,9 @@ fn now_ms() -> u64 {
 
 struct WireListener {
     sid: String,
-    hive: String,
     write_half: hum_thrum::Sender,
-    finish_sent: Arc<AtomicBool>,
-    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
+    wilted: Arc<AtomicBool>,
+    petals: Arc<Mutex<BTreeMap<u64, PetalKind>>>,
     last_touched: Arc<AtomicU64>,
 }
 
@@ -532,65 +537,54 @@ impl WireListener {
             msg = inner;
         }
         let typ = msg.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+        let index = msg.get("index").and_then(Value::as_u64);
 
-        match typ.as_str() {
-            "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
-                let mut body = json!({
-                    "chi": "session-ready",
+        match (typ.as_str(), index) {
+            ("system", _) if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
+                self.send(json!({
+                    "chi": "pulse",
                     "sid": self.sid,
-                });
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert("nestId".into(), msg.get("session_id").cloned().unwrap_or(Value::Null));
-                    obj.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
-                    obj.insert("tools".into(), msg.get("tools").cloned().unwrap_or(json!([])));
-                }
-                self.send(body).await;
+                    "kind": "cell-ready",
+                    "cell": msg.get("session_id").cloned().unwrap_or(Value::Null),
+                    "model": msg.get("model").cloned().unwrap_or(Value::Null),
+                    "tools": msg.get("tools").cloned().unwrap_or(json!([])),
+                }))
+                .await;
             }
-            "content_block_start" => {
-                let idx = msg.get("index").cloned().unwrap_or(Value::Null);
-                let block = msg.get("content_block").cloned().unwrap_or(json!({}));
-                let bt = block.get("type").and_then(Value::as_str).unwrap_or("");
-                match bt {
-                    "text" => self.chunk("text_start", json!({"blockIdx": idx})).await,
-                    "thinking" => self.chunk("reasoning_start", json!({"blockIdx": idx})).await,
-                    "tool_use" => {
-                        if let Some(i) = idx.as_i64() {
-                            self.tool_use_blocks.lock().await.insert(i);
-                        }
-                    }
-                    _ => {}
+            ("content_block_start", Some(petal)) => {
+                let kind = match msg.pointer("/content_block/type").and_then(Value::as_str) {
+                    Some("text") => PetalKind::Text,
+                    Some("thinking" | "redacted_thinking") => PetalKind::Sepal,
+                    Some("tool_use") => PetalKind::Tendril,
+                    _ => return,
+                };
+                self.petals.lock().await.insert(petal, kind);
+                if kind != PetalKind::Tendril {
+                    self.unfurl(petal, kind, json!({})).await;
                 }
             }
-            "content_block_delta" => {
+            ("content_block_delta", Some(petal)) => {
+                let reached_whole = self.petals.lock().await.get(&petal) == Some(&PetalKind::Tendril);
                 let delta = msg.get("delta").cloned().unwrap_or(json!({}));
-                let idx = msg.get("index").and_then(Value::as_i64);
-                let bridge_reports_tool_whole = match idx {
-                    Some(i) => self.tool_use_blocks.lock().await.contains(&i),
-                    None => false,
-                };
-                let block_idx_v = msg.get("index").cloned().unwrap_or(Value::Null);
                 match delta.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "thinking_delta" => self.chunk("reasoning_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("thinking")})).await,
-                    "text_delta" => self.chunk("text_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("text")})).await,
-                    "input_json_delta" if !bridge_reports_tool_whole => {
-                        self.chunk("tool_input_delta", json!({"blockIdx": block_idx_v, "partialJson": delta.get("partial_json")})).await
+                    "text_delta" => self.unfurl(petal, PetalKind::Text, json!({"text": delta.get("text")})).await,
+                    "thinking_delta" => self.unfurl(petal, PetalKind::Sepal, json!({"text": delta.get("thinking")})).await,
+                    "signature_delta" => self.unfurl(petal, PetalKind::Sepal, json!({"propolis": delta.get("signature")})).await,
+                    "input_json_delta" if !reached_whole => {
+                        self.unfurl(petal, PetalKind::Tendril, json!({"sap": delta.get("partial_json")})).await
                     }
                     _ => {}
                 }
             }
-            "content_block_stop" => {
-                let idx = msg.get("index").and_then(Value::as_i64);
-                let bridge_reports_tool_whole = match idx {
-                    Some(i) => self.tool_use_blocks.lock().await.remove(&i),
-                    None => false,
-                };
-                if !bridge_reports_tool_whole {
-                    self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
+            ("content_block_stop", Some(petal)) => {
+                let kind = self.petals.lock().await.remove(&petal);
+                if let Some(kind) = kind.filter(|k| *k != PetalKind::Tendril) {
+                    self.unfurl(petal, kind, json!({"closed": true})).await;
                 }
             }
-            "result" => {
+            ("result", _) => {
                 let subtype = msg.get("subtype").and_then(Value::as_str).unwrap_or("success");
-                let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
+                let nectar = msg.get("usage").cloned().unwrap_or(Value::Null);
                 let is_error = msg.get("is_error").and_then(Value::as_bool).unwrap_or(false)
                     || subtype.starts_with("error");
                 if is_error {
@@ -599,45 +593,36 @@ impl WireListener {
                         .filter(|s| !s.is_empty())
                         .unwrap_or("claude returned an error result with no detail (check auth / model / credit)");
                     warn!(sid = %self.sid, subtype, detail, "worker.result.error");
-                    let mut err = json!({
+                    self.send(json!({
                         "chi": "error",
                         "sid": self.sid,
                         "code": "worker_error",
                         "subtype": subtype,
                         "message": detail,
-                    });
-                    if let Some(obj) = err.as_object_mut() {
-                        obj.insert("usage".into(), usage);
-                    }
-                    self.send(err).await;
+                        "nectar": nectar,
+                    }))
+                    .await;
                 } else {
-                    let mut body = json!({
-                        "chi": "finish",
+                    self.send(json!({
+                        "chi": "wilt",
                         "sid": self.sid,
-                        "finishReason": subtype,
-                    });
-                    if let Some(obj) = body.as_object_mut() {
-                        obj.insert("usage".into(), usage);
-                    }
-                    self.send(body).await;
+                        "reason": subtype,
+                        "nectar": nectar,
+                    }))
+                    .await;
                 }
-                self.finish_sent.store(true, Ordering::SeqCst);
+                self.wilted.store(true, Ordering::SeqCst);
             }
-            _ => {
-                let _ = &self.hive;
-            }
+            _ => {}
         }
     }
 
-    async fn chunk(&self, chunk_type: &str, payload: Value) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("chunk".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("chunkType".into(), Value::String(chunk_type.into()));
-        if let Some(obj) = payload.as_object() {
-            for (k, v) in obj { body.insert(k.clone(), v.clone()); }
+    async fn unfurl(&self, petal: u64, kind: PetalKind, grew: Value) {
+        let mut body = json!({"chi": "unfurl", "sid": self.sid, "petal": petal, "kind": kind.as_str()});
+        if let (Some(body), Value::Object(grew)) = (body.as_object_mut(), grew) {
+            body.extend(grew);
         }
-        self.send(Value::Object(body)).await;
+        self.send(body).await;
     }
 }
 
@@ -651,8 +636,8 @@ mod tests {
         CellBundle {
             stdin: tx_in,
             cancel,
-            finish_sent: Arc::new(AtomicBool::new(false)),
-            tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            wilted: Arc::new(AtomicBool::new(false)),
+            petals: Arc::new(Mutex::new(BTreeMap::new())),
             last_touched: Arc::new(AtomicU64::new(0)),
         }
     }

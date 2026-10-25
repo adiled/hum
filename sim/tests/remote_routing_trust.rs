@@ -26,7 +26,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
-                "chis": ["hello", "prompt", "chunk", "finish"],
+                "chis": ["hello", "prompt", "unfurl", "wilt"],
             })),
         )
         .await;
@@ -40,7 +40,7 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
             "rid": "trust-1",
             "sid": "hum-trust",
             "modelId": "claude-opus-4-7",
-            "content": "what is in my prompt?",
+            "text": "what is in my prompt?",
         }),
     )
     .expect("laptop nestler sends prompt");
@@ -96,7 +96,7 @@ async fn opting_in_restores_discovery_routing() {
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
                 "models": ["claude-opus-4-7"],
-                "chis": ["hello", "prompt", "chunk", "finish"],
+                "chis": ["hello", "prompt", "unfurl", "wilt"],
             })),
         )
         .await;
@@ -107,9 +107,9 @@ async fn opting_in_restores_discovery_routing() {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"remote hi"}),
-                    serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text"}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":"remote hi"}),
+                    serde_json::json!({"chi":"wilt","sid":&sid,"reason":"end_turn","nectar":{}}),
                 ] {
                     server_thrum.inject_tone(&cid_for_pump, reply).await;
                 }
@@ -126,21 +126,21 @@ async fn opting_in_restores_discovery_routing() {
             "rid": "trust-2",
             "sid": "hum-trust",
             "modelId": "claude-opus-4-7",
-            "content": "who is out there?",
+            "text": "who is out there?",
         }),
     )
     .expect("laptop nestler sends prompt");
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let mut saw_finish = false;
+    let mut saw_wilt = false;
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let Some(tone) = sim.nestler_recv(laptop.id, "hum-trust", remaining).await else { break };
-        if tone.get("chi").and_then(|v| v.as_str()) == Some("finish") {
-            saw_finish = true;
+        if tone.get("chi").and_then(|v| v.as_str()) == Some("wilt") {
+            saw_wilt = true;
             break;
         }
     }
 
-    assert!(saw_finish, "opt-in routing did not reach the discovered worker");
+    assert!(saw_wilt, "opt-in routing did not reach the discovered worker");
 }

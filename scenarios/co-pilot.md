@@ -19,7 +19,7 @@ by manual key exchange:
   full keyboard, full bloom.
 - **humd-B** (observer) — attaches a nestler with the **`hearOnly`**
   propensity. It is allowed to receive every chi but cannot emit
-  `chi:"prompt"`, `chi:"tool-result"`, `chi:"permission-response"`, or
+  `chi:"prompt"`, `chi:"tendril-result"`, `chi:"permission-response"`, or
   `chi:"cancel"`. The brood enforces this at the humd boundary, not the
   nestler.
 
@@ -34,8 +34,8 @@ willingness — it is here to listen.
 2. humd-A registers humd-B as a peer with capability
    `nestler.role=hearOnly` and begins teeing every outbound petal to
    the ensemble link addressed to humd-B's `HumdId`.
-3. Every `chi:"chunk"`, `chi:"tool-call"`, `chi:"tool-result"`,
-   `chi:"permission-ask"`, `chi:"finish"`, `chi:"breath"`, even
+3. Every `chi:"unfurl"`, `chi:"tendril-reach"`, `chi:"tendril-result"`,
+   `chi:"permission-ask"`, `chi:"wilt"`, `chi:"breath"`, even
    `chi:"perf-mark"` and `chi:"drone"`, that humd-A would emit to its
    own nestler is fan-out'd to humd-B over the wire. humd-B forwards
    them to its observer nestler in the same order they were emitted
@@ -49,8 +49,8 @@ willingness — it is here to listen.
 6. A `chi:"permission-ask"` lands on both nestlers. Only Operator-A's
    reply is honoured; if Operator-B's nestler emits a response, humd-A
    drops it (logged via trace `permission.hold.denied.hearOnly`).
-7. Hum finishes. Both nestlers receive the same terminal `chi:"finish"`
-   with identical `usage` block.
+7. The bloom wilts. Both nestlers receive the same terminal `chi:"wilt"`
+   with identical `nectar`.
 
 ## The failure modes
 
@@ -66,9 +66,9 @@ willingness — it is here to listen.
   observable error. Test asserts non-empty humd-B transcript and a
   surfaced `chi:"error"` if the tee ever breaks mid-bloom.
 - **Late join double-replay.** humd-B attaches after the hum has
-  already produced N chunks. It must receive those N chunks once,
+  already unfurled N times. It must receive those N unfurls once,
   then live tail — not N more copies as duplicates, and not a fresh
-  stream starting from chunk N+1 with no replay.
+  stream starting from unfurl N+1 with no replay.
 
 ## The success criteria
 
@@ -78,7 +78,7 @@ willingness — it is here to listen.
   receives an equivalent petal (same `chi`, same `rid`, same `sigil`,
   same payload) within `RTT + 50ms`. Transcripts compared after the
   hum finishes are byte-identical modulo `from`/`to` framing.
-- humd-B's tap receives the terminal `chi:"finish"` with
+- humd-B's tap receives the terminal `chi:"wilt"` with
   `usage.output_tokens > 0` and `usage.output_tokens` equal to
   humd-A's tap's value for the same sigil.
 - For every forbidden chi emitted by humd-B during the run, humd-B's

@@ -173,7 +173,7 @@ mod tests {
                 richness: Some("medium".into()),
                 wire: Some("custom/mm-v0".into()),
             })
-            .with_chis(["hello", "gossip-publish", "tool-call", "tool-result"])
+            .with_chis(["hello", "gossip-publish", "tendril-reach", "tendril-result"])
             .with_source("https://github.com/example/mm-bee");
         let j = serde_json::to_value(&m).unwrap();
         let back: BeeManifest = serde_json::from_value(j).unwrap();

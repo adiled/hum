@@ -10,13 +10,13 @@
 //! call, so one core serves every driver: tokio for a Rust bee, and the
 //! link for a bee written in anything else.
 //!
-//! The hello. On connect humd breathes once (`sessions: []`) before it
+//! The hello. On connect humd breathes once (`sigils: []`) before it
 //! has heard anything. The core answers with the bee's hello, signed at
 //! the time it is given, under a fresh rid, carrying the fields the
 //! client owns ([`CLIENT_OWNED`]): `chi`, `rid`, `hive`, `protoVersion`,
 //! and the signature (`hid`, `from`, `pubkey`, `signedAt`, `signature`).
 //! humd acknowledges the hello's rid as it does every tone's, then gives
-//! its verdict: a breath (`sessions: {}`) admits the bee, an echo with
+//! its verdict: a breath (`sigils: {}`) admits the bee, an echo with
 //! `ok: false` under the hello's rid refuses it. A breath before the
 //! acknowledgement is the one humd sent on connect and admits nothing. A
 //! refusal after admission is still a refusal. A refusal is final: the
@@ -34,7 +34,7 @@
 //! Outliving humd. When the connection closes or cannot be made, the
 //! core waits and dials again: [`BACKOFF_FIRST`], doubling to
 //! [`BACKOFF_MOST`], a fifth either way of jitter so bees that lost humd
-//! together do not return together. A bee that had nestled hears `lost`
+//! together do not return together. A bee that had nestled hears `astray`
 //! first. One that never has is racing humd at boot, and its retries
 //! stay quiet until [`QUIET_TRIES`] have failed. Admission resets the
 //! wait.
@@ -48,7 +48,7 @@
 //! does not know, is sent anyway with an advisory, once per chi and key:
 //! the wire is checked here before humd checks it again. A hello sent as
 //! a tone is taken as a change to the hello. A tone sent while humd is
-//! away is dropped, since its session went with that humd, and the count
+//! away is dropped, since its sigil went with that humd, and the count
 //! is reported once the bee nestles again.
 //!
 //! Advisories reach the bee from two places, this core and humd, which
@@ -124,7 +124,7 @@ pub enum Output {
     Arm(Timer, Duration),
     Tone(Value),
     Nestled,
-    Lost,
+    Astray,
     Refused(String),
     Advisory(Advisory),
     Stopped,
@@ -243,8 +243,8 @@ impl Core {
         match self.state {
             State::Dialing | State::Greeting { .. } => self.retry(),
             State::Nestled { .. } => {
-                info!(hive = %self.hive, "thrum.lost — humd went away; dialing again");
-                self.out.push_back(Output::Lost);
+                info!(hive = %self.hive, "thrum.astray — humd went away; dialing again");
+                self.out.push_back(Output::Astray);
                 self.retry();
             }
             State::Idle | State::Waiting | State::Refused | State::Stopped => {}
@@ -435,7 +435,7 @@ impl Core {
             let mut fields = Map::new();
             fields.insert("count".into(), json!(n));
             let message = format!(
-                "{n} tone(s) sent while humd was away were dropped; stop a turn when the bee hears lost"
+                "{n} tone(s) sent while humd was away were dropped; stop a bloom when the bee hears astray"
             );
             self.out.push_back(Output::Advisory(Advisory::local(Code::DroppedWhileAway, message, fields)));
         }

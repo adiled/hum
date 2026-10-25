@@ -7,10 +7,10 @@
 //! wire matters. This test pins:
 //!
 //! - chi:"prompt" arriving at the worker carries `foragerTools`
-//!   merged from registered forager-hive manifests
+//!   merged from the manifests of the bees that advertise tools
 //! - every foragerTools entry has an object `inputSchema`
 //! - chi:"prompt" carries `provided` listing the union of
-//!   capabilities from those forager manifests
+//!   capabilities from those manifests
 //! - any nestler-side `tools` array on the inbound prompt is
 //!   forwarded as-is (humd doesn't strip / rename)
 
@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 #[tokio::test(flavor = "multi_thread")]
-async fn humd_enriches_prompt_with_forager_catalogue() {
+async fn humd_enriches_prompt_with_the_advertised_catalogue() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let sim = sim::Sim::new();
@@ -30,10 +30,10 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    let forager_cid = hum_identity::HumId::mint().to_string();
-    let _frx = humd.thrum.register_synthetic(forager_cid.clone());
-    let forager_hello = json!({
-        "chi":"hello","roles":["forager"],"hive":"humfs","version":"0.0.0",
+    let tools_cid = hum_identity::HumId::mint().to_string();
+    let _frx = humd.thrum.register_synthetic(tools_cid.clone());
+    let tools_hello = json!({
+        "chi":"hello","hive":"humfs","version":"0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
         "provides":["fs"],
         "tools":[
@@ -42,9 +42,9 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
             {"name":"humfs_do_code","description":"edit code",
              "inputSchema":{"type":"object","properties":{"file_path":{"type":"string"}}}},
         ],
-        "chis":["hello","tool-call","tool-result"],
+        "chis":["hello","tendril-reach","tendril-result"],
     });
-    humd.thrum.inject_tone(&forager_cid, humd.signed_hello(forager_hello)).await;
+    humd.thrum.inject_tone(&tools_cid, humd.signed_hello(tools_hello)).await;
 
     let worker_cid = hum_identity::HumId::mint().to_string();
     let mut worker_rx = humd.thrum.register_synthetic(worker_cid.clone());
@@ -52,7 +52,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
         "chi":"hello","roles":["worker"],"hive":"claude-cli","version":"0.0.0",
         "protoVersion": thrum_core::THRUM_VERSION,
         "models":["claude-opus-4-7"],
-        "chis":["hello","prompt","chunk","tool-call","finish"],
+        "chis":["hello","prompt","unfurl","tendril-reach","wilt"],
     });
     humd.thrum.inject_tone(&worker_cid, humd.signed_hello(hello)).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -60,7 +60,7 @@ async fn humd_enriches_prompt_with_forager_catalogue() {
     sim.nestler_send(humd.id, json!({
         "chi":"prompt","rid":"r1","sid":"hum-catalog-1",
         "modelId":"claude-opus-4-7","cwd":"/work",
-        "content":"hi",
+        "text":"hi",
         "tools":[
             { "name":"read", "description":"file read",
               "inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},

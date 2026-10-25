@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         "roles": ["worker"],
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
-        "chis": ["hello", "prompt", "chunk", "finish"],
+        "chis": ["hello", "prompt", "unfurl", "wilt"],
     });
     wr.write_all(format!("{hello}\n").as_bytes()).await?;
 
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         let tone: serde_json::Value = serde_json::from_str(&line)?;
         match tone.get("chi").and_then(|v| v.as_str()) {
             Some("breath") => { /* daemon's handshake reply */ }
-            Some("prompt") => { /* a turn arrived */ }
+            Some("prompt") => { /* a bloom is asked for */ }
             _ => continue,
         }
     }

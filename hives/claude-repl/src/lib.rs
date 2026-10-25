@@ -2,7 +2,7 @@
 //!
 //! Spawns the PTY, watches stdout, marks PERCHED when the prompt glyph
 //! `❯` shows up. No transcript synth, no hooks, no classifier yet — the
-//! cell compiles and runs but can't carry a turn.
+//! cell compiles and runs but can't carry a bloom.
 
 use std::io::Read;
 

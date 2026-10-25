@@ -33,7 +33,7 @@ SIM card phone ──SMS──► cellular tower ──► your USB modem
                                                 ▼
                                                 humd
                                                 │
-                                                │ chi:"chunk" → "finish"
+                                                │ chi:"unfurl" → "wilt"
                                                 ▼
                                           gsm-modem bee
                                                 │
@@ -103,8 +103,8 @@ socat -d -d pty,raw,echo=0 pty,raw,echo=0
 | modem URC / AT | hum chi |
 |---|---|
 | `+CMT: "<from>",...\n<body>` | `chi:"prompt"` (sid keyed off `<from>`) |
-| daemon's `chi:"chunk"` text parts | collected into one SMS body |
-| daemon's `chi:"finish"` | `AT+CMGS="<from>"` + body + Ctrl-Z |
+| daemon's `chi:"unfurl"` text petals | collected into one SMS body |
+| daemon's `chi:"wilt"` | `AT+CMGS="<from>"` + body + Ctrl-Z |
 
 ## What it doesn't do
 

@@ -31,7 +31,7 @@ use bytes::BytesMut;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use hum_thrum::{Bee, Event, Options};
-use thrum_core::Chi;
+use thrum_core::{Chi, PetalKind};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
@@ -109,7 +109,7 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
         "roles": ["forager"],
         "version": NESTLING_VERSION,
         "propensity": { "statefulness": "stateful", "richness": "lean", "wire": "gsm/at-cmd-sms" },
-        "chis": ["hello", "prompt", "chunk", "finish", "error"],
+        "chis": ["hello", "prompt", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/gsm-modem",
     });
     let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
@@ -128,23 +128,17 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     while let Some(event) = bee.next().await {
         let tone = match event {
             Event::Tone(tone) => tone,
-            Event::Lost | Event::Refused(_) => break,
+            Event::Astray | Event::Refused(_) => break,
             Event::Nestled | Event::Advisory(_) => continue,
         };
         if tone.get("sid").and_then(Value::as_str) != Some(sid.as_str()) {
             continue;
         }
         match tone.get("chi").and_then(Value::as_str) {
-            Some("chunk") => {
-                if let Some(part) = tone.get("part") {
-                    if part.get("type").and_then(Value::as_str) == Some("text") {
-                        if let Some(t) = part.get("text").and_then(Value::as_str) {
-                            collected.push_str(t);
-                        }
-                    }
-                }
+            Some("unfurl") if tone.get("kind").and_then(Value::as_str) == Some(PetalKind::Text.as_str()) => {
+                collected.push_str(tone.get("text").and_then(Value::as_str).unwrap_or(""));
             }
-            Some("finish") | Some("error") => break,
+            Some("wilt") | Some("error") => break,
             _ => {}
         }
     }

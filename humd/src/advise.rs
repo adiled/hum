@@ -280,8 +280,8 @@ mod tests {
     fn the_tone_carries_the_code_in_its_fields() {
         let entry = Entry {
             code: "undeclared-key".into(),
-            message: "chunk carries text".into(),
-            fields: serde_json::from_value(json!({"keys": ["text"]})).unwrap(),
+            message: "unfurl carries delta".into(),
+            fields: serde_json::from_value(json!({"keys": ["delta"]})).unwrap(),
             first: T,
             last: T,
             count: 1,

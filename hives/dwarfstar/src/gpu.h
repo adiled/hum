@@ -7,7 +7,7 @@
  * needs the GPU while another holds it files a want, an empty file named
  * by its pid in the directory beside the lock, and waits. The holder hands
  * the GPU over when it is idle and someone wants it, after its current
- * turn when a want has waited a minute, and on its own after
+ * bloom when a want has waited a minute, and on its own after
  * DWARFSTAR_IDLE_MS idle. A want left by a process that died is removed by
  * whoever sees it. A probe holds the lock for an instant, so it tries a
  * few times before it calls the GPU another bee's.

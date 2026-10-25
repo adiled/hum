@@ -6,7 +6,7 @@
 // Manual regen: `cargo run -p codegen`.
 
 export type { ChiKind } from "./chi.ts";
-import type { ChiKind } from "./chi.ts";
+import { isValidChi, type ChiKind } from "./chi.ts";
 
 export interface HelloBody {
   protoVersion: string;
@@ -37,30 +37,83 @@ export interface PromptBody {
   cwd?: string;
   systemPrompt?: string;
   text?: string;
-  content?: string;
+  content?: Petal[];
   tools?: unknown[];
   foragerTools?: unknown[];
   provided?: string[];
   disallowedTools?: string[];
   allowedTools?: string[];
   resume?: string;
+  temperature?: number;
+  prune?: Prune;
+  season?: number;
+  frost?: string[];
+  seed?: number;
+  trellis?: unknown;
+  tendrils?: Tendrils;
+  sepal?: Sepal;
+}
+
+export interface Petal {
+  kind: string;
+  role?: string;
+  text?: string;
+  grain?: Grain;
+  callId?: string;
+  name?: string;
+  args?: unknown;
+  result?: unknown;
+  isError?: boolean;
+  propolis?: string;
+  source?: unknown;
+  brix?: unknown;
+  bouquet?: unknown[];
+}
+
+export interface Grain {
+  kind: string;
+  mediaType: string;
+  data?: string;
+  url?: string;
+}
+
+export interface Prune {
+  p?: number;
+  k?: number;
+}
+
+export interface Tendrils {
+  reach?: string;
+  parallel?: boolean;
+}
+
+export interface Sepal {
+  effort?: string;
+  budget?: number;
 }
 
 export interface BreathBody {
-  sessions: unknown;
+  sigils: unknown;
   protoVersion?: string;
 }
 
-export interface ChunkBody {
-  chunkType: string;
-  blockIdx?: number;
-  delta?: unknown;
-  partialJson?: string;
+export interface UnfurlBody {
+  petal: number;
+  kind: string;
+  text?: string;
+  sap?: string;
+  callId?: string;
+  name?: string;
+  grain?: Grain;
+  propolis?: string;
+  source?: unknown;
+  brix?: unknown;
+  closed?: boolean;
 }
 
-export interface FinishBody {
-  finishReason: string;
-  usage?: unknown;
+export interface WiltBody {
+  reason: string;
+  nectar?: unknown;
   exitCode?: number;
   subtype?: string;
 }
@@ -69,41 +122,35 @@ export interface ErrorBody {
   message: string;
   code?: string;
   subtype?: string;
-  usage?: unknown;
+  nectar?: unknown;
 }
 
-export interface SessionReadyBody {
-  nestId: string;
-  model: string;
-  tools?: unknown[];
-}
-
-export interface ToolCallBody {
+export interface TendrilReachBody {
   callId: string;
-  toolName: string;
-  name?: string;
+  name: string;
   args?: unknown;
 }
 
-export interface ToolResultBody {
+export interface TendrilResultBody {
   callId: string;
   output?: string;
-  result?: string;
+  result?: unknown;
   isError?: boolean;
   title?: string;
   metadata?: unknown;
 }
 
-export interface ToolInfoBody {
+export interface TendrilInfoBody {
   callId: string;
   name?: string;
   args?: unknown;
   result?: unknown;
+  isError?: boolean;
 }
 
-export interface ToolMetaBody {
+export interface TendrilMetaBody {
   callId?: string;
-  toolName?: string;
+  name?: string;
   metadata?: unknown;
 }
 
@@ -111,11 +158,14 @@ export interface PulseBody {
   kind: string;
   pid?: number;
   headroom?: Headroom;
+  cell?: string;
+  model?: string;
+  tools?: unknown[];
 }
 
 export interface PermissionAskBody {
   callId?: string;
-  toolName?: string;
+  name?: string;
   message?: string;
   arg?: unknown;
 }
@@ -212,12 +262,12 @@ export interface CleanupBody {
 export interface CurateBody {
 }
 
-export interface TendrilResultBody {
+export interface ScoutResultBody {
   callId?: string;
   output?: unknown;
 }
 
-export interface TendrilReachBody {
+export interface ScoutBody {
   task?: string;
   tools?: unknown[];
 }
@@ -245,14 +295,13 @@ export interface ToneViews {
   "hello": HelloBody;
   "prompt": PromptBody;
   "breath": BreathBody;
-  "chunk": ChunkBody;
-  "finish": FinishBody;
+  "unfurl": UnfurlBody;
+  "wilt": WiltBody;
   "error": ErrorBody;
-  "session-ready": SessionReadyBody;
-  "tool-call": ToolCallBody;
-  "tool-result": ToolResultBody;
-  "tool-info": ToolInfoBody;
-  "tool-meta": ToolMetaBody;
+  "tendril-reach": TendrilReachBody;
+  "tendril-result": TendrilResultBody;
+  "tendril-info": TendrilInfoBody;
+  "tendril-meta": TendrilMetaBody;
   "pulse": PulseBody;
   "permission-ask": PermissionAskBody;
   "release-permit": ReleasePermitBody;
@@ -273,9 +322,20 @@ export interface ToneViews {
   "cancel": CancelBody;
   "cleanup": CleanupBody;
   "curate": CurateBody;
-  "tendril-result": TendrilResultBody;
-  "tendril-reach": TendrilReachBody;
+  "scout-result": ScoutResultBody;
+  "scout": ScoutBody;
   "petal-cell": PetalCellBody;
 }
 
-export type ToneView<C extends keyof ToneViews> = Envelope & ToneViews[C];
+// A tone: the envelope and its chi's declared body, the same tone
+// whether a bee sends it or hears it. Its rid may be left out; hum's
+// client gives a tone one when it has none, and humd's breath has none.
+export type Tone<C extends keyof ToneViews = keyof ToneViews> = {
+  [K in C]: { chi: K; rid?: string } & Omit<Envelope, "chi" | "rid"> & ToneViews[K];
+}[C];
+
+export function isTone(x: unknown): x is Tone {
+  if (!x || typeof x !== "object") return false;
+  const chi = (x as { chi?: unknown }).chi;
+  return typeof chi === "string" && isValidChi(chi);
+}

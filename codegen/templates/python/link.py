@@ -8,16 +8,15 @@ Python bee behaves exactly as a bee in any language.
 
     bee = Bee(hive="echo", as_="main", hello={"roles": ["worker"], "models": ["m"]})
     bee.on(Chi.PROMPT, on_prompt)
-    bee.on_lost(stop_turns)
+    bee.on_astray(stop_turns)
     await bee.start()    # admitted, or Refused, or LinkError
     await bee.closed()   # how the link ended; Refused or LinkError unless the bee closed it
 
 A tone goes to the handler for its sid if there is one, else to the
-handler for its chi, else to on_any: an asker follows each session it
+handler for its chi, else to on_any: a forager follows each sigil it
 opened by sid, a worker takes prompts by chi. Handlers run in the order
-tones arrive, on the event loop. A coroutine
-handler runs as its own task, so a long turn never holds up the tone
-after it (a cancel). A tone sent while humd is away is dropped by the
+tones arrive, on the event loop. A coroutine handler runs as its own
+task, so a long bloom never holds up the tone after it (a cancel). A tone sent while humd is away is dropped by the
 link, which says so.
 """
 from __future__ import annotations
@@ -38,7 +37,6 @@ _LINE_LIMIT = 64 * 1024 * 1024
 
 
 class Refused(Exception):
-    """humd refused the bee; `reason` says why."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(f"humd refused the bee: {reason}")
@@ -46,11 +44,10 @@ class Refused(Exception):
 
 
 class LinkError(Exception):
-    """The link could not run, or ended without the bee closing it."""
+    pass
 
 
 def hum_cli() -> str:
-    """Where `hum` is: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum."""
     explicit = os.environ.get(HUM_CLI_ENV)
     if explicit:
         return explicit
@@ -77,7 +74,7 @@ class Bee:
         self._by_chi: Dict[str, Handler] = {}
         self._any: Optional[Handler] = None
         self._nestled: List[Handler] = []
-        self._lost: List[Handler] = []
+        self._astray: List[Handler] = []
         self._advisory: List[Handler] = []
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._starting: Optional[asyncio.Future] = None
@@ -88,42 +85,34 @@ class Bee:
         self._tasks: Set[asyncio.Future] = set()
 
     def on(self, chi: str, fn: Handler) -> "Bee":
-        """Handle every tone of one chi; a later handler replaces an earlier."""
         self._by_chi[chi] = fn
         return self
 
     def on_sid(self, sid: str, fn: Handler) -> "Bee":
-        """Handle every tone of one session, before any chi handler."""
         self._by_sid[sid] = fn
         return self
 
     def off_sid(self, sid: str) -> "Bee":
-        """Stop following a session."""
         self._by_sid.pop(sid, None)
         return self
 
     def on_any(self, fn: Handler) -> "Bee":
-        """Handle every tone no sid or chi handler takes."""
         self._any = fn
         return self
 
     def on_nestled(self, fn: Handler) -> "Bee":
-        """humd admitted the bee: at start, and again after every reconnect."""
         self._nestled.append(fn)
         return self
 
-    def on_lost(self, fn: Handler) -> "Bee":
-        """humd went away. The link is dialing again; stop what humd was waiting on."""
-        self._lost.append(fn)
+    def on_astray(self, fn: Handler) -> "Bee":
+        self._astray.append(fn)
         return self
 
     def on_advisory(self, fn: Handler) -> "Bee":
-        """Something the bee should fix. The link has already logged it."""
         self._advisory.append(fn)
         return self
 
     async def start(self) -> None:
-        """Run the link; returns once humd has admitted the bee."""
         if self._proc is not None or self._done is not None:
             raise LinkError("this bee has already started")
         loop = asyncio.get_running_loop()
@@ -150,11 +139,9 @@ class Bee:
         self._write(tone)
 
     def hello(self, patch: Mapping[str, Any]) -> None:
-        """Change the hello; a field set to None is dropped."""
         self._write({"hello": patch})
 
     async def close(self) -> None:
-        """Close the link: what was sent goes out, then the link exits."""
         self._closing = True
         if self._proc is not None and self._proc.stdin is not None:
             self._proc.stdin.close()
@@ -163,7 +150,6 @@ class Bee:
         await self.closed()
 
     async def closed(self) -> None:
-        """Returns once the link has exited: cleanly after close(), raising otherwise."""
         if self._done is None:
             raise LinkError("this bee has not started")
         await asyncio.shield(self._done)
@@ -221,8 +207,8 @@ class Bee:
                 self._starting.set_result(None)
             for fn in self._nestled:
                 self._call(fn)
-        elif link == "lost":
-            for fn in self._lost:
+        elif link == "astray":
+            for fn in self._astray:
                 self._call(fn)
         elif link == "advisory":
             advisory = {k: v for k, v in msg.items() if k != "link"}

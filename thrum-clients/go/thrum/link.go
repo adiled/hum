@@ -14,17 +14,17 @@
 //
 //	bee := thrum.NewBee(thrum.Options{Hive: "twilio-sms", As: "main", Hello: hello})
 //	bee.On(thrum.ChiPrompt, onPrompt)
-//	bee.OnLost(stopTurns)
+//	bee.OnAstray(stopTurns)
 //	if err := bee.Start(ctx); err != nil { ... } // admitted, or *Refused, or *LinkError
 //	err := bee.Wait()                              // how the link ended
 //
 // A tone goes to the handler for its sid if there is one, else to the
-// handler for its chi, else to OnAny: an asker follows each session it
+// handler for its chi, else to OnAny: a forager follows each sigil it
 // opened by sid, a worker takes prompts by chi. Handlers run one at a
-// time, in the order tones arrive, on the goroutine reading the link: start long work in a goroutine of its own,
-// so the tone after it (a cancel) is not held up. Send is safe from any
-// goroutine. A tone sent while humd is away is dropped by the link,
-// which says so.
+// time, in the order tones arrive, on the goroutine reading the link:
+// start long work in a goroutine of its own, so the tone after it (a
+// cancel) is not held up. Send is safe from any goroutine. A tone sent
+// while humd is away is dropped by the link, which says so.
 
 package thrum
 
@@ -40,10 +40,8 @@ import (
 	"sync"
 )
 
-// LinkVersion is the version of the lines between this client and `hum bee link`.
 const LinkVersion = 1
 
-// How `hum bee link` exits.
 const (
 	LinkExitClosed = 0
 	LinkExitFailed = 1
@@ -51,53 +49,37 @@ const (
 	LinkExitRefused = 3
 )
 
-// ClientOwned are the hello fields the client owns; a bee's own values for them are ignored.
 var ClientOwned = []string{"chi", "rid", "hive", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature"}
 
-// Where `hum` is found: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum.
 const (
 	HumCLIEnv     = "HUM_CLI"
 	HumCLIName    = "hum"
 	HumCLIDefault = ".local/bin/hum"
 )
 
-// AdvisoryCode names an advisory (WIRE.md, Advisories).
 type AdvisoryCode string
 
 const (
-	// AdvisoryUndeclaredKey : a tone carries keys the thrum does not declare for its chi (client, humd)
 	AdvisoryUndeclaredKey AdvisoryCode = "undeclared-key"
-	// AdvisoryUnknownChi : a tone's chi is not in the thrum (client)
 	AdvisoryUnknownChi AdvisoryCode = "unknown-chi"
-	// AdvisoryNotATone : a line from the bee is not a JSON object with a chi, and was dropped (client)
 	AdvisoryNotATone AdvisoryCode = "not-a-tone"
-	// AdvisoryClientOwned : the bee set a hello field the client owns, and it was ignored (client)
 	AdvisoryClientOwned AdvisoryCode = "client-owned"
-	// AdvisoryToneRefused : humd refused a tone under a rid the client gave it (client)
 	AdvisoryToneRefused AdvisoryCode = "tone-refused"
-	// AdvisoryDroppedWhileAway : tones sent while humd was away were dropped (client)
 	AdvisoryDroppedWhileAway AdvisoryCode = "dropped-while-away"
-	// AdvisoryProtoDrift : the bee speaks another minor version of the thrum (humd)
 	AdvisoryProtoDrift AdvisoryCode = "proto-drift"
-	// AdvisoryReconnectStorm : the bee said hello 10 times within 10 minutes (humd)
 	AdvisoryReconnectStorm AdvisoryCode = "reconnect-storm"
-	// AdvisoryDidNotReturn : the bee was nestled when humd stopped and had not come back 2 minutes after humd started (humd)
 	AdvisoryDidNotReturn AdvisoryCode = "did-not-return"
 )
 
-// Tone is one thrum tone, as JSON.
 type Tone = map[string]any
 
-// Options name the bee and its hello.
 type Options struct {
 	Hive  string
 	As    string
 	Hello map[string]any
-	// Hum is the `hum` to run; HumCLI() when empty.
 	Hum string
 }
 
-// Advisory is something the bee should fix. The link has already logged it.
 type Advisory struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
@@ -105,17 +87,14 @@ type Advisory struct {
 	Fields  map[string]any `json:"fields,omitempty"`
 }
 
-// Refused is humd refusing the bee.
 type Refused struct{ Reason string }
 
 func (r *Refused) Error() string { return "humd refused the bee: " + r.Reason }
 
-// LinkError is the link failing to run, or ending without the bee closing it.
 type LinkError struct{ Reason string }
 
 func (e *LinkError) Error() string { return e.Reason }
 
-// HumCLI is where `hum` is: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum.
 func HumCLI() string {
 	if p := os.Getenv(HumCLIEnv); p != "" {
 		return p
@@ -127,7 +106,6 @@ func HumCLI() string {
 	return filepath.Join(home, HumCLIDefault)
 }
 
-// Bee is one bee's client.
 type Bee struct {
 	opts Options
 
@@ -136,7 +114,7 @@ type Bee struct {
 	byChi    map[string]func(Tone)
 	any      func(Tone)
 	nestled  []func()
-	lost     []func()
+	astray   []func()
 	advisory []func(Advisory)
 	id       string
 	closing  bool
@@ -154,7 +132,6 @@ type Bee struct {
 	err       error
 }
 
-// NewBee makes a bee's client; nothing runs until Start.
 func NewBee(opts Options) *Bee {
 	return &Bee{
 		opts:    opts,
@@ -165,7 +142,6 @@ func NewBee(opts Options) *Bee {
 	}
 }
 
-// On handles every tone of one chi; a later handler replaces an earlier.
 func (b *Bee) On(chi Chi, fn func(Tone)) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -173,7 +149,6 @@ func (b *Bee) On(chi Chi, fn func(Tone)) *Bee {
 	return b
 }
 
-// OnSid handles every tone of one session, before any chi handler.
 func (b *Bee) OnSid(sid string, fn func(Tone)) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -181,7 +156,6 @@ func (b *Bee) OnSid(sid string, fn func(Tone)) *Bee {
 	return b
 }
 
-// OffSid stops following a session.
 func (b *Bee) OffSid(sid string) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -189,7 +163,6 @@ func (b *Bee) OffSid(sid string) *Bee {
 	return b
 }
 
-// OnAny handles every tone no sid or chi handler takes.
 func (b *Bee) OnAny(fn func(Tone)) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -197,7 +170,6 @@ func (b *Bee) OnAny(fn func(Tone)) *Bee {
 	return b
 }
 
-// OnNestled runs when humd admits the bee: at start, and after every reconnect.
 func (b *Bee) OnNestled(fn func()) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -205,15 +177,13 @@ func (b *Bee) OnNestled(fn func()) *Bee {
 	return b
 }
 
-// OnLost runs when humd goes away. The link is dialing again; stop what humd was waiting on.
-func (b *Bee) OnLost(fn func()) *Bee {
+func (b *Bee) OnAstray(fn func()) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.lost = append(b.lost, fn)
+	b.astray = append(b.astray, fn)
 	return b
 }
 
-// OnAdvisory runs for something the bee should fix.
 func (b *Bee) OnAdvisory(fn func(Advisory)) *Bee {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -221,14 +191,12 @@ func (b *Bee) OnAdvisory(fn func(Advisory)) *Bee {
 	return b
 }
 
-// ID is the bee's id, once the link has entered it.
 func (b *Bee) ID() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.id
 }
 
-// Start runs the link and returns once humd has admitted the bee.
 func (b *Bee) Start(ctx context.Context) error {
 	b.mu.Lock()
 	if b.cmd != nil {
@@ -273,17 +241,14 @@ func (b *Bee) Start(ctx context.Context) error {
 	}
 }
 
-// Send sends a tone. The client gives it a rid when it has none.
 func (b *Bee) Send(tone Tone) error {
 	return b.write(tone)
 }
 
-// Hello changes the hello; a field set to nil is dropped.
 func (b *Bee) Hello(patch map[string]any) error {
 	return b.write(map[string]any{"hello": patch})
 }
 
-// Close closes the link: what was sent goes out, then the link exits.
 func (b *Bee) Close() error {
 	b.mu.Lock()
 	b.closing = true
@@ -300,7 +265,6 @@ func (b *Bee) Close() error {
 	return b.Wait()
 }
 
-// Wait returns once the link has exited: nil after Close, *Refused or *LinkError otherwise.
 func (b *Bee) Wait() error {
 	<-b.done
 	return b.err
@@ -384,9 +348,9 @@ func (b *Bee) receive(line []byte) {
 		for _, fn := range fns {
 			call(fn)
 		}
-	case "lost":
+	case "astray":
 		b.mu.Lock()
-		fns := append([]func(){}, b.lost...)
+		fns := append([]func(){}, b.astray...)
 		b.mu.Unlock()
 		for _, fn := range fns {
 			call(fn)

@@ -8,7 +8,7 @@
 generated from thrum-core, and the client, the other end of
 `hum bee link`."""
 from . import protocol
-from .chi import ALL_CHI, THRUM_VERSION, Chi, PulseKind, is_valid_chi
+from .chi import ALL_CHI, THRUM_VERSION, Chi, PetalKind, PulseKind, is_valid_chi
 from .link import (
     CLIENT_OWNED,
     HUM_CLI_ENV,
@@ -32,6 +32,7 @@ __all__ = [
     "LINK_VERSION",
     "LinkError",
     "LinkExit",
+    "PetalKind",
     "PulseKind",
     "Refused",
     "THRUM_VERSION",

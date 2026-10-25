@@ -4,10 +4,10 @@
  *
  *   ECHO_HIVE (echo-c), ECHO_AS (main), ECHO_MODEL (echo-c)
  *
- * It prints what happens to it, one line each: nestled, lost,
+ * It prints what happens to it, one line each: nestled, astray,
  * advisory <code>, then closed, refused <why> or failed <why>. A prompt
  * whose text is "stray" is answered with a key the thrum does not
- * declare; one whose text is "follow" has the bee follow its session and
+ * declare; one whose text is "follow" has the bee follow its sigil and
  * print sid <chi> for the next tone of it. Closing its stdin closes the
  * bee.
  */
@@ -47,26 +47,27 @@ static void on_prompt(thrum_bee *bee, const cJSON *tone, void *user) {
     const char *sid = string_of(tone, "sid");
     if (strcmp(text, "follow") == 0) thrum_bee_on_sid(bee, sid, on_followed, NULL);
     size_t n = strlen(text) + 8;
-    char *delta = malloc(n);
-    if (!delta) return;
-    snprintf(delta, n, "echo: %s", text);
+    char *echo = malloc(n);
+    if (!echo) return;
+    snprintf(echo, n, "echo: %s", text);
 
-    cJSON *chunk = cJSON_CreateObject();
-    cJSON_AddStringToObject(chunk, "chi", THRUM_CHI_CHUNK);
-    cJSON_AddStringToObject(chunk, "sid", sid);
-    cJSON_AddStringToObject(chunk, "chunkType", "text_delta");
-    cJSON_AddStringToObject(chunk, "delta", delta);
-    if (strcmp(text, "stray") == 0) cJSON_AddTrueToObject(chunk, "stray");
-    thrum_bee_send(bee, chunk);
-    cJSON_Delete(chunk);
-    free(delta);
+    cJSON *unfurl = cJSON_CreateObject();
+    cJSON_AddStringToObject(unfurl, "chi", THRUM_CHI_UNFURL);
+    cJSON_AddStringToObject(unfurl, "sid", sid);
+    cJSON_AddNumberToObject(unfurl, "petal", 0);
+    cJSON_AddStringToObject(unfurl, "kind", THRUM_PETAL_TEXT);
+    cJSON_AddStringToObject(unfurl, "text", echo);
+    if (strcmp(text, "stray") == 0) cJSON_AddTrueToObject(unfurl, "stray");
+    thrum_bee_send(bee, unfurl);
+    cJSON_Delete(unfurl);
+    free(echo);
 
-    cJSON *finish = cJSON_CreateObject();
-    cJSON_AddStringToObject(finish, "chi", THRUM_CHI_FINISH);
-    cJSON_AddStringToObject(finish, "sid", sid);
-    cJSON_AddStringToObject(finish, "finishReason", "stop");
-    thrum_bee_send(bee, finish);
-    cJSON_Delete(finish);
+    cJSON *wilt = cJSON_CreateObject();
+    cJSON_AddStringToObject(wilt, "chi", THRUM_CHI_WILT);
+    cJSON_AddStringToObject(wilt, "sid", sid);
+    cJSON_AddStringToObject(wilt, "reason", "stop");
+    thrum_bee_send(bee, wilt);
+    cJSON_Delete(wilt);
 }
 
 static void on_nestled(thrum_bee *bee, void *user) {
@@ -75,10 +76,10 @@ static void on_nestled(thrum_bee *bee, void *user) {
     say("nestled", NULL);
 }
 
-static void on_lost(thrum_bee *bee, void *user) {
+static void on_astray(thrum_bee *bee, void *user) {
     (void)bee;
     (void)user;
-    say("lost", NULL);
+    say("astray", NULL);
 }
 
 static void on_advisory(thrum_bee *bee, const thrum_advisory *advisory, void *user) {
@@ -126,7 +127,7 @@ int main(void) {
     if (!bee) return 1;
     thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, NULL);
     thrum_bee_on_nestled(bee, on_nestled, NULL);
-    thrum_bee_on_lost(bee, on_lost, NULL);
+    thrum_bee_on_astray(bee, on_astray, NULL);
     thrum_bee_on_advisory(bee, on_advisory, NULL);
 
     pthread_t eof;

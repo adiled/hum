@@ -1,13 +1,16 @@
-//! Chi registry, pulse kinds and advisory codes.
+//! Chi registry, pulse kinds, petal kinds and advisory codes.
 //!
 //! Every wire-known chi value. Adding a new variant bumps the protocol
 //! minor version. `serde(rename_all = "kebab-case")` keeps the wire
-//! format speaking kebabs (`"tool-call"`, `"release-permit"`).
+//! format speaking kebabs (`"tendril-reach"`, `"release-permit"`).
 //!
 //! The wire contract — which chi exists, what it carries, and which way
 //! it flows — lives in [`WIRE.md`](../../WIRE.md). This enum is its
 //! Rust mirror; the generated TypeScript, Python, Go and C clients are
 //! emitted from that same contract, so the five copies cannot drift.
+//!
+//! A petal is one unit of content, and its kind says which:
+//! [`PetalKind`]. WIRE.md's petals table says what each one carries.
 //!
 //! An advisory is what the wire tells a bee it should fix without
 //! refusing it: humd sends one as a `log` tone whose `fields.advisory`
@@ -27,20 +30,19 @@ pub enum Chi {
     Cleanup,
     Curate,
     ReleasePermit,
+    ScoutResult,
     TendrilResult,
-    ToolResult,
     PetalCell,
     Breath,
-    Chunk,
-    Finish,
+    Unfurl,
+    Wilt,
     Error,
-    SessionReady,
     Pulse,
     PermissionAsk,
+    Scout,
     TendrilReach,
-    ToolCall,
-    ToolMeta,
-    ToolInfo,
+    TendrilMeta,
+    TendrilInfo,
     Echo,
     PerfMark,
     Log,
@@ -83,6 +85,33 @@ pub enum AdvisoryCode {
     DidNotReturn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum PetalKind {
+    Text,
+    Tendril,
+    Grasp,
+    Pollen,
+    Sepal,
+    Waggle,
+    Thorn,
+    Brix,
+    Bouquet,
+}
+
+impl Chi {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl PetalKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 impl AdvisoryCode {
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -99,7 +128,10 @@ mod tests {
 
     #[test]
     fn chi_wire_format_is_kebab() {
-        assert_eq!(serde_json::to_string(&Chi::ToolCall).unwrap(), "\"tool-call\"");
+        assert_eq!(serde_json::to_string(&Chi::TendrilReach).unwrap(), "\"tendril-reach\"");
+        assert_eq!(serde_json::to_string(&Chi::Unfurl).unwrap(), "\"unfurl\"");
+        assert_eq!(serde_json::to_string(&Chi::Wilt).unwrap(), "\"wilt\"");
+        assert_eq!(PetalKind::Sepal.as_str(), "sepal");
         assert_eq!(serde_json::to_string(&Chi::ReleasePermit).unwrap(), "\"release-permit\"");
         assert_eq!(serde_json::to_string(&Chi::DroneRetrofit).unwrap(), "\"drone-retrofit\"");
         assert_eq!(serde_json::to_string(&Chi::WaneSync).unwrap(), "\"wane-sync\"");
@@ -113,8 +145,9 @@ mod tests {
     fn advisory_codes_are_kebab_and_chi_is_checked() {
         assert_eq!(AdvisoryCode::UndeclaredKey.as_str(), "undeclared-key");
         assert_eq!(serde_json::to_string(&AdvisoryCode::DidNotReturn).unwrap(), "\"did-not-return\"");
-        assert!(is_chi("tool-call"));
-        assert!(!is_chi("tool_call"));
+        assert!(is_chi("tendril-reach"));
+        assert!(!is_chi("tendril_reach"));
+        assert!(!is_chi("tool-call"));
     }
 
     #[test]

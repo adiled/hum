@@ -47,6 +47,7 @@ pub struct ChiSpec {
     pub version: String,
     pub chi: Vec<Variant>,
     pub pulse: Vec<Variant>,
+    pub petal: Vec<Variant>,
 }
 
 pub fn parse(chi_rs: &Path, lib_rs: &Path, wire_md: &Path) -> Result<ChiSpec> {
@@ -70,14 +71,23 @@ pub fn parse(chi_rs: &Path, lib_rs: &Path, wire_md: &Path) -> Result<ChiSpec> {
         };
         v.doc = doc.clone();
     }
-    let pulse_docs = extract_pulse_docs(&wire_src)?;
+    let pulse_docs = extract_kind_docs(&wire_src, "pulse.kind")?;
     for v in pulse.iter_mut() {
         v.doc = pulse_docs.get(&v.wire).cloned().unwrap_or_default();
+    }
+    let mut petal = extract_enum(&chi_src, "PetalKind")?;
+    let petal_docs = extract_kind_docs(&wire_src, "petal.kind")?;
+    for v in petal.iter_mut() {
+        let Some(doc) = petal_docs.get(&v.wire) else {
+            bail!("petal kind `{}` has no row in {}", v.wire, paths::WIRE_MD_REL);
+        };
+        v.doc = doc.clone();
     }
     Ok(ChiSpec {
         version: extract_version(&lib_src)?,
         chi,
         pulse,
+        petal,
     })
 }
 
@@ -212,16 +222,16 @@ fn extract_wire_docs(wire_md: &str) -> Result<HashMap<String, String>> {
     Ok(docs)
 }
 
-fn extract_pulse_docs(wire_md: &str) -> Result<HashMap<String, String>> {
+fn extract_kind_docs(wire_md: &str, table: &str) -> Result<HashMap<String, String>> {
     let mut docs = HashMap::new();
-    let mut in_pulse = false;
+    let mut inside = false;
     for line in wire_md.lines() {
         let line = line.trim();
         if line.starts_with("### ") {
-            in_pulse = line.contains("pulse.kind");
+            inside = line.contains(table);
             continue;
         }
-        if !in_pulse || !line.starts_with('|') {
+        if !inside || !line.starts_with('|') {
             continue;
         }
         let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
@@ -237,7 +247,7 @@ fn extract_pulse_docs(wire_md: &str) -> Result<HashMap<String, String>> {
         docs.insert(kind.to_string(), cells[1].to_string());
     }
     if docs.is_empty() {
-        bail!("no pulse.kind descriptions found in WIRE.md");
+        bail!("no {table} descriptions found in WIRE.md");
     }
     Ok(docs)
 }
@@ -322,37 +332,16 @@ fn render_ts(spec: &ChiSpec) -> String {
     }
     s.push_str("} as const;\n");
     s.push_str("export type PulseKindT = typeof PulseKind[keyof typeof PulseKind];\n\n");
-
-    s.push_str("// Fields every tone may carry. `chi` and `rid` are required; the rest\n");
-    s.push_str("// are situational. `ext` is the bee-private extension bag — thrum\n");
-    s.push_str("// core ignores it, each bee owns its own key.\n");
-    s.push_str("export interface Envelope {\n");
-    s.push_str("  chi: ChiKind;\n");
-    s.push_str("  rid: string;\n");
-    s.push_str("  from?: string;\n");
-    s.push_str("  to?: string;\n");
-    s.push_str("  sigil?: string;\n");
-    s.push_str("  sid?: string;\n");
-    s.push_str("  wane?: number;\n");
-    s.push_str("  sentAt?: number;\n");
-    s.push_str("  dusk?: number;\n");
-    s.push_str("  ext?: Record<string, Record<string, unknown>>;\n");
-    s.push_str("}\n\n");
-
-    s.push_str("export type Tone = Envelope & Record<string, unknown>;\n\n");
-
-    s.push_str("export function isEnvelope(x: unknown): x is Envelope {\n");
-    s.push_str("  if (!x || typeof x !== \"object\") return false;\n");
-    s.push_str("  const o = x as Record<string, unknown>;\n");
-    s.push_str("  return typeof o.chi === \"string\"\n");
-    s.push_str("    && (typeof o.rid === \"string\" || o.rid === undefined)\n");
-    s.push_str("    && (o.sid === undefined || typeof o.sid === \"string\");\n");
-    s.push_str("}\n\n");
-
-    s.push_str("export function isKnownTone(x: unknown): x is Tone {\n");
-    s.push_str("  return isEnvelope(x) && isValidChi((x as Envelope).chi as string);\n");
-    s.push_str("}\n");
-
+    s.push_str("// petal.kind says which unit of content a petal is.\n");
+    s.push_str("export const PetalKind = {\n");
+    for v in &spec.petal {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("  /** {} */\n", v.doc));
+        }
+        s.push_str(&format!("  {}: \"{}\",\n", pascal_to_camel(&v.pascal), v.wire));
+    }
+    s.push_str("} as const;\n");
+    s.push_str("export type PetalKindT = typeof PetalKind[keyof typeof PetalKind];\n");
     s
 }
 
@@ -400,6 +389,16 @@ fn render_py(spec: &ChiSpec) -> String {
     }
     s.push('\n');
 
+    s.push_str("class PetalKind:\n");
+    s.push_str("    \"\"\"petal.kind: which unit of content a petal is.\"\"\"\n");
+    for v in &spec.petal {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("    # {}\n", v.doc));
+        }
+        s.push_str(&format!("    {}: str = \"{}\"\n", pascal_to_screaming_snake(&v.pascal), v.wire));
+    }
+    s.push('\n');
+
     s
 }
 
@@ -444,6 +443,20 @@ fn render_go(spec: &ChiSpec) -> String {
         }
         s.push_str(&format!(
             "    PulseKind{} PulseKind = \"{}\"\n",
+            v.pascal, v.wire
+        ));
+    }
+    s.push_str(")\n\n");
+
+    s.push_str("// PetalKind is the kind field of a petal, and of an unfurl.\n");
+    s.push_str("type PetalKind string\n\n");
+    s.push_str("const (\n");
+    for v in &spec.petal {
+        if !v.doc.is_empty() {
+            s.push_str(&format!("    // {}\n", v.doc));
+        }
+        s.push_str(&format!(
+            "    PetalKind{} PetalKind = \"{}\"\n",
             v.pascal, v.wire
         ));
     }
@@ -509,6 +522,7 @@ fn render_c(spec: &ChiSpec) -> String {
     s.push_str(&format!("#define THRUM_VERSION \"{}\"\n\n", spec.version));
     render_c_set(&mut s, "CHI", "chi", &spec.chi);
     render_c_set(&mut s, "PULSE", "pulse", &spec.pulse);
+    render_c_set(&mut s, "PETAL", "petal", &spec.petal);
     s.push_str("#endif\n");
     s
 }
@@ -523,27 +537,29 @@ mod tests {
             version: "9.9.9".into(),
             chi: vec![
                 Variant { pascal: "Hello".into(), wire: "hello".into(), doc: "first \\".into() },
-                Variant { pascal: "ToolCall".into(), wire: "tool-call".into(), doc: String::new() },
+                Variant { pascal: "TendrilReach".into(), wire: "tendril-reach".into(), doc: String::new() },
             ],
             pulse: vec![],
+            petal: vec![Variant { pascal: "Pollen".into(), wire: "pollen".into(), doc: String::new() }],
         };
         let c = render_c(&spec);
         assert!(c.contains("#define THRUM_VERSION \"9.9.9\"\n"));
         assert!(c.contains("// first\n#define THRUM_CHI_HELLO \"hello\"\n"));
-        assert!(c.contains("#define THRUM_CHI_TOOL_CALL \"tool-call\"\n"));
+        assert!(c.contains("#define THRUM_CHI_TENDRIL_REACH \"tendril-reach\"\n"));
         assert!(c.contains("#define THRUM_CHI_COUNT 2\n"));
         assert!(c.contains("#define THRUM_PULSE_COUNT 0\n"));
+        assert!(c.contains("#define THRUM_PETAL_POLLEN \"pollen\"\n"));
         assert!(c.contains("static inline bool thrum_is_valid_chi(const char *value)"));
     }
 
     #[test]
     fn kebab_and_camel_are_consistent() {
-        assert_eq!(pascal_to_kebab("ToolCall"), "tool-call");
+        assert_eq!(pascal_to_kebab("TendrilReach"), "tendril-reach");
         assert_eq!(pascal_to_kebab("DroneRetrofit"), "drone-retrofit");
         assert_eq!(pascal_to_kebab("Hello"), "hello");
-        assert_eq!(pascal_to_camel("ToolCall"), "toolCall");
+        assert_eq!(pascal_to_camel("TendrilReach"), "tendrilReach");
         assert_eq!(pascal_to_camel("Hello"), "hello");
-        assert_eq!(pascal_to_screaming_snake("ToolCall"), "TOOL_CALL");
+        assert_eq!(pascal_to_screaming_snake("TendrilReach"), "TENDRIL_REACH");
         assert_eq!(pascal_to_screaming_snake("DroneRetrofit"), "DRONE_RETROFIT");
         assert_eq!(pascal_to_screaming_snake("Hello"), "HELLO");
     }
@@ -560,13 +576,13 @@ mod tests {
             pub enum Chi {
                 Hello,
                 Prompt,
-                Finish,
+                Wilt,
             }
         "#;
         let vs = extract_enum(src, "Chi").unwrap();
         assert_eq!(vs.len(), 3);
         assert_eq!(vs[0].pascal, "Hello");
         assert_eq!(vs[0].wire, "hello");
-        assert_eq!(vs[2].wire, "finish");
+        assert_eq!(vs[2].wire, "wilt");
     }
 }

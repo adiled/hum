@@ -132,17 +132,17 @@ mod tests {
             reach.accepts_chi("prompt"),
             "no declared set = no filtering"
         );
-        assert!(reach.accepts_chi("tool-call"));
+        assert!(reach.accepts_chi("tendril-reach"));
     }
 
     #[test]
     fn a_client_that_declared_a_list_receives_only_those() {
         let (reach, _rx) = Reach::new("scoped".into());
-        reach.replace_chis(vec!["prompt".into(), "chunk".into()]);
+        reach.replace_chis(vec!["prompt".into(), "unfurl".into()]);
         assert!(reach.accepts_chi("prompt"));
-        assert!(reach.accepts_chi("chunk"));
+        assert!(reach.accepts_chi("unfurl"));
         assert!(
-            !reach.accepts_chi("tool-call"),
+            !reach.accepts_chi("tendril-reach"),
             "an undeclared chi must not reach a scoped client"
         );
     }
@@ -157,11 +157,11 @@ mod tests {
     #[test]
     fn re_declaring_replaces_the_previous_scope() {
         let (reach, _rx) = Reach::new("rehello".into());
-        reach.replace_chis(vec!["prompt".into(), "chunk".into()]);
+        reach.replace_chis(vec!["prompt".into(), "unfurl".into()]);
         reach.replace_chis(vec!["prompt".into()]);
         assert!(reach.accepts_chi("prompt"));
         assert!(
-            !reach.accepts_chi("chunk"),
+            !reach.accepts_chi("unfurl"),
             "the earlier, wider scope must not survive a re-hello"
         );
     }

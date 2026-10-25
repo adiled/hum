@@ -16,9 +16,16 @@
 //! A worker that hosts cells says how many it can still take in
 //! `headroom`, on its hello and on each cell pulse; humd routes by it.
 //!
+//! A bloom opens with a `prompt` and closes with a `wilt`. The prompt
+//! carries its petals in `content` and how the cell should grow the
+//! bloom: `temperature`, `prune`, `season`, `frost`, `seed`, `trellis`,
+//! `tendrils`, `sepal`. What the cell grows comes back as `unfurl` tones,
+//! each growing one petal named by its kind until the petal is `closed`,
+//! and the nectar the bloom took rides on its wilt.
+//!
 //! Each `*Body` struct is the body of exactly one chi, named after it.
-//! `DroneLoad` is the nested payload of a `drone` tone rather than a
-//! chi of its own.
+//! `DroneLoad`, `Petal`, `Grain`, `Prune`, `Tendrils` and `Sepal` are
+//! shapes nested in a body rather than chis of their own.
 
 use std::collections::BTreeMap;
 
@@ -78,7 +85,7 @@ pub struct PromptBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<Vec<Petal>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,36 +101,128 @@ pub struct PromptBody {
     pub allowed_tools: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prune: Option<Prune>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub season: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frost: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trellis: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tendrils: Option<Tendrils>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sepal: Option<Sepal>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Petal {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grain: Option<Grain>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "callId")]
+    pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isError")]
+    pub is_error: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propolis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brix: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bouquet: Option<Vec<Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Grain {
+    pub kind: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Prune {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tendrils {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reach: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sepal {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BreathBody {
-    pub sessions: Value,
+    pub sigils: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "protoVersion")]
     pub proto_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkBody {
-    #[serde(rename = "chunkType")]
-    pub chunk_type: String,
+pub struct UnfurlBody {
+    pub petal: u64,
+    pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "blockIdx")]
-    pub block_idx: Option<u64>,
+    pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta: Option<Value>,
+    pub sap: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "partialJson")]
-    pub partial_json: Option<String>,
+    #[serde(rename = "callId")]
+    pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grain: Option<Grain>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propolis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brix: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FinishBody {
-    #[serde(rename = "finishReason")]
-    pub finish_reason: String,
+pub struct WiltBody {
+    pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Value>,
+    pub nectar: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "exitCode")]
     pub exit_code: Option<i64>,
@@ -139,38 +238,26 @@ pub struct ErrorBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Value>,
+    pub nectar: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionReadyBody {
-    #[serde(rename = "nestId")]
-    pub nest_id: String,
-    pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallBody {
+pub struct TendrilReachBody {
     #[serde(rename = "callId")]
     pub call_id: String,
-    #[serde(rename = "toolName")]
-    pub tool_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResultBody {
+pub struct TendrilResultBody {
     #[serde(rename = "callId")]
     pub call_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<String>,
+    pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "isError")]
     pub is_error: Option<bool>,
@@ -181,7 +268,7 @@ pub struct ToolResultBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolInfoBody {
+pub struct TendrilInfoBody {
     #[serde(rename = "callId")]
     pub call_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,15 +277,17 @@ pub struct ToolInfoBody {
     pub args: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isError")]
+    pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolMetaBody {
+pub struct TendrilMetaBody {
     #[serde(rename = "callId")]
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "toolName")]
-    pub tool_name: Option<String>,
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
@@ -210,6 +299,12 @@ pub struct PulseBody {
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headroom: Option<Headroom>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,8 +312,7 @@ pub struct PermissionAskBody {
     #[serde(rename = "callId")]
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "toolName")]
-    pub tool_name: Option<String>,
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -358,7 +452,7 @@ pub struct CleanupBody {}
 pub struct CurateBody {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TendrilResultBody {
+pub struct ScoutResultBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "callId")]
     pub call_id: Option<String>,
@@ -367,7 +461,7 @@ pub struct TendrilResultBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TendrilReachBody {
+pub struct ScoutBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -395,8 +489,8 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_wire_names() {
-        let b = ToolResultBody {
+    fn tendril_result_wire_names() {
+        let b = TendrilResultBody {
             call_id: "c1".into(),
             output: Some("done".into()),
             result: None,
@@ -412,16 +506,34 @@ mod tests {
     }
 
     #[test]
-    fn chunk_wire_names() {
-        let b = ChunkBody {
-            chunk_type: "text_delta".into(),
-            block_idx: None,
-            delta: Some(json!("hi")),
-            partial_json: None,
+    fn a_petal_unfurls_by_kind() {
+        let b = UnfurlBody {
+            petal: 0,
+            kind: "text".into(),
+            text: Some("hi".into()),
+            sap: None,
+            call_id: None,
+            name: None,
+            grain: None,
+            propolis: None,
+            source: None,
+            brix: None,
+            closed: None,
         };
         let v = serde_json::to_value(&b).unwrap();
-        assert_eq!(v["chunkType"], "text_delta");
-        assert_eq!(v["delta"], "hi");
-        assert!(v.as_object().unwrap().contains_key("delta"));
+        assert_eq!(v, json!({"petal": 0, "kind": "text", "text": "hi"}));
+    }
+
+    #[test]
+    fn a_wilt_carries_its_nectar() {
+        let b = WiltBody {
+            reason: "stop".into(),
+            nectar: Some(json!({"input_tokens": 3})),
+            exit_code: None,
+            subtype: None,
+        };
+        let v = serde_json::to_value(&b).unwrap();
+        assert_eq!(v["reason"], "stop");
+        assert_eq!(v["nectar"]["input_tokens"], 3);
     }
 }

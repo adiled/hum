@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use hum_thrum::{Bee, Event, Options, Refused};
-use thrum_core::Chi;
+use thrum_core::{Chi, PetalKind};
 use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
@@ -119,12 +119,11 @@ fn parse_payload(payload: &[u8], default_model: &str) -> Payload {
     }
 }
 
-fn chunk_text(tone: &Value) -> Option<&str> {
-    let part = tone.get("part")?;
-    if part.get("type").and_then(Value::as_str) != Some("text") {
+fn unfurled_text(tone: &Value) -> Option<&str> {
+    if tone.get("kind").and_then(Value::as_str) != Some(PetalKind::Text.as_str()) {
         return None;
     }
-    part.get("text").and_then(Value::as_str)
+    tone.get("text").and_then(Value::as_str)
 }
 
 fn build_reply(my_eid: &str, source_eid: &str, payload: &[u8]) -> bundle_protocol::Bundle {
@@ -145,7 +144,7 @@ async fn run_prompt(_cfg: &Config, payload: &Payload) -> Result<String> {
             "richness":     "lean",
             "wire":         "bp7/dtn-udpcl",
         },
-        "chis": ["hello", "prompt", "chunk", "finish", "error"],
+        "chis": ["hello", "prompt", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/bp7",
     });
     let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
@@ -169,21 +168,21 @@ async fn run_prompt(_cfg: &Config, payload: &Payload) -> Result<String> {
     let answer = loop {
         let tone = match bee.next().await {
             Some(Event::Tone(tone)) => tone,
-            Some(Event::Lost) => break Err(anyhow!("humd went away mid-turn")),
+            Some(Event::Astray) => break Err(anyhow!("humd went away mid-bloom")),
             Some(Event::Refused(why)) => break Err(Refused(why).into()),
             Some(Event::Nestled | Event::Advisory(_)) => continue,
-            None => break Err(anyhow!("the client stopped mid-turn")),
+            None => break Err(anyhow!("the client stopped mid-bloom")),
         };
         if tone.get("sid").and_then(Value::as_str) != Some(sid.as_str()) {
             continue;
         }
         match tone.get("chi").and_then(Value::as_str) {
-            Some("chunk") => {
-                if let Some(text) = chunk_text(&tone) {
+            Some("unfurl") => {
+                if let Some(text) = unfurled_text(&tone) {
                     collected.push_str(text);
                 }
             }
-            Some("finish") => break Ok(collected),
+            Some("wilt") => break Ok(collected),
             Some("error") => {
                 let msg = tone.get("message").and_then(Value::as_str).unwrap_or("stream error");
                 break Err(anyhow!("humd error: {msg}"));

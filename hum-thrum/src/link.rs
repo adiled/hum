@@ -13,7 +13,7 @@
 //!
 //! - link to bee: `{"link":"ready","linkVersion":N,"thrum":V,"bee":id,
 //!   "hive":h,"as":l}` first, then `{"link":"nestled"}`,
-//!   `{"link":"lost"}`, `{"link":"advisory","code":..,"message":..,
+//!   `{"link":"astray"}`, `{"link":"advisory","code":..,"message":..,
 //!   "from":..,"fields":{..}}`, and `{"link":"refused","error":..}` last.
 //! - bee to link: `{"hello":{..}}` first, the bee's own hello fields;
 //!   later `{"hello":{..}}` again to change them (a null drops a field).
@@ -171,8 +171,8 @@ async fn run(hive: &str, label: &str, endpoint: Endpoint, out: &mpsc::UnboundedS
                 Some(Event::Nestled) => {
                     let _ = out.send(json!({"link": "nestled"}));
                 }
-                Some(Event::Lost) => {
-                    let _ = out.send(json!({"link": "lost"}));
+                Some(Event::Astray) => {
+                    let _ = out.send(json!({"link": "astray"}));
                 }
                 Some(Event::Advisory(advisory)) => {
                     let mut line = Map::new();

@@ -17,7 +17,7 @@ knowing thrum exists. Symmetric counterpart to
 
 | statefulness | richness | wire shape | hides |
 |---|---|---|---|
-| convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, tendril, permission-ask, tool-meta |
+| convention-stateful | medium | Anthropic `/v1/messages` SSE | pulse, breath, drone, perf-mark, scout, permission-ask, tendril-meta |
 
 Each request mints a fresh sid; continuation flows through the
 `messages` array as `tool_result` content blocks.
@@ -32,23 +32,24 @@ client                           anthropic-server                    humd
   │   { model, messages, system,        │                              │
   │     tools, stream:true }            │  chi:"hello" on first call   │
   │                                     ├─────────────────────────────►│
-  │                                     │  chi:"prompt" (text/system/tools)
+  │                                     │  chi:"prompt" (petals/system/tools)
   │                                     ├─────────────────────────────►│
-  │                                     │  chi:"chunk" (text/tool_use) │
+  │                                     │  chi:"unfurl" (petals)       │
   │                                     │◄─────────────────────────────┤
   │  event: content_block_delta         │                              │
   │  data: { delta: { text: "Hi" } }    │                              │
   │◄────────────────────────────────────┤                              │
-  │                                     │  chi:"finish"                │
+  │                                     │  chi:"wilt"                  │
   │                                     │◄─────────────────────────────┤
   │  event: message_stop                │                              │
   │◄────────────────────────────────────┤                              │
 ```
 
-Tool use flows symmetrically: model tool_use blocks come out via
-`chi:"tool-call"`, and the client's `tool_result` content blocks in
-the next message come back as `chi:"tool-result"` carrying the
-matching `callId`.
+Tool use flows symmetrically: a tendril that reaches,
+`chi:"tendril-reach"`, comes out as a tool_use block that ends the
+message, and the client's `tool_result` content blocks in the next
+message come back as `chi:"tendril-result"` carrying the matching
+`callId`.
 
 ## Configure
 
@@ -114,10 +115,12 @@ for await (const chunk of stream) console.log(chunk);
 | POST `/v1/messages` | `chi:"prompt"` |
 | `system` (string or `[{type:"text"}]`) | `prompt.systemPrompt` |
 | `tools[]` (with `input_schema`) | `prompt.tools[]` |
-| `tool_result` blocks in last user msg | `chi:"tool-result"` |
-| `content_block_delta` text | `chi:"chunk"` (text part) |
-| `content_block_delta` input_json | `chi:"chunk"` (tool_use partial) |
-| `message_stop` | `chi:"finish"` |
+| `max_tokens` | `prompt.season` |
+| `tool_result` blocks in last user msg | `chi:"tendril-result"` |
+| `content_block_delta` text | `chi:"unfurl"` (a text petal) |
+| `content_block_delta` thinking / signature | `chi:"unfurl"` (a sepal petal, its propolis) |
+| a `tool_use` block, stop_reason `tool_use` | `chi:"tendril-reach"` |
+| `message_stop` | `chi:"wilt"` |
 | `error` event | `chi:"error"` |
 
 ## Status

@@ -6,13 +6,17 @@
 //   2. Pick a stable sid per remote phone number (sha256[..16])
 //      so successive texts from the same phone continue the conversation
 //   3. Send chi:"prompt" to humd
-//   4. Collect chi:"chunk" text into one buffer
-//   5. On chi:"finish", emit TwiML <Response><Message>...</Message></Response>
+//   4. Collect the text petals that unfurl into one buffer
+//   5. When the bloom wilts, emit TwiML <Response><Message>...</Message></Response>
 //      so Twilio replies inline
 //
 // Inline TwiML deadline is ~15s. For longer replies, swap in the
 // async REST path (Twilio Account SID + Auth Token required). Not
 // wired today.
+//
+// The hive is one bee, a forager, on the Go thrum client. Every SMS
+// prompts through it under the sender's sigil, followed by sid; humd
+// being away turns an SMS away at once rather than at Twilio's deadline.
 
 package main
 
@@ -89,9 +93,6 @@ func twimlReply(body string) []byte {
 	return append([]byte(xml.Header), out...)
 }
 
-// smsBee is the hive's one bee. Every SMS asks through it under the
-// sender's session, followed by sid; humd being away turns an SMS away
-// at once rather than at Twilio's deadline.
 type smsBee struct {
 	*thrum.Bee
 	up atomic.Bool
@@ -109,12 +110,12 @@ func newSmsBee() *smsBee {
 				"richness":     "lean",
 				"wire":         "twilio/sms-webhook",
 			},
-			"chis":   []string{"hello", "prompt", "chunk", "finish", "error"},
+			"chis":   []string{"hello", "prompt", "unfurl", "wilt", "error"},
 			"source": "https://github.com/adiled/hum/tree/main/hives/twilio-sms",
 		},
 	})}
 	b.OnNestled(func() { b.up.Store(true) })
-	b.OnLost(func() { b.up.Store(false) })
+	b.OnAstray(func() { b.up.Store(false) })
 	return b
 }
 
@@ -135,21 +136,17 @@ func runPrompt(ctx context.Context, bee *smsBee, cfg config, from, body, message
 	)
 	bee.OnSid(sid, func(tone thrum.Tone) {
 		chi, _ := tone["chi"].(string)
-		switch chi {
-		case "chunk":
-			part, ok := tone["part"].(map[string]any)
-			if !ok {
+		switch thrum.Chi(chi) {
+		case thrum.ChiUnfurl:
+			if kind, _ := tone["kind"].(string); kind != string(thrum.PetalKindText) {
 				return
 			}
-			if t, _ := part["type"].(string); t != "text" {
-				return
-			}
-			if text, ok := part["text"].(string); ok {
+			if text, ok := tone["text"].(string); ok {
 				mu.Lock()
 				buf.WriteString(text)
 				mu.Unlock()
 			}
-		case "finish", "error":
+		case thrum.ChiWilt, thrum.ChiError:
 			select {
 			case done <- struct{}{}:
 			default:
@@ -175,7 +172,7 @@ func runPrompt(ctx context.Context, bee *smsBee, cfg config, from, body, message
 	select {
 	case <-done:
 	case <-runCtx.Done():
-		return "", errors.New("twilio inline deadline (~15s) reached before chi:finish")
+		return "", errors.New("twilio inline deadline (~15s) reached before the bloom wilted")
 	}
 
 	mu.Lock()

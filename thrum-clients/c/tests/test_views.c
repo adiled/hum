@@ -13,7 +13,8 @@ static int kind_fits(const cJSON *v, thrum_field_kind kind) {
     switch (kind) {
     case THRUM_FIELD_STRING: return cJSON_IsString(v);
     case THRUM_FIELD_INT:
-    case THRUM_FIELD_UINT: return cJSON_IsNumber(v);
+    case THRUM_FIELD_UINT:
+    case THRUM_FIELD_NUMBER: return cJSON_IsNumber(v);
     case THRUM_FIELD_BOOL: return cJSON_IsBool(v);
     case THRUM_FIELD_ARRAY: return cJSON_IsArray(v);
     case THRUM_FIELD_OBJECT: return cJSON_IsObject(v);

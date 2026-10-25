@@ -1,16 +1,16 @@
-// End-to-end buyer for the paid-oracle forager bee.
+// End-to-end buyer for the paid-oracle bee: a forager.
 //
 // Flow:
 //   1. Enter as paid-oracle's buyer bee, through the thrum client.
-//   2. Send chi:"tool-call" with name="quote" + args.pair.
-//   3. Receive chi:"error" 402 with x402 terms (nonce + recipient
-//      + atomic price + USDC contract).
+//   2. Reach with chi:"tendril-reach", name="quote" + args.pair.
+//   3. Receive chi:"error" 402 with x402 terms in ext["paid-oracle"]
+//      (nonce + recipient + atomic price + USDC contract).
 //   4. Build USDC.transfer(recipient, amount) calldata, append the
 //      nonce as ASCII bytes so the bee can bind the payment to
 //      this challenge.
 //   5. Send tx on the configured chain, wait for inclusion.
-//   6. Resubmit chi:"tool-call" with paymentProof: {txHash, nonce}.
-//   7. Receive chi:"tool-result" with the actual price.
+//   6. Reach again with args.paymentProof: {txHash, nonce}.
+//   7. Receive chi:"tendril-result" with the actual price.
 //
 // Run:
 //   bun buy.ts ETH-USD
@@ -34,7 +34,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { Bee, type Outgoing } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi } from "../../../thrum-clients/ts/index.ts";
 
 const baseDir = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
 const keysPath = join(baseDir, "hum", "hives", "paid-oracle", "keys.json");
@@ -57,24 +57,22 @@ interface X402Terms {
 
 function log(...m: unknown[]): void { console.log("[buy]", ...m); }
 
-// One call is one bee session: the buyer enters as paid-oracle's buyer,
-// asks, and leaves. The thrum client does the hello and the socket.
 async function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body: any } | { kind: "result"; body: any }> {
   const bee = new Bee({
     hive: "paid-oracle",
     as: "buyer",
-    hello: { roles: ["asker"], version: "0.0.1", chis: ["hello", "tool-call", "tool-result", "error"] },
+    hello: { roles: ["forager"], version: "0.0.1", chis: ["hello", Chi.tendrilReach, Chi.tendrilResult, Chi.error] },
   });
   const callId = `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const sid = `paid-oracle-buyer-${Date.now().toString(36)}`;
   const answer = new Promise<{ kind: "error"; body: any } | { kind: "result"; body: any }>((resolve) => {
     bee.onAny((msg) => {
-      if (msg.chi === "error" && msg.code === 402) resolve({ kind: "error", body: msg });
-      else if (msg.chi === "tool-result") resolve({ kind: "result", body: msg });
+      if (msg.chi === Chi.error && msg.code === "402") resolve({ kind: "error", body: msg });
+      else if (msg.chi === Chi.tendrilResult) resolve({ kind: "result", body: msg });
     });
   });
   await bee.start();
-  bee.send({ chi: "tool-call", sid, callId, name: "quote", ...args } as Outgoing);
+  bee.send({ chi: Chi.tendrilReach, sid, callId, name: "quote", args });
   const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("thrum timeout")), 60_000));
   try {
     return await Promise.race([answer, timeout]);
@@ -106,13 +104,13 @@ async function main(): Promise<void> {
   log(`buyer=${keys.buyer.address}`);
   log(`pair=${PAIR}`);
 
-  log("step 1: thrum tool-call quote (no payment) →");
-  const first = await thrumCall({ args: { pair: PAIR } });
-  if (first.kind !== "error" || first.body.code !== 402) {
+  log("step 1: reach for a quote (no payment) →");
+  const first = await thrumCall({ pair: PAIR });
+  if (first.kind !== "error" || first.body.code !== "402") {
     log("unexpected first response:", JSON.stringify(first.body, null, 2));
     process.exit(2);
   }
-  const terms = first.body.x402 as X402Terms;
+  const terms = first.body.ext?.["paid-oracle"]?.x402 as X402Terms;
   const priceAtomic = BigInt(terms.price_atomic);
   log("  ↳ 402 challenge:");
   log(`    chain     = ${terms.chain}`);
@@ -170,14 +168,14 @@ async function main(): Promise<void> {
 
   log("step 3: resubmitting with paymentProof →");
   const second = await thrumCall({
-    args: { pair: PAIR },
+    pair: PAIR,
     paymentProof: { txHash, nonce: terms.nonce },
   });
   if (second.kind !== "result") {
     log("unexpected second response:", JSON.stringify(second.body, null, 2));
     process.exit(7);
   }
-  log("  ↳ chi:tool-result");
+  log("  ↳ chi:tendril-result");
   log(JSON.stringify(second.body.result, null, 2));
 }
 

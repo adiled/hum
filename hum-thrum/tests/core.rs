@@ -61,11 +61,11 @@ fn greet(core: &mut Core) -> String {
 
 fn nestle(core: &mut Core) -> String {
     let rid = greet(core);
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": []})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": []})));
     assert!(drain(core).is_empty(), "the breath on connect admits nothing");
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
     assert!(drain(core).is_empty(), "the acknowledgement is not the verdict");
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     assert_eq!(drain(core), vec![Output::Nestled]);
     assert!(core.is_nestled());
     rid
@@ -103,7 +103,7 @@ fn a_bee_split_across_reads_still_hears_whole_tones() {
     let mut core = core_with(json!({}));
     let rid = greet(&mut core);
     let mut bytes = line(json!({"chi": "echo", "rid": rid, "ok": true}));
-    bytes.extend(line(json!({"chi": "breath", "sessions": {}})));
+    bytes.extend(line(json!({"chi": "breath", "sigils": {}})));
     let (a, b) = bytes.split_at(7);
     core.received(NOW, a);
     assert!(drain(&mut core).is_empty());
@@ -123,7 +123,7 @@ fn a_refusal_is_final() {
     );
     core.closed(NOW);
     core.fired(NOW, Timer::Retry);
-    core.send(NOW, json!({"chi": "chunk", "sid": "s"}));
+    core.send(NOW, json!({"chi": "unfurl", "sid": "s"}));
     assert!(drain(&mut core).is_empty(), "a refused bee does nothing more");
 }
 
@@ -141,7 +141,7 @@ fn a_bee_outlives_humd_and_backs_off() {
     nestle(&mut core);
     core.closed(NOW);
     let outs = drain(&mut core);
-    assert_eq!(outs[0], Output::Lost);
+    assert_eq!(outs[0], Output::Astray);
     let Output::Arm(Timer::Retry, first) = outs[1] else { panic!("{outs:?}") };
     assert!((200..=300).contains(&first.as_millis()), "{first:?}");
 
@@ -165,7 +165,7 @@ fn nestle_again(core: &mut Core) {
     let hello = written(&drain(core)).remove(0);
     let rid = hello["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     assert_eq!(drain(core), vec![Output::Nestled]);
 }
 
@@ -192,7 +192,7 @@ fn a_humd_with_no_verdict_is_gone() {
 fn what_a_bee_sends_gets_a_rid_and_the_ack_of_it_is_swallowed() {
     let mut core = core_with(json!({}));
     nestle(&mut core);
-    core.send(NOW, json!({"chi": "chunk", "sid": "s", "chunkType": "text_delta", "delta": "hi"}));
+    core.send(NOW, json!({"chi": "unfurl", "sid": "s", "petal": 0, "kind": "text", "text": "hi"}));
     let tone = written(&drain(&mut core)).remove(0);
     let rid = tone["rid"].as_str().unwrap().to_string();
     assert!(hum_identity::is_valid_id(&rid));
@@ -201,7 +201,7 @@ fn what_a_bee_sends_gets_a_rid_and_the_ack_of_it_is_swallowed() {
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
     assert!(drain(&mut core).is_empty(), "an ack of a minted rid is not the bee's, however often it comes");
 
-    core.send(NOW, json!({"chi": "chunk", "sid": "s", "chunkType": "text_delta", "delta": "x"}));
+    core.send(NOW, json!({"chi": "unfurl", "sid": "s", "petal": 0, "kind": "text", "text": "x"}));
     let rid = written(&drain(&mut core))[0]["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": false, "error": "past dusk"})));
     let advs = advisories(&drain(&mut core));
@@ -221,7 +221,7 @@ fn what_a_bee_sends_gets_a_rid_and_the_ack_of_it_is_swallowed() {
 fn an_undeclared_key_is_sent_with_one_advisory() {
     let mut core = core_with(json!({}));
     nestle(&mut core);
-    let tone = json!({"chi": "chunk", "sid": "s", "chunkType": "text_delta", "delta": "a", "text": "a"});
+    let tone = json!({"chi": "unfurl", "sid": "s", "petal": 0, "kind": "text", "text": "a", "delta": "a"});
     core.send(NOW, tone.clone());
     let outs = drain(&mut core);
     assert_eq!(written(&outs).len(), 1, "sent anyway");
@@ -229,11 +229,11 @@ fn an_undeclared_key_is_sent_with_one_advisory() {
     assert_eq!(advs.len(), 1);
     assert_eq!(advs[0].code, "undeclared-key");
     assert_eq!(advs[0].from, "client");
-    assert_eq!(advs[0].fields["keys"], json!(["text"]));
+    assert_eq!(advs[0].fields["keys"], json!(["delta"]));
     core.send(NOW, tone);
     assert!(advisories(&drain(&mut core)).is_empty(), "once per chi and key");
 
-    core.send(NOW, json!({"chi": "chunks", "sid": "s"}));
+    core.send(NOW, json!({"chi": "unfurls", "sid": "s"}));
     let outs = drain(&mut core);
     assert_eq!(advisories(&outs)[0].code, "unknown-chi");
     assert_eq!(written(&outs).len(), 1);
@@ -243,7 +243,7 @@ fn an_undeclared_key_is_sent_with_one_advisory() {
 fn what_is_not_a_tone_is_dropped_with_an_advisory() {
     let mut core = core_with(json!({}));
     nestle(&mut core);
-    core.send(NOW, json!(["chunk"]));
+    core.send(NOW, json!(["unfurl"]));
     core.send(NOW, json!({"sid": "s"}));
     let outs = drain(&mut core);
     assert!(written(&outs).is_empty());
@@ -256,15 +256,15 @@ fn what_is_sent_while_humd_is_away_is_dropped_and_counted() {
     nestle(&mut core);
     core.closed(NOW);
     drain(&mut core);
-    core.send(NOW, json!({"chi": "chunk", "sid": "s", "chunkType": "text_delta", "delta": "a"}));
-    core.send(NOW, json!({"chi": "finish", "sid": "s", "finishReason": "stop"}));
+    core.send(NOW, json!({"chi": "unfurl", "sid": "s", "petal": 0, "kind": "text", "text": "a"}));
+    core.send(NOW, json!({"chi": "wilt", "sid": "s", "reason": "stop"}));
     assert!(written(&drain(&mut core)).is_empty());
     core.fired(NOW, Timer::Retry);
     drain(&mut core);
     core.connected(NOW);
     let rid = written(&drain(&mut core))[0]["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     let outs = drain(&mut core);
     assert_eq!(outs[0], Output::Nestled);
     let advs = advisories(&outs);
@@ -301,9 +301,9 @@ fn a_changed_hello_goes_out_at_once_and_its_breath_is_swallowed() {
     assert_eq!(advisories(&outs)[0].code, "client-owned");
     let rid = hello["rid"].as_str().unwrap().to_string();
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     assert!(drain(&mut core).is_empty(), "the re-hello's verdict is not a tone");
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     assert_eq!(drain(&mut core).len(), 1, "a later breath is the bee's");
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": false, "error": "revoked"})));
     assert_eq!(drain(&mut core)[1], Output::Refused("revoked".into()));
@@ -329,8 +329,8 @@ fn humd_advises_through_a_log_tone() {
         &line(json!({
             "chi": "log",
             "level": "warn",
-            "message": "chunk carries text",
-            "fields": {"advisory": "undeclared-key", "keys": ["text"]},
+            "message": "unfurl carries delta",
+            "fields": {"advisory": "undeclared-key", "keys": ["delta"]},
         })),
     );
     let outs = drain(&mut core);
@@ -338,20 +338,20 @@ fn humd_advises_through_a_log_tone() {
         outs,
         vec![Output::Advisory(Advisory {
             code: "undeclared-key".into(),
-            message: "chunk carries text".into(),
+            message: "unfurl carries delta".into(),
             from: "humd".into(),
-            fields: serde_json::from_value(json!({"keys": ["text"]})).unwrap(),
+            fields: serde_json::from_value(json!({"keys": ["delta"]})).unwrap(),
         })]
     );
-    core.send(NOW, json!({"chi": "chunk", "sid": "s", "chunkType": "text_delta", "delta": "a", "x": 1}));
+    core.send(NOW, json!({"chi": "unfurl", "sid": "s", "petal": 0, "kind": "text", "text": "a", "x": 1}));
     drain(&mut core);
     core.received(
         NOW,
         &line(json!({
             "chi": "log",
             "level": "warn",
-            "message": "chunk carries x",
-            "fields": {"advisory": "undeclared-key", "chi": "chunk", "keys": ["x"]},
+            "message": "unfurl carries x",
+            "fields": {"advisory": "undeclared-key", "chi": "unfurl", "keys": ["x"]},
         })),
     );
     assert!(drain(&mut core).is_empty(), "humd agreeing with the client is not news");
@@ -389,7 +389,7 @@ fn a_hello_changed_before_the_verdict_goes_out_once_admitted() {
     core.hello(NOW, patch);
     assert!(drain(&mut core).iter().all(|o| !matches!(o, Output::Write(_))), "not before the verdict");
     core.received(NOW, &line(json!({"chi": "echo", "rid": rid, "ok": true})));
-    core.received(NOW, &line(json!({"chi": "breath", "sessions": {}})));
+    core.received(NOW, &line(json!({"chi": "breath", "sigils": {}})));
     let outs = drain(&mut core);
     assert_eq!(outs[0], Output::Nestled);
     let hello = written(&outs).remove(0);

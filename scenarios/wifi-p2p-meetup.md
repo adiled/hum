@@ -64,8 +64,8 @@ it's unpredictable by design. If your starter is runny, add 10% more
 flour by weight. You're fine.
 ```
 
-Chunks stream back across the picnic table, over the P2P link, into
-Bob's phone. The finish tone lands. Bob adds flour. His starter
+Petals unfurl back across the picnic table, over the P2P link, into
+Bob's phone. The wilt lands. Bob adds flour. His starter
 thickens. He smiles.
 
 Alice never knew any of this happened. Her phone thought it was idle.
@@ -90,7 +90,7 @@ the TikTok tab.
 By hour two, the three phones have gossiped enough state that the
 mesh acts as a single distributed humd. A prompt typed on any phone
 finds compute on any other phone, or reaches OpenAI through Carla's
-forager, or forks a tool-call to Bob's phone for filesystem access.
+forager, or forks a tendril to Bob's phone for filesystem access.
 
 The picnic table has no power and no internet. It is a wooden surface
 with birdshit on it. But the hum on top of it is a three-node ensemble

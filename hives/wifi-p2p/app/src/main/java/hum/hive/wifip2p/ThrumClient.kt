@@ -71,7 +71,7 @@ class ThrumClient(
                     ),
                     "chis" to listOf(
                         Chi.HELLO, Chi.PROMPT, Chi.CANCEL,
-                        Chi.CHUNK, Chi.FINISH, Chi.ERROR,
+                        Chi.UNFURL, Chi.WILT, Chi.ERROR,
                         Chi.CLEANUP,
                     ),
                     "source" to "https://github.com/adiled/hum/tree/main/hives/wifi-p2p",

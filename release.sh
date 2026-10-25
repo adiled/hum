@@ -24,7 +24,6 @@ EXTRA_VERSIONED_FILES=(
   hives/claude-repl/Cargo.toml
   hives/grpc/Cargo.toml
   hives/gsm-modem/Cargo.toml
-  hives/humfs/Cargo.toml
   hives/ollama-server/Cargo.toml
   hives/ollama-worker/Cargo.toml
   hives/openai-server/package.json

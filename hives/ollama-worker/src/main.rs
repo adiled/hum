@@ -4,7 +4,7 @@
 //!
 //! Environment:
 //!   OLLAMA_WORKER_URL      — Ollama API base URL (default: http://127.0.0.1:11434)
-//!   OLLAMA_WORKER_MODEL    — default model (default: llama3.2)
+//!   OLLAMA_WORKER_MODEL    — default model (default: smollm:1.7b)
 //!   OLLAMA_WORKER_MODELS   — comma-separated model list (default: OLLAMA_WORKER_MODEL)
 //!   OLLAMA_WORKER_CTX      — context length (default: 8192)
 
@@ -13,8 +13,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use hum_nest::{serve_worker, WorkerAdvert};
 
-use lib::OllamaWorker;
-mod lib;
+use ollama_worker::OllamaWorker;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -94,7 +94,7 @@ async fn bridge(
                 to_thrum.abort();
                 return Err(Refused(why).into());
             }
-            Event::Nestled | Event::Lost | Event::Advisory(_) => {}
+            Event::Nestled | Event::Astray | Event::Advisory(_) => {}
         }
     }
     bee.close();

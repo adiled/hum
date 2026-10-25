@@ -232,125 +232,72 @@ fn quoted(items: &[String]) -> String {
 }
 
 pub fn constants_ts(spec: &LinkSpec) -> String {
-    let mut s = String::new();
-    s.push_str("/** The version of the lines between this client and `hum bee link`. */\n");
-    s.push_str(&format!("export const LINK_VERSION = {};\n\n", spec.version));
-    s.push_str("/** How `hum bee link` exits. */\nexport const LINK_EXIT = {\n");
+    let mut s = format!("export const LINK_VERSION = {};\n\nexport const LINK_EXIT = {{\n", spec.version);
     for (name, code) in &spec.exits {
         s.push_str(&format!("  {}: {code},\n", name.to_ascii_lowercase()));
     }
     s.push_str("} as const;\n\n");
-    s.push_str("/** Hello fields the client owns; a bee's own values for them are ignored. */\n");
     s.push_str(&format!("export const CLIENT_OWNED = [{}] as const;\n\n", quoted(&spec.client_owned)));
     s.push_str(&format!(
-        "/** Where `hum` is found: ${env}, else `{name}` on PATH, else ~/{def}. */\n\
-         export const HUM_CLI_ENV = \"{env}\";\nexport const HUM_CLI_NAME = \"{name}\";\n\
-         export const HUM_CLI_DEFAULT = \"{def}\";\n\n",
-        env = spec.hum_cli_env,
-        name = spec.hum_cli_name,
-        def = spec.hum_cli_default
+        "export const HUM_CLI_ENV = \"{}\";\nexport const HUM_CLI_NAME = \"{}\";\nexport const HUM_CLI_DEFAULT = \"{}\";\n\n",
+        spec.hum_cli_env, spec.hum_cli_name, spec.hum_cli_default
     ));
-    s.push_str("/** Advisory codes (WIRE.md, Advisories). */\nexport const AdvisoryCode = {\n");
+    s.push_str("export const AdvisoryCode = {\n");
     for a in &spec.advisories {
-        s.push_str(&format!("  /** {} ({}) */\n  {}: \"{}\",\n", a.doc, a.raised_by, camel(&a.pascal), a.wire));
+        s.push_str(&format!("  {}: \"{}\",\n", camel(&a.pascal), a.wire));
     }
     s.push_str("} as const;\nexport type AdvisoryCodeT = (typeof AdvisoryCode)[keyof typeof AdvisoryCode];\n");
     s
 }
 
 pub fn constants_py(spec: &LinkSpec) -> String {
-    let mut s = String::new();
-    s.push_str(&format!(
-        "LINK_VERSION = {}\n\"\"\"The version of the lines between this client and `hum bee link`.\"\"\"\n\n",
-        spec.version
-    ));
-    s.push_str("\nclass LinkExit:\n    \"\"\"How `hum bee link` exits.\"\"\"\n\n");
+    let mut s = format!("LINK_VERSION = {}\n\n\nclass LinkExit:\n", spec.version);
     for (name, code) in &spec.exits {
         s.push_str(&format!("    {name} = {code}\n"));
     }
+    s.push_str(&format!("\n\nCLIENT_OWNED = ({},)\n\n", quoted(&spec.client_owned)));
     s.push_str(&format!(
-        "\n\nCLIENT_OWNED = ({},)\n\"\"\"Hello fields the client owns; a bee's own values for them are ignored.\"\"\"\n\n",
-        quoted(&spec.client_owned)
+        "HUM_CLI_ENV = \"{}\"\nHUM_CLI_NAME = \"{}\"\nHUM_CLI_DEFAULT = \"{}\"\n\n\nclass AdvisoryCode:\n",
+        spec.hum_cli_env, spec.hum_cli_name, spec.hum_cli_default
     ));
-    s.push_str(&format!(
-        "HUM_CLI_ENV = \"{env}\"\nHUM_CLI_NAME = \"{name}\"\nHUM_CLI_DEFAULT = \"{def}\"\n\
-         \"\"\"Where `hum` is found: ${env}, else `{name}` on PATH, else ~/{def}.\"\"\"\n\n",
-        env = spec.hum_cli_env,
-        name = spec.hum_cli_name,
-        def = spec.hum_cli_default
-    ));
-    s.push_str("\nclass AdvisoryCode:\n    \"\"\"Advisory codes (WIRE.md, Advisories).\"\"\"\n\n");
     for a in &spec.advisories {
-        s.push_str(&format!("    {} = \"{}\"\n    \"\"\"{} ({})\"\"\"\n\n", screaming(&a.pascal), a.wire, a.doc, a.raised_by));
+        s.push_str(&format!("    {} = \"{}\"\n", screaming(&a.pascal), a.wire));
     }
+    s.push('\n');
     s
 }
 
 pub fn constants_go(spec: &LinkSpec) -> String {
-    let mut s = String::new();
-    s.push_str(&format!(
-        "// LinkVersion is the version of the lines between this client and `hum bee link`.\n\
-         const LinkVersion = {}\n\n",
-        spec.version
-    ));
-    s.push_str("// How `hum bee link` exits.\nconst (\n");
+    let mut s = format!("const LinkVersion = {}\n\nconst (\n", spec.version);
     for (name, code) in &spec.exits {
         s.push_str(&format!("\tLinkExit{} = {code}\n", title(name)));
     }
     s.push_str(")\n\n");
+    s.push_str(&format!("var ClientOwned = []string{{{}}}\n\n", quoted(&spec.client_owned)));
     s.push_str(&format!(
-        "// ClientOwned are the hello fields the client owns; a bee's own values for them are ignored.\n\
-         var ClientOwned = []string{{{}}}\n\n",
-        quoted(&spec.client_owned)
+        "const (\n\tHumCLIEnv     = \"{}\"\n\tHumCLIName    = \"{}\"\n\tHumCLIDefault = \"{}\"\n)\n\n",
+        spec.hum_cli_env, spec.hum_cli_name, spec.hum_cli_default
     ));
-    s.push_str(&format!(
-        "// Where `hum` is found: ${env}, else `{name}` on PATH, else ~/{def}.\n\
-         const (\n\tHumCLIEnv     = \"{env}\"\n\tHumCLIName    = \"{name}\"\n\tHumCLIDefault = \"{def}\"\n)\n\n",
-        env = spec.hum_cli_env,
-        name = spec.hum_cli_name,
-        def = spec.hum_cli_default
-    ));
-    s.push_str("// AdvisoryCode names an advisory (WIRE.md, Advisories).\ntype AdvisoryCode string\n\nconst (\n");
+    s.push_str("type AdvisoryCode string\n\nconst (\n");
     for a in &spec.advisories {
-        s.push_str(&format!(
-            "\t// Advisory{} : {} ({})\n\tAdvisory{} AdvisoryCode = \"{}\"\n",
-            a.pascal, a.doc, a.raised_by, a.pascal, a.wire
-        ));
+        s.push_str(&format!("\tAdvisory{} AdvisoryCode = \"{}\"\n", a.pascal, a.wire));
     }
     s.push_str(")\n");
     s
 }
 
 pub fn constants_c(spec: &LinkSpec) -> String {
-    let mut s = String::new();
-    s.push_str("/* The version of the lines between this client and `hum bee link`. */\n");
-    s.push_str(&format!("#define THRUM_LINK_VERSION {}\n\n", spec.version));
-    s.push_str("/* How `hum bee link` exits, and what thrum_bee_start and thrum_bee_wait return. */\n");
+    let mut s = format!("#define THRUM_LINK_VERSION {}\n\n", spec.version);
     for (name, code) in &spec.exits {
         s.push_str(&format!("#define THRUM_LINK_{name} {code}\n"));
     }
+    s.push_str(&format!("\n#define THRUM_CLIENT_OWNED {{ {} }}\n\n", quoted(&spec.client_owned)));
     s.push_str(&format!(
-        "\n/* Hello fields the client owns; a bee's own values for them are ignored. */\n\
-         #define THRUM_CLIENT_OWNED {{ {} }}\n\n",
-        quoted(&spec.client_owned)
+        "#define THRUM_HUM_CLI_ENV \"{}\"\n#define THRUM_HUM_CLI_NAME \"{}\"\n#define THRUM_HUM_CLI_DEFAULT \"{}\"\n\n",
+        spec.hum_cli_env, spec.hum_cli_name, spec.hum_cli_default
     ));
-    s.push_str(&format!(
-        "/* Where `hum` is found: ${env}, else `{name}` on PATH, else ~/{def}. */\n\
-         #define THRUM_HUM_CLI_ENV \"{env}\"\n#define THRUM_HUM_CLI_NAME \"{name}\"\n\
-         #define THRUM_HUM_CLI_DEFAULT \"{def}\"\n\n",
-        env = spec.hum_cli_env,
-        name = spec.hum_cli_name,
-        def = spec.hum_cli_default
-    ));
-    s.push_str("/* Advisory codes (WIRE.md, Advisories). */\n");
     for a in &spec.advisories {
-        s.push_str(&format!(
-            "#define THRUM_ADVISORY_{} \"{}\" /* {} ({}) */\n",
-            screaming(&a.pascal),
-            a.wire,
-            a.doc,
-            a.raised_by
-        ));
+        s.push_str(&format!("#define THRUM_ADVISORY_{} \"{}\"\n", screaming(&a.pascal), a.wire));
     }
     s
 }

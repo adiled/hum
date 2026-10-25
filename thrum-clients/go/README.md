@@ -17,8 +17,8 @@ as a Rust, TS, Python or C one.
 bee := thrum.NewBee(thrum.Options{Hive: "my-hive", As: "main",
 	Hello: map[string]any{"roles": []string{"worker"}, "models": []string{"my-model"}}})
 bee.On(thrum.ChiPrompt, func(tone thrum.Tone) {
-	_ = bee.Send(thrum.Tone{"chi": thrum.ChiChunk, "sid": tone["sid"], "chunkType": "text_delta", "delta": "hello"})
-	_ = bee.Send(thrum.Tone{"chi": thrum.ChiFinish, "sid": tone["sid"], "finishReason": "stop"})
+	_ = bee.Send(thrum.Tone{"chi": thrum.ChiUnfurl, "sid": tone["sid"], "petal": 0, "kind": thrum.PetalKindText, "text": "hello"})
+	_ = bee.Send(thrum.Tone{"chi": thrum.ChiWilt, "sid": tone["sid"], "reason": "stop"})
 })
 if err := bee.Start(ctx); err != nil {
 	log.Fatal(err)
@@ -30,7 +30,7 @@ log.Fatal(bee.Wait())
 |---|---|
 | `NewBee(Options{Hive, As, Hello})` | a bee's client; nothing runs until `Start` |
 | `On(chi, fn)`, `OnSid(sid, fn)`, `OffSid(sid)`, `OnAny(fn)` | a tone goes to its sid's handler, else its chi's, else `OnAny` |
-| `OnNestled(fn)`, `OnLost(fn)`, `OnAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
+| `OnNestled(fn)`, `OnAstray(fn)`, `OnAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `Start(ctx)` | returns once humd admits the bee, or `*Refused`, or `*LinkError` |
 | `Send(tone)`, `Hello(patch)` | send a tone, given a rid if it has none; change the hello |
 | `Close()`, `Wait()` | close the link; how the link ended |

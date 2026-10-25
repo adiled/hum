@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn tone_round_trips_with_flat_wire_shape() {
         let wire = json!({
-            "chi": "tool-call",
+            "chi": "tendril-reach",
             "rid": "abc-1",
             "sid": "s1",
             "from": "humd",
@@ -139,7 +139,7 @@ mod tests {
             "callId": "call-9",
         });
         let tone: Tone = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(tone.chi(), Chi::ToolCall);
+        assert_eq!(tone.chi(), Chi::TendrilReach);
         assert_eq!(tone.rid(), "abc-1");
         assert_eq!(tone.envelope.sid.as_deref(), Some("s1"));
         assert_eq!(tone.body.get("name").and_then(|v| v.as_str()), Some("Read"));

@@ -6,8 +6,9 @@
 //!   GET  /api/tags      — list of available models (synthesized)
 //!
 //! Ollama's streaming response is already line-delimited JSON, which
-//! matches thrum's frame format — every `chi:"chunk"` tone maps to
-//! one output line. No SSE re-framing.
+//! matches thrum's frame format — every text petal that unfurls maps to
+//! one output line, and a tendril that reaches to a `tool_calls` line.
+//! No SSE re-framing.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -25,7 +26,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use hum_thrum::{Bee, Event, Options};
-use thrum_core::Chi;
+use thrum_core::{Chi, PetalKind};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -199,7 +200,7 @@ async fn open_prompt(
     );
     hello.insert(
         "chis".into(),
-        json!(["hello", "prompt", "cancel", "chunk", "finish", "error", "tool-call", "tool-result"]),
+        json!(["hello", "prompt", "cancel", "unfurl", "wilt", "error", "tendril-reach", "tendril-result"]),
     );
     hello.insert(
         "source".into(),
@@ -239,7 +240,7 @@ async fn open_prompt(
         while let Some(event) = bee.next().await {
             let tone = match event {
                 Event::Tone(tone) => tone,
-                Event::Lost => json!({"chi": "error", "sid": sid_owned, "message": "humd went away mid-turn"}),
+                Event::Astray => json!({"chi": "error", "sid": sid_owned, "message": "humd went away mid-bloom"}),
                 Event::Refused(why) => json!({"chi": "error", "sid": sid_owned, "message": why}),
                 Event::Nestled | Event::Advisory(_) => continue,
             };
@@ -297,24 +298,11 @@ async fn generate(
     }
 }
 
-fn extract_text_part(tone: &Value) -> Option<String> {
-    let part = tone.get("part")?;
-    if part.get("type")?.as_str()? != "text" {
+fn unfurled_text(tone: &Value) -> Option<&str> {
+    if tone.get("kind").and_then(Value::as_str) != Some(PetalKind::Text.as_str()) {
         return None;
     }
-    Some(part.get("text")?.as_str()?.to_string())
-}
-
-fn extract_tool_use(tone: &Value) -> Option<(String, Value)> {
-    let part = tone.get("part")?;
-    if part.get("type")?.as_str()? != "tool_use" {
-        return None;
-    }
-    let tc = part.get("toolCall")?;
-    Some((
-        tc.get("name")?.as_str().unwrap_or("").to_string(),
-        tc.get("input").cloned().unwrap_or(json!({})),
-    ))
+    tone.get("text").and_then(Value::as_str)
 }
 
 async fn chat_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
@@ -323,8 +311,8 @@ async fn chat_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>)
         while let Some(tone) = rx.recv().await {
             let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
             match chi {
-                "chunk" => {
-                    if let Some(text) = extract_text_part(&tone) {
+                "unfurl" => {
+                    if let Some(text) = unfurled_text(&tone) {
                         let line = json!({
                             "model": model,
                             "created_at": now_iso(),
@@ -332,33 +320,34 @@ async fn chat_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>)
                             "done": false,
                         });
                         let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    } else if let Some((name, args)) = extract_tool_use(&tone) {
-                        let line = json!({
-                            "model": model,
-                            "created_at": now_iso(),
-                            "message": {
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [{ "function": { "name": name, "arguments": args } }],
-                            },
-                            "done": false,
-                        });
-                        let _ = tx.send(Ok(format!("{line}\n").into())).await;
                     }
                 }
-                "finish" => {
-                    let finish_reason = tone.get("finishReason").and_then(Value::as_str).unwrap_or("stop");
+                "tendril-reach" => {
+                    let name = tone.get("name").and_then(Value::as_str).unwrap_or("");
+                    let args = tone.get("args").cloned().unwrap_or(json!({}));
+                    let line = json!({
+                        "model": model,
+                        "created_at": now_iso(),
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [{ "function": { "name": name, "arguments": args } }],
+                        },
+                        "done": false,
+                    });
+                    let _ = tx.send(Ok(format!("{line}\n").into())).await;
+                }
+                "wilt" => {
+                    let reason = tone.get("reason").and_then(Value::as_str).unwrap_or("stop");
                     let mut out = serde_json::Map::new();
                     out.insert("model".into(), Value::String(model.clone()));
                     out.insert("created_at".into(), Value::String(now_iso()));
                     out.insert("message".into(), json!({ "role": "assistant", "content": "" }));
                     out.insert("done".into(), Value::Bool(true));
-                    out.insert("done_reason".into(), Value::String(finish_reason.into()));
-                    if let Some(usage) = tone.get("usage").cloned() {
-                        if let Some(map) = usage.as_object() {
-                            for (k, v) in map {
-                                out.insert(k.clone(), v.clone());
-                            }
+                    out.insert("done_reason".into(), Value::String(reason.into()));
+                    if let Some(nectar) = tone.get("nectar").and_then(Value::as_object) {
+                        for (k, v) in nectar {
+                            out.insert(k.clone(), v.clone());
                         }
                     }
                     let _ = tx.send(Ok(format!("{}\n", Value::Object(out)).into())).await;
@@ -383,21 +372,21 @@ async fn chat_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>)
 
 async fn chat_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
     let mut buf = String::new();
-    let mut finish_reason = String::from("stop");
-    let mut usage: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut reason = String::from("stop");
+    let mut nectar: serde_json::Map<String, Value> = serde_json::Map::new();
     while let Some(tone) = rx.recv().await {
         match tone.get("chi").and_then(Value::as_str) {
-            Some("chunk") => {
-                if let Some(t) = extract_text_part(&tone) {
-                    buf.push_str(&t);
+            Some("unfurl") => {
+                if let Some(t) = unfurled_text(&tone) {
+                    buf.push_str(t);
                 }
             }
-            Some("finish") => {
-                if let Some(r) = tone.get("finishReason").and_then(Value::as_str) {
-                    finish_reason = r.into();
+            Some("wilt") => {
+                if let Some(r) = tone.get("reason").and_then(Value::as_str) {
+                    reason = r.into();
                 }
-                if let Some(u) = tone.get("usage").and_then(|v| v.as_object()) {
-                    usage = u.clone();
+                if let Some(n) = tone.get("nectar").and_then(Value::as_object) {
+                    nectar = n.clone();
                 }
                 break;
             }
@@ -410,8 +399,8 @@ async fn chat_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Value>
     out.insert("created_at".into(), Value::String(now_iso()));
     out.insert("message".into(), json!({ "role": "assistant", "content": buf }));
     out.insert("done".into(), Value::Bool(true));
-    out.insert("done_reason".into(), Value::String(finish_reason));
-    for (k, v) in usage {
+    out.insert("done_reason".into(), Value::String(reason));
+    for (k, v) in nectar {
         out.insert(k, v);
     }
     Json(Value::Object(out)).into_response()
@@ -422,8 +411,8 @@ async fn generate_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Val
     tokio::spawn(async move {
         while let Some(tone) = rx.recv().await {
             match tone.get("chi").and_then(Value::as_str) {
-                Some("chunk") => {
-                    if let Some(text) = extract_text_part(&tone) {
+                Some("unfurl") => {
+                    if let Some(text) = unfurled_text(&tone) {
                         let line = json!({
                             "model": model,
                             "created_at": now_iso(),
@@ -433,14 +422,14 @@ async fn generate_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Val
                         let _ = tx.send(Ok(format!("{line}\n").into())).await;
                     }
                 }
-                Some("finish") => {
-                    let finish_reason = tone.get("finishReason").and_then(Value::as_str).unwrap_or("stop");
+                Some("wilt") => {
+                    let reason = tone.get("reason").and_then(Value::as_str).unwrap_or("stop");
                     let line = json!({
                         "model": model,
                         "created_at": now_iso(),
                         "response": "",
                         "done": true,
-                        "done_reason": finish_reason,
+                        "done_reason": reason,
                     });
                     let _ = tx.send(Ok(format!("{line}\n").into())).await;
                     break;
@@ -464,17 +453,17 @@ async fn generate_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Val
 
 async fn generate_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
     let mut buf = String::new();
-    let mut finish_reason = String::from("stop");
+    let mut reason = String::from("stop");
     while let Some(tone) = rx.recv().await {
         match tone.get("chi").and_then(Value::as_str) {
-            Some("chunk") => {
-                if let Some(t) = extract_text_part(&tone) {
-                    buf.push_str(&t);
+            Some("unfurl") => {
+                if let Some(t) = unfurled_text(&tone) {
+                    buf.push_str(t);
                 }
             }
-            Some("finish") => {
-                if let Some(r) = tone.get("finishReason").and_then(Value::as_str) {
-                    finish_reason = r.into();
+            Some("wilt") => {
+                if let Some(r) = tone.get("reason").and_then(Value::as_str) {
+                    reason = r.into();
                 }
                 break;
             }
@@ -487,7 +476,7 @@ async fn generate_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Va
         "created_at": now_iso(),
         "response": buf,
         "done": true,
-        "done_reason": finish_reason,
+        "done_reason": reason,
     }))
     .into_response()
 }

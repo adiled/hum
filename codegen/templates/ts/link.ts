@@ -7,42 +7,35 @@
 // no protocol, and a TS bee behaves exactly as a bee in any language.
 //
 //   const bee = new Bee({ hive: "openai-server", as: "main", hello: { roles: ["worker"], models } });
-//   bee.on(Chi.prompt, (tone) => { bee.send({ chi: Chi.chunk, sid: tone.sid, chunkType: "text_delta", delta }) });
-//   bee.onLost(() => stopTurns());
+//   bee.on(Chi.prompt, (tone) => { bee.send({ chi: Chi.unfurl, sid: tone.sid, petal: 0, kind: PetalKind.text, text }) });
+//   bee.onAstray(() => stopBlooms());
 //   await bee.start();   // admitted, or Refused, or LinkError
 //   await bee.closed();  // how the link ended; Refused or LinkError unless the bee closed it
 //
 // A tone goes to the handler for its sid if there is one, else to the
-// handler for its chi, else to onAny: an asker follows each session it
+// handler for its chi, else to onAny: a forager follows each sigil it
 // opened by sid, a worker takes prompts by chi. Handlers run in the
-// order tones arrive. An async handler is not awaited, so a long turn
+// order tones arrive. An async handler is not awaited, so a long bloom
 // never holds up the tone after it (a cancel).
 // A tone sent while humd is away is dropped by the link, which says so.
+// A tone is the same Tone whether the bee sends it or hears it: the
+// envelope and its chi's declared body, so a field the thrum does not
+// declare is a compile error, not a surprise.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
-import type { Envelope, HelloBody, ToneView, ToneViews } from "./protocol.ts";
+import type { HelloBody, Tone, ToneViews } from "./protocol.ts";
 
 // @constants
 
 export type ClientOwned = (typeof CLIENT_OWNED)[number];
 
-/** The bee's own hello fields. The client owns the rest. */
 export type Hello = Omit<HelloBody, ClientOwned>;
 
-/** A change to the hello: a field set to null is dropped. */
 export type HelloPatch = { [K in keyof Hello]?: Hello[K] | null };
-
-/** A tone the bee hears: its chi's view, and whatever else it carries. */
-export type Incoming<C extends keyof ToneViews = keyof ToneViews> = ToneView<C> & Record<string, unknown>;
-
-/** A tone the bee sends. The client gives it a rid when it has none. */
-export type Outgoing = {
-  [C in keyof ToneViews]: { chi: C; rid?: string } & Partial<Omit<Envelope, "chi" | "rid">> & ToneViews[C];
-}[keyof ToneViews];
 
 export interface Advisory {
   code: AdvisoryCodeT | (string & {});
@@ -55,7 +48,6 @@ export interface BeeOptions {
   hive: string;
   as: string;
   hello?: Hello;
-  /** The `hum` to run. Found by humCli() when not given. */
   hum?: string;
 }
 
@@ -75,7 +67,6 @@ export class LinkError extends Error {
   }
 }
 
-/** Where `hum` is: $HUM_CLI, else `hum` on PATH, else ~/.local/bin/hum. */
 export function humCli(): string {
   const explicit = process.env[HUM_CLI_ENV];
   if (explicit) return explicit;
@@ -99,16 +90,15 @@ type Handler<T> = (arg: T) => unknown;
 export class Bee {
   readonly hive: string;
   readonly as: string;
-  /** The bee's id, once the link has entered it. */
   id = "";
 
   #opts: BeeOptions;
   #child: ChildProcess | undefined;
-  #bySid = new Map<string, Handler<Incoming>>();
+  #bySid = new Map<string, Handler<Tone>>();
   #byChi = new Map<string, Handler<any>>();
-  #any: Handler<Incoming> | undefined;
+  #any: Handler<Tone> | undefined;
   #nestled: Handler<void>[] = [];
-  #lost: Handler<void>[] = [];
+  #astray: Handler<void>[] = [];
   #advisory: Handler<Advisory>[] = [];
   #starting: { resolve: () => void; reject: (e: Error) => void } | undefined;
   #done: Promise<void>;
@@ -127,49 +117,41 @@ export class Bee {
     this.#done.catch(() => {});
   }
 
-  /** Handle every tone of one chi; a later handler replaces an earlier. */
-  on<C extends keyof ToneViews>(chi: C, fn: Handler<Incoming<C>>): this {
+  on<C extends keyof ToneViews>(chi: C, fn: Handler<Tone<C>>): this {
     this.#byChi.set(chi, fn);
     return this;
   }
 
-  /** Handle every tone of one session, before any chi handler. */
-  onSid(sid: string, fn: Handler<Incoming>): this {
+  onSid(sid: string, fn: Handler<Tone>): this {
     this.#bySid.set(sid, fn);
     return this;
   }
 
-  /** Stop following a session. */
   offSid(sid: string): this {
     this.#bySid.delete(sid);
     return this;
   }
 
-  /** Handle every tone no sid or chi handler takes. */
-  onAny(fn: Handler<Incoming>): this {
+  onAny(fn: Handler<Tone>): this {
     this.#any = fn;
     return this;
   }
 
-  /** humd admitted the bee: at start, and again after every reconnect. */
   onNestled(fn: Handler<void>): this {
     this.#nestled.push(fn);
     return this;
   }
 
-  /** humd went away. The link is dialing again; stop what humd was waiting on. */
-  onLost(fn: Handler<void>): this {
-    this.#lost.push(fn);
+  onAstray(fn: Handler<void>): this {
+    this.#astray.push(fn);
     return this;
   }
 
-  /** Something the bee should fix. The link has already logged it. */
   onAdvisory(fn: Handler<Advisory>): this {
     this.#advisory.push(fn);
     return this;
   }
 
-  /** Run the link; resolves once humd has admitted the bee. */
   start(): Promise<void> {
     if (this.#child) return Promise.reject(new LinkError("this bee has already started"));
     const hum = this.#opts.hum ?? humCli();
@@ -190,7 +172,7 @@ export class Bee {
     return started;
   }
 
-  send(tone: Outgoing): void {
+  send(tone: Tone): void {
     this.#write(tone);
   }
 
@@ -198,7 +180,6 @@ export class Bee {
     this.#write({ hello: patch });
   }
 
-  /** Close the link: what was sent goes out, then the link exits. */
   close(): Promise<void> {
     this.#closing = true;
     if (this.#child) this.#child.stdin?.end();
@@ -206,7 +187,6 @@ export class Bee {
     return this.#done;
   }
 
-  /** Settles when the link has exited: resolves after close(), rejects otherwise. */
   closed(): Promise<void> {
     return this.#done;
   }
@@ -246,8 +226,8 @@ export class Bee {
         this.#starting = undefined;
         for (const fn of this.#nestled) call(fn, undefined);
         return;
-      case "lost":
-        for (const fn of this.#lost) call(fn, undefined);
+      case "astray":
+        for (const fn of this.#astray) call(fn, undefined);
         return;
       case "advisory": {
         const { link: _, ...advisory } = msg;

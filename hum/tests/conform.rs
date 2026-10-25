@@ -9,11 +9,11 @@
 //! - it nestles;
 //! - a prompt from another bee reaches it through humd, and its answer
 //!   comes back;
-//! - a session it follows by sid gets its next tone (a cancel) before
+//! - a sigil it follows by sid gets its next tone (a cancel) before
 //!   any chi handler does;
 //! - a tone it sends with a key the thrum does not declare still goes,
 //!   the bee hears an advisory, and humd records one against it;
-//! - humd restarting under it is a `lost` and then a `nestled`, and
+//! - humd restarting under it is an `astray` and then a `nestled`, and
 //!   prompts reach it again;
 //! - closing it ends the link cleanly;
 //! - a bee of a hive this humd does not have is refused, and its client
@@ -265,7 +265,7 @@ async fn spawn_inline(hive: &str) -> EchoBee {
         while let Some(event) = bee.next().await {
             let line = match event {
                 Event::Nestled => "nestled".to_string(),
-                Event::Lost => "lost".to_string(),
+                Event::Astray => "astray".to_string(),
                 Event::Advisory(a) => format!("advisory {}", a.code),
                 Event::Refused(why) => format!("refused {why}"),
                 Event::Tone(tone) if followed.is_some() && tone["sid"] == *followed.as_ref().unwrap() => {
@@ -279,12 +279,12 @@ async fn spawn_inline(hive: &str) -> EchoBee {
                         if text == "follow" {
                             followed = Some(sid.clone());
                         }
-                        let mut chunk = json!({"chi": "chunk", "sid": sid, "chunkType": "text_delta", "delta": format!("echo: {text}")});
+                        let mut unfurl = json!({"chi": "unfurl", "sid": sid, "petal": 0, "kind": "text", "text": format!("echo: {text}")});
                         if text == "stray" {
-                            chunk["stray"] = json!(true);
+                            unfurl["stray"] = json!(true);
                         }
-                        bee.send(chunk);
-                        bee.send(json!({"chi": "finish", "sid": sid, "finishReason": "stop"}));
+                        bee.send(unfurl);
+                        bee.send(json!({"chi": "wilt", "sid": sid, "reason": "stop"}));
                     }
                     continue;
                 }
@@ -298,30 +298,30 @@ async fn spawn_inline(hive: &str) -> EchoBee {
     EchoBee { lang: "rs", model, lines: rx, seen: Vec::new(), runner: Runner::Inline { sender } }
 }
 
-struct Asker {
+struct Forager {
     bee: Bee,
     asked: u32,
 }
 
-impl Asker {
+impl Forager {
     async fn ask(&mut self, model: &str, text: &str) -> String {
         self.asked += 1;
         let sid = format!("conform-{model}-{}", self.asked);
         self.bee.send(json!({"chi": "prompt", "sid": sid, "modelId": model, "text": text}));
-        let mut delta = String::new();
+        let mut bloom = String::new();
         let deadline = tokio::time::Instant::now() + WAIT;
         loop {
             let event = tokio::time::timeout_at(deadline, self.bee.next())
                 .await
                 .unwrap_or_else(|_| panic!("{model}: no answer to {text:?} within {WAIT:?}"))
-                .expect("the asker's client stopped");
+                .expect("the forager's client stopped");
             let Event::Tone(tone) = event else { continue };
             if tone["sid"] != sid {
                 continue;
             }
             match tone["chi"].as_str() {
-                Some("chunk") => delta.push_str(tone["delta"].as_str().unwrap_or("")),
-                Some("finish") => return delta,
+                Some("unfurl") => bloom.push_str(tone["text"].as_str().unwrap_or("")),
+                Some("wilt") => return bloom,
                 _ => {}
             }
         }
@@ -338,7 +338,7 @@ impl Asker {
             match tokio::time::timeout_at(deadline, self.bee.next()).await {
                 Ok(Some(Event::Nestled)) => return,
                 Ok(Some(_)) => continue,
-                _ => panic!("the asker did not nestle again"),
+                _ => panic!("the forager did not nestle again"),
             }
         }
     }
@@ -381,7 +381,7 @@ async fn every_language_is_the_same_bee() {
     }
     std::fs::create_dir_all(hum_paths::hives_d_dir()).unwrap();
     std::fs::write(hum_paths::hum_json(), r#"{"humd":{"metricsAddr":"none","irohPort":0}}"#).unwrap();
-    for hive in ["asker", "echo-rs", "echo-ts", "echo-py", "echo-go", "echo-c"] {
+    for hive in ["forager", "echo-rs", "echo-ts", "echo-py", "echo-go", "echo-c"] {
         std::fs::write(hum_paths::hive_installation(hive), "# conformance\n").unwrap();
     }
 
@@ -389,10 +389,10 @@ async fn every_language_is_the_same_bee() {
     let warm = Command::new(env!("CARGO_BIN_EXE_hum")).arg("--version").output();
     assert!(warm.is_ok_and(|o| o.status.success()), "hum does not run");
     let mut humd = Humd::start();
-    let asker_bee = Bee::link(Options::new("asker", "main").hello(json!({"roles": ["asker"]})))
+    let forager_bee = Bee::link(Options::new("forager", "main").hello(json!({"roles": ["forager"]})))
         .await
-        .expect("the asker nestles");
-    let mut asker = Asker { bee: asker_bee, asked: 0 };
+        .expect("the forager nestles");
+    let mut forager = Forager { bee: forager_bee, asked: 0 };
 
     let mut bees = vec![spawn_inline("echo-rs").await];
     for lang in &langs {
@@ -403,11 +403,11 @@ async fn every_language_is_the_same_bee() {
 
     for bee in &mut bees {
         bee.expect("nestled");
-        assert_eq!(asker.ask(&bee.model, "hi").await, "echo: hi", "{}", bee.lang);
-        assert_eq!(asker.ask(&bee.model, "stray").await, "echo: stray", "{}", bee.lang);
+        assert_eq!(forager.ask(&bee.model, "hi").await, "echo: hi", "{}", bee.lang);
+        assert_eq!(forager.ask(&bee.model, "stray").await, "echo: stray", "{}", bee.lang);
         bee.expect("advisory undeclared-key");
-        assert_eq!(asker.ask(&bee.model, "follow").await, "echo: follow", "{}", bee.lang);
-        asker.cancel_last(&bee.model);
+        assert_eq!(forager.ask(&bee.model, "follow").await, "echo: follow", "{}", bee.lang);
+        forager.cancel_last(&bee.model);
         bee.expect("sid cancel");
     }
     for bee in &bees {
@@ -421,11 +421,11 @@ async fn every_language_is_the_same_bee() {
 
     humd.stop();
     let mut humd = Humd::start();
-    asker.nestled_again().await;
+    forager.nestled_again().await;
     for bee in &mut bees {
-        bee.expect("lost");
+        bee.expect("astray");
         bee.expect("nestled");
-        assert_eq!(asker.ask(&bee.model, "again").await, "echo: again", "{} after humd restarted", bee.lang);
+        assert_eq!(forager.ask(&bee.model, "again").await, "echo: again", "{} after humd restarted", bee.lang);
     }
 
     for bee in bees {
@@ -446,6 +446,6 @@ async fn every_language_is_the_same_bee() {
     }
     eprintln!("conform: refused cleanly: {}", refused.join(", "));
 
-    asker.bee.close();
+    forager.bee.close();
     humd.stop();
 }

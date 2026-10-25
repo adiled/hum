@@ -603,7 +603,7 @@ impl Sim {
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "models": models,
-            "chis": ["hello", "prompt", "chunk", "finish"],
+            "chis": ["hello", "prompt", "unfurl", "wilt"],
         });
         if let Some((free, total)) = headroom {
             hello["headroom"] = serde_json::json!({"freeSlots": free, "totalSlots": total});
@@ -632,10 +632,10 @@ impl Sim {
                     continue;
                 }
                 let frames = vec![
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","blockIdx":0}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":&reply}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
-                    serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text"}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":&reply}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","closed":true}),
+                    serde_json::json!({"chi":"wilt","sid":&sid,"reason":"end_turn","nectar":{}}),
                 ];
                 for f in frames {
                     thrum.inject_tone(&cid_for_pump, f).await;
@@ -737,7 +737,7 @@ impl Sim {
         result
     }
 
-    pub async fn attach_mock_forager<F>(
+    pub async fn attach_mock_tools<F>(
         &self,
         humd: Hid,
         hive: &str,
@@ -774,12 +774,11 @@ impl Sim {
             .collect();
         let hello = h.signed_hello(serde_json::json!({
             "chi": "hello",
-            "roles": ["forager"],
             "hive": hive,
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "tools": tools,
-            "chis": ["hello", "tool-call", "tool-result", "cancel"],
+            "chis": ["hello", "tendril-reach", "tendril-result", "cancel"],
         }));
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
@@ -792,7 +791,7 @@ impl Sim {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if chi != "tool-call" {
+                if chi != "tendril-reach" {
                     continue;
                 }
                 let sid = tone
@@ -805,16 +804,15 @@ impl Sim {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let tool_name = tone
-                    .get("toolName")
+                let name = tone
+                    .get("name")
                     .and_then(|v| v.as_str())
-                    .or_else(|| tone.get("name").and_then(|v| v.as_str()))
                     .unwrap_or("")
                     .to_string();
                 let args = tone.get("args").cloned().unwrap_or(Value::Null);
-                let result = responder(&tool_name, args);
+                let result = responder(&name, args);
                 let reply = serde_json::json!({
-                    "chi": "tool-result",
+                    "chi": "tendril-result",
                     "sid": sid,
                     "callId": call_id,
                     "result": result,

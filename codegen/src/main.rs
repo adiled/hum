@@ -149,10 +149,11 @@ fn run_target(
             emit(out)?;
         }
         eprintln!(
-            "codegen {target}: {} ({} chi, {} pulse) -> {names}",
+            "codegen {target}: {} ({} chi, {} pulse, {} petal) -> {names}",
             spec.version,
             spec.chi.len(),
             spec.pulse.len(),
+            spec.petal.len(),
         );
     }
     Ok(())

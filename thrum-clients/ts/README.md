@@ -14,12 +14,12 @@ thrum. Every language gets that same client, so a TS bee behaves exactly
 as a Rust, Python, Go or C one.
 
 ```ts
-import { Bee, Chi } from "thrum";
+import { Bee, Chi, PetalKind } from "thrum";
 
 const bee = new Bee({ hive: "my-hive", as: "main", hello: { roles: ["worker"], models: ["my-model"] } });
 bee.on(Chi.prompt, (tone) => {
-  bee.send({ chi: Chi.chunk, sid: tone.sid, chunkType: "text_delta", delta: "hello" });
-  bee.send({ chi: Chi.finish, sid: tone.sid, finishReason: "stop" });
+  bee.send({ chi: Chi.unfurl, sid: tone.sid, petal: 0, kind: PetalKind.text, text: "hello" });
+  bee.send({ chi: Chi.wilt, sid: tone.sid, reason: "stop" });
 });
 await bee.start();
 await bee.closed();
@@ -29,7 +29,7 @@ await bee.closed();
 |---|---|
 | `new Bee({ hive, as, hello })` | a bee's client; nothing runs until `start` |
 | `on(chi, fn)`, `onSid(sid, fn)`, `offSid(sid)`, `onAny(fn)` | a tone goes to its sid's handler, else its chi's, else `onAny` |
-| `onNestled(fn)`, `onLost(fn)`, `onAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
+| `onNestled(fn)`, `onAstray(fn)`, `onAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `start()` | resolves once humd admits the bee; rejects with `Refused` or `LinkError` |
 | `send(tone)`, `hello(patch)` | send a tone, given a rid if it has none; change the hello |
 | `close()`, `closed()` | close the link; how the link ended |

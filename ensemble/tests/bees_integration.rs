@@ -55,7 +55,7 @@ async fn advertise_percolates_and_discover_filters_by_hive() {
             richness: Some("medium".into()),
             wire: Some("custom/mm-v0".into()),
         })
-        .with_chis(["hello", "gossip-publish", "tool-call", "tool-result"]);
+        .with_chis(["hello", "gossip-publish", "tendril-reach", "tendril-result"]);
     ens_a.bee_advertise(manifest.clone()).await;
 
     let (got_id, got_manifest) = timeout(Duration::from_millis(300), discover.recv())

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { Bee, Chi, type Hello } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi, PetalKind, type Grain, type Hello, type Petal, type Tone } from "../../../thrum-clients/ts/index.ts";
 import { BEE_VERSION, HIVE_NAME, Requester, SOURCE } from "./requester.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
@@ -109,7 +109,7 @@ const USAGE: Record<string, TenantUsage> = (() => {
   try { return JSON.parse(readFileSync(USAGE_PATH, "utf8")); } catch { return {}; }
 })();
 
-const sid_to_nestid: Map<string, string> = new Map();
+const sid_to_cell: Map<string, string> = new Map();
 const bloom_to_sid: Map<string, string> = new Map();
 
 interface SidMeta {
@@ -193,62 +193,60 @@ function flatten(content: OpenAIMessage["content"]): string {
   return "";
 }
 
-interface ThrumAttachment {
-  kind: string;
-  mediaType: string;
-  data?: string;
-  url?: string;
-}
-
-function imageAttachmentFromUrl(url: string): ThrumAttachment | null {
+function grainFromUrl(url: string): Grain {
   const inline = url.match(DATA_URI_RE);
   if (inline) return { kind: "image", mediaType: inline[1], data: inline[2] };
   return { kind: "image", mediaType: "image/*", url };
 }
 
-function attachmentsFromContent(content: OpenAIMessage["content"]): ThrumAttachment[] {
+function grainsFromContent(content: OpenAIMessage["content"]): Grain[] {
   if (!Array.isArray(content)) return [];
-  const out: ThrumAttachment[] = [];
+  const out: Grain[] = [];
   for (const part of content) {
     if (part.type !== "image_url") continue;
     const url = (part as { image_url?: { url?: string } }).image_url?.url;
-    if (!url) continue;
-    const attachment = imageAttachmentFromUrl(url);
-    if (attachment) out.push(attachment);
+    if (url) out.push(grainFromUrl(url));
   }
   return out;
 }
 
-function allAttachments(messages: OpenAIMessage[]): ThrumAttachment[] {
-  const out: ThrumAttachment[] = [];
-  for (const m of messages) out.push(...attachmentsFromContent(m.content));
+function allGrains(messages: OpenAIMessage[]): Grain[] {
+  const out: Grain[] = [];
+  for (const m of messages) out.push(...grainsFromContent(m.content));
   return out;
 }
 
-function isFirstTurn(messages: OpenAIMessage[]): boolean {
-  const userTurns = messages.filter(m => m.role === "user").length;
-  const assistantTurns = messages.filter(m => m.role === "assistant").length;
-  return userTurns === 1 && assistantTurns === 0;
+function petalsOf(text: string, grains: Grain[]): Petal[] {
+  return [
+    { kind: PetalKind.text, text },
+    ...grains.map((grain): Petal => ({ kind: PetalKind.pollen, grain })),
+  ];
+}
+
+function isFirstPrompt(messages: OpenAIMessage[]): boolean {
+  const asked = messages.filter(m => m.role === "user").length;
+  const answered = messages.filter(m => m.role === "assistant").length;
+  return asked === 1 && answered === 0;
 }
 
 function messagesToPrompt(messages: OpenAIMessage[]): { systemPrompt?: string; userPrompt: string } {
   const systemPieces: string[] = [];
-  const turns: string[] = [];
+  const said: string[] = [];
   for (const msg of messages) {
     if (msg.role === "system") {
       systemPieces.push(flatten(msg.content));
     } else if (msg.role === "user") {
-      turns.push(`User: ${flatten(msg.content)}`);
+      said.push(`User: ${flatten(msg.content)}`);
     } else if (msg.role === "assistant") {
       const text = flatten(msg.content);
-      if (text) turns.push(`Assistant: ${text}`);
+      if (text) said.push(`Assistant: ${text}`);
     }
   }
   return {
     systemPrompt: systemPieces.length > 0 ? systemPieces.join("\n\n") : undefined,
-    userPrompt: isFirstTurn(messages)
-      ? (turns[0]?.replace(/^User: /, "") ?? "")
-      : turns.join("\n\n"),
+    userPrompt: isFirstPrompt(messages)
+      ? (said[0]?.replace(/^User: /, "") ?? "")
+      : said.join("\n\n"),
   };
 }
 
@@ -256,7 +254,7 @@ function hash16(value: string): string {
   return createHash("sha1").update(value).digest("hex").slice(0, 16);
 }
 
-function sessionKey(messages: OpenAIMessage[]): string {
+function sigilKey(messages: OpenAIMessage[]): string {
   const firstUser = messages.find(m => m.role === "user");
   return hash16(firstUser ? flatten(firstUser.content) : `none-${Date.now()}`);
 }
@@ -317,6 +315,74 @@ function jsonModeSchema(format: JsonModeFormat): unknown {
   return jsonSchema?.schema;
 }
 
+interface BloomAsk {
+  temperature?: number;
+  topP?: number;
+  season?: number;
+  stop?: string | string[];
+  seed?: number;
+  toolChoice?: string | { type: string; name?: string; function?: { name: string } };
+  parallel?: boolean;
+  effort?: string;
+  format?: JsonModeFormat;
+}
+
+function reachOf(choice: BloomAsk["toolChoice"]): string | undefined {
+  if (typeof choice === "string") return choice;
+  return choice?.function?.name ?? choice?.name;
+}
+
+function trellisOf(format: JsonModeFormat | undefined): unknown {
+  if (!format || format.type === "text") return undefined;
+  return jsonModeSchema(format) ?? "json";
+}
+
+function bloomSettings(ask: BloomAsk): Partial<Tone<"prompt">> {
+  const out: Partial<Tone<"prompt">> = {};
+  if (typeof ask.temperature === "number") out.temperature = ask.temperature;
+  if (typeof ask.topP === "number") out.prune = { p: ask.topP };
+  if (typeof ask.season === "number") out.season = ask.season;
+  if (ask.stop !== undefined) out.frost = Array.isArray(ask.stop) ? ask.stop : [ask.stop];
+  if (typeof ask.seed === "number") out.seed = ask.seed;
+  const reach = reachOf(ask.toolChoice);
+  if (reach !== undefined || typeof ask.parallel === "boolean") {
+    out.tendrils = {
+      ...(reach !== undefined ? { reach } : {}),
+      ...(typeof ask.parallel === "boolean" ? { parallel: ask.parallel } : {}),
+    };
+  }
+  if (ask.effort) out.sepal = { effort: ask.effort };
+  const trellis = trellisOf(ask.format);
+  if (trellis !== undefined) out.trellis = trellis;
+  return out;
+}
+
+type Nectar = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+
+function responsesUsage(nectar: unknown): { input_tokens: number; output_tokens: number; total_tokens: number } | undefined {
+  if (!nectar || typeof nectar !== "object") return undefined;
+  const n = nectar as Nectar;
+  const input = (n.input_tokens ?? 0) + (n.cache_read_input_tokens ?? 0) + (n.cache_creation_input_tokens ?? 0);
+  const output = n.output_tokens ?? 0;
+  return { input_tokens: input, output_tokens: output, total_tokens: input + output };
+}
+
+function mcpCall(info: Tone<"tendril-info">): Record<string, unknown> {
+  const name = info.name ?? "";
+  const output = typeof info.result === "string" ? info.result : info.result === undefined ? "" : JSON.stringify(info.result);
+  const isError = info.isError === true;
+  return {
+    id: info.callId || `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+    type: "mcp_call",
+    server_label: name.includes("_") ? name.split("_", 2)[0] : "hum",
+    name,
+    arguments: info.args === undefined ? "{}" : typeof info.args === "string" ? info.args : JSON.stringify(info.args),
+    status: isError ? "failed" : "completed",
+    output,
+    ...(isError ? { error: { message: output } } : {}),
+  };
+}
+
 function injectJsonMode(
   systemPrompt: string | undefined,
   format: JsonModeFormat | undefined,
@@ -331,11 +397,10 @@ function injectJsonMode(
 }
 
 const mainHello: Hello = {
-  roles: ["forager", "worker"],
-  provides: ["session"],
+  roles: ["worker"],
   version: BEE_VERSION,
   propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
-  chis: ["hello", "prompt", "cancel", "tool-result", "chunk", "finish", "session-ready", "tool-call", "error"],
+  chis: ["hello", "prompt", "cancel", "tendril-result", "unfurl", "wilt", "tendril-reach", "error"],
   source: SOURCE,
 };
 const thrum = new Bee({ hive: HIVE_NAME, as: "main", hello: mainHello });
@@ -356,14 +421,8 @@ function requesterLabel(req: IncomingMessage, tenant: string, user: string | und
   return `requester-${fingerprint.slice(0, 32)}`;
 }
 
-// Attachments and sampling are this hive's, not the thrum's: they ride
-// in the envelope's ext under the hive's name, where a worker that knows
-// this hive can find them and every other bee leaves them be.
-function hiveExt(attachments: unknown[], sampling: Record<string, unknown>): { ext?: Record<string, Record<string, unknown>> } {
-  const mine: Record<string, unknown> = {};
-  if (attachments.length > 0) mine.attachments = attachments;
-  if (Object.keys(sampling).length > 0) mine.sampling = sampling;
-  return Object.keys(mine).length > 0 ? { ext: { [HIVE_NAME]: mine } } : {};
+function hiveExt(sampling: Record<string, unknown>): { ext?: Record<string, Record<string, unknown>> } {
+  return Object.keys(sampling).length > 0 ? { ext: { [HIVE_NAME]: { sampling } } } : {};
 }
 
 async function requester(req: IncomingMessage, tenant: string, user: string | undefined): Promise<Requester> {
@@ -462,25 +521,27 @@ async function start(): Promise<void> {
       const stream = body.stream !== false;
       const includeUsage = body.stream_options?.include_usage !== false;
       const model = body.model ?? MODEL_IDS[0] ?? NO_MODEL;
-      const sid = `${tenant === "default" ? "" : tenant + ":"}${body.user ?? `oai-${sessionKey(messages)}`}`;
+      const sid = `${tenant === "default" ? "" : tenant + ":"}${body.user ?? `oai-${sigilKey(messages)}`}`;
       audit({ endpoint: "chat.completions", tenant, model, sid, stream: body.stream ?? true });
       let { systemPrompt, userPrompt } = messagesToPrompt(messages);
       const tools = toolsFromOpenAI(body.tools);
-      const attachments = allAttachments(messages);
+      const grains = allGrains(messages);
 
       systemPrompt = injectJsonMode(systemPrompt, body.response_format);
 
+      const settings = bloomSettings({
+        temperature: body.temperature,
+        topP: body.top_p,
+        season: body.max_completion_tokens ?? body.max_tokens,
+        stop: body.stop,
+        seed: body.seed,
+        toolChoice: body.tool_choice,
+        parallel: body.parallel_tool_calls,
+        format: body.response_format,
+      });
       const sampling: Record<string, unknown> = {};
-      if (typeof body.temperature === "number") sampling.temperature = body.temperature;
-      if (typeof body.top_p === "number") sampling.topP = body.top_p;
-      const maxTokens = body.max_completion_tokens ?? body.max_tokens;
-      if (typeof maxTokens === "number") sampling.maxTokens = maxTokens;
-      if (body.stop !== undefined) sampling.stop = body.stop;
-      if (typeof body.seed === "number") sampling.seed = body.seed;
       if (typeof body.frequency_penalty === "number") sampling.frequencyPenalty = body.frequency_penalty;
       if (typeof body.presence_penalty === "number") sampling.presencePenalty = body.presence_penalty;
-      if (body.tool_choice !== undefined) sampling.toolChoice = body.tool_choice;
-      if (typeof body.parallel_tool_calls === "boolean") sampling.parallelToolCalls = body.parallel_tool_calls;
 
       const chunkId = `chatcmpl-${randomUUID()}`;
       const translator = new OpenAITranslator(chunkId, model, includeUsage);
@@ -597,7 +658,7 @@ async function start(): Promise<void> {
 
       const toolReturns = trailingToolReturns(messages);
       for (const tr of toolReturns) {
-        rq.send({ chi: "tool-result", sid, callId: tr.tool_call_id, result: tr.result });
+        rq.send({ chi: "tendril-result", sid, callId: tr.tool_call_id, result: tr.result });
       }
 
       const sendPrompt = hasTrailingUserAfterTool(messages) || toolReturns.length === 0;
@@ -606,10 +667,11 @@ async function start(): Promise<void> {
           chi: "prompt",
           sid,
           modelId: model,
-          content: userPrompt,
+          content: petalsOf(userPrompt, grains),
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(tools ? { tools } : {}),
-          ...hiveExt(attachments, sampling),
+          ...settings,
+          ...hiveExt(sampling),
         });
       }
       return;
@@ -669,7 +731,7 @@ async function start(): Promise<void> {
       let userText = "";
       let firstUserMsg = "";
       let firstItemId = "";
-      const respAttachments: ThrumAttachment[] = [];
+      const grains: Grain[] = [];
       if (typeof body.input === "string") {
         userText = body.input;
         firstUserMsg = body.input;
@@ -678,7 +740,7 @@ async function start(): Promise<void> {
           const first = body.input[0] as { id?: unknown };
           if (typeof first?.id === "string") firstItemId = first.id;
         }
-        const allUserTurns: string[] = [];
+        const asked: string[] = [];
         for (const item of body.input) {
           const it = item as ResponsesInputItem & { role?: string; type?: string };
           if (typeof it.type === "string" && it.type !== "message") continue;
@@ -694,20 +756,17 @@ async function start(): Promise<void> {
                 if (p.text) parts.push(p.text);
               } else if (p.type === "input_image" || p.type === "image_url") {
                 const u = p.image_url?.url;
-                if (u) {
-                  const attachment = imageAttachmentFromUrl(u);
-                  if (attachment) respAttachments.push(attachment);
-                }
+                if (u) grains.push(grainFromUrl(u));
               }
             }
             collected = parts.join("\n");
           }
-          if (collected) allUserTurns.push(collected);
+          if (collected) asked.push(collected);
         }
-        firstUserMsg = allUserTurns[0] ?? "";
+        firstUserMsg = asked[0] ?? "";
         userText = isDeltaMode
-          ? allUserTurns.join("\n")
-          : (allUserTurns[allUserTurns.length - 1] ?? "");
+          ? asked.join("\n")
+          : (asked[asked.length - 1] ?? "");
       }
 
       const prefix = `${tenant === "default" ? "" : tenant + ":"}oai-r-`;
@@ -739,15 +798,18 @@ async function start(): Promise<void> {
 
       let systemPrompt = injectJsonMode(body.instructions, body.response_format);
 
+      const settings = bloomSettings({
+        temperature: body.temperature,
+        topP: body.top_p,
+        season: body.max_output_tokens,
+        toolChoice: body.tool_choice,
+        parallel: body.parallel_tool_calls,
+        effort: body.reasoning?.effort,
+        format: body.response_format,
+      });
       const sampling: Record<string, unknown> = {};
-      if (typeof body.temperature === "number") sampling.temperature = body.temperature;
-      if (typeof body.top_p === "number") sampling.topP = body.top_p;
-      if (typeof body.max_output_tokens === "number") sampling.maxTokens = body.max_output_tokens;
-      if (body.tool_choice !== undefined) sampling.toolChoice = body.tool_choice;
-      if (typeof body.parallel_tool_calls === "boolean") sampling.parallelToolCalls = body.parallel_tool_calls;
       if (body.service_tier) sampling.serviceTier = body.service_tier;
       if (body.truncation) sampling.truncation = body.truncation;
-      if (body.reasoning?.effort) sampling.reasoningEffort = body.reasoning.effort;
       if (body.reasoning?.summary) sampling.reasoningSummary = body.reasoning.summary;
       if (body.text?.verbosity) sampling.textVerbosity = body.text.verbosity;
       if (Array.isArray(body.include)) sampling.include = body.include;
@@ -781,12 +843,10 @@ async function start(): Promise<void> {
         const openItems = new Map<number, OpenItem>();
         const finalOutput: Array<Record<string, unknown>> = [];
         let nextOutputIndex = 0;
-        let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
-
-        const closeItem = (blockIdx: number) => {
-          const open = openItems.get(blockIdx);
+        const closeItem = (petal: number) => {
+          const open = openItems.get(petal);
           if (!open) return;
-          openItems.delete(blockIdx);
+          openItems.delete(petal);
           if (open.kind === "reasoning") {
             sse("response.reasoning_summary_text.done", {
               type: "response.reasoning_summary_text.done",
@@ -852,21 +912,14 @@ async function start(): Promise<void> {
           }
         };
 
-        rq.on(sid, (msg) => {
-          const chi = msg.chi as string | undefined;
-          const chunkType = msg.chunkType as string | undefined;
-          const blockIdx = typeof msg.id === "number" ? (msg.id as number)
-            : typeof msg.blockIdx === "number" ? (msg.blockIdx as number)
-            : -1;
-          if (chi === "session-ready") {
-            const nid = msg.nestId as string | undefined;
-            if (nid) sid_to_nestid.set(sid, nid);
-            return;
-          }
-          if (chi === "chunk" && chunkType === "reasoning_start") {
+        const openFor = (petal: number, kind: string): OpenItem | undefined => {
+          const open = openItems.get(petal);
+          if (open) return open;
+          if (kind === PetalKind.sepal) {
             const idx = nextOutputIndex++;
             const rsId = `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            openItems.set(blockIdx, { kind: "reasoning", outputIndex: idx, itemId: rsId, text: "" });
+            const fresh: OpenItem = { kind: "reasoning", outputIndex: idx, itemId: rsId, text: "" };
+            openItems.set(petal, fresh);
             sse("response.output_item.added", {
               type: "response.output_item.added",
               output_index: idx,
@@ -879,34 +932,13 @@ async function start(): Promise<void> {
               summary_index: 0,
               part: { type: "summary_text", text: "" },
             });
-            return;
+            return fresh;
           }
-          if (chi === "chunk" && chunkType === "reasoning_delta") {
-            const open = openItems.get(blockIdx);
-            if (!open || open.kind !== "reasoning") return;
-            const delta = (msg.delta as string) ?? "";
-            if (!delta) return;
-            open.text += delta;
-            sse("response.reasoning.delta", {
-              type: "response.reasoning.delta",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              content_index: 0,
-              delta,
-            });
-            sse("response.reasoning_summary_text.delta", {
-              type: "response.reasoning_summary_text.delta",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              summary_index: 0,
-              delta,
-            });
-            return;
-          }
-          if (chi === "chunk" && chunkType === "text_start") {
+          if (kind === PetalKind.text) {
             const idx = nextOutputIndex++;
             const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            openItems.set(blockIdx, { kind: "message", outputIndex: idx, itemId: msgId, text: "" });
+            const fresh: OpenItem = { kind: "message", outputIndex: idx, itemId: msgId, text: "" };
+            openItems.set(petal, fresh);
             sse("response.output_item.added", {
               type: "response.output_item.added",
               output_index: idx,
@@ -919,101 +951,70 @@ async function start(): Promise<void> {
               content_index: 0,
               part: { type: "output_text", text: "" },
             });
+            return fresh;
+          }
+          return undefined;
+        };
+
+        rq.on(sid, (msg) => {
+          if (msg.chi === "pulse") {
+            if (msg.kind === "cell-ready" && msg.cell) sid_to_cell.set(sid, msg.cell);
             return;
           }
-          if (chi === "chunk" && chunkType === "text_delta") {
-            const open = openItems.get(blockIdx);
-            if (!open || open.kind !== "message") {
-              const idx = nextOutputIndex++;
-              const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-              const fresh: OpenItem = { kind: "message", outputIndex: idx, itemId: msgId, text: "" };
-              openItems.set(blockIdx, fresh);
-              sse("response.output_item.added", {
-                type: "response.output_item.added",
-                output_index: idx,
-                item: { id: msgId, type: "message", role: "assistant", status: "in_progress", content: [] },
-              });
-              sse("response.content_part.added", {
-                type: "response.content_part.added",
-                item_id: msgId,
-                output_index: idx,
-                content_index: 0,
-                part: { type: "output_text", text: "" },
-              });
-              const delta = (msg.delta as string) ?? "";
-              if (delta) {
-                fresh.text += delta;
-                sse("response.output_text.delta", {
-                  type: "response.output_text.delta",
-                  item_id: msgId,
-                  output_index: idx,
-                  content_index: 0,
-                  delta,
-                });
-              }
+          if (msg.chi === "unfurl") {
+            if (msg.closed) {
+              closeItem(msg.petal);
               return;
             }
-            const delta = (msg.delta as string) ?? "";
-            if (!delta) return;
+            const open = openFor(msg.petal, msg.kind);
+            const delta = msg.text ?? "";
+            if (!open || !delta) return;
             open.text += delta;
-            sse("response.output_text.delta", {
-              type: "response.output_text.delta",
-              item_id: open.itemId,
-              output_index: open.outputIndex,
-              content_index: 0,
-              delta,
-            });
+            if (open.kind === "reasoning") {
+              sse("response.reasoning.delta", {
+                type: "response.reasoning.delta",
+                item_id: open.itemId,
+                output_index: open.outputIndex,
+                content_index: 0,
+                delta,
+              });
+              sse("response.reasoning_summary_text.delta", {
+                type: "response.reasoning_summary_text.delta",
+                item_id: open.itemId,
+                output_index: open.outputIndex,
+                summary_index: 0,
+                delta,
+              });
+            } else {
+              sse("response.output_text.delta", {
+                type: "response.output_text.delta",
+                item_id: open.itemId,
+                output_index: open.outputIndex,
+                content_index: 0,
+                delta,
+              });
+            }
             return;
           }
-          if (chi === "chunk" && chunkType === "content_block_stop") {
-            closeItem(blockIdx);
-            return;
-          }
-          if (chi === "chunk" && chunkType === "tool_executed") {
-            const callItemId = (msg.callId as string) ?? `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            const toolName = (msg.toolName as string) ?? "";
-            const args = msg.arguments !== undefined
-              ? (typeof msg.arguments === "string" ? msg.arguments : JSON.stringify(msg.arguments))
-              : "{}";
-            const output = (msg.output as string) ?? "";
-            const isError = (msg.isError as boolean) === true;
-            const serverLabel = toolName.includes("_") ? toolName.split("_", 2)[0] : "hum";
+          if (msg.chi === "tendril-info") {
+            const item = mcpCall(msg);
             const idx = nextOutputIndex++;
-            const itemBase = {
-              id: callItemId,
-              type: "mcp_call",
-              server_label: serverLabel,
-              name: toolName,
-              arguments: args,
-              status: isError ? "failed" : "completed",
-              output,
-              ...(isError ? { error: { message: output } } : {}),
-            };
             sse("response.output_item.added", {
               type: "response.output_item.added",
               output_index: idx,
-              item: { ...itemBase, output: "", status: "in_progress" },
+              item: { ...item, output: "", status: "in_progress" },
             });
             sse("response.output_item.done", {
               type: "response.output_item.done",
               output_index: idx,
-              item: itemBase,
+              item,
             });
-            finalOutput.push(itemBase);
+            finalOutput.push(item);
             return;
           }
-          if (chi === "finish") {
-            usage = msg.usage as typeof usage;
+          if (msg.chi === "wilt") {
             for (const idx of [...openItems.keys()]) closeItem(idx);
-            const inputT = (usage?.input_tokens ?? 0)
-              + (usage?.cache_read_input_tokens ?? 0)
-              + (usage?.cache_creation_input_tokens ?? 0);
-            const outputT = usage?.output_tokens ?? 0;
-            const finalUsage = usage ? {
-              input_tokens: inputT,
-              output_tokens: outputT,
-              total_tokens: inputT + outputT,
-            } : undefined;
+            const finalUsage = responsesUsage(msg.nectar);
             if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
             const meta = sid_to_meta.get(sid);
             sse("response.completed", { type: "response.completed", response: {
@@ -1033,24 +1034,23 @@ async function start(): Promise<void> {
             rq.off(sid);
             return;
           }
-          if (chi === "error") {
-            sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: (msg.message as string) ?? "unknown" } } });
+          if (msg.chi === "error") {
+            sse("response.failed", { type: "response.failed", response: { id: responseId, object: "response", status: "failed", error: { message: msg.message ?? "unknown" } } });
             res.write("data: [DONE]\n\n");
             res.end();
             rq.off(sid);
           }
         });
       } else {
-        let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
         type NSOpen =
           | { kind: "reasoning"; itemId: string; text: string }
           | { kind: "message"; itemId: string; text: string };
         const nsOpen = new Map<number, NSOpen>();
         const nsOutput: Array<Record<string, unknown>> = [];
-        const nsCloseItem = (blockIdx: number) => {
-          const open = nsOpen.get(blockIdx);
+        const nsCloseItem = (petal: number) => {
+          const open = nsOpen.get(petal);
           if (!open) return;
-          nsOpen.delete(blockIdx);
+          nsOpen.delete(petal);
           if (open.kind === "reasoning") {
             nsOutput.push({
               id: open.itemId,
@@ -1069,75 +1069,34 @@ async function start(): Promise<void> {
           }
         };
         rq.on(sid, (msg) => {
-          const chi = msg.chi as string | undefined;
-          const chunkType = msg.chunkType as string | undefined;
-          const blockIdx = typeof msg.id === "number" ? (msg.id as number)
-            : typeof msg.blockIdx === "number" ? (msg.blockIdx as number)
-            : -1;
-          if (chi === "session-ready") {
-            const nid = msg.nestId as string | undefined;
-            if (nid) sid_to_nestid.set(sid, nid);
+          if (msg.chi === "pulse") {
+            if (msg.kind === "cell-ready" && msg.cell) sid_to_cell.set(sid, msg.cell);
             return;
           }
-          if (chi === "chunk" && chunkType === "reasoning_start") {
-            nsOpen.set(blockIdx, { kind: "reasoning", itemId: `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" });
-            return;
-          }
-          if (chi === "chunk" && chunkType === "reasoning_delta") {
-            const open = nsOpen.get(blockIdx);
-            if (open?.kind === "reasoning") open.text += (msg.delta as string) ?? "";
-            return;
-          }
-          if (chi === "chunk" && chunkType === "text_start") {
-            nsOpen.set(blockIdx, { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" });
-            return;
-          }
-          if (chi === "chunk" && chunkType === "text_delta") {
-            let open = nsOpen.get(blockIdx);
-            if (!open || open.kind !== "message") {
-              open = { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
-              nsOpen.set(blockIdx, open);
+          if (msg.chi === "unfurl") {
+            if (msg.closed) {
+              nsCloseItem(msg.petal);
+              return;
             }
-            open.text += (msg.delta as string) ?? "";
+            let open = nsOpen.get(msg.petal);
+            if (!open && msg.kind === PetalKind.sepal) {
+              open = { kind: "reasoning", itemId: `rs_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
+              nsOpen.set(msg.petal, open);
+            }
+            if (!open && msg.kind === PetalKind.text) {
+              open = { kind: "message", itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`, text: "" };
+              nsOpen.set(msg.petal, open);
+            }
+            if (open) open.text += msg.text ?? "";
             return;
           }
-          if (chi === "chunk" && chunkType === "content_block_stop") {
-            nsCloseItem(blockIdx);
+          if (msg.chi === "tendril-info") {
+            nsOutput.push(mcpCall(msg));
             return;
           }
-          if (chi === "chunk" && chunkType === "tool_executed") {
-            const callItemId = (msg.callId as string) ?? `mcp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            const toolName = (msg.toolName as string) ?? "";
-            const args = msg.arguments !== undefined
-              ? (typeof msg.arguments === "string" ? msg.arguments : JSON.stringify(msg.arguments))
-              : "{}";
-            const output = (msg.output as string) ?? "";
-            const isError = (msg.isError as boolean) === true;
-            const serverLabel = toolName.includes("_") ? toolName.split("_", 2)[0] : "hum";
-            nsOutput.push({
-              id: callItemId,
-              type: "mcp_call",
-              server_label: serverLabel,
-              name: toolName,
-              arguments: args,
-              status: isError ? "failed" : "completed",
-              output,
-              ...(isError ? { error: { message: output } } : {}),
-            });
-            return;
-          }
-          if (chi === "finish") {
-            usage = msg.usage as typeof usage;
+          if (msg.chi === "wilt") {
             for (const idx of [...nsOpen.keys()]) nsCloseItem(idx);
-            const inputT = (usage?.input_tokens ?? 0)
-              + (usage?.cache_read_input_tokens ?? 0)
-              + (usage?.cache_creation_input_tokens ?? 0);
-            const outputT = usage?.output_tokens ?? 0;
-            const finalUsage = usage ? {
-              input_tokens: inputT,
-              output_tokens: outputT,
-              total_tokens: inputT + outputT,
-            } : undefined;
+            const finalUsage = responsesUsage(msg.nectar);
             if (finalUsage) trackUsage(tenant, finalUsage.input_tokens, finalUsage.output_tokens);
             const meta = sid_to_meta.get(sid);
             res.writeHead(200, { "Content-Type": "application/json" });
@@ -1156,9 +1115,9 @@ async function start(): Promise<void> {
             rq.off(sid);
             return;
           }
-          if (chi === "error") {
+          if (msg.chi === "error") {
             res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: { message: (msg.message as string) ?? "unknown", type: "internal_error" } }));
+            res.end(JSON.stringify({ error: { message: msg.message ?? "unknown", type: "internal_error" } }));
             rq.off(sid);
           }
         });
@@ -1166,16 +1125,17 @@ async function start(): Promise<void> {
 
       req.on("close", () => { rq.off(sid); });
 
-      const resume = sid_to_nestid.get(sid);
+      const resume = sid_to_cell.get(sid);
       rq.send({
         chi: "prompt",
         sid,
         modelId: model,
-        content: userText,
+        content: petalsOf(userText, grains),
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(tools ? { tools } : {}),
         ...(Array.isArray(body.allowed_tools) && body.allowed_tools.length > 0 ? { allowedTools: body.allowed_tools } : {}),
-        ...hiveExt(respAttachments, sampling),
+        ...settings,
+        ...hiveExt(sampling),
         ...(resume ? { resume } : {}),
       });
       return;
@@ -1217,8 +1177,8 @@ async function start(): Promise<void> {
   thrum.on(Chi.prompt, (msg) => {
     if (msg.sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
   });
-  thrum.on(Chi.toolResult, (msg) => {
-    openaiWorker.handleToolResult(msg).catch(e => console.error("[worker] tool-result failed:", e));
+  thrum.on(Chi.tendrilResult, (msg) => {
+    openaiWorker.handleTendrilResult(msg).catch(e => console.error("[worker] tendril-result failed:", e));
   });
   thrum.on(Chi.cancel, (msg) => {
     openaiWorker.cancel(msg);

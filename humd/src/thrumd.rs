@@ -302,11 +302,11 @@ pub(crate) fn tone_is_dusk(tone: &Value) -> bool {
     false
 }
 
-pub fn breath_tone(sessions: Value) -> Tone {
+pub fn breath_tone(sigils: Value) -> Tone {
     json!({
         "chi": "breath",
         "from": "daemon",
-        "sessions": sessions,
+        "sigils": sigils,
         "protoVersion": THRUM_VERSION,
     })
 }

@@ -67,8 +67,8 @@ struct thrum_bee {
     void *any_user;
     event_handler nestled[THRUM_EVENTS_MAX];
     size_t n_nestled;
-    event_handler lost[THRUM_EVENTS_MAX];
-    size_t n_lost;
+    event_handler astray[THRUM_EVENTS_MAX];
+    size_t n_astray;
     advisory_handler advisory[THRUM_EVENTS_MAX];
     size_t n_advisory;
 
@@ -198,8 +198,8 @@ int thrum_bee_on_nestled(thrum_bee *bee, thrum_event_fn fn, void *user) {
     return add_event(bee, bee->nestled, &bee->n_nestled, fn, user);
 }
 
-int thrum_bee_on_lost(thrum_bee *bee, thrum_event_fn fn, void *user) {
-    return add_event(bee, bee->lost, &bee->n_lost, fn, user);
+int thrum_bee_on_astray(thrum_bee *bee, thrum_event_fn fn, void *user) {
+    return add_event(bee, bee->astray, &bee->n_astray, fn, user);
 }
 
 int thrum_bee_on_advisory(thrum_bee *bee, thrum_advisory_fn fn, void *user) {
@@ -377,7 +377,7 @@ static void receive(thrum_bee *bee, const char *line) {
             snprintf(bee->id, sizeof bee->id, "%s", string_of(msg, "bee") ? string_of(msg, "bee") : "");
         }
         pthread_mutex_unlock(&bee->mu);
-    } else if (strcmp(link, "nestled") == 0 || strcmp(link, "lost") == 0) {
+    } else if (strcmp(link, "nestled") == 0 || strcmp(link, "astray") == 0) {
         int nestled = link[0] == 'n';
         event_handler fns[THRUM_EVENTS_MAX];
         size_t n;
@@ -386,8 +386,8 @@ static void receive(thrum_bee *bee, const char *line) {
             bee->start_result = 0;
             pthread_cond_broadcast(&bee->cond);
         }
-        n = nestled ? bee->n_nestled : bee->n_lost;
-        memcpy(fns, nestled ? bee->nestled : bee->lost, n * sizeof *fns);
+        n = nestled ? bee->n_nestled : bee->n_astray;
+        memcpy(fns, nestled ? bee->nestled : bee->astray, n * sizeof *fns);
         pthread_mutex_unlock(&bee->mu);
         for (size_t i = 0; i < n; i++) fns[i].fn(bee, fns[i].user);
     } else if (strcmp(link, "advisory") == 0) {

@@ -30,7 +30,7 @@ number (sid = sha256("twilio-sms:From")[..16] — stable per remote).
 ```
 phone user ──SMS──► Twilio ──POST /sms──► twilio-sms ──chi:prompt──► humd
                                                                          │
-phone user ◄──SMS── Twilio ◄──TwiML <Response>── twilio-sms ◄──chi:finish─┘
+phone user ◄──SMS── Twilio ◄──TwiML <Response>── twilio-sms ◄──chi:wilt───┘
 ```
 
 ## Configure Twilio
@@ -55,7 +55,7 @@ the bee itself terminates the SMS, hum stays private).
 | `HUM_TWILIO_PORT` | `14623` | HTTP listen port |
 | `HUM_TWILIO_HOST` | `0.0.0.0` | HTTP listen host |
 | `HUM_TWILIO_MODEL` | `claude-haiku-4.5` | model the daemon spawns |
-| `HUM_TWILIO_SYSTEM` | terse SMS-friendly system prompt | system instruction prepended to every turn |
+| `HUM_TWILIO_SYSTEM` | terse SMS-friendly system prompt | system instruction prepended to every bloom |
 | `HUM_TWILIO_REPLY_LIMIT` | `1500` | hard cap on reply length (Twilio caps long-form SMS) |
 | `TWILIO_AUTH_TOKEN` | _(unset)_ | reserved — signature verification not yet implemented |
 | `HUM_THRUM_SOCK` | `$XDG_STATE_HOME/hum/thrum.sock` | humd's NDJSON socket |
@@ -89,8 +89,8 @@ You'll get a TwiML response back — same shape Twilio gets.
 | `To` (your number) | `prompt.ext["twilio-sms"].to` |
 | `Body` (the text) | `prompt.text` |
 | `MessageSid` | `rid` |
-| daemon's `chi:"chunk"` text parts (collected) | TwiML `<Message>` body |
-| daemon's `chi:"finish"` | response sent |
+| daemon's `chi:"unfurl"` text petals (collected) | TwiML `<Message>` body |
+| daemon's `chi:"wilt"` | response sent |
 
 ## What it doesn't do
 

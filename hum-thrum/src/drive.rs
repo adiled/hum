@@ -7,7 +7,7 @@
 //! From then on the bee reads [`Event`]s with [`Bee::next`] and sends with
 //! [`Bee::send`], [`Bee::hello`] and [`Bee::close`], or with a [`Sender`]
 //! cloned into other tasks. Reconnecting is the core's business: a bee
-//! hears [`Event::Lost`] when humd goes away and [`Event::Nestled`] when
+//! hears [`Event::Astray`] when humd goes away and [`Event::Nestled`] when
 //! it is admitted again, and nothing else changes.
 //!
 //! [`Endpoint::Resolve`] looks the socket up afresh on every dial, since
@@ -67,7 +67,7 @@ impl Options {
 pub enum Event {
     Nestled,
     Tone(Value),
-    Lost,
+    Astray,
     Advisory(Advisory),
     Refused(String),
 }
@@ -259,8 +259,8 @@ async fn drive(
                 Output::Nestled => {
                     let _ = events.send(Event::Nestled);
                 }
-                Output::Lost => {
-                    let _ = events.send(Event::Lost);
+                Output::Astray => {
+                    let _ = events.send(Event::Astray);
                 }
                 Output::Advisory(advisory) => {
                     let _ = events.send(Event::Advisory(advisory));

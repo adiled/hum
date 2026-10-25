@@ -20,7 +20,7 @@ sudo apt-get install pkg-config libcjson-dev       # Debian, Ubuntu
 
 ```c
 static void on_prompt(thrum_bee *bee, const cJSON *tone, void *user) {
-    /* build a chunk and a finish for the tone's sid, then thrum_bee_send each */
+    /* build an unfurl and a wilt for the tone's sid, then thrum_bee_send each */
 }
 
 thrum_options opts = {.hive = "my-hive", .as = "main", .hello = hello};
@@ -35,7 +35,7 @@ thrum_bee_free(bee);
 |---|---|
 | `thrum_bee_new(&opts)` | a bee's client; nothing runs until `thrum_bee_start` |
 | `thrum_bee_on`, `thrum_bee_on_sid`, `thrum_bee_off_sid`, `thrum_bee_on_any` | a tone goes to its sid's handler, else its chi's, else the any handler |
-| `thrum_bee_on_nestled`, `thrum_bee_on_lost`, `thrum_bee_on_advisory` | humd admitted the bee; humd went away; something to fix |
+| `thrum_bee_on_nestled`, `thrum_bee_on_astray`, `thrum_bee_on_advisory` | humd admitted the bee; humd went away; something to fix |
 | `thrum_bee_start` | returns once humd admits the bee (0), or `THRUM_LINK_REFUSED`, or `THRUM_LINK_FAILED` |
 | `thrum_bee_send`, `thrum_bee_hello` | send a tone, given a rid if it has none; change the hello |
 | `thrum_bee_close`, `thrum_bee_wait` | close the link; how the link ended |

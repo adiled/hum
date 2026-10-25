@@ -15,14 +15,14 @@ exactly as a Rust, TS, Go or C one.
 
 ```python
 import asyncio
-from thrum import Bee, Chi
+from thrum import Bee, Chi, PetalKind
 
 async def main():
     bee = Bee(hive="my-hive", as_="main", hello={"roles": ["worker"], "models": ["my-model"]})
 
     def on_prompt(tone):
-        bee.send({"chi": Chi.CHUNK, "sid": tone["sid"], "chunkType": "text_delta", "delta": "hello"})
-        bee.send({"chi": Chi.FINISH, "sid": tone["sid"], "finishReason": "stop"})
+        bee.send({"chi": Chi.UNFURL, "sid": tone["sid"], "petal": 0, "kind": PetalKind.TEXT, "text": "hello"})
+        bee.send({"chi": Chi.WILT, "sid": tone["sid"], "reason": "stop"})
 
     bee.on(Chi.PROMPT, on_prompt)
     await bee.start()
@@ -35,7 +35,7 @@ asyncio.run(main())
 |---|---|
 | `Bee(hive, as_, hello)` | a bee's client; nothing runs until `start` |
 | `on(chi, fn)`, `on_sid(sid, fn)`, `off_sid(sid)`, `on_any(fn)` | a tone goes to its sid's handler, else its chi's, else `on_any` |
-| `on_nestled(fn)`, `on_lost(fn)`, `on_advisory(fn)` | humd admitted the bee; humd went away; something to fix |
+| `on_nestled(fn)`, `on_astray(fn)`, `on_advisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `await start()` | returns once humd admits the bee; raises `Refused` or `LinkError` |
 | `send(tone)`, `hello(patch)` | send a tone, given a rid if it has none; change the hello |
 | `await close()`, `await closed()` | close the link; how the link ended |

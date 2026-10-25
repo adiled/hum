@@ -15,6 +15,7 @@ typedef enum {
     THRUM_FIELD_STRING,
     THRUM_FIELD_INT,
     THRUM_FIELD_UINT,
+    THRUM_FIELD_NUMBER,
     THRUM_FIELD_BOOL,
     THRUM_FIELD_ARRAY,
     THRUM_FIELD_OBJECT,
@@ -57,35 +58,88 @@ static const thrum_field THRUM_FIELDS_HEADROOM[2] = {
     {"totalSlots", THRUM_FIELD_UINT, false},
 };
 
-static const thrum_field THRUM_FIELDS_PROMPT_BODY[11] = {
+static const thrum_field THRUM_FIELDS_PROMPT_BODY[19] = {
     {"modelId", THRUM_FIELD_STRING, true},
     {"cwd", THRUM_FIELD_STRING, true},
     {"systemPrompt", THRUM_FIELD_STRING, true},
     {"text", THRUM_FIELD_STRING, true},
-    {"content", THRUM_FIELD_STRING, true},
+    {"content", THRUM_FIELD_ARRAY, true},
     {"tools", THRUM_FIELD_ARRAY, true},
     {"foragerTools", THRUM_FIELD_ARRAY, true},
     {"provided", THRUM_FIELD_ARRAY, true},
     {"disallowedTools", THRUM_FIELD_ARRAY, true},
     {"allowedTools", THRUM_FIELD_ARRAY, true},
     {"resume", THRUM_FIELD_STRING, true},
+    {"temperature", THRUM_FIELD_NUMBER, true},
+    {"prune", THRUM_FIELD_OBJECT, true},
+    {"season", THRUM_FIELD_UINT, true},
+    {"frost", THRUM_FIELD_ARRAY, true},
+    {"seed", THRUM_FIELD_INT, true},
+    {"trellis", THRUM_FIELD_ANY, true},
+    {"tendrils", THRUM_FIELD_OBJECT, true},
+    {"sepal", THRUM_FIELD_OBJECT, true},
+};
+
+static const thrum_field THRUM_FIELDS_PETAL[13] = {
+    {"kind", THRUM_FIELD_STRING, false},
+    {"role", THRUM_FIELD_STRING, true},
+    {"text", THRUM_FIELD_STRING, true},
+    {"grain", THRUM_FIELD_OBJECT, true},
+    {"callId", THRUM_FIELD_STRING, true},
+    {"name", THRUM_FIELD_STRING, true},
+    {"args", THRUM_FIELD_ANY, true},
+    {"result", THRUM_FIELD_ANY, true},
+    {"isError", THRUM_FIELD_BOOL, true},
+    {"propolis", THRUM_FIELD_STRING, true},
+    {"source", THRUM_FIELD_ANY, true},
+    {"brix", THRUM_FIELD_ANY, true},
+    {"bouquet", THRUM_FIELD_ARRAY, true},
+};
+
+static const thrum_field THRUM_FIELDS_GRAIN[4] = {
+    {"kind", THRUM_FIELD_STRING, false},
+    {"mediaType", THRUM_FIELD_STRING, false},
+    {"data", THRUM_FIELD_STRING, true},
+    {"url", THRUM_FIELD_STRING, true},
+};
+
+static const thrum_field THRUM_FIELDS_PRUNE[2] = {
+    {"p", THRUM_FIELD_NUMBER, true},
+    {"k", THRUM_FIELD_UINT, true},
+};
+
+static const thrum_field THRUM_FIELDS_TENDRILS[2] = {
+    {"reach", THRUM_FIELD_STRING, true},
+    {"parallel", THRUM_FIELD_BOOL, true},
+};
+
+static const thrum_field THRUM_FIELDS_SEPAL[2] = {
+    {"effort", THRUM_FIELD_STRING, true},
+    {"budget", THRUM_FIELD_UINT, true},
 };
 
 static const thrum_field THRUM_FIELDS_BREATH_BODY[2] = {
-    {"sessions", THRUM_FIELD_ANY, false},
+    {"sigils", THRUM_FIELD_ANY, false},
     {"protoVersion", THRUM_FIELD_STRING, true},
 };
 
-static const thrum_field THRUM_FIELDS_CHUNK_BODY[4] = {
-    {"chunkType", THRUM_FIELD_STRING, false},
-    {"blockIdx", THRUM_FIELD_UINT, true},
-    {"delta", THRUM_FIELD_ANY, true},
-    {"partialJson", THRUM_FIELD_STRING, true},
+static const thrum_field THRUM_FIELDS_UNFURL_BODY[11] = {
+    {"petal", THRUM_FIELD_UINT, false},
+    {"kind", THRUM_FIELD_STRING, false},
+    {"text", THRUM_FIELD_STRING, true},
+    {"sap", THRUM_FIELD_STRING, true},
+    {"callId", THRUM_FIELD_STRING, true},
+    {"name", THRUM_FIELD_STRING, true},
+    {"grain", THRUM_FIELD_OBJECT, true},
+    {"propolis", THRUM_FIELD_STRING, true},
+    {"source", THRUM_FIELD_ANY, true},
+    {"brix", THRUM_FIELD_ANY, true},
+    {"closed", THRUM_FIELD_BOOL, true},
 };
 
-static const thrum_field THRUM_FIELDS_FINISH_BODY[4] = {
-    {"finishReason", THRUM_FIELD_STRING, false},
-    {"usage", THRUM_FIELD_ANY, true},
+static const thrum_field THRUM_FIELDS_WILT_BODY[4] = {
+    {"reason", THRUM_FIELD_STRING, false},
+    {"nectar", THRUM_FIELD_ANY, true},
     {"exitCode", THRUM_FIELD_INT, true},
     {"subtype", THRUM_FIELD_STRING, true},
 };
@@ -94,53 +148,50 @@ static const thrum_field THRUM_FIELDS_ERROR_BODY[4] = {
     {"message", THRUM_FIELD_STRING, false},
     {"code", THRUM_FIELD_STRING, true},
     {"subtype", THRUM_FIELD_STRING, true},
-    {"usage", THRUM_FIELD_ANY, true},
+    {"nectar", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_SESSION_READY_BODY[3] = {
-    {"nestId", THRUM_FIELD_STRING, false},
-    {"model", THRUM_FIELD_STRING, false},
-    {"tools", THRUM_FIELD_ARRAY, true},
-};
-
-static const thrum_field THRUM_FIELDS_TOOL_CALL_BODY[4] = {
+static const thrum_field THRUM_FIELDS_TENDRIL_REACH_BODY[3] = {
     {"callId", THRUM_FIELD_STRING, false},
-    {"toolName", THRUM_FIELD_STRING, false},
-    {"name", THRUM_FIELD_STRING, true},
+    {"name", THRUM_FIELD_STRING, false},
     {"args", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_TOOL_RESULT_BODY[6] = {
+static const thrum_field THRUM_FIELDS_TENDRIL_RESULT_BODY[6] = {
     {"callId", THRUM_FIELD_STRING, false},
     {"output", THRUM_FIELD_STRING, true},
-    {"result", THRUM_FIELD_STRING, true},
+    {"result", THRUM_FIELD_ANY, true},
     {"isError", THRUM_FIELD_BOOL, true},
     {"title", THRUM_FIELD_STRING, true},
     {"metadata", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_TOOL_INFO_BODY[4] = {
+static const thrum_field THRUM_FIELDS_TENDRIL_INFO_BODY[5] = {
     {"callId", THRUM_FIELD_STRING, false},
     {"name", THRUM_FIELD_STRING, true},
     {"args", THRUM_FIELD_ANY, true},
     {"result", THRUM_FIELD_ANY, true},
+    {"isError", THRUM_FIELD_BOOL, true},
 };
 
-static const thrum_field THRUM_FIELDS_TOOL_META_BODY[3] = {
+static const thrum_field THRUM_FIELDS_TENDRIL_META_BODY[3] = {
     {"callId", THRUM_FIELD_STRING, true},
-    {"toolName", THRUM_FIELD_STRING, true},
+    {"name", THRUM_FIELD_STRING, true},
     {"metadata", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_PULSE_BODY[3] = {
+static const thrum_field THRUM_FIELDS_PULSE_BODY[6] = {
     {"kind", THRUM_FIELD_STRING, false},
     {"pid", THRUM_FIELD_INT, true},
     {"headroom", THRUM_FIELD_OBJECT, true},
+    {"cell", THRUM_FIELD_STRING, true},
+    {"model", THRUM_FIELD_STRING, true},
+    {"tools", THRUM_FIELD_ARRAY, true},
 };
 
 static const thrum_field THRUM_FIELDS_PERMISSION_ASK_BODY[4] = {
     {"callId", THRUM_FIELD_STRING, true},
-    {"toolName", THRUM_FIELD_STRING, true},
+    {"name", THRUM_FIELD_STRING, true},
     {"message", THRUM_FIELD_STRING, true},
     {"arg", THRUM_FIELD_ANY, true},
 };
@@ -225,12 +276,12 @@ static const thrum_field THRUM_FIELDS_PERF_MARK_BODY[2] = {
     {"note", THRUM_FIELD_STRING, true},
 };
 
-static const thrum_field THRUM_FIELDS_TENDRIL_RESULT_BODY[2] = {
+static const thrum_field THRUM_FIELDS_SCOUT_RESULT_BODY[2] = {
     {"callId", THRUM_FIELD_STRING, true},
     {"output", THRUM_FIELD_ANY, true},
 };
 
-static const thrum_field THRUM_FIELDS_TENDRIL_REACH_BODY[2] = {
+static const thrum_field THRUM_FIELDS_SCOUT_BODY[2] = {
     {"task", THRUM_FIELD_STRING, true},
     {"tools", THRUM_FIELD_ARRAY, true},
 };
@@ -255,21 +306,20 @@ static const thrum_field THRUM_FIELDS_ENVELOPE[11] = {
 
 static const thrum_view THRUM_ENVELOPE = {NULL, THRUM_FIELDS_ENVELOPE, 11};
 
-#define THRUM_VIEW_COUNT 34
+#define THRUM_VIEW_COUNT 33
 
 static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"hello", THRUM_FIELDS_HELLO_BODY, 16},
-    {"prompt", THRUM_FIELDS_PROMPT_BODY, 11},
+    {"prompt", THRUM_FIELDS_PROMPT_BODY, 19},
     {"breath", THRUM_FIELDS_BREATH_BODY, 2},
-    {"chunk", THRUM_FIELDS_CHUNK_BODY, 4},
-    {"finish", THRUM_FIELDS_FINISH_BODY, 4},
+    {"unfurl", THRUM_FIELDS_UNFURL_BODY, 11},
+    {"wilt", THRUM_FIELDS_WILT_BODY, 4},
     {"error", THRUM_FIELDS_ERROR_BODY, 4},
-    {"session-ready", THRUM_FIELDS_SESSION_READY_BODY, 3},
-    {"tool-call", THRUM_FIELDS_TOOL_CALL_BODY, 4},
-    {"tool-result", THRUM_FIELDS_TOOL_RESULT_BODY, 6},
-    {"tool-info", THRUM_FIELDS_TOOL_INFO_BODY, 4},
-    {"tool-meta", THRUM_FIELDS_TOOL_META_BODY, 3},
-    {"pulse", THRUM_FIELDS_PULSE_BODY, 3},
+    {"tendril-reach", THRUM_FIELDS_TENDRIL_REACH_BODY, 3},
+    {"tendril-result", THRUM_FIELDS_TENDRIL_RESULT_BODY, 6},
+    {"tendril-info", THRUM_FIELDS_TENDRIL_INFO_BODY, 5},
+    {"tendril-meta", THRUM_FIELDS_TENDRIL_META_BODY, 3},
+    {"pulse", THRUM_FIELDS_PULSE_BODY, 6},
     {"permission-ask", THRUM_FIELDS_PERMISSION_ASK_BODY, 4},
     {"release-permit", THRUM_FIELDS_RELEASE_PERMIT_BODY, 3},
     {"echo", THRUM_FIELDS_ECHO_BODY, 2},
@@ -289,8 +339,8 @@ static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {
     {"cancel", NULL, 0},
     {"cleanup", NULL, 0},
     {"curate", NULL, 0},
-    {"tendril-result", THRUM_FIELDS_TENDRIL_RESULT_BODY, 2},
-    {"tendril-reach", THRUM_FIELDS_TENDRIL_REACH_BODY, 2},
+    {"scout-result", THRUM_FIELDS_SCOUT_RESULT_BODY, 2},
+    {"scout", THRUM_FIELDS_SCOUT_BODY, 2},
     {"petal-cell", THRUM_FIELDS_PETAL_CELL_BODY, 1},
 };
 

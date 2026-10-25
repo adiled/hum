@@ -88,14 +88,14 @@ func TestGoldenSpotChecks(t *testing.T) {
 			if h.ProtoVersion != "0.8.0" || h.Hive != "claude-cli" || len(h.Roles) != 1 || h.Roles[0] != "worker" {
 				t.Fatalf("hello mismatch: %+v", h)
 			}
-		case ChiToolResult:
-			var r ToolResultBody
+		case ChiTendrilResult:
+			var r TendrilResultBody
 			blob, _ := json.Marshal(body)
 			if err := json.Unmarshal(blob, &r); err != nil {
 				t.Fatal(err)
 			}
 			if r.CallId != "call-1" || r.Output == nil || *r.Output != "file contents" {
-				t.Fatalf("tool-result mismatch: %+v", r)
+				t.Fatalf("tendril-result mismatch: %+v", r)
 			}
 		case ChiWaneSync:
 			var w WaneSyncBody

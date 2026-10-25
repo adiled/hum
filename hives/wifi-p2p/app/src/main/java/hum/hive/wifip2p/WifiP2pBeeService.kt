@@ -22,7 +22,7 @@ import java.io.PrintWriter
  *   P2P Radio ⇄ P2pManager (TCP on p2p0) ⇄ ThrumClient (to local humd)
  *
  * Inbound P2P tones → translated to chi:"prompt" → sent to humd
- * humd replies (chunk/finish) → collected → sent back over P2P TCP
+ * humd's unfurl/wilt → collected → sent back over P2P TCP
  */
 class WifiP2pBeeService : Service() {
     companion object {
@@ -38,7 +38,7 @@ class WifiP2pBeeService : Service() {
     private var p2pManager: P2pManager? = null
     private var thrumClient: ThrumClient? = null
 
-    // Per-peer state: we collect chunks per (peerId, sid)
+    // Per-peer state: we collect text petals per (peerId, sid)
     private val peerReplies = mutableMapOf<String, StringBuilder>()
     private val replyLock = Mutex()
 
@@ -155,7 +155,7 @@ class WifiP2pBeeService : Service() {
             }
         }
 
-        // 5. Handle thrum replies (chunks for all active sid)
+        // 5. Handle thrum replies (petals for every active sid)
         thrumClient?.onCatchAll { tone ->
             scope.launch {
                 handleThrumReply(tone, replyLimit)
@@ -255,22 +255,20 @@ class WifiP2pBeeService : Service() {
     }
 
     /**
-     * Handle a thrum reply (chunk/finish) and forward back to P2P.
+     * Gather a bloom's text petals and hand the peer its reply when it wilts.
      */
     private suspend fun handleThrumReply(tone: Tone, replyLimit: Int) {
         when (tone.chi) {
-            Chi.CHUNK -> {
+            Chi.UNFURL -> {
                 val sid = tone.sid ?: return
-                val part = tone.body["part"] as? Map<*, *> ?: return
-                if (part["type"] == "text") {
-                    val text = part["text"] as? String ?: return
-                    replyLock.withLock {
-                        val buf = peerReplies.getOrPut(sid) { StringBuilder() }
-                        buf.append(text)
-                    }
+                if (tone.body["kind"] != "text") return
+                val text = tone.body["text"] as? String ?: return
+                replyLock.withLock {
+                    val buf = peerReplies.getOrPut(sid) { StringBuilder() }
+                    buf.append(text)
                 }
             }
-            Chi.FINISH -> {
+            Chi.WILT -> {
                 val sid = tone.sid ?: return
                 replyLock.withLock {
                     val buf = peerReplies.remove(sid) ?: return@withLock
@@ -280,14 +278,20 @@ class WifiP2pBeeService : Service() {
                         reply = reply.take(replyLimit - 3) + "..."
                     }
 
-                    // Send reply back over P2P to all peers for this sid
-                    val finishTone = Tone(
-                        chi = Chi.FINISH,
+                    val petal = Tone(
+                        chi = Chi.UNFURL,
                         rid = rid(),
                         sid = sid,
-                        body = mapOf("reply" to reply)
+                        body = mapOf("petal" to 0, "kind" to "text", "text" to reply)
                     )
-                    p2pManager?.broadcastTone(finishTone.toJson())
+                    val wilt = Tone(
+                        chi = Chi.WILT,
+                        rid = rid(),
+                        sid = sid,
+                        body = mapOf("reason" to (tone.body["reason"] ?: "stop"))
+                    )
+                    p2pManager?.broadcastTone(petal.toJson())
+                    p2pManager?.broadcastTone(wilt.toJson())
                 }
             }
             Chi.ERROR -> {

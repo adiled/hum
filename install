@@ -305,7 +305,6 @@ print_next_steps() {
   log ""
   log "humd is up. Install a hive; it enters and runs its own bee:"
   log "  hum hive openai-server install    # OpenAI inference"
-  log "  hum hive humfs install            # filesystem forager"
   log "  hum hive paid-oracle install      # x402 paid price oracle"
   log ""
   log "Bee state: hum bee --list"

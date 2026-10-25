@@ -27,7 +27,7 @@ itself. If a client disagrees with this document, the document wins.
 - **Encoding**: UTF-8. Keys are case-sensitive, camelCase by
   convention (the wire uses `protoVersion`, `sentAt`, etc.). The
   `chi` discriminator and all chi values are **kebab-case**
-  (`"tool-call"`, `"release-permit"`).
+  (`"tendril-reach"`, `"release-permit"`).
 - **Backpressure**: humd reads at line rate; if a writer can't keep up,
   the receiver drops oldest unsent frames. Clients SHOULD assume
   at-most-once delivery of any single tone.
@@ -44,10 +44,10 @@ Every tone is a JSON object with these top-level fields:
 |---|---|---|---|
 | `chi` | string | **yes** | Tone discriminator. Must be one of the kebab-case values in the chi registry below. |
 | `rid` | string | **yes** | Request id. Echoed in correlated responses (e.g. `chi:"echo"`). Format-agnostic; hum's client mints a HumId (52 Crockford base32 characters) when a bee sends none. **Not a dedup key** — see [Identity](#identity). |
-| `sid` | string | situational | Session id. Required for `prompt`, `chunk`, `finish`, `tool-call`, etc. Picked by the originator. |
+| `sid` | string | situational | The string a [sigil](#sigilsid) is drawn from: blooms whose tones carry it share that sigil. Required for `prompt`, `unfurl`, `wilt`, `tendril-reach`, and the like. The forager picks it. |
 | `from` | string | situational | Sender identity. `HumdId` hex when crossing humds, bee name when on a local socket. |
 | `to` | string | situational | Destination identity. `HumdId` hex for ensemble-routed tones; absent for local-only. |
-| `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same (nest, sid). |
+| `sigil` | string | optional | 12-char content hash, see [Helpers](#helpers). Stable across reconnects for the same sid. |
 | `wane` | integer | optional | Lamport clock per sigil — see [WaneTracker](#wanetracker). |
 | `sentAt` | integer | optional | Wall-clock ms at send time. UTC. |
 | `dusk` | integer | optional | Absolute ms expiry. humd drops a tone arriving with `now > dusk`, and counts it — see [Identity](#identity). |
@@ -102,9 +102,9 @@ single protocol.
   "propensity": {
     "statefulness": "stateless | convention-stateful | stateful | transport-only",
     "richness":     "rich | medium | lean | opaque",
-    "wire":         "<freeform tag, e.g. 'openai/chat-completions' or 'x402/tool-call'>"
+    "wire":         "<freeform tag, e.g. 'openai/chat-completions' or 'x402/tendril'>"
   },
-  "chis": ["hello", "prompt", "chunk", "finish"],
+  "chis": ["hello", "prompt", "unfurl", "wilt"],
   "source": "https://github.com/...optional pointer to your repo..."
 }
 ```
@@ -156,13 +156,13 @@ Direction is sacred. Two ends of the same connection, two roles:
 
 | who | sends | receives |
 |---|---|---|
-| **asker side** (a nestler when pre-handshake, a nestled after) | `chi:"hello"` (first ask), then `chi:"prompt"`, `chi:"cancel"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"` — keeps asking the whole lifetime | `chi:"breath"` (accepting the handshake), `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"`, `chi:"session-ready"`, `chi:"pulse"` |
-| **cell side** (compute) | `chi:"chunk"`, `chi:"finish"`, `chi:"tool-call"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tool-result"`, `chi:"release-permit"`, `chi:"cancel"` |
+| **forager side**, the bee that prompts (a nestler before its hello is accepted, a nestled after) | `chi:"hello"` first, then `chi:"prompt"`, `chi:"cancel"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"`, for the whole of its life | `chi:"breath"` (accepting the hello), `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"`, `chi:"pulse"` |
+| **cell side** (compute) | `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cancel"` |
 
-The asker is the same actor throughout — a **nestler** before its
+The forager is the same bee throughout: a **nestler** before its
 hello is accepted, a **nestled** after. The role doesn't flip when
 the state changes; "hello" is just the first of many asks the
-connection will carry. Cancels, prompts, tool-results, cleanups all
+connection will carry. Cancels, prompts, tendril-results, cleanups all
 flow from the nestled state, not just hello from the nestler.
 
 A cell is always answerer. **Nobody is both on the same connection.**
@@ -174,7 +174,7 @@ advertise.
 The wire is **opaque to the cell's implementation.** A cell might
 be a local subprocess (`claude-cli`), a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
-the wire sees identical chunks coming back either way. The kind of
+the wire sees the same petals unfurl back either way. The kind of
 cell (`Worker` impl, in Rust terms) is the hive's concern,
 exposed to the wire only via `hive: "<kind>"` on hello.
 
@@ -183,14 +183,14 @@ What the wire *does* see, at the humd level:
 - Each humd advertises in its `PeerCapabilities.nests` (gossiped via
   the ensemble) which **kinds** of hive its nest is configured to
   host (e.g. `["claude-cli", "ollama-local"]`).
-- Each `chi:"prompt"` carries a `modelId` — the asker says which
+- Each `chi:"prompt"` carries a `modelId`: the forager says which
   model it wants. humd's routing picks an appropriate worker bee
   (a local one over thrum, or routes to a peer humd whose advertised
   hives can serve it).
 
 That's the whole "compute discovery" mechanism. No `provides_nest`
 field on a bee's hello — the kind is `hive: "<name>"` + bee role flag.
-**The advertise lives on the humd, not invented per-asker.**
+**The advertise lives on the humd, not invented per forager.**
 
 If you want to add a new kind of compute to the mesh, you ship a
 `Worker` impl (any process speaking thrum), point it at a humd, and
@@ -213,35 +213,34 @@ clients carry as their doc comment. They are the same contract stated
 at two lengths — `description` is the one the clients quote, so a chi
 with no description here has none in the clients either.
 
-### Nestler → daemon
+### Nestler → humd
 
 | chi | body fields | meaning | description |
 |---|---|---|
 | `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
-| `prompt` | `sid`, `text`/`content`, optional `modelId`/`cwd`/`systemPrompt`/`tools` | start a turn | start a turn — content, system, tools |
-| `cancel` | `sid` | interrupt the current turn for this sid | interrupt mid-turn |
-| `cleanup` | `sid` | drop daemon state for this session | session deleted, drop daemon state |
+| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd`/`systemPrompt`/`tools`, and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal` | open a bloom | open a bloom: its petals, and how the cell should grow it |
+| `cancel` | `sid` | stop the open bloom of this sigil | stop the open bloom |
+| `cleanup` | `sid` | drop humd's state for this sigil | drop humd's state for a sigil |
 | `curate` | `sid` | manual compaction request | manual compaction request |
 | `release-permit` | `callId`, `ok`, optional `error` | answer a `permission-ask` | resolve an earlier permission-ask |
-| `tendril-result` | `sid`, `callId`, `result` | task subagent answered | task subagent answered |
-| `tool-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | nestler-declared tool answered | nestler-declared tool answered |
+| `scout-result` | `sid`, `callId`, `output` | a scout came back | a scout came back |
+| `tendril-result` | `callId`, `result`/`output`, `isError`, `title`, `metadata` | what a tendril grasped | what a tendril grasped |
 | `petal-cell` | `sid`, `cell` | OC message-graph update (graft hint) | OC message-graph update (graft hint) |
 
-### Daemon → nestler
+### humd → nestler
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `breath` | (state snapshot, usually `{}`) | reply to hello — handshake, full state sync on connect | handshake — full state sync on connect |
-| `chunk` | `chunkType`, `blockIdx`, `delta`, `partialJson` | streamed model output, partwise (text/reasoning/tool) | model output partwise (text/reasoning/tool) |
-| `finish` | `finishReason`, `usage`, optional `exitCode`, `subtype` | turn complete | turn complete — finishReason + usage |
-| `error` | `message`, `code`, optional `subtype`, `usage` | turn aborted / hard error | turn aborted |
-| `session-ready` | `nestId`, `model`, `tools` | nest spawned, ready for prompts | nest spawned, claude session id known |
-| `pulse` | `kind` (CellSpawned/CellReady/CellIdle/CellDied/CellEvicted), optional `pid`/`headroom` | cell lifecycle event, with the worker's headroom after it | cell lifecycle event and headroom |
-| `permission-ask` | `callId`, `toolName`, `message`, `arg` | mid-stream permission needed | mid-stream permission needed |
-| `tendril-reach` | `task`, `tools` | task subagent dispatch | task subagent dispatch |
-| `tool-call` | `sid`, `callId`, `name`, `args` | nestler-declared tool dispatch | nestler-declared tool dispatch |
-| `tool-meta` | `callId`, `toolName`, `metadata` | out-of-band metadata for a tool result | out-of-band metadata for a tool result |
-| `tool-info` | `callId`, `name`, `args`, `result` | completed-in-server tool execution, purely informational. Carries the full pair as one tone. Unlike `tool-call`/`tool-result`, which form a two-phase handoff requiring the recipient to execute and reply, `tool-info` says "this tool ran upstream, here's everything." Consumers render it without taking action. | completed-in-server tool execution — purely informational. Carries the full {callId, name, args, result} pair as one tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase handoff requiring the recipient to execute and reply), `ToolInfo` says "this tool ran upstream, here's everything." Consumers render it without taking action. Used by humd when its native MCP tools run in-process, or when a nestler-tool roundtrip completes successfully and observers want a clean audit event. |
+| `breath` | `sigils` (state per sigil, usually `{}`), optional `protoVersion` | reply to hello: accepts it, and syncs state on connect | accept a hello, sync state on connect |
+| `unfurl` | `petal` (its index in the bloom), `kind`, and what grew: `text`, `sap`, `callId`/`name`, `grain`, `propolis`, `source`, `brix`; `closed` once the petal is whole | one petal of a bloom growing | a petal growing |
+| `wilt` | `reason`, `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
+| `error` | `message`, `code`, optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
+| `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the worker's headroom after it | a cell's life, and headroom |
+| `permission-ask` | `callId`, `name`, `message`, `arg` | a tendril needs leave to reach | a tendril needs leave to reach |
+| `scout` | `task`, `tools` | send a scout out | send a scout out |
+| `tendril-reach` | `sid`, `callId`, `name`, `args` | a brokered tool call reaching | a tendril reaching |
+| `tendril-meta` | `callId`, `name`, `metadata` | what a tendril carries besides its result | what a tendril carries besides its result |
+| `tendril-info` | `callId`, `name`, `args`, `result`, `isError` | a tendril that already reached and came back, told whole. Unlike `tendril-reach` and `tendril-result`, a two-phase handoff the receiver acts on, `tendril-info` says "this ran upstream, here is all of it", and a receiver only shows it. | a tendril that already came back, told whole, for showing only |
 
 ### Either direction
 
@@ -277,10 +276,42 @@ See [`ensemble/README.md`](../ensemble/README.md).
 | kind | description |
 |---|---|
 | `cell-spawned` | process created |
-| `cell-ready` | system init received, accepting input |
-| `cell-idle` | turn complete, no listeners |
+| `cell-ready` | brooded: accepting prompts, its id, model and tools known |
+| `cell-idle` | the bloom wilted, no listeners |
 | `cell-died` | process exited |
 | `cell-evicted` | killed to make room |
+
+### `petal.kind`
+
+A petal is one unit of content: in a prompt's `content`, and as it grows
+in an `unfurl`.
+
+| kind | description |
+|---|---|
+| `text` | words, in `text` |
+| `tendril` | a brokered tool call: `callId`, `name`, `args`; its input grows as `sap` |
+| `grasp` | what a tendril came back with: `callId`, `result`, `isError` |
+| `pollen` | a grain of media: `grain` with its `kind` (image, audio, file), `mediaType`, and `data` or `url` |
+| `sepal` | the cell's reasoning, in `text`, sealed by `propolis` so it can carry into the next bloom |
+| `waggle` | where a petal's words came from: `source` |
+| `thorn` | the cell declining, or a filter acting: `text` says why |
+| `brix` | how likely each token was: `brix` |
+| `bouquet` | several candidate petals for one prompt: `bouquet` |
+
+### How a bloom grows
+
+A prompt says how the cell should grow its bloom.
+
+| field | meaning |
+|---|---|
+| `temperature` | how warm the sampling is |
+| `prune` | `p` and `k`: cut the unlikely tail |
+| `season` | how many tokens the bloom may grow |
+| `frost` | where the bloom stops |
+| `seed` | a seed, for a bloom grown again the same |
+| `trellis` | the shape the answer grows along: a schema, or `"json"` |
+| `tendrils` | `reach` (`auto`, `none`, `required`, or a tendril's name) and `parallel` |
+| `sepal` | how much the cell reasons first: `effort`, or a `budget` |
 
 ### Advisories
 
@@ -326,9 +357,9 @@ byte-for-byte.
 sigil = lowercase_hex(sha256("sigil:" + sid)[..6])      // 12 chars
 ```
 
-Stable identifier for a session, the same on every humd. Used by humd's
-WaneTracker keys and by drift detection; `sid` is the session id the
-asker chose.
+What ties a run of blooms together, the same on every humd. humd routes a
+bloom's tones by it and keys its wane by it; `sid` is the string the
+forager chose to draw it from.
 
 ### `rid()`
 
@@ -423,23 +454,23 @@ if remote_wane > local_wane[sigil]:
 
 Both ends converge in O(1) round-trips after the link heals.
 
-## Tool-call extension
+## Tendrils
 
-A nestler-declared tool is an arbitrary callable the bee exposes
-to the model via `chi:"prompt"` `tools` array. When the model picks
-it, humd emits `chi:"tool-call"`; the nestler answers with
-`chi:"tool-result"` carrying the same `callId`.
+A nestler-declared tool is an arbitrary callable the bee offers the
+cell in its prompt's `tools`. When the cell picks it, a tendril
+reaches: humd emits `chi:"tendril-reach"`, and the nestler answers with
+`chi:"tendril-result"` carrying the same `callId`.
 
 ```
-nestler → daemon: chi:"prompt" { tools: [{ name, description, input_schema }, ...] }
-daemon → nestler: chi:"tool-call" { sid, callId, name, args }
-nestler → daemon: chi:"tool-result" { sid, callId, result }
+nestler → humd: chi:"prompt" { tools: [{ name, description, input_schema }, ...] }
+humd → nestler: chi:"tendril-reach" { sid, callId, name, args }
+nestler → humd: chi:"tendril-result" { sid, callId, result }
 ```
 
-Errors set `result.error` and humd surfaces them as a model error
-turn. Timeouts: if no `tool-result` arrives within the nestler-side
-timeout, send `chi:"tool-result"` with `result.error = "timeout"` so
-the model unblocks.
+Errors set `result.error`, and humd surfaces them as an error in the
+bloom. If no `tendril-result` arrives within the nestler's own timeout,
+it sends `chi:"tendril-result"` with `result.error = "timeout"` so the
+cell does not wait forever.
 
 ## The client
 
@@ -461,7 +492,7 @@ passes through unchanged; a line without one is the link's own.
 | link to bee | `{"link":"ready","linkVersion":1,"thrum":..,"bee":..,"hive":..,"as":..}` | first: the bee is entered; a client of another `linkVersion` stops here |
 | bee to link | `{"hello":{..}}` | first: the bee's own hello fields; the link connects once it has them |
 | link to bee | `{"link":"nestled"}` | humd admitted the bee, at start and after every reconnect |
-| link to bee | `{"link":"lost"}` | humd went away; the link is dialing again |
+| link to bee | `{"link":"astray"}` | humd went away; the link is dialing again |
 | link to bee | `{"link":"advisory","code":..,"message":..,"from":..,"fields":{..}}` | something to fix ([Advisories](#advisories)) |
 | bee to link | `{"hello":{..}}` | later: a change to the hello; a null drops a field |
 | link to bee | `{"link":"refused","error":..}` | last: humd refused the bee, or its hive is not installed |
@@ -506,7 +537,7 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells |
+| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |
