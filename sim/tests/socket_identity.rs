@@ -33,7 +33,7 @@ fn hello_with_identity(tone: &mut serde_json::Value, bee: &BeeKey) {
 fn base_hello() -> serde_json::Value {
     serde_json::json!({
         "chi": "hello",
-        "roles": ["worker"],
+        "role": "nurse",
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,
@@ -52,7 +52,7 @@ async fn a_bee_that_signs_its_hid_stays_connected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let mut hello = base_hello();
     hello_with_identity(&mut hello, &bee);
     humd.thrum.inject_tone(&cid, hello).await;
@@ -72,7 +72,7 @@ async fn signed_hello_survives(enter_under: Option<&str>, exit_first: bool) -> b
     let _rx = humd.thrum.register_synthetic(cid.clone());
     let bee = fresh_bee();
     if let Some(hive) = enter_under {
-        humd.bees.enter(hive, &bee);
+        humd.bees.enter(hive, thrum_core::Role::Nurse, &bee);
     }
     if exit_first {
         humd.bees.exit(&bee.id());
@@ -94,7 +94,7 @@ async fn a_signed_bee_that_never_entered_is_disconnected() {
 async fn a_bee_entered_under_another_hive_is_disconnected() {
     let _ = tracing_subscriber::fmt::try_init();
     assert!(
-        !signed_hello_survives(Some("humfs"), false).await,
+        !signed_hello_survives(Some("bash"), false).await,
         "a bee speaks for the hive it entered under, not the one it claims"
     );
 }
@@ -116,7 +116,7 @@ async fn an_entered_bee_that_does_not_sign_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let mut hello = base_hello();
     hello["hid"] = serde_json::json!(bee.hid.to_hex());
     humd.thrum.inject_tone(&cid, hello).await;
@@ -139,7 +139,7 @@ async fn a_bee_with_a_forged_signature_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let mut hello = base_hello();
     hello_with_identity(&mut hello, &bee);
     hello["signature"] = serde_json::json!(hex::encode([0u8; 64]));
@@ -165,7 +165,7 @@ async fn a_bee_claiming_anothers_hid_is_disconnected() {
 
     let mallory = fresh_bee();
     let victim = fresh_bee();
-    humd.bees.enter("claude-cli", &victim);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &victim);
     let signed_at = now_ms();
     let msg = hum_identity::socket_hello_message(&victim.hid, signed_at);
     let sig = mallory.signing.sign(&msg);
@@ -196,7 +196,7 @@ async fn a_replayed_hello_outside_the_skew_window_is_disconnected() {
     let _rx = humd.thrum.register_synthetic(cid.clone());
 
     let bee = fresh_bee();
-    humd.bees.enter("claude-cli", &bee);
+    humd.bees.enter("claude-cli", thrum_core::Role::Nurse, &bee);
     let stale = now_ms() - 3_600_000;
     let sig = bee.sign_socket_hello(stale);
     let (pubkey, signature) = (sig.pubkey, sig.signature);

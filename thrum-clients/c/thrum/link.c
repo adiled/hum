@@ -54,6 +54,7 @@ typedef struct {
 struct thrum_bee {
     char *hive;
     char *as;
+    char *role;
     char *hum;
     cJSON *hello;
 
@@ -98,7 +99,7 @@ static char *dup_or_null(const char *s) {
 }
 
 thrum_bee *thrum_bee_new(const thrum_options *opts) {
-    if (!opts || !opts->hive || !opts->as) return NULL;
+    if (!opts || !opts->hive || !opts->as || !opts->role) return NULL;
     thrum_bee *bee = calloc(1, sizeof *bee);
     if (!bee) return NULL;
     pthread_mutex_init(&bee->mu, NULL);
@@ -106,12 +107,13 @@ thrum_bee *thrum_bee_new(const thrum_options *opts) {
     pthread_cond_init(&bee->cond, NULL);
     bee->hive = dup_or_null(opts->hive);
     bee->as = dup_or_null(opts->as);
+    bee->role = dup_or_null(opts->role);
     bee->hum = dup_or_null(opts->hum);
     bee->hello = opts->hello ? cJSON_Duplicate(opts->hello, 1) : cJSON_CreateObject();
     bee->start_result = -1;
     bee->to_link = -1;
     bee->from_link = -1;
-    if (!bee->hive || !bee->as || (opts->hum && !bee->hum) || !bee->hello) {
+    if (!bee->hive || !bee->as || !bee->role || (opts->hum && !bee->hum) || !bee->hello) {
         thrum_bee_free(bee);
         return NULL;
     }
@@ -497,7 +499,7 @@ int thrum_bee_start(thrum_bee *bee) {
     posix_spawn_file_actions_addclose(&actions, to[1]);
     posix_spawn_file_actions_addclose(&actions, from[0]);
     posix_spawn_file_actions_addclose(&actions, from[1]);
-    char *argv[] = {hum, "bee", "link", "--hive", bee->hive, "--as", bee->as, NULL};
+    char *argv[] = {hum, "bee", "link", "--hive", bee->hive, "--as", bee->as, "--role", bee->role, NULL};
     int spawned = posix_spawnp(&bee->pid, hum, &actions, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&actions);
     close(to[0]);
@@ -596,6 +598,7 @@ void thrum_bee_free(thrum_bee *bee) {
     cJSON_Delete(bee->hello);
     free(bee->hive);
     free(bee->as);
+    free(bee->role);
     free(bee->hum);
     free(bee);
 }

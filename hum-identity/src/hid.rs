@@ -2,9 +2,9 @@
 //! wire: SHA-256 of an Ed25519 public key, written `<prefix>_<hex>`.
 //! Content-addressable: no registry, no central naming.
 //!
-//! The prefix tells a daemon from a participant and nothing more. A
-//! bee's role is a claim in its hello, so a worker that starts foraging
-//! is still the same bee.
+//! The prefix tells a daemon from a participant and nothing more: a
+//! bee's role is not in its id. A bee given another role is entered again,
+//! under another key, so it has another id.
 //!
 //! The 12-char short form widens with zeros so it still round-trips
 //! through serializers. It is for logs and sigils, not for

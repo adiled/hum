@@ -1,4 +1,4 @@
-//! `Worker::curate` — the compute side of `chi:"curate"`.
+//! `Nurse::curate` — the compute side of `chi:"curate"`.
 //!
 //! Curation works on the transcript on disk, not on a live cell: `claude -p`
 //! exits after every turn, so a curate almost always arrives with nothing
@@ -11,8 +11,8 @@ use std::fs;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use claude_cli::graft::session_path;
-use claude_cli::ClaudeCliWorker;
-use hum_nest::Worker;
+use claude_cli::ClaudeCliNurse;
+use hum_nest::Nurse;
 use tempfile::TempDir;
 
 // HOME is process-global and cargo runs these tests on parallel threads.
@@ -58,7 +58,7 @@ async fn curate_prunes_the_sid_transcript_in_place() {
     let path = stage_transcript(&home, cwd, &sid, "with_thinking.jsonl");
     let before = fs::metadata(&path).expect("stat").len();
 
-    let report = ClaudeCliWorker.curate(&sid, cwd).await.expect("curate");
+    let report = ClaudeCliNurse.curate(&sid, cwd).await.expect("curate");
 
     // Byte counts are of the re-serialized entries, not the raw file, so
     // they track the transcript's size without matching it exactly.
@@ -84,13 +84,13 @@ async fn curate_is_a_no_op_when_no_transcript_exists() {
     let (_home, _guard) = sandbox();
 
     let sid = hum_identity::HumId::from_foreign("ses_never_prompted");
-    let report = ClaudeCliWorker
+    let report = ClaudeCliNurse
         .curate(&sid, "/tmp/nonexistent")
         .await
         .expect("curate must not error on a missing transcript");
 
     // A curate can arrive for a sid this bee has never raised a cell for —
-    // humd sprays to every worker. That is not a failure.
+    // humd sprays to every nurse. That is not a failure.
     assert_eq!(report.bytes_before, 0);
     assert_eq!(report.bytes_after, 0);
     assert_eq!(report.trimmed(), 0);

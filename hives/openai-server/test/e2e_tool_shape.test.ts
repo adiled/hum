@@ -228,7 +228,7 @@ describe("every requester is a bee", () => {
     expect(a1).not.toBe(b);
     expect(a2).toBe(a1);
     expect(a1).not.toBe(main);
-    const foragers = humd.hellos.filter((h) => JSON.stringify(h.roles) === JSON.stringify(["forager"]));
+    const foragers = humd.hellos.filter((h) => h.role === "forager");
     expect(foragers.length).toBeGreaterThanOrEqual(2);
     for (const h of humd.hellos) expect(typeof h.signature).toBe("string");
   });

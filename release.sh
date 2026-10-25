@@ -19,13 +19,13 @@ set -euo pipefail
 # what `hum hive install` publishes, so those track the same number.
 EXTRA_VERSIONED_FILES=(
   hives/anthropic-server/package.json
+  hives/bash/Cargo.toml
   hives/bp7/Cargo.toml
   hives/claude-cli/Cargo.toml
   hives/claude-repl/Cargo.toml
   hives/grpc/Cargo.toml
   hives/gsm-modem/Cargo.toml
   hives/ollama-server/Cargo.toml
-  hives/ollama-worker/Cargo.toml
   hives/openai-server/package.json
   hives/paid-oracle/Cargo.toml
   hives/vercel-ai/package.json

@@ -1,7 +1,7 @@
-//! Single humd serves a prompt end-to-end via MockWorker.
+//! Single humd serves a prompt end-to-end via MockNurse.
 //!
 //! Pure single-humd path. No ensemble routing; if this fails, the in-
-//! process humd boot or the worker→listener bridge is broken.
+//! process humd boot or the nurse→listener bridge is broken.
 
 use std::time::Duration;
 
@@ -12,9 +12,9 @@ async fn mock_prompt_yields_wilt() {
     let sim = sim::Sim::new();
     let a = sim.spawn_humd(ensemble::Hid::random_humd()).await;
 
-    sim.attach_mock_worker(a.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_nurse(a.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches");
+        .expect("mock nurse attaches");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     sim.nestler_send(

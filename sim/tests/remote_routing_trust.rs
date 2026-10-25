@@ -6,22 +6,22 @@ async fn a_prompt_is_not_forwarded_on_an_unverified_capability_claim() {
 
     let sim = sim::Sim::new();
     let laptop = sim
-        .spawn_humd_not_trusting_remote_workers(ensemble::Hid::random_humd())
+        .spawn_humd_not_trusting_remote_nurses(ensemble::Hid::random_humd())
         .await;
     let server = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     sim.wire_unauthenticated(laptop.id, server.id).expect("L↔S");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut claimed_rx = server.thrum.register_synthetic(worker_cid.clone());
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut claimed_rx = server.thrum.register_synthetic(nurse_cid.clone());
     server
         .thrum
         .inject_tone(
-            &worker_cid,
+            &nurse_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "roles": ["worker"],
+                "role": "nurse",
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -82,16 +82,16 @@ async fn opting_in_restores_discovery_routing() {
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let worker_cid = hum_identity::HumId::mint().to_string();
-    let mut worker_rx = server.thrum.register_synthetic(worker_cid.clone());
+    let nurse_cid = hum_identity::HumId::mint().to_string();
+    let mut nurse_rx = server.thrum.register_synthetic(nurse_cid.clone());
     let server_thrum = server.thrum.clone();
     server
         .thrum
         .inject_tone(
-            &worker_cid,
+            &nurse_cid,
             server.signed_hello(serde_json::json!({
                 "chi": "hello",
-                "roles": ["worker"],
+                "role": "nurse",
                 "hive": "claude-cli",
                 "version": "0.0.0",
                 "protoVersion": thrum_core::THRUM_VERSION,
@@ -101,9 +101,9 @@ async fn opting_in_restores_discovery_routing() {
         )
         .await;
 
-    let cid_for_pump = worker_cid.clone();
+    let cid_for_pump = nurse_cid.clone();
     tokio::spawn(async move {
-        while let Some(tone) = worker_rx.recv().await {
+        while let Some(tone) = nurse_rx.recv().await {
             if tone.get("chi").and_then(|v| v.as_str()) == Some("prompt") {
                 let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 for reply in [
@@ -142,5 +142,5 @@ async fn opting_in_restores_discovery_routing() {
         }
     }
 
-    assert!(saw_wilt, "opt-in routing did not reach the discovered worker");
+    assert!(saw_wilt, "opt-in routing did not reach the discovered nurse");
 }

@@ -53,7 +53,8 @@ fn golden() -> Vec<Value> {
         thrum_core::HelloBody {
             proto_version: "0.8.0".into(),
             hive: "claude-cli".into(),
-            roles: Some(vec!["worker".into()]),
+            role: "nurse".into(),
+            builds: None,
             version: Some("0.32.0".into()),
             hid: "bee_09".into(),
             pubkey: "0a".into(),
@@ -61,7 +62,6 @@ fn golden() -> Vec<Value> {
             signature: "0b".into(),
             models: None,
             tools: None,
-            provides: Some(vec!["env".into(), "token".into()]),
             chis: None,
             propensity: None,
             headroom: None,
@@ -97,9 +97,6 @@ fn golden() -> Vec<Value> {
                 bouquet: None,
             }]),
             tools: Some(vec![Value::from("builtin")]),
-            forager_tools: Some(vec![serde_json::json!({ "name": "Brave" })]),
-            provided: Some(vec!["env".into()]),
-            disallowed_tools: Some(vec![]),
             allowed_tools: None,
             resume: None,
             temperature: Some(0.5),
@@ -160,7 +157,7 @@ fn golden() -> Vec<Value> {
         Chi::Error,
         thrum_core::ErrorBody {
             message: "nest crashed".into(),
-            code: Some("worker_error".into()),
+            code: Some("nurse_error".into()),
             subtype: Some("nest_crash".into()),
             nectar: None,
         }
@@ -169,8 +166,9 @@ fn golden() -> Vec<Value> {
         Chi::TendrilReach,
         thrum_core::TendrilReachBody {
             call_id: "call-1".into(),
-            name: "Read".into(),
-            args: Some(serde_json::json!({ "path": "/x" })),
+            name: "bash".into(),
+            args: Some(serde_json::json!({ "command": "cat /x" })),
+            cwd: Some("/Users/op/auth".into()),
         }
     );
     push!(
@@ -297,7 +295,7 @@ fn check_round_trip(tone: &Tone) {
             let v: HelloBody = serde_json::from_value(Value::Object(body.clone())).unwrap();
             assert_eq!(v.proto_version, "0.8.0");
             assert_eq!(v.hive, "claude-cli");
-            assert_eq!(v.roles.as_deref(), Some(&["worker".to_string()][..]));
+            assert_eq!(v.role, "nurse");
         }
         Chi::TendrilResult => {
             let v: TendrilResultBody = serde_json::from_value(Value::Object(body.clone())).unwrap();

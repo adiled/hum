@@ -1,9 +1,10 @@
 //! The link: this client on stdio, for a bee written in anything.
 //!
 //! A bee in TS, Python, Go or C does not speak to humd. It spawns
-//! `hum bee link --hive <hive> --as <label>` with two pipes and speaks to
-//! the link, one JSON object per line each way, and the link is the
-//! [`Bee`] a Rust bee would hold: it enters the bee, finds the socket,
+//! `hum bee link --hive <hive> --as <label> --role <role>` with two pipes
+//! and speaks to the link, one JSON object per line each way, and the
+//! link is the [`Bee`] a Rust bee would hold: it enters the bee for its
+//! role, finds the socket,
 //! signs the hello, reads humd's verdict, reconnects, checks every tone
 //! against the spec. The generated client in each language is the other
 //! end of these pipes and nothing more.
@@ -12,7 +13,7 @@
 //! A line without one is the link's own:
 //!
 //! - link to bee: `{"link":"ready","linkVersion":N,"thrum":V,"bee":id,
-//!   "hive":h,"as":l}` first, then `{"link":"nestled"}`,
+//!   "hive":h,"as":l,"role":r}` first, then `{"link":"nestled"}`,
 //!   `{"link":"astray"}`, `{"link":"advisory","code":..,"message":..,
 //!   "from":..,"fields":{..}}`, and `{"link":"refused","error":..}` last.
 //! - bee to link: `{"hello":{..}}` first, the bee's own hello fields;
@@ -41,7 +42,7 @@ use tokio::sync::mpsc;
 use crate::core::Endpoint;
 use crate::drive::{Bee, Event, Options};
 
-pub const LINK_VERSION: u32 = 1;
+pub const LINK_VERSION: u32 = 2;
 
 pub const HUM_CLI_ENV: &str = "HUM_CLI";
 pub const HUM_CLI_NAME: &str = "hum";
@@ -63,7 +64,7 @@ fn not_a_tone(message: &str) -> Value {
     })
 }
 
-pub async fn serve(hive: &str, label: &str, endpoint: Endpoint) -> i32 {
+pub async fn serve(hive: &str, label: &str, role: thrum_core::Role, endpoint: Endpoint) -> i32 {
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
@@ -75,17 +76,23 @@ pub async fn serve(hive: &str, label: &str, endpoint: Endpoint) -> i32 {
             }
         }
     });
-    let code = run(hive, label, endpoint, &out_tx).await;
+    let code = run(hive, label, role, endpoint, &out_tx).await;
     drop(out_tx);
     let _ = writer.await;
     code
 }
 
-async fn run(hive: &str, label: &str, endpoint: Endpoint, out: &mpsc::UnboundedSender<Value>) -> i32 {
-    let key = match hum_identity::enter_as(hive, label) {
+async fn run(
+    hive: &str,
+    label: &str,
+    role: thrum_core::Role,
+    endpoint: Endpoint,
+    out: &mpsc::UnboundedSender<Value>,
+) -> i32 {
+    let key = match hum_identity::enter_as(hive, label, role.as_str()) {
         Ok(key) => key,
         Err(e) => {
-            tracing::error!(hive, label, err = %e, "link.enter.failed");
+            tracing::error!(hive, label, role = role.as_str(), err = %e, "link.enter.failed");
             let _ = out.send(json!({"link": "refused", "error": e.to_string()}));
             return exit::REFUSED;
         }
@@ -97,6 +104,7 @@ async fn run(hive: &str, label: &str, endpoint: Endpoint, out: &mpsc::UnboundedS
         "bee": key.id(),
         "hive": hive,
         "as": label,
+        "role": role.as_str(),
     }));
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -130,6 +138,7 @@ async fn run(hive: &str, label: &str, endpoint: Endpoint, out: &mpsc::UnboundedS
         Options {
             hive: hive.to_string(),
             label: label.to_string(),
+            role,
             hello,
             endpoint,
         },

@@ -1690,34 +1690,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "hum-mcp"
-version = "0.33.1"
-dependencies = [
- "anyhow",
- "axum",
- "parking_lot",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "thrum-core",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hum-nest"
 version = "0.33.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "command-group",
  "hum-identity",
- "hum-mcp",
  "hum-paths",
  "hum-thrum",
  "libc",
  "lru 0.12.5",
  "metrics",
+ "parking_lot",
  "rand 0.8.6",
  "regex",
  "serde",
@@ -1779,7 +1765,6 @@ dependencies = [
  "governor",
  "hex",
  "hum-identity",
- "hum-mcp",
  "hum-nest",
  "hum-paths",
  "metrics",
@@ -4148,7 +4133,6 @@ dependencies = [
  "ensemble",
  "hex",
  "hum-identity",
- "hum-mcp",
  "hum-paths",
  "humd",
  "parking_lot",

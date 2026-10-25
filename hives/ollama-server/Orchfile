@@ -7,3 +7,9 @@ ONESHOT true
 SERVICE ollama-server
 RUN ${HUM_SRC}/target/release/ollama-server
 RESTART always
+
+SERVICE ollama-nurse
+RUN ${HUM_SRC}/target/release/ollama-nurse
+ENV OLLAMA_NURSE_MODEL=smollm:1.7b
+ENV OLLAMA_NURSE_MODELS=smollm:1.7b
+RESTART always

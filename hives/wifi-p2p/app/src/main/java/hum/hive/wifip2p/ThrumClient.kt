@@ -60,7 +60,7 @@ class ThrumClient(
                 rid = "hello-${System.currentTimeMillis().toString(36)}",
                 from = proof["hid"] as String,
                 body = proof + mapOf(
-                    "roles" to listOf("forager"),
+                    "role" to "forager",
                     "hive" to HIVE_NAME,
                     "version" to BEE_VERSION,
                     "protoVersion" to THRUM_VERSION,

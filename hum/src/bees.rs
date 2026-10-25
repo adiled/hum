@@ -31,15 +31,15 @@ fn texts(v: &Value, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn enter(hive: &str, label: Option<&str>) -> Result<()> {
+pub fn enter(hive: &str, label: Option<&str>, role: thrum_core::Role) -> Result<()> {
     let key = match label {
-        Some(label) => hum_identity::enter_as(hive, label)?,
+        Some(label) => hum_identity::enter_as(hive, label, role.as_str())?,
         None => {
             if !hum_paths::hive_installed(hive) {
                 bail!("{hive} is not installed on this humd — `hum hive <ref> install` first");
             }
             let key = hum_identity::mint_bee_key()?;
-            hum_identity::enter(hive, "", &key)?;
+            hum_identity::enter(hive, "", role.as_str(), &key)?;
             key
         }
     };
@@ -63,7 +63,7 @@ pub fn act(id: &str, verb: &str) -> Result<()> {
                 println!("{id} had not exited");
             }
         }
-        "enter" => bail!("a bee is entered under a hive, not by id: hum bee enter --hive <hive>"),
+        "enter" => bail!("a bee is entered under a hive, not by id: hum bee enter --hive <hive> --role <role>"),
         other => bail!("unknown verb '{other}' (exit | reenter)"),
     }
     Ok(())
@@ -100,7 +100,7 @@ pub fn list() -> Result<()> {
     let book = humd::advise::read(&hum_paths::advisories());
     if entered.is_empty() && nestled.is_empty() {
         println!("no bee has entered this humd.");
-        println!("a hive enters one: hum bee enter --hive <hive>");
+        println!("a hive enters one: hum bee enter --hive <hive> --role <role>");
         return Ok(());
     }
 
@@ -119,12 +119,9 @@ pub fn list() -> Result<()> {
         };
         let mark = if state == "nestled" { "●" } else { "○" };
         let label = if entry.label.is_empty() { String::new() } else { format!(" as {}", entry.label) };
-        println!("{mark} {id}  —  hive {}{label}, {state}", entry.hive);
+        let role = if entry.role.is_empty() { String::new() } else { format!(", {}", entry.role) };
+        println!("{mark} {id}  —  hive {}{label}{role}, {state}", entry.hive);
         if let Some(m) = nest_of(id) {
-            let roles = texts(m, "roles");
-            if !roles.is_empty() {
-                println!("    roles:    {}", roles.join("+"));
-            }
             let models = texts(m, "models");
             if !models.is_empty() {
                 println!("    models:   {}", models.join(", "));

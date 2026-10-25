@@ -13,7 +13,7 @@
 
 #define THRUM_VERSION "0.8.0"
 
-// announce self: hive, roles, signed identity
+// announce self: hive, role, signed identity
 #define THRUM_CHI_HELLO "hello"
 // open a bloom: its petals, and how the cell should grow it
 #define THRUM_CHI_PROMPT "prompt"
@@ -195,6 +195,33 @@ static inline bool thrum_is_valid_petal(const char *value) {
     if (!value) return false;
     for (i = 0; i < THRUM_PETAL_COUNT; i++) {
         if (strcmp(THRUM_ALL_PETAL[i], value) == 0) return true;
+    }
+    return false;
+}
+
+// opens blooms, bringing the outside world into the thrum
+#define THRUM_ROLE_FORAGER "forager"
+// grows blooms in its cells; all inference is nursing
+#define THRUM_ROLE_NURSE "nurse"
+// changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
+#define THRUM_ROLE_BUILDER "builder"
+// serves the fixed, named tools in its hello's `tools`, and nothing else
+#define THRUM_ROLE_ATTENDANT "attendant"
+
+#define THRUM_ROLE_COUNT 4
+
+static const char *const THRUM_ALL_ROLE[THRUM_ROLE_COUNT] = {
+    THRUM_ROLE_FORAGER,
+    THRUM_ROLE_NURSE,
+    THRUM_ROLE_BUILDER,
+    THRUM_ROLE_ATTENDANT,
+};
+
+static inline bool thrum_is_valid_role(const char *value) {
+    size_t i;
+    if (!value) return false;
+    for (i = 0; i < THRUM_ROLE_COUNT; i++) {
+        if (strcmp(THRUM_ALL_ROLE[i], value) == 0) return true;
     }
     return false;
 }

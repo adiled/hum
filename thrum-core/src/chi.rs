@@ -1,4 +1,4 @@
-//! Chi registry, pulse kinds, petal kinds and advisory codes.
+//! Chi registry, pulse kinds, petal kinds, roles and advisory codes.
 //!
 //! Every wire-known chi value. Adding a new variant bumps the protocol
 //! minor version. `serde(rename_all = "kebab-case")` keeps the wire
@@ -11,6 +11,9 @@
 //!
 //! A petal is one unit of content, and its kind says which:
 //! [`PetalKind`]. WIRE.md's petals table says what each one carries.
+//!
+//! A bee does one [`Role`], set when its hive enters it, and its hello
+//! says which. WIRE.md's roles table says what each one sends and hears.
 //!
 //! An advisory is what the wire tells a bee it should fix without
 //! refusing it: humd sends one as a `log` tone whose `fields.advisory`
@@ -83,6 +86,7 @@ pub enum AdvisoryCode {
     ProtoDrift,
     ReconnectStorm,
     DidNotReturn,
+    CwdNotHum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
@@ -100,9 +104,29 @@ pub enum PetalKind {
     Bouquet,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum Role {
+    Forager,
+    Nurse,
+    Builder,
+    Attendant,
+}
+
 impl Chi {
     pub fn as_str(self) -> &'static str {
         self.into()
+    }
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(s: &str) -> Option<Role> {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
     }
 }
 
@@ -148,6 +172,15 @@ mod tests {
         assert!(is_chi("tendril-reach"));
         assert!(!is_chi("tendril_reach"));
         assert!(!is_chi("tool-call"));
+    }
+
+    #[test]
+    fn a_role_is_one_of_four_and_kebab() {
+        assert_eq!(Role::Nurse.as_str(), "nurse");
+        assert_eq!(Role::parse("builder"), Some(Role::Builder));
+        assert_eq!(Role::parse("attendant"), Some(Role::Attendant));
+        assert_eq!(Role::parse("worker"), None);
+        assert_eq!(AdvisoryCode::CwdNotHum.as_str(), "cwd-not-hum");
     }
 
     #[test]

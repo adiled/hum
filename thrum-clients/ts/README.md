@@ -14,9 +14,9 @@ thrum. Every language gets that same client, so a TS bee behaves exactly
 as a Rust, Python, Go or C one.
 
 ```ts
-import { Bee, Chi, PetalKind } from "thrum";
+import { Bee, Chi, PetalKind, Role } from "thrum";
 
-const bee = new Bee({ hive: "my-hive", as: "main", hello: { roles: ["worker"], models: ["my-model"] } });
+const bee = new Bee({ hive: "my-hive", as: "main", role: Role.nurse, hello: { models: ["my-model"] } });
 bee.on(Chi.prompt, (tone) => {
   bee.send({ chi: Chi.unfurl, sid: tone.sid, petal: 0, kind: PetalKind.text, text: "hello" });
   bee.send({ chi: Chi.wilt, sid: tone.sid, reason: "stop" });
@@ -27,7 +27,7 @@ await bee.closed();
 
 | | |
 |---|---|
-| `new Bee({ hive, as, hello })` | a bee's client; nothing runs until `start` |
+| `new Bee({ hive, as, role, hello })` | a bee's client; nothing runs until `start` |
 | `on(chi, fn)`, `onSid(sid, fn)`, `offSid(sid)`, `onAny(fn)` | a tone goes to its sid's handler, else its chi's, else `onAny` |
 | `onNestled(fn)`, `onAstray(fn)`, `onAdvisory(fn)` | humd admitted the bee; humd went away; something to fix |
 | `start()` | resolves once humd admits the bee; rejects with `Refused` or `LinkError` |

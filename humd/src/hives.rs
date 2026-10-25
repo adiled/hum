@@ -73,16 +73,8 @@ pub fn headroom_of(tone: &Value) -> Option<ensemble::headroom::CellHeadroom> {
     ))
 }
 
-pub fn roles_of(hello: &Value) -> Vec<String> {
-    match hello.get("roles") {
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-        Some(Value::String(s)) => vec![s.clone()],
-        _ => Vec::new(),
-    }
+pub fn role_of(hello: &Value) -> Option<thrum_core::Role> {
+    thrum_core::Role::parse(hello.get("role")?.as_str()?)
 }
 
 #[cfg(test)]
@@ -92,8 +84,8 @@ mod tests {
 
     #[test]
     fn only_an_installed_hive_is_recognised() {
-        let hives = InstalledHives::in_memory(["humfs"]);
-        assert!(hives.recognises("humfs"));
+        let hives = InstalledHives::in_memory(["bash"]);
+        assert!(hives.recognises("bash"));
         assert!(!hives.recognises("claude-cli"));
         hives.install("claude-cli");
         assert!(hives.recognises("claude-cli"));
@@ -101,10 +93,10 @@ mod tests {
 
     #[test]
     fn a_hive_name_that_is_a_path_is_never_recognised() {
-        let hives = InstalledHives::in_memory(["humfs"]);
+        let hives = InstalledHives::in_memory(["bash"]);
         assert!(!hives.recognises(""));
-        assert!(!hives.recognises("../humfs"));
-        assert!(!hives.recognises(".humfs"));
+        assert!(!hives.recognises("../bash"));
+        assert!(!hives.recognises(".bash"));
         hives.install("../etc");
         assert!(!hives.recognises("../etc"));
     }
@@ -120,10 +112,11 @@ mod tests {
     }
 
     #[test]
-    fn roles_are_read_from_roles_alone() {
-        assert_eq!(roles_of(&json!({"roles": ["worker", "forager"]})), ["worker", "forager"]);
-        assert_eq!(roles_of(&json!({"roles": "worker"})), ["worker"]);
-        assert!(roles_of(&json!({"bee": ["forager"]})).is_empty());
-        assert!(roles_of(&json!({})).is_empty());
+    fn a_role_is_one_of_four() {
+        assert_eq!(role_of(&json!({"role": "nurse"})), Some(thrum_core::Role::Nurse));
+        assert_eq!(role_of(&json!({"role": "builder"})), Some(thrum_core::Role::Builder));
+        assert_eq!(role_of(&json!({"role": "worker"})), None);
+        assert_eq!(role_of(&json!({"roles": ["forager"]})), None);
+        assert_eq!(role_of(&json!({})), None);
     }
 }

@@ -22,7 +22,6 @@ anyhow = { workspace = true }
 
 # Path deps on every workspace crate.
 thrum-core = { path = "../thrum-core" }
-hum-mcp = { path = "../hum-mcp" }
 hum-identity = { path = "../hum-identity" }
 thehum = { path = "../thehum" }
 ensemble = { path = "../ensemble" }

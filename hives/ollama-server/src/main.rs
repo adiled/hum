@@ -9,6 +9,12 @@
 //! matches thrum's frame format — every text petal that unfurls maps to
 //! one output line, and a tendril that reaches to a `tool_calls` line.
 //! No SSE re-framing.
+//!
+//! The hive's other bee, its nurse, calls Ollama itself; a call that
+//! carries its mark ([`hop::FROM_NURSE`]) is refused here, so the nurse
+//! never prompts hum through its own forager.
+
+mod hop;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -192,7 +198,6 @@ async fn open_prompt(
     tools: Option<&[Value]>,
 ) -> Result<(mpsc::Receiver<Value>, tokio::task::JoinHandle<()>)> {
     let mut hello = serde_json::Map::new();
-    hello.insert("roles".into(), json!(["forager"]));
     hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
     hello.insert(
         "propensity".into(),
@@ -216,7 +221,7 @@ async fn open_prompt(
             }),
         );
     }
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(Value::Object(hello)))
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Forager).hello(Value::Object(hello)))
         .await
         .context("link the ollama-server bee")?;
 
@@ -511,6 +516,16 @@ fn error_resp(code: StatusCode, msg: &str) -> Response {
     (code, body).into_response()
 }
 
+async fn refuse_the_nurse(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    if req.headers().contains_key(hop::FROM_NURSE) {
+        return error_resp(
+            StatusCode::LOOP_DETECTED,
+            "this is hum's own Ollama surface, not Ollama; point OLLAMA_NURSE_URL at Ollama itself",
+        );
+    }
+    next.run(req).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     hum_paths::init();
@@ -533,8 +548,33 @@ async fn main() -> Result<()> {
         .route("/api/tags", get(tags))
         .route("/api/chat", post(chat))
         .route("/api/generate", post(generate))
+        .layer(axum::middleware::from_fn(refuse_the_nurse))
         .with_state(cfg);
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    fn guarded() -> Router {
+        Router::new()
+            .route("/api/chat", post(|| async { "reached" }))
+            .layer(axum::middleware::from_fn(refuse_the_nurse))
+    }
+
+    #[tokio::test]
+    async fn the_hives_own_nurse_is_refused() {
+        let marked = axum::http::Request::post("/api/chat")
+            .header(hop::FROM_NURSE, "1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(guarded().oneshot(marked).await.unwrap().status(), StatusCode::LOOP_DETECTED);
+        let plain = axum::http::Request::post("/api/chat").body(Body::empty()).unwrap();
+        assert_eq!(guarded().oneshot(plain).await.unwrap().status(), StatusCode::OK);
+    }
 }

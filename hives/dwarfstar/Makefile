@@ -1,4 +1,4 @@
-# dwarfstar: the DwarfStar engine (antirez/ds4), linked into a hum worker.
+# dwarfstar: the DwarfStar engine (antirez/ds4), linked into a hum nurse.
 #
 #   make           out/dwarfstar-bee and the Metal kernels beside it
 #   make check     out/dwarfstar-bee-stub: the bee with no engine, for the

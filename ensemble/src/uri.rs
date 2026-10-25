@@ -1,17 +1,20 @@
 //! `hum://` URI parsing.
 //!
-//! The wire-level address scheme for anything addressable across
-//! the mesh — cwd, file paths in tool args, attach targets, etc.
-//! The URI host segment is, in resolution order:
+//! The wire-level address scheme for anything addressable across the
+//! mesh: where a bloom builds (a prompt's `cwd`), attach targets. The
+//! URI host segment is, in resolution order:
 //!
-//! 1. **alias** — a name registered in the local resolver of the humd
+//! 1. **here** — no host at all, `hum:///<path>`: the humd the URI came
+//!    from, as `file:///` is the machine a path is read on.
+//! 2. **alias** — a name registered in the local resolver of the humd
 //!    the URI came from (today: `peers.json`; future: ENS / HNS / DID
 //!    adapters slotting into the same trait).
-//! 2. **shortid** — `<prefix>_<12hex>` form of a [`Hid`].
-//! 3. **full hid** — `<prefix>_<64hex>` form.
+//! 3. **shortid** — `<prefix>_<12hex>` form of a [`Hid`].
+//! 4. **full hid** — `<prefix>_<64hex>` form.
 //!
-//! Schemes other than `hum://` are rejected. Path component is
-//! arbitrary opaque text, left to whoever serves it to interpret.
+//! Schemes other than `hum://` are rejected. The path is a directory on
+//! the host, left to whoever serves it to interpret; with none, a builder
+//! starts in its host's home directory.
 //!
 //! Canonicalization: the humd the URI came from resolves aliases to
 //! full [`Hid`]s before forwarding any tone downstream, so peer humds
@@ -22,6 +25,7 @@
 //! hum://workstation/Users/op/auth        — alias
 //! hum://humd_a4f2b8c19d3e/Users/op/auth  — shortid
 //! hum://humd_a4f2b8c19d3e…64hex/path     — full hid
+//! hum:///Users/op/auth                   — here
 //! ```
 //!
 //! The host segment is classified by shape, not by asking: a known role
@@ -40,6 +44,7 @@ pub struct HumUri {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostRef {
+    Here,
     Alias(String),
     Hid(Hid),
 }
@@ -47,7 +52,6 @@ pub enum HostRef {
 #[derive(Debug)]
 pub enum UriParseError {
     WrongScheme,
-    EmptyHost,
     BadHid(HidParseError),
 }
 
@@ -55,7 +59,6 @@ impl fmt::Display for UriParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UriParseError::WrongScheme => write!(f, "URI must start with `hum://`"),
-            UriParseError::EmptyHost => write!(f, "URI has empty host"),
             UriParseError::BadHid(e) => write!(f, "host parses as hid but is malformed: {e}"),
         }
     }
@@ -70,9 +73,9 @@ impl HumUri {
             Some(i) => (&rest[..i], &rest[i + 1..]),
             None => (rest, ""),
         };
-        if host_str.is_empty() { return Err(UriParseError::EmptyHost); }
-
-        let host = if looks_like_hid(host_str) {
+        let host = if host_str.is_empty() {
+            HostRef::Here
+        } else if looks_like_hid(host_str) {
             Hid::from_hex(host_str)
                 .map(HostRef::Hid)
                 .map_err(UriParseError::BadHid)?
@@ -88,6 +91,7 @@ impl HumUri {
 
     pub fn to_string_canonical(&self) -> String {
         let host = match &self.host {
+            HostRef::Here => String::new(),
             HostRef::Alias(a) => a.clone(),
             HostRef::Hid(h) => h.to_hex(),
         };
@@ -155,8 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_host() {
-        assert!(matches!(HumUri::parse("hum:///path"), Err(UriParseError::EmptyHost)));
+    fn no_host_is_here() {
+        let u = HumUri::parse("hum:///Users/op").unwrap();
+        assert_eq!(u.host, HostRef::Here);
+        assert_eq!(u.path, "Users/op");
+        assert_eq!(u.to_string_canonical(), "hum:///Users/op");
+        let home = HumUri::parse("hum://").unwrap();
+        assert_eq!(home.host, HostRef::Here);
+        assert_eq!(home.path, "");
     }
 
     #[test]

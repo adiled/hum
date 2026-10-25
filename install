@@ -222,7 +222,7 @@ build_binaries() {
 linux_unit_dir="${XDG_CONFIG_HOME}/systemd/user"
 darwin_unit_dir="$HOME/Library/LaunchAgents"
 
-trust_remote_workers="${HUM_TRUST_REMOTE_WORKERS:-0}"
+trust_remote_nurses="${HUM_TRUST_REMOTE_NURSES:-0}"
 
 write_linux_unit() {
   mkdir -p "$linux_unit_dir"
@@ -230,8 +230,8 @@ write_linux_unit() {
   if [ -f "$linux_unit_dir/humd.service" ]; then
     TRUST_LINE="$(grep -E '^Environment=' "$linux_unit_dir/humd.service" || true)"
   fi
-  if [ -z "$TRUST_LINE" ] && [ "$trust_remote_workers" != "0" ]; then
-    TRUST_LINE="Environment=HUM_TRUST_REMOTE_WORKERS=$trust_remote_workers"
+  if [ -z "$TRUST_LINE" ] && [ "$trust_remote_nurses" != "0" ]; then
+    TRUST_LINE="Environment=HUM_TRUST_REMOTE_NURSES=$trust_remote_nurses"
   fi
   cat > "$linux_unit_dir/humd.service" <<EOF
 [Unit]
@@ -258,10 +258,10 @@ write_darwin_unit() {
   if [ -f "$darwin_unit_dir/humd.plist" ]; then
     TRUST_XML="$(awk '/<key>EnvironmentVariables<\/key>/{f=1} f{print} /<\/dict>/{if(f){exit}}' "$darwin_unit_dir/humd.plist")"
   fi
-  if [ -z "$TRUST_XML" ] && [ "$trust_remote_workers" != "0" ]; then
+  if [ -z "$TRUST_XML" ] && [ "$trust_remote_nurses" != "0" ]; then
     TRUST_XML="  <key>EnvironmentVariables</key>
   <dict>
-    <key>HUM_TRUST_REMOTE_WORKERS</key><string>$trust_remote_workers</string>
+    <key>HUM_TRUST_REMOTE_NURSES</key><string>$trust_remote_nurses</string>
   </dict>"
   fi
   cat > "$darwin_unit_dir/humd.plist" <<EOF
@@ -305,6 +305,7 @@ print_next_steps() {
   log ""
   log "humd is up. Install a hive; it enters and runs its own bee:"
   log "  hum hive openai-server install    # OpenAI inference"
+  log "  hum hive bash install             # lend this host's shell to the blooms that build here"
   log "  hum hive paid-oracle install      # x402 paid price oracle"
   log ""
   log "Bee state: hum bee --list"

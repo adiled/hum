@@ -3,13 +3,17 @@ name = "ollama-server"
 version = "0.33.1"
 edition = "2024"
 license = "MIT"
-description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client."
+description = "Ollama for hum, both ways: an Ollama-compatible HTTP surface for any Ollama client, and a nurse that calls Ollama's API."
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
 hum-identity = { path = "../../hum-identity" }
 hum-thrum = { path = "../../hum-thrum" }
 hum-paths = { path = "../../hum-paths" }
+hum-nest = { path = "../../hum-nest" }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower = "0.5"
@@ -25,4 +29,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 [[bin]]
 name = "ollama-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "ollama-nurse"
+path = "src/nurse/main.rs"
 [workspace]

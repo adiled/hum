@@ -15,9 +15,9 @@ async fn phone_laptop_roam() {
 
     sim.wire_unauthenticated(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
-    sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_nurse(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches to laptop");
+        .expect("mock nurse attaches to laptop");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     sim.nestler_send(

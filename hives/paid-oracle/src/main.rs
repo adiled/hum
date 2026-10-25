@@ -2,7 +2,7 @@
 //!
 //! Sells one piece of data per USDC payment. Wire:
 //!
-//! 1. A forager's tendril reaches: `chi:"tendril-reach"`
+//! 1. A bloom's tendril reaches this attendant: `chi:"tendril-reach"`
 //!    `{ name: "quote", args: { pair } }`.
 //! 2. We reply `chi:"error"` with `code: "402"` and the payment terms
 //!    (price, recipient, chain, nonce) in `ext["paid-oracle"].x402`,
@@ -35,7 +35,6 @@ use tracing::{info, warn};
 const HIVE_NAME: &str = "paid-oracle";
 const BEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const QUOTE_TOOL: &str = "quote";
-const CAPABILITY: &str = "x402:quote";
 const QUOTE_PRICE_CENTS: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +126,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello(&cfg)))
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Attendant).hello(hello(&cfg)))
         .await
         .context("link the paid-oracle bee")?;
     info!(hive = HIVE_NAME, bee = %bee.id(), "thrum.nestled");
@@ -162,7 +161,6 @@ async fn main() -> Result<()> {
 fn hello(cfg: &Config) -> Value {
     json!({
         "version": BEE_VERSION,
-        "provides": [CAPABILITY],
         "tools": [
             {
                 "name": QUOTE_TOOL,

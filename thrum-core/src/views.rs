@@ -8,20 +8,21 @@
 //! Optional fields are also `skip_serializing_if` so absent fields are
 //! absent from the wire, mirroring how builders construct tones.
 //!
-//! A hello names the `hive` the bee belongs to and the `roles` it
-//! claims, and proves the bee is its `hid` by a signature from the key
-//! that hashes to it. Older bees said `bee` for their roles; humd still
-//! reads it.
+//! A hello names the `hive` the bee belongs to and the `role` it was
+//! entered for, and proves the bee is its `hid` by a signature from the
+//! key that hashes to it. A forager whose blooms build where it is says
+//! `builds`.
 //!
-//! A worker that hosts cells says how many it can still take in
-//! `headroom`, on its hello and on each cell pulse; humd routes by it.
+//! A nurse says how many more cells it can take in `headroom`, on its
+//! hello and on each cell pulse; humd routes by it.
 //!
 //! A bloom opens with a `prompt` and closes with a `wilt`. The prompt
 //! carries its petals in `content` and how the cell should grow the
 //! bloom: `temperature`, `prune`, `season`, `frost`, `seed`, `trellis`,
 //! `tendrils`, `sepal`. What the cell grows comes back as `unfurl` tones,
 //! each growing one petal named by its kind until the petal is `closed`,
-//! and the nectar the bloom took rides on its wilt.
+//! and the nectar the bloom took rides on its wilt. A prompt's `cwd` is
+//! where the bloom builds, `hum://<humdid>/<path>`.
 //!
 //! Each `*Body` struct is the body of exactly one chi, named after it.
 //! `DroneLoad`, `Petal`, `Grain`, `Prune`, `Tendrils` and `Sepal` are
@@ -37,8 +38,9 @@ pub struct HelloBody {
     #[serde(rename = "protoVersion")]
     pub proto_version: String,
     pub hive: String,
+    pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Vec<String>>,
+    pub builds: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub hid: String,
@@ -50,8 +52,6 @@ pub struct HelloBody {
     pub models: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provides: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chis: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,14 +88,6 @@ pub struct PromptBody {
     pub content: Option<Vec<Petal>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "foragerTools")]
-    pub forager_tools: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provided: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "disallowedTools")]
-    pub disallowed_tools: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "allowedTools")]
     pub allowed_tools: Option<Vec<String>>,
@@ -248,6 +240,8 @@ pub struct TendrilReachBody {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

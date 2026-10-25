@@ -36,8 +36,8 @@ func main() {
 	bee := thrum.NewBee(thrum.Options{
 		Hive: env("ECHO_HIVE", "echo-go"),
 		As:   env("ECHO_AS", "main"),
+		Role: thrum.RoleNurse,
 		Hello: map[string]any{
-			"roles":    []string{"worker"},
 			"version":  "1.0.0",
 			"models":   []string{model},
 			"headroom": map[string]any{"freeSlots": 1, "totalSlots": 1},

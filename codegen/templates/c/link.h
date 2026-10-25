@@ -2,11 +2,12 @@
 //
 // A thrum_bee runs `hum bee link` and speaks to it over two pipes, one
 // JSON object per line. The link is hum's own client, in Rust: it enters
-// the bee, signs the hello, reads humd's verdict, reconnects when humd
-// restarts, and checks every tone against the thrum. So this file knows
-// no protocol, and a C bee behaves exactly as a bee in any language.
+// the bee for its role, signs the hello, reads humd's verdict, reconnects
+// when humd restarts, and checks every tone against the thrum. So this
+// file knows no protocol, and a C bee behaves exactly as a bee in any
+// language.
 //
-//   thrum_options opts = { .hive = "dwarfstar", .as = "ds4flash", .hello = hello };
+//   thrum_options opts = { .hive = "dwarfstar", .as = "ds4flash", .role = THRUM_ROLE_NURSE, .hello = hello };
 //   thrum_bee *bee = thrum_bee_new(&opts);
 //   thrum_bee_on(bee, THRUM_CHI_PROMPT, on_prompt, ctx);
 //   thrum_bee_on_astray(bee, on_astray, ctx);
@@ -16,7 +17,7 @@
 //
 // A tone goes to the handler for its sid if there is one, else to the
 // handler for its chi, else to the any handler: a forager follows each
-// sigil it opened by sid, a worker takes prompts by chi. Callbacks run
+// sigil it opened by sid, a nurse takes prompts by chi. Callbacks run
 // one at a time, in the order tones arrive, on the thread
 // reading the link; a tone is valid only during its callback. Hand long
 // work to a thread of its own, so the tone after it (a cancel) is not
@@ -56,6 +57,7 @@ typedef void (*thrum_advisory_fn)(thrum_bee *bee, const thrum_advisory *advisory
 typedef struct {
     const char *hive;
     const char *as;
+    const char *role;
     const cJSON *hello;
     const char *hum;
 } thrum_options;

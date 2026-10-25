@@ -1,4 +1,4 @@
-//! A prompt goes to a worker with room. humd hosts no cells; each worker
+//! A prompt goes to a nurse with room. humd hosts no cells; each nurse
 //! claims its own headroom, and a full one is passed over for one with
 //! room on a peer.
 
@@ -42,34 +42,34 @@ async fn pair(sim: &sim::Sim) -> (std::sync::Arc<sim::SimHumd>, std::sync::Arc<s
     let a = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     let b = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     sim.wire_unauthenticated(a.id, b.id).expect("wire A ↔ B");
-    sim.attach_mock_worker_claiming(b.id, vec![MODEL.into()], Some((3, 4)), "B")
+    sim.attach_mock_nurse_claiming(b.id, vec![MODEL.into()], Some((3, 4)), "B")
         .await
-        .expect("worker with room on B");
+        .expect("nurse with room on B");
     (a, b)
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_full_worker_is_passed_over_for_one_with_room_on_a_peer() {
+async fn a_full_nurse_is_passed_over_for_one_with_room_on_a_peer() {
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
     let (a, _b) = pair(&sim).await;
-    sim.attach_mock_worker_claiming(a.id, vec![MODEL.into()], Some((0, 4)), "A")
+    sim.attach_mock_nurse_claiming(a.id, vec![MODEL.into()], Some((0, 4)), "A")
         .await
-        .expect("full worker on A");
+        .expect("full nurse on A");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert_eq!(answer(&sim, a.id, "full-1").await.as_deref(), Some("B"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_worker_that_fills_up_is_passed_over_from_its_next_prompt() {
+async fn a_nurse_that_fills_up_is_passed_over_from_its_next_prompt() {
     let _ = tracing_subscriber::fmt::try_init();
     let sim = sim::Sim::new();
     let (a, _b) = pair(&sim).await;
     let local = sim
-        .attach_mock_worker_claiming(a.id, vec![MODEL.into()], Some((2, 4)), "A")
+        .attach_mock_nurse_claiming(a.id, vec![MODEL.into()], Some((2, 4)), "A")
         .await
-        .expect("worker with room on A");
+        .expect("nurse with room on A");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert_eq!(answer(&sim, a.id, "fill-1").await.as_deref(), Some("A"));

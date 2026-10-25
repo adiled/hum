@@ -106,13 +106,12 @@ async fn handle_sms(cfg: Arc<Config>, sms: IncomingSms, writer: Arc<Mutex<Serial
     let sid = sigil_for_phone(&sms.from);
 
     let hello = json!({
-        "roles": ["forager"],
         "version": NESTLING_VERSION,
         "propensity": { "statefulness": "stateful", "richness": "lean", "wire": "gsm/at-cmd-sms" },
         "chis": ["hello", "prompt", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/gsm-modem",
     });
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main").hello(hello))
+    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Forager).hello(hello))
         .await
         .context("link the gsm-modem bee")?;
     bee.send(json!({

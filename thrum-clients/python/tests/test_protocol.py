@@ -58,7 +58,7 @@ class GoldenWireTest(unittest.TestCase):
         )
         self.assertEqual(hello.proto_version, "0.8.0")
         self.assertEqual(hello.hive, "claude-cli")
-        self.assertEqual(hello.roles, ["worker"])
+        self.assertEqual(hello.role, "nurse")
         unfurl = p.from_wire(
             p.UnfurlBody, {k: v for k, v in tones["unfurl"].items() if k not in ENV_KEYS}
         )

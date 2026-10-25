@@ -11,7 +11,7 @@ THRUM_VERSION = "0.8.0"
 class Chi:
     """Every wire-known chi value. Adding a new variant bumps the
     protocol minor; renaming/removing bumps major."""
-    # announce self: hive, roles, signed identity
+    # announce self: hive, role, signed identity
     HELLO: str = "hello"
     # open a bloom: its petals, and how the cell should grow it
     PROMPT: str = "prompt"
@@ -150,4 +150,15 @@ class PetalKind:
     BRIX: str = "brix"
     # several candidate petals for one prompt: `bouquet`
     BOUQUET: str = "bouquet"
+
+class Role:
+    """role: the one job a bee does, set when its hive enters it."""
+    # opens blooms, bringing the outside world into the thrum
+    FORAGER: str = "forager"
+    # grows blooms in its cells; all inference is nursing
+    NURSE: str = "nurse"
+    # changes the world: runs what a bloom composes on its host, through [`bash`](#bash)
+    BUILDER: str = "builder"
+    # serves the fixed, named tools in its hello's `tools`, and nothing else
+    ATTENDANT: str = "attendant"
 

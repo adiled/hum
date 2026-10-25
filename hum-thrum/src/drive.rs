@@ -1,6 +1,7 @@
 //! The tokio driver, and the client a Rust bee holds.
 //!
-//! [`Bee::link`] enters the bee under its hive and label, starts a task
+//! [`Bee::link`] enters the bee under its hive and label for its role,
+//! starts a task
 //! that carries out what the [`Core`] asks for over the Unix socket, and
 //! returns once humd has admitted the bee, or fails with [`Refused`]: by
 //! humd, or because the bee's hive is not installed here to enter it.
@@ -36,15 +37,17 @@ use crate::core::{Advisory, Core, Endpoint, Output, Timer};
 pub struct Options {
     pub hive: String,
     pub label: String,
+    pub role: thrum_core::Role,
     pub hello: Map<String, Value>,
     pub endpoint: Endpoint,
 }
 
 impl Options {
-    pub fn new(hive: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn new(hive: impl Into<String>, label: impl Into<String>, role: thrum_core::Role) -> Self {
         Self {
             hive: hive.into(),
             label: label.into(),
+            role,
             hello: Map::new(),
             endpoint: Endpoint::Resolve,
         }
@@ -124,7 +127,8 @@ pub struct Bee {
 
 impl Bee {
     pub async fn link(opts: Options) -> Result<Bee> {
-        let key = hum_identity::enter_as(&opts.hive, &opts.label).map_err(|e| Refused(e.to_string()))?;
+        let key = hum_identity::enter_as(&opts.hive, &opts.label, opts.role.as_str())
+            .map_err(|e| Refused(e.to_string()))?;
         Self::link_as(opts, key).await
     }
 
@@ -141,7 +145,7 @@ impl Bee {
     }
 
     pub fn spawn(opts: Options, key: BeeKey) -> Bee {
-        let core = Core::new(opts.hive.clone(), key, opts.hello, opts.endpoint);
+        let core = Core::new(opts.hive.clone(), opts.role, key, opts.hello, opts.endpoint);
         let id = core.bee_id();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();

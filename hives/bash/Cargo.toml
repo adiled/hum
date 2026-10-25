@@ -1,0 +1,28 @@
+[package]
+name = "bash-builder"
+version = "0.33.1"
+edition = "2024"
+license = "MIT"
+description = "A builder: lends the host it runs on to the blooms that build there, through one bash shell per sigil."
+
+[[bin]]
+name = "bash-builder"
+path = "src/main.rs"
+
+[dependencies]
+thrum-core = { path = "../../thrum-core" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+parking_lot = "0.12"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]

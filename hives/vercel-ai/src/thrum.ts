@@ -6,7 +6,7 @@
 // and a new generation waits briefly for humd to return before it fails.
 // The bee connects once humd hears it.
 
-import { Bee, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Role, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
 
 export const HIVE_NAME = "vercel-ai";
@@ -19,7 +19,8 @@ class ProviderBee {
   #bee = new Bee({
     hive: HIVE_NAME,
     as: "main",
-    hello: { roles: ["forager"], version: pkg.version },
+    role: Role.forager,
+    hello: { version: pkg.version },
   });
   #started: Promise<void> | undefined;
   #open = new Map<string, SidHandler>();

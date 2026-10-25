@@ -9,7 +9,7 @@ export const THRUM_VERSION = "0.8.0" as const;
 // Every wire-known chi value. Adding a new variant bumps the
 // protocol minor; renaming/removing bumps major.
 export const Chi = {
-  /** announce self: hive, roles, signed identity */
+  /** announce self: hive, role, signed identity */
   hello: "hello",
   /** open a bloom: its petals, and how the cell should grow it */
   prompt: "prompt",
@@ -118,3 +118,16 @@ export const PetalKind = {
   bouquet: "bouquet",
 } as const;
 export type PetalKindT = typeof PetalKind[keyof typeof PetalKind];
+
+// role is the one job a bee does, set when its hive enters it.
+export const Role = {
+  /** opens blooms, bringing the outside world into the thrum */
+  forager: "forager",
+  /** grows blooms in its cells; all inference is nursing */
+  nurse: "nurse",
+  /** changes the world: runs what a bloom composes on its host, through [`bash`](#bash) */
+  builder: "builder",
+  /** serves the fixed, named tools in its hello's `tools`, and nothing else */
+  attendant: "attendant",
+} as const;
+export type RoleT = typeof Role[keyof typeof Role];

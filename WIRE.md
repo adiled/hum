@@ -74,8 +74,8 @@ The first tone a nestler sends after `connect()` MUST be `chi:"hello"`.
 your bee exists, what chi values you speak, and can route tones
 to you, provided the hive your hello names is installed on that humd
 (`hum hive <ref> install`) and the hello is signed by a key that hive
-entered (`hum bee enter --hive <hive>`). A humd understands a bee only
-through its hive, and knows it only by its key. The ensemble layer (peer humds, gossip) and the on-chain layer
+entered (`hum bee enter --hive <hive> --role <role>`). A humd understands
+a bee only through its hive, and knows it only by its key. The ensemble layer (peer humds, gossip) and the on-chain layer
 (`HumdRegistry`) are additive opt-ins on top.
 
 The handshake doesn't distinguish where the bytes came from. A hello
@@ -92,7 +92,7 @@ single protocol.
   "chi": "hello",
   "rid": "hello-1",
   "hive": "<the hive you belong to>",
-  "roles": ["worker"],
+  "role": "nurse",
   "hid": "bee_<sha256 of your ed25519 pubkey>",
   "pubkey": "<hex ed25519 public key>",
   "signedAt": 1700000000000,
@@ -109,12 +109,14 @@ single protocol.
 }
 ```
 
-- `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt` and `signature`
-  are **required**. The signature proves the hello comes from the entered
-  key the `hid` names (see [hives/README.md](hives/README.md)).
-- `roles` is what the bee claims to do: `worker`, `forager`, both, or
-  a role of its own. It is a claim, not identity. Older bees sent it
-  as `bee`; humd still reads that.
+- `hive`, `role`, `protoVersion`, `hid`, `pubkey`, `signedAt` and
+  `signature` are **required**. The signature proves the hello comes from
+  the entered key the `hid` names (see [hives/README.md](hives/README.md)).
+- `role` is the one job the bee does, set when its hive entered it:
+  `forager`, `nurse`, `builder` or `attendant` ([Roles](#roles)).
+- `builds: true` on a forager's hello says its blooms build where it is:
+  a prompt of its with no `cwd` builds in the home directory of its humd's
+  host ([Where a bloom builds](#where-a-bloom-builds)).
 - `chis` (note: plural) is the list of chi values this bee speaks
   and expects to receive. **Distinct from `chi`** at the top level —
   `chi` is the discriminator (this tone IS a hello); `chis` is the
@@ -129,8 +131,8 @@ single protocol.
   registered, not announced to the ensemble, and the connection is closed.
 - A hello naming **no** hive, or a hive **not installed** on this humd,
   is refused the same way. So is one that is **unsigned**, whose
-  signature fails or is stale, or whose key was never entered under that
-  hive or has exited.
+  signature fails or is stale, whose key was never entered under that
+  hive or has exited, or whose `role` is not the one its key entered for.
 - A `protoVersion` whose **major** differs from humd's is **refused** the
   same way.
 - A `protoVersion` that differs only in minor or patch is admitted, with a
@@ -147,53 +149,53 @@ The bumping rules humd applies:
 humd hosts no cells. A **nest** is the cells a hive hosts (live LLM
 subprocesses) and the limits it keeps them under, turned on with
 hum-nest. The wire never sees a nest as a thing of its own; it sees the
-chi traffic that flows through it, and the `headroom` a worker claims on
+chi traffic that flows through it, and the `headroom` a nurse claims on
 its hello and on each `chi:"pulse"` about its cells (`freeSlots`,
-`totalSlots`). humd sends a prompt to a worker with room, local first,
+`totalSlots`). humd sends a prompt to a nurse with room, local first,
 then on a peer, and to a full one only when no other can serve.
 
-Direction is sacred. Two ends of the same connection, two roles:
+## Roles
 
-| who | sends | receives |
-|---|---|---|
-| **forager side**, the bee that prompts (a nestler before its hello is accepted, a nestled after) | `chi:"hello"` first, then `chi:"prompt"`, `chi:"cancel"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cleanup"`, `chi:"curate"`, for the whole of its life | `chi:"breath"` (accepting the hello), `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"`, `chi:"pulse"` |
-| **cell side** (compute) | `chi:"unfurl"`, `chi:"wilt"`, `chi:"tendril-reach"`, `chi:"permission-ask"` | `chi:"prompt"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"cancel"` |
+A bee does one job, its `role`, set when its hive entered it. Direction
+is sacred: the role says what the bee sends and what it hears, for the
+whole of its life.
 
-The forager is the same bee throughout: a **nestler** before its
-hello is accepted, a **nestled** after. The role doesn't flip when
-the state changes; "hello" is just the first of many asks the
-connection will carry. Cancels, prompts, tendril-results, cleanups all
-flow from the nestled state, not just hello from the nestler.
+| role | does | sends | receives |
+|---|---|---|---|
+| **forager** | opens blooms, bringing the outside world into the thrum | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"release-permit"`, `chi:"scout-result"`, `chi:"tendril-result"` for the tools it put on its prompt, and `chi:"tendril-reach"` straight to an attendant, with no bloom between | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"permission-ask"`, `chi:"scout"`, `chi:"tendril-info"`, and `chi:"tendril-reach"` for its own tools |
+| **nurse** | grows blooms in its cells; all inference is nursing | `chi:"unfurl"`, `chi:"wilt"`, `chi:"error"`, `chi:"pulse"`, `chi:"tendril-reach"`, `chi:"tendril-info"`, `chi:"permission-ask"`, `chi:"scout"` | `chi:"prompt"`, `chi:"cancel"`, `chi:"cleanup"`, `chi:"curate"`, `chi:"tendril-result"`, `chi:"release-permit"`, `chi:"scout-result"` |
+| **builder** | changes the world: runs what a bloom composes on its host, through [`bash`](#bash) | `chi:"tendril-result"` | `chi:"tendril-reach"` for `bash`, `chi:"cleanup"` |
+| **attendant** | serves the fixed, named tools in its hello's `tools`, and nothing else | `chi:"tendril-result"`, or `chi:"error"` under the reach's `callId` to refuse it | `chi:"tendril-reach"` for its tools |
 
-A cell is always answerer. **Nobody is both on the same connection.**
-A process that wanted to "also offer compute" would not do so by
-inverting its nestler connection — it would do so by being a cell
-inside *some humd's nest*, addressable via that humd's ensemble
-advertise.
+Every bee sends `chi:"hello"` first and hears `chi:"breath"` accept it.
+It is the same bee throughout: a **nestler** before its hello is
+accepted, a **nestled** after, and the role doesn't flip when the state
+changes. **Nobody is two roles on the same connection.** A hive that
+wants a bee for each job enters one for each.
 
 The wire is **opaque to the cell's implementation.** A cell might
-be a local subprocess (`claude-cli`), a Rust struct that wraps an
+be a local subprocess, a Rust struct that wraps an
 HTTP client to OpenAI's API, a deterministic mock for sim tests —
 the wire sees the same petals unfurl back either way. The kind of
-cell (`Worker` impl, in Rust terms) is the hive's concern,
+cell (`Nurse` impl, in Rust terms) is the hive's concern,
 exposed to the wire only via `hive: "<kind>"` on hello.
 
 What the wire *does* see, at the humd level:
 
 - Each humd advertises in its `PeerCapabilities.nests` (gossiped via
   the ensemble) which **kinds** of hive its nest is configured to
-  host (e.g. `["claude-cli", "ollama-local"]`).
+  host.
 - Each `chi:"prompt"` carries a `modelId`: the forager says which
-  model it wants. humd's routing picks an appropriate worker bee
+  model it wants. humd's routing picks an appropriate nurse
   (a local one over thrum, or routes to a peer humd whose advertised
   hives can serve it).
 
-That's the whole "compute discovery" mechanism. No `provides_nest`
-field on a bee's hello — the kind is `hive: "<name>"` + bee role flag.
+That's the whole "compute discovery" mechanism. Nothing on a bee's
+hello claims a nest: the kind is `hive: "<name>"`, and its `role`.
 **The advertise lives on the humd, not invented per forager.**
 
 If you want to add a new kind of compute to the mesh, you ship a
-`Worker` impl (any process speaking thrum), point it at a humd, and
+`Nurse` impl (any process speaking thrum), point it at a humd, and
 the mesh discovers via the existing capability gossip; peers route
 prompts your way. The wire stays exactly the same.
 
@@ -217,8 +219,8 @@ with no description here has none in the clients either.
 
 | chi | body fields | meaning | description |
 |---|---|---|
-| `hello` | `hive`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `roles`/`version`/`models`/`tools`/`provides`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, roles, signed identity |
-| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd`/`systemPrompt`/`tools`, and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal` | open a bloom | open a bloom: its petals, and how the cell should grow it |
+| `hello` | `hive`, `role`, `protoVersion`, `hid`, `pubkey`, `signedAt`, `signature`, optional `builds`/`version`/`models`/`tools`/`propensity`/`chis`/`bind`/`headroom`/`source` | first frame after connect: announce self, signed | announce self: hive, role, signed identity |
+| `prompt` | `sid`, `text`, `content` (petals), optional `modelId`/`cwd` (where it builds, `hum://`)/`systemPrompt`/`tools`/`allowedTools`/`resume`, and how the bloom grows: `temperature`/`prune`/`season`/`frost`/`seed`/`trellis`/`tendrils`/`sepal` | open a bloom | open a bloom: its petals, and how the cell should grow it |
 | `cancel` | `sid` | stop the open bloom of this sigil | stop the open bloom |
 | `cleanup` | `sid` | drop humd's state for this sigil | drop humd's state for a sigil |
 | `curate` | `sid` | manual compaction request | manual compaction request |
@@ -235,10 +237,10 @@ with no description here has none in the clients either.
 | `unfurl` | `petal` (its index in the bloom), `kind`, and what grew: `text`, `sap`, `callId`/`name`, `grain`, `propolis`, `source`, `brix`; `closed` once the petal is whole | one petal of a bloom growing | a petal growing |
 | `wilt` | `reason`, `nectar`, optional `exitCode`, `subtype` | the bloom closes | close the bloom, with its nectar |
 | `error` | `message`, `code`, optional `subtype`, `nectar` | the bloom broke off | the bloom broke off |
-| `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the worker's headroom after it | a cell's life, and headroom |
+| `pulse` | `kind` (cell-spawned/cell-ready/cell-idle/cell-died/cell-evicted), optional `pid`/`headroom`, and on `cell-ready` the `cell`'s id, its `model` and `tools` | a cell's life, with the nurse's headroom after it | a cell's life, and headroom |
 | `permission-ask` | `callId`, `name`, `message`, `arg` | a tendril needs leave to reach | a tendril needs leave to reach |
 | `scout` | `task`, `tools` | send a scout out | send a scout out |
-| `tendril-reach` | `sid`, `callId`, `name`, `args` | a brokered tool call reaching | a tendril reaching |
+| `tendril-reach` | `sid`, `callId`, `name`, `args`, and on a `bash` reach to a builder the `cwd` its shell starts in, its host's home directory when absent | a brokered tool call reaching | a tendril reaching |
 | `tendril-meta` | `callId`, `name`, `metadata` | what a tendril carries besides its result | what a tendril carries besides its result |
 | `tendril-info` | `callId`, `name`, `args`, `result`, `isError` | a tendril that already reached and came back, told whole. Unlike `tendril-reach` and `tendril-result`, a two-phase handoff the receiver acts on, `tendril-info` says "this ran upstream, here is all of it", and a receiver only shows it. | a tendril that already came back, told whole, for showing only |
 
@@ -333,6 +335,7 @@ root, and `hum doctor` lists them.
 | `proto-drift` | humd | the bee speaks another minor version of the thrum |
 | `reconnect-storm` | humd | the bee said hello 10 times within 10 minutes |
 | `did-not-return` | humd | the bee was nestled when humd stopped and had not come back 2 minutes after humd started |
+| `cwd-not-hum` | humd | a prompt's `cwd` is not a `hum://` address, and was dropped |
 
 **Send deadline.** Every inter-humd send is bounded at 5s
 (`ensemble::SEND_TIMEOUT`). A peer that stops reading fills its socket
@@ -456,29 +459,71 @@ Both ends converge in O(1) round-trips after the link heals.
 
 ## Tendrils
 
-A nestler-declared tool is an arbitrary callable the bee offers the
-cell in its prompt's `tools`. When the cell picks it, a tendril
-reaches: humd emits `chi:"tendril-reach"`, and the nestler answers with
-`chi:"tendril-result"` carrying the same `callId`.
+A tendril is a tool call a cell makes, brokered across the wire. A nurse
+reaches (`chi:"tendril-reach"`), and the bee that serves the tool answers
+with `chi:"tendril-result"` carrying the same `callId`. Three kinds of
+bee serve one:
+
+- a **builder** serves [`bash`](#bash), the thrum's own tendril;
+- an **attendant** serves the tools it lists in its hello's `tools`;
+- a **forager** serves the tools it put on its prompt's `tools`.
+
+When humd hands a nurse a prompt, the prompt's `tools` are everything the
+bloom may reach: the forager's own, every attendant's, and `bash` when
+the bloom builds somewhere. A nurse hands them to its cell as they are.
+humd routes each reach by its name: `bash` to the builder where the bloom
+builds, any other name to an attendant serving it here or on a peer, and
+failing that back to the forager.
 
 ```
-nestler → humd: chi:"prompt" { tools: [{ name, description, input_schema }, ...] }
-humd → nestler: chi:"tendril-reach" { sid, callId, name, args }
-nestler → humd: chi:"tendril-result" { sid, callId, result }
+forager → humd:   chi:"prompt" { tools: [{ name, description, inputSchema }, ...] }
+humd → nurse:     chi:"prompt" { tools: [...the forager's, the attendants', bash] }
+nurse → humd:     chi:"tendril-reach" { sid, callId, name, args }
+humd → server:    chi:"tendril-reach" { sid, callId, name, args, cwd? }
+server → humd:    chi:"tendril-result" { sid, callId, output, isError }
+humd → nurse:     chi:"tendril-result" { sid, callId, output, isError }
 ```
 
-Errors set `result.error`, and humd surfaces them as an error in the
-bloom. If no `tendril-result` arrives within the nestler's own timeout,
-it sends `chi:"tendril-result"` with `result.error = "timeout"` so the
-cell does not wait forever.
+A reach no bee can serve is answered by humd itself, with a
+`tendril-result` whose `isError` is true and whose `output` says why, so
+the cell does not wait for an answer that cannot come.
+
+### `bash`
+
+The one tendril the thrum declares (`thrum_core::bash_tool`), so every
+nurse hands its cell the same tool. A reach carries `command` and an
+optional `timeout` in ms (120000 by default, 600000 at most). The builder
+runs it in the sigil's shell, which starts where the bloom builds and
+keeps its directory and environment from one reach to the next, until
+the sigil's `cleanup`. The result's `output` is stdout and stderr
+together, its last line naming the exit code when it is not 0;
+`metadata.exitCode` is the exit code, and `isError` is true when it is
+not 0.
+
+### Where a bloom builds
+
+A prompt's `cwd` says where its bloom builds: `hum://<humdid>/<path>`,
+the builder on that humd, its shell starting in `<path>`. The host may be
+a full hid, a short one, or an alias from the forager's humd's
+`peers.json`; the forager's humd resolves it to a full hid before the
+prompt goes anywhere.
+
+- `hum://<humdid>` with no path starts in the home directory of that
+  host.
+- `hum:///<path>`, with no host, is the forager's own humd.
+- No `cwd` builds in the home directory of the forager's own humd, but
+  only when the forager's hello says `builds: true`. Otherwise the bloom
+  builds nowhere, and its `bash` reaches are answered as unserved.
+- A `cwd` that is not a `hum://` address is dropped, with the
+  `cwd-not-hum` advisory, and the prompt is taken as having none.
 
 ## The client
 
 A bee does not implement this wire; it uses hum's client. In Rust that
 is `hum_thrum::Bee::link`. In TS, Python, Go and C it is the client in
 `thrum-clients/<lang>`, generated from the Rust, which runs
-`hum bee link --hive <hive> --as <label>` and talks to it over two
-pipes. Either way the same Rust decides everything below, so every
+`hum bee link --hive <hive> --as <label> --role <role>` and talks to it
+over two pipes. Either way the same Rust decides everything below, so every
 language behaves the same, and `cargo test -p hum --test conform` holds
 each of them to it against a real humd.
 
@@ -489,7 +534,7 @@ passes through unchanged; a line without one is the link's own.
 
 | direction | line | meaning |
 |---|---|---|
-| link to bee | `{"link":"ready","linkVersion":1,"thrum":..,"bee":..,"hive":..,"as":..}` | first: the bee is entered; a client of another `linkVersion` stops here |
+| link to bee | `{"link":"ready","linkVersion":2,"thrum":..,"bee":..,"hive":..,"as":..,"role":..}` | first: the bee is entered; a client of another `linkVersion` stops here |
 | bee to link | `{"hello":{..}}` | first: the bee's own hello fields; the link connects once it has them |
 | link to bee | `{"link":"nestled"}` | humd admitted the bee, at start and after every reconnect |
 | link to bee | `{"link":"astray"}` | humd went away; the link is dialing again |
@@ -497,8 +542,8 @@ passes through unchanged; a line without one is the link's own.
 | bee to link | `{"hello":{..}}` | later: a change to the hello; a null drops a field |
 | link to bee | `{"link":"refused","error":..}` | last: humd refused the bee, or its hive is not installed |
 
-The link owns the hello's `chi`, `rid`, `hive`, `protoVersion`, `hid`,
-`from`, `pubkey`, `signedAt` and `signature`, gives a tone without a
+The link owns the hello's `chi`, `rid`, `hive`, `role`, `protoVersion`,
+`hid`, `from`, `pubkey`, `signedAt` and `signature`, gives a tone without a
 `rid` one, and swallows humd's acknowledgements of the rids it minted.
 It exits 0 when the bee closes its stdin, 3 when the bee is refused, 2
 on a first line that is not a hello, and 1 otherwise. It ignores
@@ -511,11 +556,11 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 1. Resolve the socket as [Transport](#transport) says, afresh on every
    dial.
-2. Connect. humd breathes once (`sessions: []`) before it has heard
+2. Connect. humd breathes once (`sigils: []`) before it has heard
    anything; that breath admits nothing.
 3. Send the hello, signed as a key the bee's hive entered, under a fresh
    `rid`. humd acknowledges it (`echo`, `ok: true`), then gives its
-   verdict: a breath (`sessions: {}`) admits the bee, an `echo` with
+   verdict: a breath (`sigils: {}`) admits the bee, an `echo` with
    `ok: false` under the hello's `rid` refuses it. A refusal is final,
    even one that comes after admission. A change to the hello is a
    fresh signed hello on the same connection: at once while nestled,
@@ -537,7 +582,7 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 | THRUM_VERSION | what changed |
 |---|---|
-| 0.8.0 | hello names its `hive` (required) and `roles` (was `bee`), and is signed by a key its hive entered; bee hids are `bee_`; `sigil(sid)` drops its nest; a worker claims `headroom` on hello and `pulse`; humd hosts no cells. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
+| 0.8.0 | hello names its `hive` and its one `role` (`forager`, `nurse`, `builder`, `attendant`; was `roles`, and before that `bee`), both required, and is signed by a key its hive entered for that role; bee hids are `bee_`; `sigil(sid)` drops its nest; a nurse claims `headroom` on hello and `pulse`; humd hosts no cells. The thrum declares `bash`, which a builder serves; a prompt's `cwd` is where its bloom builds, `hum://`, and a forager's hello may say `builds`; humd hands a nurse the bloom's tools in the prompt's `tools`, so `provides`, `foragerTools`, `provided` and `disallowedTools` are gone. The wire speaks hum's building blocks: `chunk` is `unfurl` (a petal growing, by kind), `finish` is `wilt`, `usage` is `nectar`, `tool-*` are `tendril-*`, subagents are `scout`s, `session-ready` folds into the `cell-ready` pulse, breath carries `sigils`; prompt `content` is petals, and a prompt says how its bloom grows |
 | 0.7.0 | ensemble plumbing chi (peer-add/remove, attach/detach, wane-sync, gossip-publish, kad-find-node, kad-find-node-resp) |
 | 0.6.0 | drone, drone-retrofit, perf-mark first-classed |
 | 0.5.0 | release-permit, permission-ask, tendril-reach, tendril-result |

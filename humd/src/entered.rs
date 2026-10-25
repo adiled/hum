@@ -1,9 +1,10 @@
 //! The bees entered on this humd.
 //!
 //! A hive enters a bee with `hum bee enter`, which leaves a record of the
-//! bee's key and hive on disk; exiting marks it, reentering clears it.
-//! humd admits a hello only when it is signed by an entered key and names
-//! the hive that key entered under. The record is read at every hello and
+//! bee's key, hive and role on disk; exiting marks it, reentering clears
+//! it. humd admits a hello only when it is signed by an entered key and
+//! names the hive and the role that key entered for. The record is read at
+//! every hello and
 //! never cached, so an exit is honoured from the very next hello; a bee
 //! already nestled when it exits stays until it reconnects.
 
@@ -30,7 +31,7 @@ impl EnteredBees {
         }
     }
 
-    pub fn enter(&self, hive: &str, key: &hum_identity::BeeKey) {
+    pub fn enter(&self, hive: &str, role: thrum_core::Role, key: &hum_identity::BeeKey) {
         if let Some(m) = &self.memory {
             m.write().insert(
                 key.id(),
@@ -38,6 +39,7 @@ impl EnteredBees {
                     hive: hive.to_string(),
                     pubkey: hex::encode(key.pubkey_bytes()),
                     label: String::new(),
+                    role: role.as_str().to_string(),
                     exited: false,
                 },
             );
@@ -60,10 +62,11 @@ impl EnteredBees {
         }
     }
 
-    pub fn admits(&self, hid: &Hid, hive: &str) -> bool {
+    pub fn admits(&self, hid: &Hid, hive: &str, role: thrum_core::Role) -> bool {
         self.entry(hid).is_some_and(|e| {
             !e.exited
                 && e.hive == hive
+                && e.role == role.as_str()
                 && hex::decode(&e.pubkey)
                     .is_ok_and(|pk| Hid::from_pubkey(hum_identity::HidPrefix::Bee, &pk) == *hid)
         })
@@ -73,17 +76,19 @@ impl EnteredBees {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thrum_core::Role;
 
     #[test]
     fn a_bee_is_admitted_only_under_the_hive_it_entered() {
         let bees = EnteredBees::in_memory();
         let key = hum_identity::BeeKey::generate();
-        assert!(!bees.admits(&key.hid, "humfs"));
-        bees.enter("humfs", &key);
-        assert!(bees.admits(&key.hid, "humfs"));
-        assert!(!bees.admits(&key.hid, "claude-cli"));
+        assert!(!bees.admits(&key.hid, "bash", Role::Builder));
+        bees.enter("bash", Role::Builder, &key);
+        assert!(bees.admits(&key.hid, "bash", Role::Builder));
+        assert!(!bees.admits(&key.hid, "claude-cli", Role::Builder));
+        assert!(!bees.admits(&key.hid, "bash", Role::Nurse), "a bee is admitted only for its role");
         bees.exit(&key.id());
-        assert!(!bees.admits(&key.hid, "humfs"));
+        assert!(!bees.admits(&key.hid, "bash", Role::Builder));
     }
 
     #[test]
@@ -94,12 +99,13 @@ mod tests {
         bees.memory.as_ref().unwrap().write().insert(
             key.id(),
             Entry {
-                hive: "humfs".into(),
+                hive: "bash".into(),
                 pubkey: hex::encode(other.pubkey_bytes()),
                 label: String::new(),
+                role: "builder".into(),
                 exited: false,
             },
         );
-        assert!(!bees.admits(&key.hid, "humfs"));
+        assert!(!bees.admits(&key.hid, "bash", Role::Builder));
     }
 }

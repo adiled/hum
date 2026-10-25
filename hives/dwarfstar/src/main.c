@@ -1,4 +1,4 @@
-/* dwarfstar-bee: the DwarfStar engine as a hum worker.
+/* dwarfstar-bee: the DwarfStar engine as a hum nurse.
  *
  * The bee reaches humd through the thrum C client, which runs
  * `hum bee link` for it, and answers prompts from the engine linked into
@@ -567,7 +567,6 @@ static int metal_dir(char *out, size_t cap) {
 }
 
 static cJSON *hello_for(void) {
-    static const char *const roles[] = {"worker"};
     static const char *const chis[] = {THRUM_CHI_HELLO, THRUM_CHI_PROMPT, THRUM_CHI_CANCEL,
                                        THRUM_CHI_UNFURL, THRUM_CHI_WILT, THRUM_CHI_ERROR,
                                        THRUM_CHI_PULSE};
@@ -575,7 +574,6 @@ static cJSON *hello_for(void) {
     cJSON *propensity;
 
     if (!hello) return NULL;
-    cJSON_AddItemToObject(hello, "roles", cJSON_CreateStringArray(roles, 1));
     cJSON_AddStringToObject(hello, "version", VERSION);
     cJSON_AddItemToObject(hello, "models", ds4_models_ids(&g_models));
     cJSON_AddItemToObject(hello, "chis",
@@ -654,7 +652,7 @@ int main(void) {
     char kernels[2048] = "";
     char lock[1100];
     char err[512] = "DWARFSTAR_GPU_LOCK is unset; the Orchfile sets it under ${HUM_HIVE_STATE}";
-    pthread_t worker;
+    pthread_t blooms;
     int rc;
 
     if ((env = env_of("DWARFSTAR_DIR"))) {
@@ -688,7 +686,7 @@ int main(void) {
     atomic_store(&g_free_slots, free_slots_now());
     {
         cJSON *hello = hello_for();
-        thrum_options opts = {.hive = HIVE, .as = label, .hello = hello};
+        thrum_options opts = {.hive = HIVE, .as = label, .role = THRUM_ROLE_NURSE, .hello = hello};
         g_bee = thrum_bee_new(&opts);
         cJSON_Delete(hello);
     }
@@ -702,7 +700,7 @@ int main(void) {
     thrum_bee_on_nestled(g_bee, on_nestled, NULL);
     thrum_bee_on_astray(g_bee, on_astray, NULL);
     g_last_bloom_ms = now_ms();
-    if (pthread_create(&worker, NULL, take_blooms, NULL) != 0) {
+    if (pthread_create(&blooms, NULL, take_blooms, NULL) != 0) {
         fprintf(stderr, "dwarfstar: could not start the bloom thread\n");
         return 1;
     }
@@ -716,7 +714,7 @@ int main(void) {
     ds4_bridge_cancel(g_bridge);
     pthread_cond_broadcast(&g_ready);
     pthread_mutex_unlock(&g_lock);
-    pthread_join(worker, NULL);
+    pthread_join(blooms, NULL);
 
     while (g_head) {
         struct bloom *t = g_head;

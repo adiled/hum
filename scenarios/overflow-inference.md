@@ -19,7 +19,7 @@ asymmetric capacity:
   medium richness). It announces `nests: []` for the requested model
   or `can_relay: true` with no local capacity. It is the door, not
   the kitchen.
-- **humd-B** — worker. Hosts a `claude-cli` nest and advertises
+- **humd-B** — nurse. Hosts a `claude-cli` nest and advertises
   `nests: ["claude-cli"]`, `hosts: [...]` in its `PeerCapabilities`,
   with available inference slots.
 

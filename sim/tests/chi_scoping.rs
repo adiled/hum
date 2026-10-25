@@ -14,7 +14,7 @@ use sim::{Sim, SimHumd};
 fn base_hello(chis: Option<&[&str]>) -> Value {
     let mut hello = serde_json::json!({
         "chi": "hello",
-        "roles": ["worker"],
+        "role": "nurse",
         "hive": "claude-cli",
         "version": "0.1.0",
         "protoVersion": thrum_core::THRUM_VERSION,

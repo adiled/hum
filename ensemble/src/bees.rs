@@ -27,8 +27,10 @@ pub struct BeeManifest {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<BindAddr>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<thrum_core::Role>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builds: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hid: Option<crate::Hid>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -37,8 +39,6 @@ pub struct BeeManifest {
     pub models: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub provides: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headroom: Option<crate::headroom::CellHeadroom>,
 }
@@ -84,10 +84,10 @@ impl BeeManifest {
             chis: Vec::new(),
             source: None,
             bind: None,
-            roles: Vec::new(),
+            role: None,
+            builds: false,
             models: Vec::new(),
             tools: Vec::new(),
-            provides: Vec::new(),
             hid: None,
             hid_verified: false,
             headroom: None,
@@ -113,17 +113,13 @@ impl BeeManifest {
         self
     }
 
-    pub fn with_roles<I, S>(mut self, roles: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.roles = roles.into_iter().map(Into::into).collect();
+    pub fn with_role(mut self, role: thrum_core::Role) -> Self {
+        self.role = Some(role);
         self
     }
 
-    pub fn plays(&self, role: &str) -> bool {
-        self.roles.iter().any(|r| r == role)
+    pub fn plays(&self, role: thrum_core::Role) -> bool {
+        self.role == Some(role)
     }
 
     pub fn is_full(&self) -> bool {

@@ -11,7 +11,8 @@ import { isValidChi, type ChiKind } from "./chi.ts";
 export interface HelloBody {
   protoVersion: string;
   hive: string;
-  roles?: string[];
+  role: string;
+  builds?: boolean;
   version?: string;
   hid: string;
   pubkey: string;
@@ -19,7 +20,6 @@ export interface HelloBody {
   signature: string;
   models?: string[];
   tools?: unknown[];
-  provides?: string[];
   chis?: string[];
   propensity?: unknown;
   headroom?: Headroom;
@@ -39,9 +39,6 @@ export interface PromptBody {
   text?: string;
   content?: Petal[];
   tools?: unknown[];
-  foragerTools?: unknown[];
-  provided?: string[];
-  disallowedTools?: string[];
   allowedTools?: string[];
   resume?: string;
   temperature?: number;
@@ -129,6 +126,7 @@ export interface TendrilReachBody {
   callId: string;
   name: string;
   args?: unknown;
+  cwd?: string;
 }
 
 export interface TendrilResultBody {

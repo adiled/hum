@@ -20,7 +20,6 @@ parking_lot = "0.12"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
-hum-mcp = { path = "../hum-mcp" }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = { workspace = true }
 hex = { workspace = true }

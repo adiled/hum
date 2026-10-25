@@ -48,7 +48,7 @@ async function startFakeHumd(): Promise<{
   send: (t: Tone) => void;
   shutdown: () => Promise<void>;
 }> {
-  const dir = mkdtempSync(join(tmpdir(), "hum-worker-e2e-"));
+  const dir = mkdtempSync(join(tmpdir(), "hum-nurse-e2e-"));
   const sockPath = join(dir, "thrum.sock");
   const capturedReplies: Tone[] = [];
   let helloResolve!: (t: Tone) => void;
@@ -125,7 +125,7 @@ let server: Subprocess<"ignore", "pipe", "pipe">;
 async function boot(toolCallsFirst: boolean) {
   openAI = await startFakeOpenAI(toolCallsFirst);
   humd = await startFakeHumd();
-  const xdg = mkdtempSync(join(tmpdir(), "hum-worker-xdg-"));
+  const xdg = mkdtempSync(join(tmpdir(), "hum-nurse-xdg-"));
   mkdirSync(join(xdg, "config", "hum", "hives.d"), { recursive: true });
   writeFileSync(join(xdg, "config", "hum", "hives.d", "openai-server.orch"), "");
   const humBin = join(import.meta.dir, "..", "..", "..", "target", "debug");
@@ -156,18 +156,18 @@ async function teardown() {
   openAI.shutdown();
 }
 
-describe("openai-server worker half — chi:prompt in, a bloom out", () => {
+describe("openai-server nurse half — chi:prompt in, a bloom out", () => {
   beforeAll(async () => { await boot(false); });
   afterAll(async () => { await teardown(); });
 
-  test("hello advertises the worker's discovered models", async () => {
+  test("hello advertises the nurse's discovered models", async () => {
     const hello = await waitForHello(humd.helloReceived, 5000);
     expect(hello.models).toEqual(["gpt-4o"]);
   });
 
   test("unfurls a text petal and wilts with nectar", async () => {
-    const sid = "worker-test-sid";
-    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: [{ kind: "text", text: "hello worker" }] });
+    const sid = "nurse-test-sid";
+    humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: [{ kind: "text", text: "hello nurse" }] });
 
     await waitFor(() => humd.capturedReplies.some(r => r.chi === "wilt"), 5000);
 
@@ -186,12 +186,12 @@ describe("openai-server worker half — chi:prompt in, a bloom out", () => {
   });
 });
 
-describe("openai-server worker half — tool loop", () => {
+describe("openai-server nurse half — tool loop", () => {
   beforeAll(async () => { await boot(true); });
   afterAll(async () => { await teardown(); });
 
   test("tool_calls → chi:tendril-reach, tendril-result → it grows on and wilts", async () => {
-    const sid = "worker-tool-sid";
+    const sid = "nurse-tool-sid";
     humd.send({ chi: "prompt", sid, hive: "openai-server", modelId: "gpt-4o", content: [{ kind: "text", text: "read the file" }], tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] });
 
     await waitFor(() => humd.capturedReplies.some(r => r.chi === "tendril-reach"), 5000);

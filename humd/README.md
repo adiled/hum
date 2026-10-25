@@ -12,7 +12,7 @@ hello in over the thrum socket, peer humds dial in over the ensemble
 transports, and the OS hands it a state directory and a runtime
 directory. It is a coordination node: everything mesh-shaped (admission,
 routing, gossip) happens here, and nothing LLM-shaped does. Cells live in
-the nests of the hives that host them, and a worker's claimed headroom
+the nests of the hives that host them, and a nurse's claimed headroom
 is how humd knows where a prompt can go.
 
 The crate ships two entry points off the same code:
@@ -51,11 +51,9 @@ they want to swap (`thrum_override`, `ensemble`, `hives`, `bees`,
    `hum.json`. Walk `peers.json` and dial outbound. Detach an accept
    loop per transport.
 7. **thrum**. Bind the unix socket at
-   `$XDG_STATE_HOME/hum/thrum.sock`. Worker and forager bees connect
-   here and exchange tones.
-8. **MCP**. Bind the HTTP listener at `cfg.http_path` so bees can
-   expose tools to their compute via MCP if they want.
-9. **wait for shutdown**. SIGTERM, SIGINT, or ctrl-c.
+   `$XDG_STATE_HOME/hum/thrum.sock`. Every bee connects here, whatever
+   its role, and exchanges tones.
+8. **wait for shutdown**. SIGTERM, SIGINT, or ctrl-c.
 
 ## Inspection surface
 
@@ -108,8 +106,8 @@ transport-agnostic. The hints a remote peer would paste into its
 ## DaemonConfig and embedding
 
 `DaemonConfig::from_env()` is production defaults: real XDG paths, mint
-identity if absent, bind a real thrum socket, MCP HTTP on `cfg.http_path`,
-metrics on `humd.metricsAddr`. Embedders override the bits they need:
+identity if absent, bind a real thrum socket, metrics on
+`humd.metricsAddr`. Embedders override the bits they need:
 
 | field | who sets it |
 |-------|-------------|

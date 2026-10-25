@@ -7,20 +7,20 @@
 """The client end of `hum bee link`, for a bee written in Python.
 
 A Bee runs `hum bee link` and speaks to it over two pipes, one JSON object
-per line. The link is hum's own client, in Rust: it enters the bee, signs
-the hello, reads humd's verdict, reconnects when humd restarts, and checks
-every tone against the thrum. So this module knows no protocol, and a
-Python bee behaves exactly as a bee in any language.
+per line. The link is hum's own client, in Rust: it enters the bee for its
+role, signs the hello, reads humd's verdict, reconnects when humd
+restarts, and checks every tone against the thrum. So this module knows no
+protocol, and a Python bee behaves exactly as a bee in any language.
 
-    bee = Bee(hive="echo", as_="main", hello={"roles": ["worker"], "models": ["m"]})
+    bee = Bee(hive="echo", as_="main", role=Role.NURSE, hello={"models": ["m"]})
     bee.on(Chi.PROMPT, on_prompt)
-    bee.on_astray(stop_turns)
+    bee.on_astray(stop_blooms)
     await bee.start()    # admitted, or Refused, or LinkError
     await bee.closed()   # how the link ended; Refused or LinkError unless the bee closed it
 
 A tone goes to the handler for its sid if there is one, else to the
 handler for its chi, else to on_any: a forager follows each sigil it
-opened by sid, a worker takes prompts by chi. Handlers run in the order
+opened by sid, a nurse takes prompts by chi. Handlers run in the order
 tones arrive, on the event loop. A coroutine handler runs as its own
 task, so a long bloom never holds up the tone after it (a cancel). A tone sent while humd is away is dropped by the
 link, which says so.
@@ -34,7 +34,7 @@ import shutil
 import sys
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Set, Union
 
-LINK_VERSION = 1
+LINK_VERSION = 2
 
 
 class LinkExit:
@@ -44,7 +44,7 @@ class LinkExit:
     REFUSED = 3
 
 
-CLIENT_OWNED = ("chi", "rid", "hive", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature",)
+CLIENT_OWNED = ("chi", "rid", "hive", "role", "protoVersion", "hid", "from", "pubkey", "signedAt", "signature",)
 
 HUM_CLI_ENV = "HUM_CLI"
 HUM_CLI_NAME = "hum"
@@ -61,6 +61,7 @@ class AdvisoryCode:
     PROTO_DRIFT = "proto-drift"
     RECONNECT_STORM = "reconnect-storm"
     DID_NOT_RETURN = "did-not-return"
+    CWD_NOT_HUM = "cwd-not-hum"
 
 
 Tone = Dict[str, Any]
@@ -95,11 +96,13 @@ class Bee:
         self,
         hive: str,
         as_: str,
+        role: str,
         hello: Optional[Mapping[str, Any]] = None,
         hum: Optional[str] = None,
     ) -> None:
         self.hive = hive
         self.as_ = as_
+        self.role = role
         self.id = ""
         self._hello: Dict[str, Any] = dict(hello or {})
         self._hum = hum
@@ -156,7 +159,7 @@ class Bee:
         hum = self._hum or hum_cli()
         try:
             self._proc = await asyncio.create_subprocess_exec(
-                hum, "bee", "link", "--hive", self.hive, "--as", self.as_,
+                hum, "bee", "link", "--hive", self.hive, "--as", self.as_, "--role", self.role,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 limit=_LINE_LIMIT,

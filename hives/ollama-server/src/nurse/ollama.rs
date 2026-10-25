@@ -1,4 +1,4 @@
-//! ollama-worker — Worker that calls Ollama's HTTP API.
+//! The Nurse that calls Ollama's HTTP API.
 //!
 //! Sends prompts to Ollama's `/api/chat` endpoint and streams the
 //! response back over thrum: Ollama's content unfurls as one text
@@ -10,9 +10,9 @@
 //! can reuse it for the next prompt of the same sid.
 //!
 //! Environment:
-//!   OLLAMA_WORKER_URL      — Ollama API base URL (default: http://127.0.0.1:11434)
-//!   OLLAMA_WORKER_MODEL    — default model (default: smollm:1.7b)
-//!   OLLAMA_WORKER_CTX      — context length (default: 8192)
+//!   OLLAMA_NURSE_URL      — Ollama API base URL (default: http://127.0.0.1:11434)
+//!   OLLAMA_NURSE_MODEL    — default model (default: smollm:1.7b)
+//!   OLLAMA_NURSE_CTX      — context length (default: 8192)
 
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use hum_nest::{Cell, Egg, Propensity, Worker};
+use hum_nest::{Cell, Egg, Propensity, Nurse};
 use thrum_core::PetalKind;
 
 fn petal_text(fed: &str) -> String {
@@ -67,20 +67,20 @@ struct OllamaOptions {
     stop: Option<Vec<String>>,
 }
 
-pub struct OllamaWorker {
+pub struct OllamaNurse {
     url: String,
     default_model: String,
     default_ctx: u64,
 }
 
-impl Default for OllamaWorker {
+impl Default for OllamaNurse {
     fn default() -> Self {
         Self {
-            url: std::env::var("OLLAMA_WORKER_URL")
+            url: std::env::var("OLLAMA_NURSE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into()),
-            default_model: std::env::var("OLLAMA_WORKER_MODEL")
+            default_model: std::env::var("OLLAMA_NURSE_MODEL")
                 .unwrap_or_else(|_| "smollm:1.7b".into()),
-            default_ctx: std::env::var("OLLAMA_WORKER_CTX")
+            default_ctx: std::env::var("OLLAMA_NURSE_CTX")
                 .ok().and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(8192),
         }
@@ -88,7 +88,7 @@ impl Default for OllamaWorker {
 }
 
 #[async_trait]
-impl Worker for OllamaWorker {
+impl Nurse for OllamaNurse {
     fn ephemeral(&self) -> bool { false }
 
     fn propensity(&self) -> Propensity {
@@ -102,7 +102,7 @@ impl Worker for OllamaWorker {
             egg.model_id.clone()
         };
 
-        info!(model = %model, cwd = %egg.cwd, "ollama-worker.raise");
+        info!(model = %model, cwd = %egg.cwd, "ollama-nurse.raise");
         let client = reqwest::Client::new();
         let url = self.url.clone();
         let default_ctx = self.default_ctx;
@@ -117,7 +117,7 @@ impl Worker for OllamaWorker {
             let prompt = match rx_feed.recv().await {
                 Some(p) => p,
                 None => {
-                    warn!("ollama-worker: feed closed before first prompt");
+                    warn!("ollama-nurse: feed closed before first prompt");
                     return;
                 }
             };
@@ -152,6 +152,7 @@ impl Worker for OllamaWorker {
             let req = client
                 .post(format!("{}/api/chat", url))
                 .header("Content-Type", "application/json")
+                .header(crate::hop::FROM_NURSE, "1")
                 .body(req_body);
 
             match req.send().await {
@@ -213,7 +214,7 @@ impl Worker for OllamaWorker {
                                 }
                             }
                             Err(e) => {
-                                warn!(err = %e, line = line.chars().take(200).collect::<String>(), "ollama-worker.parse");
+                                warn!(err = %e, line = line.chars().take(200).collect::<String>(), "ollama-nurse.parse");
                             }
                         }
                     }

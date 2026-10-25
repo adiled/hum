@@ -3,11 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { Bee, Chi, PetalKind, type Grain, type Hello, type Petal, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi, PetalKind, Role, type Grain, type Hello, type Petal, type Tone } from "../../../thrum-clients/ts/index.ts";
 import { BEE_VERSION, HIVE_NAME, Requester, SOURCE } from "./requester.ts";
 import { OpenAITranslator } from "./transform.ts";
 import { toolsFromOpenAI, type ToolSpec, type OpenAITool } from "./tools.ts";
-import { OpenAIWorker } from "./openai.ts";
+import { OpenAINurse } from "./openai.ts";
 export { toolsFromOpenAI } from "./tools.ts";
 
 interface HiveConfig {
@@ -397,13 +397,12 @@ function injectJsonMode(
 }
 
 const mainHello: Hello = {
-  roles: ["worker"],
   version: BEE_VERSION,
   propensity: { statefulness: "stateless_per_call", wire: HIVE_NAME },
   chis: ["hello", "prompt", "cancel", "tendril-result", "unfurl", "wilt", "tendril-reach", "error"],
   source: SOURCE,
 };
-const thrum = new Bee({ hive: HIVE_NAME, as: "main", hello: mainHello });
+const thrum = new Bee({ hive: HIVE_NAME, as: "main", role: Role.nurse, hello: mainHello });
 
 const REQUESTER_IDLE_MS = 10 * 60_000;
 const REQUESTER_READY_MS = 10_000;
@@ -515,7 +514,7 @@ async function start(): Promise<void> {
         return bad(res, `n>1 unsupported (this server serves a single completion per call)`);
       }
       if (body.logprobs === true || (typeof body.top_logprobs === "number" && body.top_logprobs > 0)) {
-        return bad(res, "logprobs unsupported by hum workers (claude-cli doesn't emit token probabilities)");
+        return bad(res, "logprobs unsupported by hum nurses (claude-cli doesn't emit token probabilities)");
       }
 
       const stream = body.stream !== false;
@@ -1168,20 +1167,20 @@ async function start(): Promise<void> {
   const actualPort = (addr && typeof addr === "object" && typeof addr.port === "number") ? addr.port : PORT;
   console.log(`[hum-openai-server] listening on http://${actualHost}:${actualPort}`);
 
-  const openaiWorker = new OpenAIWorker(thrum);
-  await openaiWorker.discover();
-  MODEL_IDS = openaiWorker.models();
+  const openaiNurse = new OpenAINurse(thrum);
+  await openaiNurse.discover();
+  MODEL_IDS = openaiNurse.models();
   mainHello.models = MODEL_IDS;
   mainHello.bind = { host: actualHost, port: actualPort, scheme: "http" };
 
   thrum.on(Chi.prompt, (msg) => {
-    if (msg.sid) { openaiWorker.handlePrompt(msg).catch(e => console.error("[worker] prompt failed:", e)); }
+    if (msg.sid) { openaiNurse.handlePrompt(msg).catch(e => console.error("[nurse] prompt failed:", e)); }
   });
   thrum.on(Chi.tendrilResult, (msg) => {
-    openaiWorker.handleTendrilResult(msg).catch(e => console.error("[worker] tendril-result failed:", e));
+    openaiNurse.handleTendrilResult(msg).catch(e => console.error("[nurse] tendril-result failed:", e));
   });
   thrum.on(Chi.cancel, (msg) => {
-    openaiWorker.cancel(msg);
+    openaiNurse.cancel(msg);
   });
   await thrum.start();
   console.log(`[hum-openai-server] nestled as ${thrum.id}`);

@@ -2,12 +2,14 @@
 //!
 //! A bee is its key, and the key is filed under the id it hashes to, so
 //! nothing but the key names a bee. A hive brings a bee into being by
-//! entering it: minting a key and recording the hive it entered under.
-//! A hive that keeps track of its bees by something of its own (a role,
-//! a requester's fingerprint) enters them under a label: the same hive
-//! and label are always the same bee. Whoever can read the key is the
-//! bee; humd admits only a hello signed by an entered key, so the key
-//! file is the trust boundary.
+//! entering it: minting a key and recording the hive it entered under and
+//! the one role it entered for. A hive that keeps track of its bees by
+//! something of its own (a job, a requester's fingerprint) enters them
+//! under a label: the same hive and label are always the same bee. A bee
+//! changes role only by being entered again for another, which files it
+//! under another key, so nothing the old key was trusted with carries
+//! over. Whoever can read the key is the bee; humd admits only a hello
+//! signed by an entered key, so the key file is the trust boundary.
 //!
 //! File format: raw 32-byte Ed25519 secret seed, mode 0o600, atomic
 //! write-and-rename, the same convention as humd's daemon key. An entry
@@ -149,6 +151,8 @@ pub struct Entry {
     pub pubkey: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exited: bool,
 }
@@ -160,43 +164,66 @@ fn write_entry(id: &str, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
-pub fn enter(hive: &str, label: &str, key: &BeeKey) -> Result<()> {
+pub fn enter(hive: &str, label: &str, role: &str, key: &BeeKey) -> Result<()> {
     if !hum_paths::is_plain_name(hive) {
         return Err(anyhow!("{hive:?} is not a hive name"));
     }
     if !label.is_empty() && !hum_paths::is_plain_name(label) {
         return Err(anyhow!("{label:?} is not a plain label"));
     }
+    if !hum_paths::is_plain_name(role) {
+        return Err(anyhow!("{role:?} is not a role"));
+    }
     let entry = Entry {
         hive: hive.to_string(),
         pubkey: hex::encode(key.pubkey_bytes()),
         label: label.to_string(),
+        role: role.to_string(),
         exited: false,
     };
     write_entry(&key.id(), &entry)?;
-    info!(hid = %key.hid.short(), hive, label, "bee.entered");
+    info!(hid = %key.hid.short(), hive, label, role, "bee.entered");
     Ok(())
 }
 
-pub fn enter_as(hive: &str, label: &str) -> Result<BeeKey> {
+pub fn enter_as(hive: &str, label: &str, role: &str) -> Result<BeeKey> {
     if !hum_paths::hive_installed(hive) {
         return Err(anyhow!("{hive} is not installed on this humd — `hum hive <ref> install` first"));
     }
     if !hum_paths::is_plain_name(label) {
         return Err(anyhow!("{label:?} is not a plain label"));
     }
-    if let Some((id, e)) = entered()
+    if !hum_paths::is_plain_name(role) {
+        return Err(anyhow!("{role:?} is not a role"));
+    }
+    let same: Vec<(String, Entry)> = entered()
         .into_iter()
-        .find(|(_, e)| e.hive == hive && e.label == label)
-    {
+        .filter(|(_, e)| e.hive == hive && e.label == label)
+        .collect();
+    let kept = same
+        .iter()
+        .filter(|(_, e)| e.role == role)
+        .min_by_key(|(_, e)| e.exited)
+        .or_else(|| same.iter().find(|(_, e)| e.role.is_empty()))
+        .map(|(id, _)| id.clone());
+    for (id, e) in &same {
+        if Some(id) != kept.as_ref() && !e.exited {
+            set_exited(id, true)?;
+            info!(id, hive, label, from = %e.role, to = role, "bee.exited.for-another-role");
+        }
+    }
+    if let Some(id) = kept {
         let key = load_bee_key(&id)?;
-        if e.exited {
-            set_exited(&id, false)?;
+        let mut e = entry(&id).ok_or_else(|| anyhow!("{id} lost its entry"))?;
+        if e.exited || e.role != role {
+            e.exited = false;
+            e.role = role.to_string();
+            write_entry(&id, &e)?;
         }
         return Ok(key);
     }
     let key = mint_bee_key()?;
-    enter(hive, label, &key)?;
+    enter(hive, label, role, &key)?;
     Ok(key)
 }
 
@@ -304,9 +331,10 @@ mod tests {
 
         let key = mint_bee_key().expect("mint");
         assert!(entry(&key.id()).is_none());
-        enter("claude-cli", "", &key).expect("enter");
+        enter("claude-cli", "", "nurse", &key).expect("enter");
         let got = entry(&key.id()).expect("entered");
         assert_eq!(got.hive, "claude-cli");
+        assert_eq!(got.role, "nurse");
         assert_eq!(got.pubkey, hex::encode(key.pubkey_bytes()));
         assert!(!got.exited);
         assert_eq!(entered().len(), 1);
@@ -330,19 +358,52 @@ mod tests {
         unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
 
-        assert!(enter_as("sun", "main").is_err(), "an uninstalled hive enters nothing");
+        assert!(enter_as("sun", "main", "nurse").is_err(), "an uninstalled hive enters nothing");
         std::fs::create_dir_all(hum_paths::hives_d_dir()).unwrap();
         std::fs::write(hum_paths::hive_installation("sun"), "").unwrap();
 
-        let first = enter_as("sun", "main").expect("enter");
-        assert_eq!(enter_as("sun", "main").unwrap().hid, first.hid);
-        assert_ne!(enter_as("sun", "requester-ab").unwrap().hid, first.hid);
+        let first = enter_as("sun", "main", "nurse").expect("enter");
+        assert_eq!(enter_as("sun", "main", "nurse").unwrap().hid, first.hid);
+        assert_ne!(enter_as("sun", "requester-ab", "forager").unwrap().hid, first.hid);
         assert_eq!(entry(&first.id()).unwrap().label, "main");
 
         exit(&first.id()).unwrap();
-        assert_eq!(enter_as("sun", "main").unwrap().hid, first.hid, "entering again reenters");
+        assert_eq!(enter_as("sun", "main", "nurse").unwrap().hid, first.hid, "entering again reenters");
         assert!(!entry(&first.id()).unwrap().exited);
-        assert!(enter_as("sun", "../x").is_err());
+        assert!(enter_as("sun", "../x", "nurse").is_err());
+        assert!(enter_as("sun", "main", "../x").is_err());
+
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    }
+
+    #[test]
+    fn another_role_is_another_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let state = TempDir::new().unwrap();
+        let config = TempDir::new().unwrap();
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        std::fs::create_dir_all(hum_paths::hives_d_dir()).unwrap();
+        std::fs::write(hum_paths::hive_installation("sun"), "").unwrap();
+
+        let nurse = enter_as("sun", "main", "nurse").expect("enter");
+        let builder = enter_as("sun", "main", "builder").expect("enter again");
+        assert_ne!(builder.hid, nurse.hid, "a new role is a new key");
+        assert!(entry(&nurse.id()).unwrap().exited, "the old role's key is exited");
+        assert_eq!(entry(&builder.id()).unwrap().role, "builder");
+
+        let back = enter_as("sun", "main", "nurse").expect("enter back");
+        assert_eq!(back.hid, nurse.hid, "a role comes back to its own key");
+        assert!(entry(&builder.id()).unwrap().exited);
+
+        let legacy = mint_bee_key().unwrap();
+        enter("sun", "old", "x", &legacy).unwrap();
+        let mut e = entry(&legacy.id()).unwrap();
+        e.role = String::new();
+        write_entry(&legacy.id(), &e).unwrap();
+        assert_eq!(enter_as("sun", "old", "forager").unwrap().hid, legacy.hid, "a bee entered before roles takes its first");
+        assert_eq!(entry(&legacy.id()).unwrap().role, "forager");
 
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         unsafe { std::env::remove_var("XDG_STATE_HOME") };

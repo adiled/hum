@@ -32,7 +32,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Bee, PetalKind, type Hello, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, PetalKind, Role, type Hello, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
 
 const HIVE_NAME = "anthropic-server";
@@ -40,13 +40,12 @@ const HIVE_NAME = "anthropic-server";
 type SidHandler = (tone: Tone) => void;
 
 const hello: Hello = {
-  roles: ["forager"],
   version: pkg.version,
   propensity: { statefulness: "convention-stateful", richness: "medium", wire: "anthropic/messages" },
   chis: ["hello", "prompt", "cancel", "unfurl", "wilt", "error", "tendril-reach", "tendril-result"],
   source: "https://github.com/adiled/hum/tree/main/hives/anthropic-server",
 };
-const bee = new Bee({ hive: HIVE_NAME, as: "main", hello });
+const bee = new Bee({ hive: HIVE_NAME, as: "main", role: Role.forager, hello });
 const sigils = new Map<string, SidHandler>();
 let nestled = false;
 bee.onNestled(() => {

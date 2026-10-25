@@ -9,7 +9,7 @@
 #   2. build the openai-server bee
 #   3. seed ~/.config/hum/hives/openai-server.json (target user)
 #   4. seed/patch ~/.config/opencode/opencode.json with provider.hum
-#   5. (re)register claude-cli worker + openai-server bees with humnest
+#   5. (re)register the claude-cli nurse + openai-server bees with humnest
 #
 # Env:
 #   HUM_DEV_USER       target user (default: clwnd; same as deploy)

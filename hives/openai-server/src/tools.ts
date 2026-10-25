@@ -1,7 +1,7 @@
 // OpenAI-function → thrum-tool mapping.
 //
 // MCP wire-standard schema field is `inputSchema`; humd forwards
-// this verbatim into the worker bee's MCP catalogue. Claude's mcp
+// this verbatim into the nurse bee's MCP catalogue. Claude's mcp
 // client zod-validates and rejects the entire `tools/list`
 // response if any entry has `inputSchema: null` — so we MUST
 // rename `parameters` and MUST emit at least `{}` when caller

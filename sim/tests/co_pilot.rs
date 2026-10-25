@@ -44,9 +44,9 @@ async fn co_pilot_fanout() {
     let phone = sim.spawn_humd(ensemble::Hid::random_humd()).await;
     sim.wire_unauthenticated(laptop.id, phone.id).expect("wire laptop ↔ phone");
 
-    sim.attach_mock_worker(laptop.id, vec!["claude-haiku-4-5".into()])
+    sim.attach_mock_nurse(laptop.id, vec!["claude-haiku-4-5".into()])
         .await
-        .expect("mock worker attaches to laptop");
+        .expect("mock nurse attaches to laptop");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     sim.attach_observer(phone.id, laptop.id, "hum-X")
