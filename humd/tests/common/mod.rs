@@ -117,6 +117,10 @@ impl Humd {
         self.thrum.inject_tone(cid, tone).await;
     }
 
+    pub fn advisories(&self) -> humd::advise::Book {
+        humd::advise::read(&self._dir.path().join("advisories.json"))
+    }
+
     pub fn wane_of(&self, sid: &str) -> Option<u64> {
         self.wane.snapshot().get(sid).copied()
     }

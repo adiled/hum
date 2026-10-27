@@ -1143,7 +1143,10 @@ enter, a revoked key, an incompatible protocol) and advises on the rest.
 An advisory reaches the bee as a `log` tone whose `fields.advisory` is
 one of these codes, and hum's client raises some itself before a tone
 leaves the bee. humd keeps them per bee in `advisories.json` in the state
-root, and `hum doctor` lists them.
+root, and `hum doctor` lists them. A refusal is kept there too, as
+`refused` with its reason, when the hello names a bee entered on this
+humd, so `hum bee --list` says why a bee that keeps dialling is not
+nestled; that bee is not heard from as having failed to return.
 
 <!-- thrum: advisories -->
 
@@ -1159,6 +1162,7 @@ root, and `hum doctor` lists them.
 | `reconnect-storm` | humd | the bee said hello 10 times within 10 minutes |
 | `did-not-return` | humd | the bee was nestled when humd stopped and had not come back 2 minutes after humd started |
 | `cwd-not-hum` | humd | a prompt's `cwd` is not a `hum://` address, and was dropped |
+| `refused` | humd | humd refused the bee's hello, and why; the bee heard it in the hello's echo |
 
 <!-- /thrum -->
 

@@ -1197,6 +1197,23 @@ impl HumdSink {
         self.advise(client_id, entries);
     }
 
+    fn refuse_hello(&self, client_id: &str, rid: &str, hello: &Value, why: &str) {
+        let named = match ensemble::parse_socket_identity(hello) {
+            ensemble::SocketIdentity::Verified(hid)
+            | ensemble::SocketIdentity::Unsigned(Some(hid)) => Some(hid),
+            _ => None,
+        };
+        if let Some(hid) = named
+            && let Some(entry) = self.bees.entry(&hid)
+        {
+            self.advisories
+                .refused(&hid.to_hex(), &entry.hive, why, thrum_core::now_ms());
+        }
+        self.thrum
+            .thrum_to(client_id, thrumd::echo_tone(rid, false, Some(why)));
+        self.thrum.thrum_close(client_id);
+    }
+
     fn snapshot_bees(&self) {
         let json = {
             let m = self.manifests.read();
@@ -1533,11 +1550,7 @@ impl ToneSink for HumdSink {
                             "thrum.hello.proto-missing — hello declares no protoVersion. \
                              Not registered, not announced to the ensemble."
                         );
-                        self.thrum.thrum_to(
-                            client_id,
-                            thrumd::echo_tone(&rid, false, Some("protoVersion is required")),
-                        );
-                        self.thrum.thrum_close(client_id);
+                        self.refuse_hello(client_id, &rid, &tone, "protoVersion is required");
                         return;
                     }
                     Some(declared) => {
@@ -1558,15 +1571,7 @@ impl ToneSink for HumdSink {
                                     current = thrum_core::THRUM_VERSION,
                                     "thrum.hello.proto-incompatible — rejected, not announced"
                                 );
-                                self.thrum.thrum_to(
-                                    client_id,
-                                    thrumd::echo_tone(
-                                        &rid,
-                                        false,
-                                        Some("protoVersion incompatible"),
-                                    ),
-                                );
-                                self.thrum.thrum_close(client_id);
+                                self.refuse_hello(client_id, &rid, &tone, "protoVersion incompatible");
                                 return;
                             }
                         }
@@ -1587,9 +1592,7 @@ impl ToneSink for HumdSink {
                         "thrum.hello.hive-unrecognised — a bee is understood only through a hive \
                          installed here (`hum hive <ref> install`). Not registered, not announced."
                     );
-                    self.thrum
-                        .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                    self.thrum.thrum_close(client_id);
+                    self.refuse_hello(client_id, &rid, &tone, why);
                     return;
                 }
 
@@ -1597,9 +1600,7 @@ impl ToneSink for HumdSink {
                 if client_id != "ensemble" && role.is_none() {
                     let why = "hello names no role: forager | nurse | builder | attendant";
                     error!(client_id, hive = %hive, reason = why, "thrum.hello.role-missing — Not registered, not announced.");
-                    self.thrum
-                        .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                    self.thrum.thrum_close(client_id);
+                    self.refuse_hello(client_id, &rid, &tone, why);
                     return;
                 }
 
@@ -1635,9 +1636,7 @@ impl ToneSink for HumdSink {
                                 "thrum.hello.not-entered — a bee nestles only by signing as a key \
                                  its hive entered for its role (`hum bee enter --hive <hive> --role <role>`). Not registered, not announced."
                             );
-                            self.thrum
-                                .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                            self.thrum.thrum_close(client_id);
+                            self.refuse_hello(client_id, &rid, &tone, why);
                             return;
                         }
                     }

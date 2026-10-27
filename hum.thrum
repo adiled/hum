@@ -675,3 +675,7 @@ DOC the bee was nestled when humd stopped and had not come back 2 minutes after 
 ADVISORY cwd-not-hum
 BY humd
 DOC a prompt's `cwd` is not a `hum://` address, and was dropped
+
+ADVISORY refused
+BY humd
+DOC humd refused the bee's hello, and why; the bee heard it in the hello's echo

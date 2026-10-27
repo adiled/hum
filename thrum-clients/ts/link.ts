@@ -64,6 +64,7 @@ export const AdvisoryCode = {
   reconnectStorm: "reconnect-storm",
   didNotReturn: "did-not-return",
   cwdNotHum: "cwd-not-hum",
+  refused: "refused",
 } as const;
 export type AdvisoryCodeT = (typeof AdvisoryCode)[keyof typeof AdvisoryCode];
 

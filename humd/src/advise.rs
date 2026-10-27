@@ -164,6 +164,24 @@ impl Advisories {
         if let Some(entry) = self.unreturned.lock().remove(bee) {
             out.push(entry);
         }
+        out.extend(self.storm(bee, hive, now_ms));
+        out
+    }
+
+    pub fn refused(&self, bee: &str, hive: &str, why: &str, now_ms: i64) -> Vec<Entry> {
+        self.returned.lock().insert(bee.to_string());
+        let mut fields = Map::new();
+        fields.insert("reason".into(), json!(why));
+        let message = format!("humd refused its hello: {why}");
+        let mut out: Vec<Entry> = self
+            .note(bee, hive, AdvisoryCode::Refused, message, fields, now_ms)
+            .into_iter()
+            .collect();
+        out.extend(self.storm(bee, hive, now_ms));
+        out
+    }
+
+    fn storm(&self, bee: &str, hive: &str, now_ms: i64) -> Option<Entry> {
         let storm = {
             let mut hellos = self.hellos.lock();
             let seen = hellos.entry(bee.to_string()).or_default();
@@ -183,11 +201,9 @@ impl Advisories {
                  being dropped by something, or is not waiting between dials",
                 STORM_WINDOW.as_secs() / 60
             );
-            if let Some(entry) = self.note(bee, hive, AdvisoryCode::ReconnectStorm, message, fields, now_ms) {
-                out.push(entry);
-            }
+            return self.note(bee, hive, AdvisoryCode::ReconnectStorm, message, fields, now_ms);
         }
-        out
+        None
     }
 
     pub fn unreturned(&self, now_ms: i64) -> Vec<String> {
@@ -274,6 +290,22 @@ mod tests {
         let out = ads.hello("bee_gone", "h", T + 3);
         assert_eq!(out[0].code, "did-not-return");
         assert!(ads.hello("bee_gone", "h", T + 4).is_empty());
+    }
+
+    #[test]
+    fn a_refused_hello_says_why_and_counts_as_coming_back() {
+        let ads = Advisories::default();
+        ads.expect(HashMap::from([("bee_old".to_string(), "h".to_string())]));
+        let out = ads.refused("bee_old", "h", "hello names no role", T);
+        assert_eq!(out[0].code, "refused");
+        assert_eq!(out[0].fields["reason"], "hello names no role");
+        assert!(ads.refused("bee_old", "h", "hello names no role", T + 1).is_empty());
+        assert!(ads.unreturned(T + 2).is_empty());
+        for i in 0..STORM_HELLOS {
+            ads.refused("bee_old", "h", "hello names no role", T + 3 + i as i64);
+        }
+        let codes: Vec<String> = ads.book()["bee_old"].advisories.iter().map(|e| e.code.clone()).collect();
+        assert_eq!(codes, vec!["refused".to_string(), "reconnect-storm".to_string()]);
     }
 
     #[test]

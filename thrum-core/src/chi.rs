@@ -86,6 +86,7 @@ pub enum AdvisoryCode {
     ReconnectStorm,
     DidNotReturn,
     CwdNotHum,
+    Refused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
