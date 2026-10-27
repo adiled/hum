@@ -50,6 +50,37 @@ use uuid::Uuid;
 
 use hum_nest::{Propensity, Cell, Egg, Nurse};
 
+pub const DEFAULT_MODELS: &[&str] = &[
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-5-5",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+];
+
+pub fn advertised_models() -> Vec<String> {
+    let named: Vec<String> = std::env::var("CLAUDE_MODELS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
+    if named.is_empty() {
+        DEFAULT_MODELS.iter().map(|m| m.to_string()).collect()
+    } else {
+        named
+    }
+}
+
 pub fn claude_program() -> Result<std::path::PathBuf> {
     if let Some(named) = std::env::var_os("CLAUDE_CLI_PATH").filter(|v| !v.is_empty()) {
         return Ok(named.into());

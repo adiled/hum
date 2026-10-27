@@ -256,6 +256,12 @@ orchd runs with the service manager's \fBPATH\fR, not your shell's. Set it
 when installing (\fBCLAUDE_CLI_PATH=... hum hive claude-cli install\fR) to
 name another.
 .TP
+.B CLAUDE_MODELS
+The models the claude-cli nurse advertises, comma-separated. Unset or
+empty, it advertises its built-in list. Set it when installing
+(\fBCLAUDE_MODELS=claude-opus-5-5,claude-sonnet-5-5 hum hive claude-cli install\fR);
+humd routes a prompt to the nurse only for a model it names.
+.TP
 .B HUM_LOG_LEVEL
 What humd and the nurses log, as a tracing filter: \fBinfo\fR when unset,
 or \fBdebug\fR, \fBtrace\fR, or a filter per target such as

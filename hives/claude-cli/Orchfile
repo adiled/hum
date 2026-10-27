@@ -1,5 +1,6 @@
 ARG HUM_SRC=
 ARG CLAUDE_CLI_PATH=
+ARG CLAUDE_MODELS=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -8,4 +9,5 @@ ONESHOT true
 SERVICE claude-cli
 RUN ${HUM_SRC}/target/release/claude-cli-nurse
 ENV CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH}
+ENV CLAUDE_MODELS=${CLAUDE_MODELS}
 RESTART always
