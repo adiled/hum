@@ -248,8 +248,18 @@ descriptions reach every model here. The setting also lives in
 that key.
 .TP
 .B CLAUDE_CLI_PATH
-Path to the claude binary a nurse's cells spawn. Default \fBclaude\fR on
-\fBPATH\fR.
+Path to the claude binary a nurse's cells spawn. Unset or empty, the
+nurse looks for \fBclaude\fR on \fBPATH\fR, then in \fB~/.local/bin\fR,
+\fB~/.cargo/bin\fR, \fB~/.bun/bin\fR, \fB/opt/homebrew/bin\fR,
+\fB/usr/local/bin\fR and \fB~/.claude/local\fR, since a nurse under
+orchd runs with the service manager's \fBPATH\fR, not your shell's. Set it
+when installing (\fBCLAUDE_CLI_PATH=... hum hive claude-cli install\fR) to
+name another.
+.TP
+.B HUM_LOG_LEVEL
+What humd and the nurses log, as a tracing filter: \fBinfo\fR when unset,
+or \fBdebug\fR, \fBtrace\fR, or a filter per target such as
+\fBinfo,humd=trace\fR.
 .TP
 .B XDG_RUNTIME_DIR
 Where the per-boot runtime files live: the thrum socket, the http

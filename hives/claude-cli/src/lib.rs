@@ -50,6 +50,21 @@ use uuid::Uuid;
 
 use hum_nest::{Propensity, Cell, Egg, Nurse};
 
+pub fn claude_program() -> Result<std::path::PathBuf> {
+    if let Some(named) = std::env::var_os("CLAUDE_CLI_PATH").filter(|v| !v.is_empty()) {
+        return Ok(named.into());
+    }
+    let mut dirs = hum_paths::program_dirs();
+    dirs.push(hum_paths::home().join(".claude/local"));
+    hum_paths::find_program_in("claude", &dirs).ok_or_else(|| {
+        let looked: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        anyhow::anyhow!(
+            "no claude program in {}; install Claude Code, or name it in CLAUDE_CLI_PATH",
+            looked.join(":")
+        )
+    })
+}
+
 pub const HOST_TOOLS: &[&str] = &[
     "Bash", "BashOutput", "KillShell", "KillBash",
     "Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
@@ -216,7 +231,7 @@ impl Nurse for ClaudeCliNurse {
             None if path.exists() => Session::Resume(&derived),
             None => Session::Begin(&derived),
         };
-        let cli = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
+        let cli = claude_program()?;
         let argv = build_argv(&spec, session);
         let env = build_env(&spec);
         let mut grower = stream::Grower::new(spec.prompt.trellis.is_some());
@@ -232,7 +247,7 @@ impl Nurse for ClaudeCliNurse {
         spec.bounds.apply_pre_exec(cmd.as_std_mut())
             .with_context(|| "apply resource limits")?;
 
-        let mut child = cmd.group_spawn().with_context(|| format!("spawn {cli}"))?;
+        let mut child = cmd.group_spawn().with_context(|| format!("spawn {}", cli.display()))?;
         let pid = child.inner().id();
         let mut stdin = child.inner().stdin.take().context("missing stdin")?;
         let stdout = child.inner().stdout.take().context("missing stdout")?;

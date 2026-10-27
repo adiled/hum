@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
 
     hum_paths::init();
     let filter = EnvFilter::try_from_env("HUM_LOG_LEVEL")
-        .unwrap_or_else(|_| EnvFilter::new("trace"));
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)

@@ -320,6 +320,43 @@ pub fn hum_bin(name: &str) -> PathBuf {
     local_bin_dir().join(name)
 }
 
+pub fn program_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = set("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    for dir in [
+        local_bin_dir(),
+        home().join(".cargo/bin"),
+        home().join(".bun/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ] {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+pub fn find_program_in(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().map(|d| d.join(name)).find(|p| is_executable(p))
+}
+
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    find_program_in(name, &program_dirs())
+}
+
+fn is_executable(p: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::metadata(p) else { return false };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.is_file() && meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    meta.is_file()
+}
+
 pub fn foreign_hive_cache(org: &str, repo: &str, branch: &str) -> PathBuf {
     cache_dir()
         .join(layout::HIVES_SUBDIR)

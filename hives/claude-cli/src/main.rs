@@ -7,7 +7,7 @@
 //!
 //! Env knobs:
 //!   HUM_THRUM_SOCK     thrum socket (default `$XDG_STATE_HOME/hum/thrum.sock`)
-//!   CLAUDE_CLI_PATH    claude binary (default `claude` on PATH)
+//!   CLAUDE_CLI_PATH    claude binary (default `claude`, by hum_paths::program_dirs and ~/.claude/local)
 //!   CLAUDE_MODELS      comma-separated models advertised on hello
 //!                       (default: claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5)
 
@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use hum_nest::{serve_nurse, NurseAdvert};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -27,6 +28,11 @@ async fn main() -> Result<()> {
         .with_target(false)
         .compact()
         .init();
+
+    match claude_cli::claude_program() {
+        Ok(cli) => info!(claude = %cli.display(), "claude-cli.program"),
+        Err(e) => warn!("claude-cli.program-missing — {e}"),
+    }
 
     let nurse = Arc::new(claude_cli::ClaudeCliNurse);
 

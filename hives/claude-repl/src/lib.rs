@@ -77,6 +77,21 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     argv
 }
 
+pub fn claude_program() -> Result<std::path::PathBuf> {
+    if let Some(named) = std::env::var_os("CLAUDE_CLI_PATH").filter(|v| !v.is_empty()) {
+        return Ok(named.into());
+    }
+    let mut dirs = hum_paths::program_dirs();
+    dirs.push(hum_paths::home().join(".claude/local"));
+    hum_paths::find_program_in("claude", &dirs).ok_or_else(|| {
+        let looked: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        anyhow::anyhow!(
+            "no claude program in {}; install Claude Code, or name it in CLAUDE_CLI_PATH",
+            looked.join(":")
+        )
+    })
+}
+
 #[async_trait]
 impl Nurse for ClaudeReplNurse {
     fn ephemeral(&self) -> bool {
@@ -84,7 +99,7 @@ impl Nurse for ClaudeReplNurse {
     }
 
     async fn raise(&self, spec: Egg) -> Result<Cell> {
-        let cli = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
+        let cli = claude_program()?;
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -111,7 +126,7 @@ impl Nurse for ClaudeReplNurse {
             cmd.arg(a);
         }
 
-        let mut child = pair.slave.spawn_command(cmd).context("pty spawn")?;
+        let mut child = pair.slave.spawn_command(cmd).with_context(|| format!("pty spawn {}", cli.display()))?;
         let pid = child.process_id();
         drop(pair.slave);
         if let Some(pid) = pid
