@@ -1,4 +1,20 @@
+# ollama-server: Ollama's API in front of humd, and a nurse that grows
+# blooms through Ollama. Set an ARG in the environment of
+# `hum hive ollama-server install` to change it, for example
+# OLLAMA_NURSE_MODELS=llama3.2,qwen3:4b. An empty ARG keeps the bee's own
+# default; the README says what each one is. The forager listens on
+# 14624 and the nurse calls Ollama on its own port, 11434, so both run
+# beside a stock Ollama.
+
 ARG HUM_SRC=
+ARG OLLAMA_SERVER_HOST=
+ARG OLLAMA_SERVER_PORT=
+ARG OLLAMA_SERVER_MODELS=
+ARG OLLAMA_SERVER_LABEL=
+ARG OLLAMA_NURSE_URL=
+ARG OLLAMA_NURSE_MODEL=
+ARG OLLAMA_NURSE_MODELS=
+ARG OLLAMA_NURSE_CTX=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -6,10 +22,16 @@ ONESHOT true
 
 SERVICE ollama-server
 RUN ${HUM_SRC}/target/release/ollama-server
+ENV OLLAMA_SERVER_HOST=${OLLAMA_SERVER_HOST}
+ENV OLLAMA_SERVER_PORT=${OLLAMA_SERVER_PORT}
+ENV OLLAMA_SERVER_MODELS=${OLLAMA_SERVER_MODELS}
+ENV OLLAMA_SERVER_LABEL=${OLLAMA_SERVER_LABEL}
 RESTART always
 
 SERVICE ollama-nurse
 RUN ${HUM_SRC}/target/release/ollama-nurse
-ENV OLLAMA_NURSE_MODEL=smollm:1.7b
-ENV OLLAMA_NURSE_MODELS=smollm:1.7b
+ENV OLLAMA_NURSE_URL=${OLLAMA_NURSE_URL}
+ENV OLLAMA_NURSE_MODEL=${OLLAMA_NURSE_MODEL}
+ENV OLLAMA_NURSE_MODELS=${OLLAMA_NURSE_MODELS}
+ENV OLLAMA_NURSE_CTX=${OLLAMA_NURSE_CTX}
 RESTART always

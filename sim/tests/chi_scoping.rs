@@ -1,8 +1,9 @@
 //! Chi-scoped delivery.
 //!
 //! A bee that declares `chis` in its hello gets only those from a
-//! broadcast. One that declares nothing still gets everything, because
-//! every bee written before this field existed sends an empty set.
+//! broadcast under a sid it holds. One that declares nothing still gets
+//! everything, because every bee written before this field existed sends
+//! an empty set.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,12 @@ fn chis_of(tones: &[Value]) -> Vec<&str> {
         .collect()
 }
 
+async fn holding(humd: &SimHumd, cid: &str, sid: &str) {
+    humd.thrum
+        .inject_tone(cid, serde_json::json!({"chi": "attach", "sid": sid}))
+        .await;
+}
+
 async fn spawn() -> (Sim, Arc<SimHumd>) {
     let _ = tracing_subscriber::fmt::try_init();
     let sim = Sim::new();
@@ -68,6 +75,7 @@ async fn a_scoped_client_does_not_receive_an_undeclared_chi() {
     humd.thrum
         .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt"]))))
         .await;
+    holding(&humd, &cid, "sess-1").await;
     humd.thrum
         .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))
         .await;
@@ -90,6 +98,7 @@ async fn a_scoped_client_receives_a_declared_chi() {
     humd.thrum
         .inject_tone(&cid, humd.signed_hello(base_hello(Some(&["prompt", "unfurl"]))))
         .await;
+    holding(&humd, &cid, "sess-1").await;
 
     humd.thrum
         .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))
@@ -111,6 +120,7 @@ async fn a_client_that_declared_nothing_still_receives_everything() {
     let cid = hum_identity::HumId::mint().to_string();
     let mut rx = humd.thrum.register_synthetic(cid.clone());
     humd.thrum.inject_tone(&cid, humd.signed_hello(base_hello(None))).await;
+    holding(&humd, &cid, "sess-1").await;
 
     humd.thrum
         .inject_tone("ensemble", peer_reply("unfurl", "sess-1"))

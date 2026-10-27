@@ -1,6 +1,7 @@
 //! An MCP server for web2's tests: four tools, over stdio, or over
-//! streamable HTTP with `--http`, printing the port it listens on, and with
-//! `--token <t>` refusing a request whose bearer is not `t`.
+//! streamable HTTP with `--http`, printing the port it listens on. With
+//! `--token <t>` it refuses a request whose bearer is not `t`, and over
+//! stdio it does not start unless `$MOCK_TOKEN` is `t`.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -53,12 +54,17 @@ impl Mock {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let token = args.iter().position(|a| a == "--token").and_then(|i| args.get(i + 1)).cloned();
     if !args.iter().any(|a| a == "--http") {
+        if let Some(t) = &token
+            && std::env::var("MOCK_TOKEN").ok().as_ref() != Some(t)
+        {
+            anyhow::bail!("$MOCK_TOKEN is not the token");
+        }
         let running = Mock.serve(rmcp::transport::stdio()).await?;
         running.waiting().await?;
         return Ok(());
     }
-    let token = args.iter().position(|a| a == "--token").and_then(|i| args.get(i + 1)).cloned();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let base = format!("http://{}", listener.local_addr()?);
     let service = StreamableHttpService::new(|| Ok(Mock), LocalSessionManager::default().into(), StreamableHttpServerConfig::default());

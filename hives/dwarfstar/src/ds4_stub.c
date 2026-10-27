@@ -105,11 +105,11 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
         size_t n = strcspn(at, " ");
         size_t step = n + (at[n] == ' ' ? 1 : 0);
         if (atomic_load(&bridge->cancelled)) {
-            wilt->reason = "cancelled";
+            wilt->reason = "cancel";
             return 0;
         }
         if (wilt->tokens_out >= max_tokens) {
-            wilt->reason = "length";
+            wilt->reason = "max_tokens";
             return 0;
         }
         on_piece(user, at, step);

@@ -2,10 +2,11 @@
 //!
 //! Tokens live in one file, `secrets/credentials.json` in web2's state
 //! directory, mode 0600 in a 0700 directory, written whole and renamed into
-//! place. `secrets/` is the directory a builder's shell is kept out of. A token is never put in
-//! an environment, never logged, and never answered back. The serving bee
-//! reads the file again whenever it changes, so `web2 login` in a terminal
-//! takes effect on the next call without a restart.
+//! place. That keeps them from other users only: any process of the user
+//! web2 runs as can read them, a builder's shell among them. A token is
+//! never put in an environment, never logged, and never answered back. The
+//! serving bee reads the file again whenever it changes, so `web2 login` in
+//! a terminal takes effect on the next call without a restart.
 //!
 //! A token is stored by `web2 login <service>` (typed at a prompt, or
 //! piped in), or read from the environment web2 runs in when the config

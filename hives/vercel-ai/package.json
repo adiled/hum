@@ -13,15 +13,18 @@
     "dist/"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "test": "tsup && bun test"
   },
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/provider": "^3.0.8"
   },
   "devDependencies": {
+    "@types/node": "^22.19.17",
+    "ai": "^6.0.315",
     "tsup": "^8.5.1",
     "typescript": "^5.7.0",
-    "@types/node": "^22.19.17"
+    "zod": "^4.6.7"
   }
 }

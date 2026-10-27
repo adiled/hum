@@ -1,327 +1,288 @@
+// WiFi Direct: find the phones that run this hive, form a group with one,
+// and keep a link to each phone in it. The bee advertises itself as a
+// DNS-SD service, _hum._tcp, and asks to connect only to a device that
+// advertises it. Once a group forms, the group owner listens on the group
+// address and a client dials the owner there; the client dials again
+// while the group lasts. A link is one TCP connection carrying the
+// stream both ways, known by its <ip>:<port>.
+
 package hum.hive.wifip2p
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pDeviceList
-import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest
 import android.os.Build
+import android.os.Looper
 import android.util.Log
-import kotlinx.coroutines.*
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.io.Closeable
+import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.PrintWriter
+import java.util.concurrent.ConcurrentHashMap
 
-/**
- * WiFi Direct peer-to-peer group management.
- *
- * Handles:
- *   - Service discovery (Bonjour-style _hum._tcp)
- *   - Group formation (GO negotiation)
- *   - TCP server on p2p0 interface (Group Owner side)
- *   - TCP client connection (client side)
- *   - Peer lifecycle tracking
- */
 class P2pManager(
     private val context: Context,
     private val scope: CoroutineScope,
     private val config: Config,
 ) {
-    companion object {
-        const val TAG = "HumP2P"
-        const val DEFAULT_PORT = 4377
-        const val SERVICE_TYPE = "_hum._tcp"
-    }
-
     data class Config(
-        val port: Int = DEFAULT_PORT,
-        val serviceType: String = SERVICE_TYPE,
+        val port: Int = 4377,
         val goIntent: Int = 8,
+        val serviceType: String = "_hum._tcp",
     )
 
-    // Callbacks
-    var onPeerConnected: ((peerId: String, reader: BufferedReader, writer: PrintWriter) -> Unit)? = null
-    var onPeerDisconnected: ((peerId: String) -> Unit)? = null
-    var onPeerFound: ((device: WifiP2pDevice) -> Unit)? = null
-    var onGroupFormed: ((isGO: Boolean, groupIp: String) -> Unit)? = null
+    var onLine: (peer: String, host: String, line: String) -> Unit = { _, _, _ -> }
+    var onGone: (peer: String) -> Unit = {}
 
-    private var p2pManager: WifiP2pManager? = null
-    private var p2pChannel: WifiP2pManager.Channel? = null
-    private var isGO = false
-    private var groupIp: String? = null
+    private class Peer(val socket: Socket, val out: Channel<Tone>)
 
-    private var serverSocket: ServerSocket? = null
-    private var serverJob: Job? = null
-    private val activePeers = mutableMapOf<String, Pair<BufferedReader, PrintWriter>>()
-    private var receiverRegistered = false
+    private val manager: WifiP2pManager? = context.getSystemService(WifiP2pManager::class.java)
+    private var channel: WifiP2pManager.Channel? = null
+    private val peers = ConcurrentHashMap<String, Peer>()
+    private val open = ConcurrentHashMap.newKeySet<Closeable>()
+    private var discovery: Job? = null
+    private var group: Job? = null
+    @Volatile private var formed = false
+    private var connecting = false
 
-    /** Initialize P2P manager and register broadcast receiver. */
-    fun init(): Boolean {
-        p2pManager = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
-            ?: return false
-        p2pChannel = p2pManager?.initialize(context, scope.monitor, null)
-            ?: return false
-
-        // Register broadcast receiver for P2P events
-        val intentFilter = IntentFilter().apply {
-            addAction("android.net.wifi.p2p.STATE_CHANGED")
-            addAction("android.net.wifi.p2p.PEERS_CHANGED")
-            addAction("android.net.wifi.p2p.CONNECTION_INFO_CHANGED")
-            addAction("android.net.wifi.p2p.GROUP_INFO_CHANGED")
-            addAction("android.net.wifi.p2p.GROUP_REMOVED")
-            addAction("android.net.wifi.p2p.DISCOVERY_CHANGE")
+    fun permitted(): Boolean {
+        val needs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
         }
-        context.registerReceiver(p2pReceiver, intentFilter, Context.RECEIVER_EXPORTED)
-        receiverRegistered = true
+        return ContextCompat.checkSelfPermission(context, needs) == PackageManager.PERMISSION_GRANTED
+    }
+
+    @SuppressLint("MissingPermission")
+    fun start(): Boolean {
+        val manager = manager ?: return false
+        if (!permitted()) return false
+        val channel = manager.initialize(context, Looper.getMainLooper()) {
+            Log.w(TAG, "p2p.channel.lost")
+        } ?: return false
+        this.channel = channel
+        val filter = IntentFilter().apply {
+            addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+        }
+        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        manager.setDnsSdResponseListeners(
+            channel,
+            { _, type, device -> if (type?.startsWith(config.serviceType) == true) found(device) },
+            null,
+        )
+        advertise()
+        discovery = scope.launch(Dispatchers.Main) {
+            while (isActive) {
+                if (!formed) {
+                    connecting = false
+                    discover()
+                }
+                delay(REDISCOVER_MS)
+            }
+        }
         return true
     }
 
-    /** Start service discovery. */
-    fun startDiscovery() {
-        val manager = p2pManager ?: return
-        val channel = p2pChannel ?: return
+    fun send(peer: String, tone: Tone) {
+        val to = peers[peer] ?: return
+        if (to.out.trySend(tone).isFailure) runCatching { to.socket.close() }
+    }
 
-        // Register a local service (Bonjour _hum._tcp) so peers can discover us
-        manager.requestPeers(channel, null)
+    @SuppressLint("MissingPermission")
+    fun stop() {
+        discovery?.cancel()
+        disband()
+        val manager = manager ?: return
+        val channel = channel ?: return
+        runCatching { context.unregisterReceiver(receiver) }
+        manager.clearServiceRequests(channel, null)
+        manager.clearLocalServices(channel, null)
+        manager.stopPeerDiscovery(channel, null)
+        manager.removeGroup(channel, null)
+        channel.close()
+    }
 
-        // Start peer discovery
-        manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                Log.i(TAG, "P2P discovery started")
-            }
-            override fun onFailure(reason: Int) {
-                Log.w(TAG, "P2P discovery failed: reason=$reason")
-            }
+    @SuppressLint("MissingPermission")
+    private fun advertise() {
+        val manager = manager ?: return
+        val channel = channel ?: return
+        val info = WifiP2pDnsSdServiceInfo.newInstance("hum", config.serviceType, mapOf("port" to "${config.port}"))
+        manager.clearLocalServices(channel, done("clearLocalServices") {
+            manager.addLocalService(channel, info, done("addLocalService"))
         })
-
-        // Register service for Bonjour-style discovery
-        val serviceRequest = WifiP2pDevice().apply {
-            // We register our service type so peers see us
-        }
-        // In Android 13+, use discoverTransmitDiscoveryChannel for faster discovery
+        manager.clearServiceRequests(channel, done("clearServiceRequests") {
+            manager.addServiceRequest(channel, WifiP2pDnsSdServiceRequest.newInstance(), done("addServiceRequest"))
+        })
     }
 
-    /** Stop discovery. */
-    fun stopDiscovery() {
-        p2pManager?.stopPeerDiscovery(p2pChannel, null)
+    @SuppressLint("MissingPermission")
+    private fun discover() {
+        val manager = manager ?: return
+        val channel = channel ?: return
+        manager.discoverServices(channel, done("discoverServices"))
     }
 
-    /** Connect to a discovered peer. */
-    fun connectToPeer(device: WifiP2pDevice) {
-        val manager = p2pManager ?: return
-        val channel = p2pChannel ?: return
-
-        val config = WifiP2pManager.WifiP2pConfig().apply {
+    @SuppressLint("MissingPermission")
+    private fun found(device: WifiP2pDevice) {
+        val manager = manager ?: return
+        val channel = channel ?: return
+        if (formed || connecting) return
+        connecting = true
+        Log.i(TAG, "p2p.found ${device.deviceName} ${device.deviceAddress}")
+        val asked = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
-            groupOwnerIntent = this@P2pManager.config.goIntent
+            groupOwnerIntent = config.goIntent
         }
-        manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                Log.i(TAG, "P2P connect initiated to ${device.deviceAddress}")
-            }
+        manager.connect(channel, asked, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() = Unit
             override fun onFailure(reason: Int) {
-                Log.w(TAG, "P2P connect failed: reason=$reason")
+                connecting = false
+                Log.w(TAG, "p2p.connect.failed reason=$reason")
             }
         })
     }
 
-    /** Create a group as Group Owner. */
-    fun createGroup() {
-        val manager = p2pManager ?: return
-        val channel = p2pChannel ?: return
+    private fun connected(info: WifiP2pInfo?) {
+        val owner = info?.groupOwnerAddress
+        if (info == null || !info.groupFormed || owner == null) {
+            if (formed) Log.i(TAG, "p2p.group.gone")
+            formed = false
+            disband()
+            return
+        }
+        if (formed) return
+        formed = true
+        connecting = false
+        Log.i(TAG, "p2p.group.formed owner=${info.isGroupOwner} at=${owner.hostAddress}")
+        group = scope.launch { if (info.isGroupOwner) serve(owner) else reach(owner) }
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            manager.createLocalP2pGroup(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() = Log.i(TAG, "P2P group created")
-                override fun onFailure(reason: Int) = Log.w(TAG, "P2P group creation failed: $reason")
-            })
-        } else {
-            // Legacy: no direct group creation, rely on connect()
-            Log.w(TAG, "Direct group creation not supported on this API level")
+    private fun disband() {
+        group?.cancel()
+        group = null
+        for (closing in open) runCatching { closing.close() }
+        open.clear()
+        for (peer in peers.values) runCatching { peer.socket.close() }
+    }
+
+    private suspend fun serve(at: InetAddress) {
+        try {
+            val server = ServerSocket().also { open += it }
+            server.reuseAddress = true
+            server.bind(InetSocketAddress(at, config.port), BACKLOG)
+            Log.i(TAG, "p2p.listening ${at.hostAddress}:${config.port}")
+            while (currentCoroutineContext().isActive) link(server.accept())
+        } catch (e: IOException) {
+            Log.i(TAG, "p2p.listen.stopped ${e.message}")
         }
     }
 
-    /** Remove the current group. */
-    fun removeGroup() {
-        p2pManager?.removeGroup(p2pChannel, null)
-        stopServer()
-        isGO = false
-        groupIp = null
-    }
-
-    /** Start TCP server on the P2P interface (GO side). */
-    private fun startServer(ip: String) {
-        stopServer()
-        serverJob = scope.launch {
+    private suspend fun reach(owner: InetAddress) {
+        var tries = 0
+        while (formed && currentCoroutineContext().isActive) {
+            val socket = Socket().also { open += it }
             try {
-                val addr = InetAddress.getByName(ip)
-                serverSocket = ServerSocket(config.port, 10, addr)
-                Log.i(TAG, "P2P TCP server listening on $ip:${config.port}")
-
-                while (isActive) {
-                    val client = serverSocket!!.accept()
-                    launch {
-                        handlePeerConnection(client)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "P2P server stopped: ${e.message}")
+                socket.connect(InetSocketAddress(owner, config.port), DIAL_MS)
+                tries = 0
+                link(socket).join()
+            } catch (e: IOException) {
+                Log.d(TAG, "p2p.dial.failed ${e.message}")
+            } finally {
+                open -= socket
+                runCatching { socket.close() }
             }
+            delay(ThrumClient.backoff(tries++))
         }
     }
 
-    private fun stopServer() {
-        serverJob?.cancel()
-        serverJob = null
-        try { serverSocket?.close() } catch (_: Exception) {}
-        serverSocket = null
-    }
-
-    /** Connect to GO as client (client side). */
-    private fun connectToGO(ip: String) {
+    private fun link(socket: Socket): Job {
+        socket.keepAlive = true
+        socket.tcpNoDelay = true
+        val host = socket.inetAddress.hostAddress ?: "?"
+        val id = "$host:${socket.port}"
+        val out = Channel<Tone>(OUTBOX)
+        peers[id] = Peer(socket, out)
+        Log.i(TAG, "p2p.link $id")
         scope.launch {
             try {
-                val socket = Socket(ip, config.port)
-                Log.i(TAG, "P2P client connected to $ip:${config.port}")
-                handlePeerConnection(socket)
-            } catch (e: Exception) {
-                Log.w(TAG, "P2P client connect failed: ${e.message}")
-            }
-        }
-    }
-
-    /** Handle a single P2P TCP connection. */
-    private fun handlePeerConnection(socket: Socket) {
-        try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-            val writer = PrintWriter(socket.getOutputStream(), true)
-            // Use socket's remote address as peer ID (stable enough)
-            val peerId = "${socket.inetAddress.hostAddress}:${socket.port}"
-            activePeers[peerId] = reader to writer
-            onPeerConnected?.invoke(peerId, reader, writer)
-
-            // Read loop — tones from the P2P peer
-            scope.launch {
-                try {
-                    while (isActive) {
-                        val line = reader.readLine() ?: break
-                        if (line.isBlank()) continue
-                        onP2pToneReceived(peerId, line)
-                    }
-                } catch (_: Exception) {
-                } finally {
-                    activePeers.remove(peerId)
-                    onPeerDisconnected?.invoke(peerId)
-                    try { socket.close() } catch (_: Exception) {}
+                val to = socket.getOutputStream()
+                for (tone in out) {
+                    to.write(line(tone))
+                    to.flush()
                 }
+            } catch (_: IOException) {
+            } finally {
+                runCatching { socket.close() }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "P2P connection error: ${e.message}")
+        }
+        return scope.launch {
+            try {
+                val lines = Lines(socket.getInputStream())
+                while (true) onLine(id, host, lines.next() ?: break)
+            } catch (_: IOException) {
+            } finally {
+                peers.remove(id)
+                out.close()
+                runCatching { socket.close() }
+                Log.i(TAG, "p2p.unlink $id")
+                onGone(id)
+            }
         }
     }
 
-    /** Send a tone over P2P to a specific peer. */
-    fun sendToPeer(peerId: String, tone: String) {
-        val pair = activePeers[peerId]
-        if (pair != null) {
-            pair.second.println(tone)
-            pair.second.flush()
+    private fun done(what: String, then: () -> Unit = {}) = object : WifiP2pManager.ActionListener {
+        override fun onSuccess() = then()
+        override fun onFailure(reason: Int) {
+            Log.w(TAG, "p2p.$what.failed reason=$reason")
         }
     }
 
-    /** Broadcast tone to all connected peers. */
-    fun broadcastTone(tone: String) {
-        for ((_, pair) in activePeers) {
-            pair.second.println(tone)
-            pair.second.flush()
-        }
-    }
-
-    /** Called when a P2P tone arrives from the radio. */
-    var onP2pToneReceived: (peerId: String, line: String) -> Unit = { _, _ -> }
-
-    /** Cleanup all connections. */
-    fun cleanup() {
-        stopDiscovery()
-        removeGroup()
-        stopServer()
-        for ((_, pair) in activePeers) {
-            try { pair.first.close() } catch (_: Exception) {}
-            try { pair.second.close() } catch (_: Exception) {}
-        }
-        activePeers.clear()
-        if (receiverRegistered) {
-            try { context.unregisterReceiver(p2pReceiver) } catch (_: Exception) {}
-            receiverRegistered = false
-        }
-    }
-
-    // ── Broadcast receiver for P2P events ─────────────────────
-
-    private val p2pReceiver = object : BroadcastReceiver() {
+    private val receiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
         override fun onReceive(ctx: Context, intent: Intent) {
             when (intent.action) {
-                "android.net.wifi.p2p.STATE_CHANGED" -> {
-                    val enabled = intent.getBooleanExtra(
-                        WifiP2pManager.EXTRA_WIFI_STATE, false
-                    )
-                    Log.i(TAG, "WiFi P2P enabled=$enabled")
+                WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
+                    val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
+                    Log.i(TAG, "p2p.enabled=${state == WifiP2pManager.WIFI_P2P_STATE_ENABLED}")
+                    if (state == WifiP2pManager.WIFI_P2P_STATE_ENABLED) advertise()
                 }
-                "android.net.wifi.p2p.PEERS_CHANGED" -> {
-                    val peers = intent.getParcelableExtra<WifiP2pDeviceList>(
-                        WifiP2pManager.EXTRA_WIFI_P2P_DEVICE_LIST
-                    )
-                    if (peers != null) {
-                        for (device in peers.deviceList) {
-                            Log.i(TAG, "Found peer: ${device.deviceAddress} " +
-                                "name=${device.deviceName} " +
-                                "status=${device.status}")
-                            onPeerFound?.invoke(device)
-                        }
-                    }
-                }
-                "android.net.wifi.p2p.CONNECTION_INFO_CHANGED" -> {
-                    val info = intent.getParcelableExtra<WifiP2pInfo>(
-                        WifiP2pManager.EXTRA_WIFI_P2P_INFO
-                    )
-                    if (info != null) {
-                        val go = info.groupOwnerAddress?.hostAddress ?: ""
-                        val isGO = info.isGroupOwner
-                        this@P2pManager.isGO = isGO
-                        groupIp = go
-                        Log.i(TAG, "P2P group formed: GO=$isGO ip=$go")
-                        onGroupFormed?.invoke(isGO, go)
-
-                        if (isGO && go.isNotEmpty()) {
-                            startServer(go)
-                        } else if (!isGO && go.isNotEmpty()) {
-                            connectToGO(go)
-                        }
-                    }
-                }
-                "android.net.wifi.p2p.GROUP_INFO_CHANGED" -> {
-                    val group = intent.getParcelableExtra<WifiP2pGroup>(
-                        WifiP2pManager.EXTRA_WIFI_P2P_GROUP
-                    )
-                    if (group != null) {
-                        Log.i(TAG, "Group: ${group.network?.ssid} " +
-                            "clients=${group.clientList?.size}")
-                    }
-                }
-                "android.net.wifi.p2p.GROUP_REMOVED" -> {
-                    Log.i(TAG, "P2P group removed")
-                    isGO = false
-                    groupIp = null
-                    stopServer()
+                WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
+                    val manager = manager ?: return
+                    val channel = channel ?: return
+                    manager.requestConnectionInfo(channel) { connected(it) }
                 }
             }
         }
+    }
+
+    companion object {
+        const val TAG = "HumP2P"
+        private const val REDISCOVER_MS = 60_000L
+        private const val DIAL_MS = 5_000
+        private const val BACKLOG = 16
+        private const val OUTBOX = 256
     }
 }

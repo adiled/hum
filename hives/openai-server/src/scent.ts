@@ -6,17 +6,25 @@
 // as they are, and the scents come back in their order, with the tokens
 // they took as nectar. Any other reach is refused.
 
-import { Bee, Chi, Role, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi, Role, type Hello, type Tone } from "../../../thrum-clients/ts/index.ts";
 import { HIVE } from "./config.ts";
 import { SOURCE, VERSION } from "./requester.ts";
 import { post } from "./upstream.ts";
+
+export const HELLO: Hello = {
+  version: VERSION,
+  models: [],
+  propensity: { statefulness: "stateless", richness: "lean", wire: "openai/embeddings" },
+  chis: ["hello", "tendril-reach", "tendril-result"],
+  source: SOURCE,
+};
 
 export class Scent {
   readonly bee: Bee;
   #models: string[] = [];
 
   constructor(hum?: string) {
-    this.bee = new Bee({ hive: HIVE, as: "scent", role: Role.attendant, hum, hello: { version: VERSION, models: [], source: SOURCE } });
+    this.bee = new Bee({ hive: HIVE, as: "scent", role: Role.attendant, hum, hello: HELLO });
     this.bee.on(Chi.tendrilReach, (t) => void this.#reached(t));
   }
 

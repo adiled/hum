@@ -37,6 +37,7 @@ impl Home {
         let d = self.dir.path();
         let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_web2"));
         cmd.args(args)
+            .current_dir(d)
             .env("WEB2_CONFIG", d.join("web2.json"))
             .env("WEB2_STATE", d.join("state"))
             .env("HOME", d)
@@ -296,7 +297,7 @@ async fn a_person_turns_commands_on_and_off_from_the_command_line() {
     assert!(ok && said.contains("echo off"), "{said}");
     assert!(home.fails("mock echo hi").await.contains("turned off here"));
     let (ok, listed) = home.cli(&["review", "mock"]).await;
-    assert!(ok && listed.contains("echo") && listed.contains("web2 allow mock"), "{listed}");
+    assert!(ok && listed.contains("echo: off by services.mock.deny") && !listed.contains("web2 allow mock"), "{listed}");
 
     let written: Value = serde_json::from_str(&std::fs::read_to_string(home.dir.path().join("web2.json")).unwrap()).unwrap();
     assert_eq!(written["services"]["mock"], json!({ "allow": ["create-*"], "deny": ["echo"] }));
@@ -340,4 +341,89 @@ async fn an_mcp_server_that_asks_to_be_signed_in_is_signed_in_once() {
     let stored = std::fs::read_to_string(home.dir.path().join("state/secrets/credentials.json")).unwrap();
     assert!(stored.contains("mcpOauth") && stored.contains("tok-1"));
     drop(child);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stdio_server_takes_its_credentials_in_its_env_and_no_auth() {
+    let server = mock_mcp();
+    let keyed = |token: &str| json!({ "mcpServers": { "mock": { "command": server, "args": ["--token", "s3cret"], "env": { "MOCK_TOKEN": token } } } });
+    let home = Home::new(keyed("s3cret"));
+    assert_eq!(home.ok("mock echo hi").await, "hi");
+    home.configure(keyed("nope"));
+    assert!(home.fails("mock echo hi").await.contains("did not start"));
+
+    home.configure(json!({ "mcpServers": { "mock": { "command": server } }, "services": { "mock": { "auth": "bearer" } } }));
+    let refused = home.fails("help").await;
+    assert!(refused.contains("services.mock") && refused.contains("takes no `auth`") && refused.contains("`env`"), "{refused}");
+    let (ok, said) = home.cli(&["login", "mock", "--token-stdin"]).await;
+    assert!(!ok && said.contains("takes no `auth`"), "{said}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_import_leaves_out_what_web2_cannot_read_and_never_breaks_the_config() {
+    let server = mock_mcp();
+    let home = Home::new(json!({ "mcpServers": { "mock": { "command": server } } })).with_env("WEB2_TEST_KEY", "k");
+    let found = json!({ "mcpServers": {
+        "fs": { "command": "npx", "args": ["-y", "fs"] },
+        "old": { "type": "sse", "url": "https://example.com/sse" },
+        "asks": { "command": "npx", "env": { "TOKEN": "${input:token}" } },
+        "keyed": { "type": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ${WEB2_TEST_KEY}" } },
+        "dotted.name": { "command": "x" }
+    } });
+    std::fs::write(home.dir.path().join(".claude.json"), found.to_string()).unwrap();
+    let config = home.dir.path().join("web2.json");
+    let before = std::fs::read_to_string(&config).unwrap();
+
+    let (ok, dry) = home.cli(&["import", "--dry-run"]).await;
+    assert!(ok && dry.contains("+ fs") && dry.contains("old: legacy SSE"), "{dry}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+
+    let (ok, said) = home.cli(&["import"]).await;
+    assert!(ok && said.contains("+ fs (from Claude Code)"), "{said}");
+    for (name, why) in [("old", "legacy SSE"), ("asks", "${input:token}"), ("keyed", "${WEB2_TEST_KEY}"), ("dotted.name", "letters, digits")] {
+        assert!(said.lines().any(|l| l.trim_start().starts_with(&format!("{name}: ")) && l.contains(why)), "{name}: {why} in\n{said}");
+    }
+    assert!(!said.contains("+ old") && !said.contains("+ asks") && !said.contains("+ keyed"), "{said}");
+    let help = home.ok("help").await;
+    assert!(help.contains("fs") && help.contains("mock"), "{help}");
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    let names: Vec<&String> = written["mcpServers"].as_object().unwrap().keys().collect();
+    assert_eq!(names, ["mock", "fs"]);
+    assert_eq!(home.ok("mock echo still").await, "still");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_and_allow_say_deny_keeps_a_command_off() {
+    let server = mock_mcp();
+    let home = Home::new(json!({ "mcpServers": { "mock": { "command": server } }, "services": { "mock": { "deny": ["create-note"] } } }));
+    let (ok, listed) = home.cli(&["review", "mock"]).await;
+    assert!(ok && listed.contains("create-note") && listed.contains("services.mock.deny"), "{listed}");
+    assert!(!listed.contains("turns them on"), "review offered a denied command:\n{listed}");
+
+    let (ok, said) = home.cli(&["allow", "mock", "create-*"]).await;
+    assert!(ok && said.contains("create-* on") && said.contains("create-note: off by services.mock.deny"), "{said}");
+    let (ok, said) = home.cli(&["allow", "mock", "create_note"]).await;
+    assert!(ok && said.contains("create_note: off by services.mock.deny") && !said.contains(" on\n"), "{said}");
+    assert!(home.fails("mock create-note --title x").await.contains("turned off here"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_spec_that_signs_in_with_oauth_or_basic_says_what_web2_json_needs() {
+    let home = Home::new(json!({ "redirectPort": 9123, "services": { "locked": { "openapi": "oauth.json" }, "plain": { "openapi": "basic.json" } } }));
+    let spec = |scheme: Value| {
+        json!({ "openapi": "3.0.3", "info": { "title": "Locked" }, "servers": [{ "url": "http://127.0.0.1:9/v1" }],
+            "components": { "securitySchemes": { "s": scheme } }, "security": [{ "s": [] }],
+            "paths": { "/things": { "get": { "operationId": "listThings" } } } })
+        .to_string()
+    };
+    let oauth = json!({ "type": "oauth2", "flows": { "authorizationCode": {
+        "authorizationUrl": "https://auth.example/authorize", "tokenUrl": "https://auth.example/token", "scopes": { "read": "" } } } });
+    std::fs::write(home.dir.path().join("oauth.json"), spec(oauth)).unwrap();
+    std::fs::write(home.dir.path().join("basic.json"), spec(json!({ "type": "http", "scheme": "basic" }))).unwrap();
+
+    let (ok, said) = home.cli(&["login", "locked"]).await;
+    assert!(!ok && said.contains("OAuth") && said.contains(r#"services.locked.auth {"oauth": {"clientId": "#), "{said}");
+    assert!(said.contains("http://127.0.0.1:9123/callback") && !said.contains("names no way"), "{said}");
+    let (ok, said) = home.cli(&["login", "plain"]).await;
+    assert!(!ok && said.contains(r#"services.plain.auth {"basic": "#) && !said.contains("names no way"), "{said}");
 }

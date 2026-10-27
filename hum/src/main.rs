@@ -96,9 +96,11 @@ hello with the key. humd admits only a signed hello from an entered bee
 whose hive is installed. hum starts no process.
 
   hum bee --list                            bees entered here, and which have nestled
-  hum bee enter --hive <hive> [--as <l>]    sign a bee in; prints its id
+  hum bee enter --hive <hive> --role <r> [--as <l>]
+                                            sign a bee in for one role; prints its id
                                             (the same bee every time for one label)
-  hum bee link --hive <hive> --as <l>       be that bee's client on stdio
+  hum bee link --hive <hive> --role <r> --as <l>
+                                            be that bee's client on stdio
                                             (spawned by a bee's thrum client)
   hum bee <id> exit            sign it out; humd refuses its next hello
   hum bee <id> reenter         sign it back in")]

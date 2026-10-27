@@ -5,11 +5,13 @@
 //! The order of checks on an incoming tone matters. Envelope first: a
 //! tone without a non-empty `chi` is dropped before anything else looks
 //! at it. Then dusk: a tone past its expiry gets a not-ok echo and is
-//! dropped. Then auto-echo, which skips `echo` itself and the chatty
-//! `log` frames. Only then does the tone reach the sink.
+//! dropped. Then admission: until a breath admits the client's hello,
+//! humd hears nothing from it but a hello, and refuses anything else
+//! under its rid. Then auto-echo, which skips `echo` itself and the
+//! chatty `log` frames. Only then does the tone reach the sink.
 //!
-//! A hello does not claim a sigil by itself. The sink does that, once
-//! it understands which sid this client is responsible for.
+//! A hello holds no sid by itself. The sink holds one for the client
+//! once it prompts or attaches under it.
 //!
 //! Errors and panics inside the sink are the sink's problem. This loop
 //! keeps reading either way, until the client is closed: a refused
@@ -62,7 +64,7 @@ pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
         info!(client_id = %short(&client_id), total, "thrum.disconnected");
     }
     if let Some(sink) = thrum.inner_sink() {
-        sink.forget(&client_id).await;
+        sink.forget(&client_id, reach.sids()).await;
     }
     drop(reach);
     let _ = writer_task.await;
@@ -75,6 +77,7 @@ async fn read_loop(
     read_half: tokio::net::unix::OwnedReadHalf,
 ) {
     let mut lines = BufReader::new(read_half).lines();
+    let mut warned = false;
     loop {
         let next = tokio::select! {
             next = lines.next_line() => next,
@@ -101,11 +104,11 @@ async fn read_loop(
                 continue;
             }
         };
-        dispatch(thrum, client_id, reach, tone).await;
+        dispatch(thrum, client_id, reach, tone, &mut warned).await;
     }
 }
 
-async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Value) {
+async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Value, warned: &mut bool) {
     thrum.heard(client_id, &tone);
     if let Some(reason) = validate_envelope(&tone) {
         trace!(client_id = %short(client_id), reason, "thrum.tone.rejected");
@@ -127,6 +130,20 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
         trace!(chi = %chi, rid = rid.as_deref().unwrap_or(""), "thrum.tone.dusk");
         if let Some(rid) = rid.as_deref() {
             let _ = reach.send(echo_tone(rid, false, Some("past dusk")));
+        }
+        return;
+    }
+
+    if chi != "hello" && !reach.admitted() {
+        if !*warned && chi != "echo" && chi != "log" {
+            warn!(client_id = %short(client_id), chi = %chi, "thrum.tone.before-hello — refused; humd hears nothing but a hello until a breath admits it");
+            *warned = true;
+        }
+        if chi != "echo"
+            && chi != "log"
+            && let Some(rid) = rid.as_deref()
+        {
+            let _ = reach.send(echo_tone(rid, false, Some("not nestled: say hello first")));
         }
         return;
     }

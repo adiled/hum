@@ -34,6 +34,10 @@ impl WaneTracker {
         self.counters.lock().insert(sigil.to_string(), value);
     }
 
+    pub fn forget(&self, sigil: &str) {
+        self.counters.lock().remove(sigil);
+    }
+
     pub fn behind(&self, sigil: &str, remote: u64) -> bool {
         remote > self.get(sigil)
     }
@@ -76,5 +80,15 @@ mod tests {
         assert!(w.behind("s", 5));
         assert!(!w.behind("s", 4));
         assert!(!w.behind("s", 3));
+    }
+
+    #[test]
+    fn a_forgotten_sigil_is_gone() {
+        let w = WaneTracker::new();
+        w.tick("a");
+        w.tick("b");
+        w.forget("a");
+        assert_eq!(w.get("a"), 0);
+        assert_eq!(w.snapshot().len(), 1);
     }
 }

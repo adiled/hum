@@ -4,7 +4,8 @@
 //! is used: a child process for a stdio server, a session for one over
 //! streamable HTTP. A connection left idle past `idleMs` is closed, and one
 //! that drops is opened again on the next call. A server's tools are listed
-//! when it connects, and again when it says its list changed.
+//! when it connects, and again when it says its list changed. Every
+//! connection is closed before web2 exits, so none is cut off mid-close.
 //!
 //! web2 offers a server no capabilities of its own: no sampling, no
 //! elicitation, no roots. A tool that asks for input mid-call, or that
@@ -192,7 +193,13 @@ impl Pool {
                 Opened::Ready(r) => r,
                 Opened::Challenged => return Err(needs_login(&service.name, "asks to be signed in")),
             };
-            let catalogue = list(running.peer(), &service.name).await?;
+            let catalogue = match list(running.peer(), &service.name).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = running.cancel().await;
+                    return Err(e);
+                }
+            };
             *guard = Some(Conn { client: running, catalogue, stale, listed: Instant::now(), used: Instant::now() });
         }
         let conn = guard.as_mut().ok_or_else(|| Denied::Failed(format!("{} has no connection", service.name)))?;
@@ -219,6 +226,16 @@ impl Pool {
         let taken = slot.lock().await.take();
         if let Some(conn) = taken {
             let _ = conn.client.cancel().await;
+        }
+    }
+
+    pub async fn close(&self) {
+        let slots: Vec<Slot> = self.slots.lock().drain().map(|(_, slot)| slot).collect();
+        for slot in slots {
+            let taken = slot.lock().await.take();
+            if let Some(conn) = taken {
+                let _ = conn.client.cancel().await;
+            }
         }
     }
 

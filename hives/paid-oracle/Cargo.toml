@@ -3,7 +3,7 @@ name = "paid-oracle"
 version = "0.33.1"
 edition = "2024"
 license = "MIT"
-description = "x402-style paid oracle bee — sells one price per USDC payment, verified on-chain."
+description = "An attendant that sells a price per call for USDC, x402-style, verified on chain."
 
 [dependencies]
 thrum-core = { path = "../../thrum-core" }
@@ -11,15 +11,19 @@ hum-identity = { path = "../../hum-identity" }
 hum-thrum = { path = "../../hum-thrum" }
 hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-uuid = { version = "1", features = ["v4"] }
-hex = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = "0.2"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
 
 [[bin]]
 name = "paid-oracle"

@@ -1,4 +1,11 @@
+# grpc: the thrum over one gRPC bidi stream. Set an ARG in the
+# environment of `hum hive grpc install` to change it, for example
+# HUM_GRPC_PORT=14622. An empty ARG keeps the forager's own default; the
+# README says what each one is.
+
 ARG HUM_SRC=
+ARG HUM_GRPC_HOST=
+ARG HUM_GRPC_PORT=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -6,4 +13,6 @@ ONESHOT true
 
 SERVICE grpc
 RUN ${HUM_SRC}/target/release/grpc-forager
+ENV HUM_GRPC_HOST=${HUM_GRPC_HOST}
+ENV HUM_GRPC_PORT=${HUM_GRPC_PORT}
 RESTART always

@@ -1,4 +1,18 @@
+# twilio-sms: hum by text message. Set an ARG in the environment of
+# `hum hive twilio-sms install` to change it, for example
+# TWILIO_AUTH_TOKEN=... HUM_TWILIO_URL=https://hum.example.com/sms. An
+# empty ARG keeps the forager's own default; the README says what each
+# one is.
+
 ARG HUM_SRC=
+ARG HUM_TWILIO_PORT=
+ARG HUM_TWILIO_HOST=
+ARG HUM_TWILIO_MODEL=
+ARG HUM_TWILIO_SYSTEM=
+ARG HUM_TWILIO_REPLY_LIMIT=
+ARG HUM_TWILIO_URL=
+ARG TWILIO_AUTH_TOKEN=
+ARG HUM_CLI=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -6,4 +20,12 @@ ONESHOT true
 
 SERVICE twilio-sms
 RUN ${HUM_SRC}/out/twilio-sms
+ENV HUM_TWILIO_PORT=${HUM_TWILIO_PORT}
+ENV HUM_TWILIO_HOST=${HUM_TWILIO_HOST}
+ENV HUM_TWILIO_MODEL=${HUM_TWILIO_MODEL}
+ENV HUM_TWILIO_SYSTEM=${HUM_TWILIO_SYSTEM}
+ENV HUM_TWILIO_REPLY_LIMIT=${HUM_TWILIO_REPLY_LIMIT}
+ENV HUM_TWILIO_URL=${HUM_TWILIO_URL}
+ENV TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+ENV HUM_CLI=${HUM_CLI}
 RESTART always

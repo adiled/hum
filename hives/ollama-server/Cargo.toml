@@ -25,6 +25,13 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+lru = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
 
 [[bin]]
 name = "ollama-server"

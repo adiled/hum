@@ -1,8 +1,6 @@
-//! The humd growing an ask goes away mid-bloom. The ask should be grown
-//! again, once that humd is back or by another; today it waits out its
-//! lifetime instead, because the near humd never tells the forager that
-//! the peer it handed the bloom to is gone. See "What is not yet" in the
-//! README.
+//! The humd growing an ask goes away mid-bloom. The near humd breaks the
+//! bloom off as `nurse-gone` when it loses that peer, and the ask is grown
+//! again once that humd is back.
 
 mod common;
 
@@ -12,7 +10,6 @@ use common::near::{far_reach, forager_on, spawn_near};
 use common::*;
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "humd does not yet break off a bloom whose grower left the ensemble; see README, What is not yet"]
 async fn an_ask_outlives_the_humd_growing_it() {
     let w = ensemble_world();
     let (far_hid, far_tcp) = far_reach();

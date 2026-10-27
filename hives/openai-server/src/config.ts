@@ -5,7 +5,7 @@
 // `hives/openai-server`. An environment variable wins over the file.
 //
 //   host, port    where the HTTP surface listens (OPENAI_SERVER_HOST, OPENAI_SERVER_PORT; 127.0.0.1:14620)
-//   apiKey        a key named `default` (OPENAI_SERVER_API_KEY), beside the keys in secrets/keys.json
+//   apiKey        a key named `default` (OPENAI_SERVER_API_KEY), a name no key in secrets/keys.json takes
 //   cors          the origins a browser may call from, or "*"; none by default
 //   timeoutMs     how long one request may take (OPENAI_SERVER_TIMEOUT_MS; 15 minutes)
 //   rate          { capacity, refillPerSec } for each key; no limit when unset

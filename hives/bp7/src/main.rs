@@ -40,7 +40,7 @@ struct Config {
     listen: SocketAddr,
     node_eid: String,
     label: String,
-    model: String,
+    model: Option<String>,
     route: Option<SocketAddr>,
     allow: Option<Vec<IpAddr>>,
     blooms: usize,
@@ -94,7 +94,7 @@ impl Config {
             listen: parsed("BP7_LISTEN", "0.0.0.0:4556".parse()?)?,
             node_eid,
             label: var("BP7_LABEL").unwrap_or_else(|| "main".into()),
-            model: var("BP7_MODEL").unwrap_or_else(|| "claude-sonnet-4".into()),
+            model: var("BP7_MODEL"),
             route,
             allow,
             blooms,
@@ -112,6 +112,10 @@ fn now_ms() -> u64 {
 
 fn deadline_of(expires: u64) -> tokio::time::Instant {
     tokio::time::Instant::now() + Duration::from_millis(expires.saturating_sub(now_ms()))
+}
+
+fn sid(key: &str, attempt: u32) -> String {
+    format!("bp7-{}-{attempt}", &key[..16])
 }
 
 struct Forager {
@@ -147,7 +151,7 @@ async fn run() -> Result<()> {
     let bee = hum::link(&cfg.label, json!({
         "version": NESTLING_VERSION,
         "propensity": {"statefulness": "stateless", "richness": "lean", "wire": "bp7/dtn-udpcl"},
-        "chis": ["hello", "prompt", "cancel", "unfurl", "wilt", "error"],
+        "chis": ["hello", "prompt", "cancel", "cleanup", "unfurl", "wilt", "error"],
         "source": "https://github.com/adiled/hum/tree/main/hives/bp7",
     }))?;
     let sock = Arc::new(UdpSocket::bind(cfg.listen).await.with_context(|| format!("bind {}", cfg.listen))?);
@@ -160,9 +164,25 @@ async fn run() -> Result<()> {
     );
 
     me.sweep();
-    for key in me.spool.lock().unwrap().waiting() {
+    let waiting = me.spool.lock().unwrap().waiting();
+    let mut left_open = vec![];
+    for key in waiting {
+        if let Ok((held, _, None)) = me.spool.lock().unwrap().load(&key)
+            && held.attempts > 0
+        {
+            left_open.push(sid(&key, held.attempts));
+        }
         me.enqueue(key);
     }
+    tokio::spawn({
+        let hum = me.hum.clone();
+        async move {
+            hum.nestled().await;
+            for sid in &left_open {
+                hum.cleanup(sid);
+            }
+        }
+    });
     tokio::spawn(me.clone().grow_all(asks));
     tokio::spawn({
         let me = me.clone();
@@ -273,11 +293,11 @@ impl Forager {
                         return Some(hum::backoff(held.attempts));
                     }
                 };
-                let (text, model, system) = words(&payload, &self.cfg.model);
+                let (text, model, system) = words(&payload, self.cfg.model.as_deref());
                 let bloom = Bloom {
-                    sid: format!("bp7-{}-{attempt}", &key[..16]),
+                    sid: sid(key, attempt),
                     text: &text,
-                    model: &model,
+                    model: model.as_deref(),
                     system: system.as_deref(),
                     dusk: held.expires,
                 };
@@ -334,13 +354,13 @@ impl Forager {
     }
 }
 
-fn words(payload: &[u8], default_model: &str) -> (String, String, Option<String>) {
+fn words(payload: &[u8], default_model: Option<&str>) -> (String, Option<String>, Option<String>) {
     if let Ok(v) = serde_json::from_slice::<Value>(payload)
         && let Some(text) = v.get("text").and_then(Value::as_str)
     {
-        let model = v.get("modelId").and_then(Value::as_str).unwrap_or(default_model);
+        let model = v.get("modelId").and_then(Value::as_str).filter(|m| !m.is_empty()).or(default_model);
         let system = v.get("system").and_then(Value::as_str).map(str::to_string);
-        return (text.to_string(), model.to_string(), system);
+        return (text.to_string(), model.map(str::to_string), system);
     }
-    (String::from_utf8_lossy(payload).into_owned(), default_model.to_string(), None)
+    (String::from_utf8_lossy(payload).into_owned(), default_model.map(str::to_string), None)
 }

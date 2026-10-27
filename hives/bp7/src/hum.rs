@@ -6,8 +6,10 @@
 //! is dropped. Each bloom has its own sid, made from the ask's key and
 //! the attempt, so no two asks, and no two tries at one ask, ever share a
 //! line of blooms; its mid is the same, and its dusk is the ask's expiry.
-//! What humd sounds under a sid goes to whoever opened it. humd going
-//! away ends every open bloom as astray, and an ask on it is tried again.
+//! What humd sounds under a sid goes to whoever opened it, and once its
+//! bloom is over, wilted, broken off or cancelled, the sid is cleaned up.
+//! humd going away ends every open bloom as astray, its sids gone with
+//! it, and an ask on it is tried again.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -40,7 +42,7 @@ pub struct Hum {
 pub struct Bloom<'a> {
     pub sid: String,
     pub text: &'a str,
-    pub model: &'a str,
+    pub model: Option<&'a str>,
     pub system: Option<&'a str>,
     pub dusk: u64,
 }
@@ -74,32 +76,45 @@ impl Hum {
         prompt.insert("mid".into(), json!(bloom.sid));
         prompt.insert("dusk".into(), json!(bloom.dusk));
         prompt.insert("text".into(), json!(bloom.text));
-        prompt.insert("modelId".into(), json!(bloom.model));
+        if let Some(model) = bloom.model {
+            prompt.insert("modelId".into(), json!(model));
+        }
         if let Some(system) = bloom.system {
             prompt.insert("systemPrompt".into(), json!(system));
         }
         let (to, mut heard) = mpsc::unbounded_channel();
         let _ = self.cmds.send(Cmd::Open { sid: bloom.sid.clone(), rid, prompt: Value::Object(prompt), to });
         let mut text = String::new();
-        let outcome = loop {
+        let (outcome, lost) = loop {
             let next = tokio::time::timeout_at(deadline, heard.recv()).await;
             match next {
                 Err(_) => {
                     self.sender.send(json!({"chi": Chi::Cancel, "sid": bloom.sid}));
-                    break Outcome::Expired;
+                    break (Outcome::Expired, false);
                 }
-                Ok(None) => break Outcome::Again("the bee stopped".into()),
+                Ok(None) => break (Outcome::Again("the bee stopped".into()), true),
                 Ok(Some(Heard::Unfurl(more))) => text.push_str(&more),
-                Ok(Some(Heard::Wilt)) => break Outcome::Grown { ok: true, text },
-                Ok(Some(Heard::Broke { code, message })) if code.as_deref() == Some("no-nurse") => {
-                    break Outcome::Again(message);
+                Ok(Some(Heard::Wilt)) => break (Outcome::Grown { ok: true, text }, false),
+                Ok(Some(Heard::Broke { code, message })) if matches!(code.as_deref(), Some("no-nurse" | "nurse-gone")) => {
+                    break (Outcome::Again(message), false);
                 }
-                Ok(Some(Heard::Broke { message, .. })) => break Outcome::Grown { ok: false, text: message },
-                Ok(Some(Heard::Astray)) => break Outcome::Again("humd went away mid-bloom".into()),
+                Ok(Some(Heard::Broke { message, .. })) => break (Outcome::Grown { ok: false, text: message }, false),
+                Ok(Some(Heard::Astray)) => break (Outcome::Again("humd went away mid-bloom".into()), true),
             }
         };
-        let _ = self.cmds.send(Cmd::Close { sid: bloom.sid });
+        let _ = self.cmds.send(Cmd::Close { sid: bloom.sid.clone() });
+        if !lost {
+            self.cleanup(&bloom.sid);
+        }
         outcome
+    }
+
+    pub fn cleanup(&self, sid: &str) {
+        self.sender.send(json!({"chi": Chi::Cleanup, "sid": sid}));
+    }
+
+    pub async fn nestled(&self) {
+        let _ = self.nestled.clone().wait_for(|n| *n).await;
     }
 }
 

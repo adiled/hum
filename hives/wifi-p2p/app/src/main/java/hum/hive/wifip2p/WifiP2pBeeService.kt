@@ -1,377 +1,131 @@
+// The bee: a foreground service that keeps one forager nestled on humd and
+// the WiFi Direct group's links open, and hands what crosses between them
+// to the forage. Its id, its key and its settings are in the app's files
+// directory, under hum/.
+
 package hum.hive.wifip2p
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.Context
 import android.content.Intent
-import android.os.Build
+import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
-import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Mutex
-import java.io.BufferedReader
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.io.File
-import java.io.PrintWriter
 
-/**
- * Android foreground service that runs the WiFi Direct bee.
- *
- * Architecture:
- *   P2P Radio ⇄ P2pManager (TCP on p2p0) ⇄ ThrumClient (to local humd)
- *
- * Inbound P2P tones → translated to chi:"prompt" → sent to humd
- * humd's unfurl/wilt → collected → sent back over P2P TCP
- */
+const val HIVE = "wifi-p2p"
+
+val HELLO: List<Pair<String, Any?>> = listOf(
+    "version" to BuildConfig.VERSION_NAME,
+    "propensity" to mapOf(
+        "statefulness" to "convention-stateful",
+        "richness" to "lean",
+        "wire" to "wifi-p2p/tcp",
+    ),
+    "chis" to listOf(Chi.HELLO, Chi.PROMPT, Chi.CANCEL, Chi.CLEANUP, Chi.UNFURL, Chi.WILT, Chi.ERROR),
+    "source" to "https://github.com/adiled/hum/tree/main/hives/wifi-p2p",
+)
+
 class WifiP2pBeeService : Service() {
-    companion object {
-        const val TAG = "HumP2P:Bee"
-        const val NOTIFICATION_CHANNEL_ID = "hum-p2p-bee-channel"
-        const val NOTIFICATION_ID = 1
-        const val REPLY_LIMIT = 4096
-        const val DEFAULT_MODEL = "claude-haiku-4.5"
-        const val DEFAULT_SYSTEM = "You are a concise assistant for P2P mesh agents."
-    }
-
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var p2pManager: P2pManager? = null
-    private var thrumClient: ThrumClient? = null
-
-    // Per-peer state: we collect text petals per (peerId, sid)
-    private val peerReplies = mutableMapOf<String, StringBuilder>()
-    private val replyLock = Mutex()
-
-    private val dataDir: String by lazy {
-        "${getDataDir().absolutePath}"
-    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var client: ThrumClient? = null
+    private var p2p: P2pManager? = null
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Service created")
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        val channel = NotificationChannel(CHANNEL, getString(R.string.service_notification_channel), NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION,
+            notification(getString(R.string.service_notification_text)),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "Service starting")
-        scope.launch {
-            startBee()
-        }
+        if (client == null) start()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.i(TAG, "Service stopping")
-        p2pManager?.cleanup()
-        thrumClient?.disconnect()
+        p2p?.stop()
+        client?.stop()
         scope.cancel()
         super.onDestroy()
     }
 
-    private fun getDataDir(): File {
-        // Use app's internal data directory for identity persistence
-        val dir = File(applicationContext.filesDir, "hum")
-        dir.mkdirs()
-        return dir
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Hum P2P Bee",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "Notification for WiFi Direct bee foreground service"
-            }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
-    }
-
-    private fun buildNotification(): Notification {
-        val channelId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NOTIFICATION_CHANNEL_ID
-        } else {
-            ""
-        }
-        val builder = Notification.Builder(this, channelId)
-            .setContentTitle("Hum P2P Bee")
-            .setContentText("WiFi Direct bee is running")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-        return builder.build()
-    }
-
-    private suspend fun startBee() {
-        val sockPath = resolveThrumSock()
-        val model = System.getProperty("HUM_P2P_MODEL", DEFAULT_MODEL)
-        val systemPrompt = System.getProperty("HUM_P2P_SYSTEM", DEFAULT_SYSTEM)
-        val replyLimit = System.getProperty("HUM_P2P_REPLY_LIMIT", "$REPLY_LIMIT").toIntOrNull() ?: REPLY_LIMIT
-
-        // 1. Initialize thrum client
-        thrumClient = ThrumClient(sockPath, dataDir, scope)
-
-        // 2. Set up P2P manager
-        val p2pConfig = P2pManager.Config(
-            port = System.getProperty("HUM_P2P_PORT", "4377").toIntOrNull() ?: 4377,
-            serviceType = System.getProperty("HUM_P2P_SERVICE_TYPE", "_hum._tcp"),
-            goIntent = System.getProperty("HUM_P2P_GO_INTENT", "8").toIntOrNull() ?: 8,
-        )
-        val p2p = P2pManager(this, scope, p2pConfig)
-        p2pManager = p2p
-
-        // 3. Wire up P2P callbacks
-        p2p.onPeerFound = { device ->
-            Log.i(TAG, "Peer found: ${device.deviceName} (${device.deviceAddress})")
-            // Auto-connect to new peers
-            p2p.connectToPeer(device)
-        }
-
-        p2p.onGroupFormed = { isGO, ip ->
-            Log.i(TAG, "Group formed: GO=$isGO ip=$ip")
-        }
-
-        p2p.onPeerConnected = { peerId, reader, writer ->
-            Log.i(TAG, "Peer connected: $peerId")
-            // Start reading P2P tones and forwarding to humd
-            scope.launch {
-                handleP2pPeer(peerId, reader, writer, model, systemPrompt, replyLimit)
-            }
-        }
-
-        p2p.onPeerDisconnected = { peerId ->
-            Log.i(TAG, "Peer disconnected: $peerId")
-            cleanupPeer(peerId)
-        }
-
-        // 4. Forward P2P tones to thrum client
-        p2p.onP2pToneReceived = { peerId, line ->
-            scope.launch {
-                handleInboundP2pTone(peerId, line, model, systemPrompt)
-            }
-        }
-
-        // 5. Handle thrum replies (petals for every active sid)
-        thrumClient?.onCatchAll { tone ->
-            scope.launch {
-                handleThrumReply(tone, replyLimit)
-            }
-        }
-
-        // 6. Start everything
-        thrumClient?.connect()
-        p2p.init()
-        p2p.startDiscovery()
-
-        Log.i(TAG, "Bee started: sock=$sockPath model=$model")
-    }
-
-    /**
-     * Handle an inbound P2P tone — translate to thrum prompt.
-     *
-     * P2P wire uses same NDJSON framing as thrum. The tone carries:
-     *   {"chi":"prompt","sid":"<peer-hid>","text":"..."}
-     *
-     * We map this to a thrum chi:"prompt" with a stable sid derived
-     * from the peer's hid.
-     */
-    private suspend fun handleInboundP2pTone(
-        peerId: String,
-        line: String,
-        model: String,
-        systemPrompt: String,
-    ) {
-        try {
-            val tone = Tone.fromJson(line)
-            when (tone.chi) {
-                Chi.PROMPT -> {
-                    val text = tone.body["text"] as? String ?: return
-                    val peerSid = tone.sid ?: peerId
-
-                    // Create a stable sid for this conversation
-                    val convSid = sigil(peerSid, HIVE_NAME)
-
-                    // Send prompt to humd
-                    val promptTone = Tone(
-                        chi = Chi.PROMPT,
-                        rid = rid(),
-                        sid = convSid,
-                        body = mapOf(
-                            "text" to text,
-                            "modelId" to model,
-                            "systemPrompt" to systemPrompt,
-                            "ext" to mapOf(
-                                "wifi-p2p" to mapOf(
-                                    "peerId" to peerId,
-                                )
-                            )
-                        )
-                    )
-                    thrumClient?.send(promptTone)
-                }
-                Chi.CANCEL -> {
-                    val sid = tone.sid ?: return
-                    val cancelTone = Tone(
-                        chi = Chi.CANCEL,
-                        rid = rid(),
-                        sid = sigil(sid, HIVE_NAME),
-                    )
-                    thrumClient?.send(cancelTone)
-                }
-                Chi.CLEANUP -> {
-                    val sid = tone.sid ?: return
-                    val cleanupTone = Tone(
-                        chi = Chi.CLEANUP,
-                        rid = rid(),
-                        sid = sigil(sid, HIVE_NAME),
-                    )
-                    thrumClient?.send(cleanupTone)
-                }
-                Chi.HELLO -> {
-                    // P2P hello — acknowledge
-                    val peerHid = tone.body["hid"] as? String ?: ""
-                    val ack = Tone(
-                        chi = Chi.BREATH,
-                        rid = rid(),
-                        sid = tone.sid,
-                        body = mapOf("hid" to peerHid)
-                    )
-                    p2pManager?.sendToPeer(peerId, ack.toJson())
-                }
-                Chi.ECHO -> {
-                    // Delivery ack — no action needed
-                }
-                else -> {
-                    Log.w(TAG, "Unknown P2P chi: ${tone.chi}")
-                }
-            }
+    private fun start() {
+        val dir = File(filesDir, "hum")
+        val key = try {
+            IdentityStore.load(dir)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse inbound P2P tone: ${e.message}")
+            return quit("no bee in $dir: ${e.message}")
         }
-    }
-
-    /**
-     * Gather a bloom's text petals and hand the peer its reply when it wilts.
-     */
-    private suspend fun handleThrumReply(tone: Tone, replyLimit: Int) {
-        when (tone.chi) {
-            Chi.UNFURL -> {
-                val sid = tone.sid ?: return
-                if (tone.body["kind"] != "text") return
-                val text = tone.body["text"] as? String ?: return
-                replyLock.withLock {
-                    val buf = peerReplies.getOrPut(sid) { StringBuilder() }
-                    buf.append(text)
+        val settings = Settings.load(File(dir, "$HIVE.json"))
+        val humd = Humd.parse(settings.humd) ?: return quit("humd ${settings.humd} is neither /<socket> nor <host>:<port>")
+        val p2p = P2pManager(this, scope, settings.p2p)
+        lateinit var client: ThrumClient
+        val forage = Forage(settings.forage, humd = { client.send(it) }, peer = p2p::send)
+        client = ThrumClient(dial(humd), HIVE, Role.FORAGER, key, HELLO) { event ->
+            when (event) {
+                ThrumClient.Event.Nestled -> say("nestled on humd at ${settings.humd}")
+                ThrumClient.Event.Astray -> {
+                    forage.astray()
+                    say("humd went away; dialing ${settings.humd} again")
                 }
-            }
-            Chi.WILT -> {
-                val sid = tone.sid ?: return
-                replyLock.withLock {
-                    val buf = peerReplies.remove(sid) ?: return@withLock
-                    var reply = buf.toString().trim()
-                    if (reply.isEmpty()) reply = "(no reply)"
-                    if (reply.length > replyLimit) {
-                        reply = reply.take(replyLimit - 3) + "..."
-                    }
-
-                    val petal = Tone(
-                        chi = Chi.UNFURL,
-                        rid = rid(),
-                        sid = sid,
-                        body = mapOf("petal" to 0, "kind" to "text", "text" to reply)
-                    )
-                    val wilt = Tone(
-                        chi = Chi.WILT,
-                        rid = rid(),
-                        sid = sid,
-                        body = mapOf("reason" to (tone.body["reason"] ?: "stop"))
-                    )
-                    p2pManager?.broadcastTone(petal.toJson())
-                    p2pManager?.broadcastTone(wilt.toJson())
+                is ThrumClient.Event.Heard -> {
+                    advisory(event.tone)
+                    forage.hum(event.tone)
                 }
-            }
-            Chi.ERROR -> {
-                val sid = tone.sid ?: return
-                replyLock.withLock {
-                    peerReplies.remove(sid)
-                }
-                val errTone = Tone(
-                    chi = Chi.ERROR,
-                    rid = rid(),
-                    sid = sid,
-                    body = mapOf(
-                        "code" to (tone.body["code"] ?: "error"),
-                        "message" to (tone.body["message"] ?: "inference failed"),
-                    )
-                )
-                p2pManager?.broadcastTone(errTone.toJson())
+                is ThrumClient.Event.Refused -> quit("humd refused ${key.hid}: ${event.why}")
+                is ThrumClient.Event.Failing -> say("humd is not answering at ${settings.humd} (${event.tries} tries): ${event.why}")
             }
         }
+        p2p.onLine = forage::heard
+        p2p.onGone = forage::gone
+        if (!p2p.start()) return quit("WiFi Direct is unavailable, or nearby-devices permission is not granted")
+        this.client = client
+        this.p2p = p2p
+        client.start(scope)
+        Log.i(TAG, "bee ${key.hid} dialing humd at ${settings.humd}")
     }
 
-    /**
-     * Handle a connected P2P peer's TCP stream.
-     *
-     * Reads NDJSON tones from the TCP connection and routes them
-     * through the inbound handler.
-     */
-    private suspend fun handleP2pPeer(
-        peerId: String,
-        reader: BufferedReader,
-        writer: PrintWriter,
-        model: String,
-        systemPrompt: String,
-        replyLimit: Int,
-    ) {
-        try {
-            var line = reader.readLine()
-            while (line != null) {
-                if (line.isNotBlank()) {
-                    handleInboundP2pTone(peerId, line, model, systemPrompt)
-                }
-                line = reader.readLine()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "P2P peer $peerId disconnected: ${e.message}")
-        }
-        p2pManager?.onPeerDisconnected?.invoke(peerId)
+    private fun advisory(tone: Tone) {
+        if (tone.str("chi") != Chi.LOG) return
+        val fields = tone["fields"] as? Tone ?: return
+        Log.w(TAG, "advisory ${fields.str("advisory")}: ${tone.str("message")}")
     }
 
-    private fun cleanupPeer(peerId: String) {
-        // Remove any pending replies for this peer
-        replyLock.withLock {
-            peerReplies.entries.removeIf { (_, _) -> true }
-        }
+    private fun say(what: String) {
+        Log.i(TAG, what)
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification(what))
     }
 
-    /**
-     * Resolve thrum socket path.
-     *
-     * Priority:
-     *   1. HUM_THRUM_SOCK env (system property on Android)
-     *   2. XDG_RUNTIME_DIR/hum/thrum.sock
-     *   3. /run/user/<uid>/hum/thrum.sock
-     *   4. Default: /data/data/hum.hive.wifip2p/hum/thrum.sock
-     */
-    private fun resolveThrumSock(): String {
-        val explicit = System.getProperty("HUM_THRUM_SOCK")
-            ?: System.getProperty("HUM_SOCKET")
-        if (explicit != null) return explicit
+    private fun quit(why: String) {
+        Log.e(TAG, why)
+        stopSelf()
+    }
 
-        val xdgRuntime = System.getProperty("XDG_RUNTIME_DIR")
-        if (xdgRuntime != null) {
-            return "$xdgRuntime/hum/thrum.sock"
-        }
+    private fun notification(text: String) = NotificationCompat.Builder(this, CHANNEL)
+        .setContentTitle(getString(R.string.service_notification_title))
+        .setContentText(text)
+        .setSmallIcon(android.R.drawable.stat_notify_sync)
+        .setOngoing(true)
+        .build()
 
-        // Termux default
-        val termuxSock = "/data/data/com.termux/files/usr/run/hum/thrum.sock"
-        if (File(termuxSock).exists()) return termuxSock
-
-        // Fallback: local bridge TCP
-        return "127.0.0.1:14620"
+    companion object {
+        const val TAG = "HumP2P"
+        private const val CHANNEL = "hum-p2p-bee"
+        private const val NOTIFICATION = 1
     }
 }

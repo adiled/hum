@@ -51,8 +51,12 @@ pub fn init() {
     xdg_default("XDG_RUNTIME_DIR", home.join(".local/state/run"));
 }
 
+fn set(var: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(var).filter(|v| !v.is_empty())
+}
+
 fn xdg_default(var: &str, default: PathBuf) {
-    if std::env::var_os(var).is_none() {
+    if set(var).is_none() {
         unsafe {
             std::env::set_var(var, default);
         }
@@ -95,20 +99,20 @@ pub const HIVES_SUBDIR: &str = "hives";
 pub const HIVE_INSTALL_UNIT: &str = "hive-install";
 
 pub fn thrum_sock() -> PathBuf {
-    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
+    if let Some(p) = set("HUM_THRUM_SOCK") {
         return PathBuf::from(p);
     }
-    if let Some(p) = std::env::var_os("HUM_SOCKET") {
+    if let Some(p) = set("HUM_SOCKET") {
         return PathBuf::from(p);
     }
     state_dir().join(THRUM_SOCK_BASENAME)
 }
 
 pub fn thrum_sock_resolved() -> PathBuf {
-    if let Some(p) = std::env::var_os("HUM_THRUM_SOCK") {
+    if let Some(p) = set("HUM_THRUM_SOCK") {
         return PathBuf::from(p);
     }
-    if let Some(p) = std::env::var_os("HUM_SOCKET") {
+    if let Some(p) = set("HUM_SOCKET") {
         return PathBuf::from(p);
     }
     if let Some(rt) = RuntimeInfo::read() {
@@ -363,7 +367,7 @@ pub fn daemon_logs(name: &str) -> DaemonLogs {
 }
 
 fn xdg(var: &str) -> PathBuf {
-    if let Some(v) = std::env::var_os(var) {
+    if let Some(v) = set(var) {
         return PathBuf::from(v);
     }
     init();

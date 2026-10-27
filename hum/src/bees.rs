@@ -151,6 +151,6 @@ pub fn list() -> Result<()> {
     }
 
     println!("● nestled in humd   ○ entered or exited, not nestled");
-    println!("verbs: hum bee enter --hive <hive> [--as <label>]   |   hum bee <id> exit | reenter");
+    println!("verbs: hum bee enter --hive <hive> --role <role> [--as <label>]   |   hum bee <id> exit | reenter");
     Ok(())
 }

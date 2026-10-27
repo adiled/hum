@@ -1,6 +1,8 @@
 //! Connection registry — who is currently reachable, and how.
 //!
-//! Each [`Reach`] carries the chi scope its client declared in its hello.
+//! Each [`Reach`] holds the sids its client prompted or attached under,
+//! whether a breath has admitted its hello, and the chi scope its client
+//! declared in its hello.
 //! An empty scope means unspecified, not "wants nothing": a client that
 //! declared nothing accepts every chi. That is the only answer available
 //! to every bee written before the field existed, and narrowing it would
@@ -13,6 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -26,7 +29,8 @@ pub struct Reach {
     pub client_id: ClientId,
     tx: mpsc::Sender<Value>,
     audit: Arc<super::audit::Audit>,
-    sigils: Mutex<HashSet<String>>,
+    sids: Mutex<HashSet<String>>,
+    admitted: AtomicBool,
     chis: Mutex<HashSet<String>>,
     closing: Notify,
 }
@@ -46,7 +50,8 @@ impl Reach {
                 client_id,
                 tx,
                 audit,
-                sigils: Mutex::new(HashSet::new()),
+                sids: Mutex::new(HashSet::new()),
+                admitted: AtomicBool::new(false),
                 chis: Mutex::new(HashSet::new()),
                 closing: Notify::new(),
             },
@@ -67,16 +72,28 @@ impl Reach {
         self.closing.notified().await;
     }
 
-    pub fn add_sigil(&self, sigil: String) {
-        self.sigils.lock().insert(sigil);
+    pub fn admit(&self) {
+        self.admitted.store(true, Ordering::SeqCst);
     }
 
-    pub fn has_sigil(&self, sigil: &str) -> bool {
-        self.sigils.lock().contains(sigil)
+    pub fn admitted(&self) -> bool {
+        self.admitted.load(Ordering::SeqCst)
     }
 
-    pub fn sigil_count(&self) -> usize {
-        self.sigils.lock().len()
+    pub fn hold(&self, sid: String) {
+        self.sids.lock().insert(sid);
+    }
+
+    pub fn holds(&self, sid: &str) -> bool {
+        self.sids.lock().contains(sid)
+    }
+
+    pub fn release(&self, sid: &str) {
+        self.sids.lock().remove(sid);
+    }
+
+    pub fn sids(&self) -> Vec<String> {
+        self.sids.lock().iter().cloned().collect()
     }
 
     pub fn replace_chis(&self, chis: Vec<String>) {
@@ -104,8 +121,8 @@ impl Registry {
         self.by_id.insert(reach.client_id.clone(), reach);
     }
 
-    pub(crate) fn remove(&mut self, client_id: &str) {
-        self.by_id.remove(client_id);
+    pub(crate) fn remove(&mut self, client_id: &str) -> Option<Arc<Reach>> {
+        self.by_id.remove(client_id)
     }
 
     pub(crate) fn get(&self, client_id: &str) -> Option<&Reach> {
