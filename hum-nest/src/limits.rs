@@ -12,8 +12,12 @@
 //! Each rlimit is set soft and hard alike, on the one process; what it
 //! spawns inherits the limit, and counts against it on its own.
 //!
-//! `wall_clock_ms` is no rlimit: `serve_nurse` ends a cell that outlives
-//! it, on every platform.
+//! `rss_bytes` caps the virtual address space (`RLIMIT_AS`), not the
+//! resident set: every mapping counts, touched or not, and one past it
+//! fails with `ENOMEM`.
+//!
+//! `wall_clock_ms` is how long a cell may live from its raise. It is no
+//! rlimit: `serve_nurse` ends a cell that outlives it, on every platform.
 //!
 //! cgroups, seccomp, namespaces: out of scope at this tier — rlimit only.
 //!
@@ -34,13 +38,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
-    /// Caps the process's virtual address space (`RLIMIT_AS`), not its
-    /// resident set: every mapping counts, touched or not, and one past it
-    /// fails with `ENOMEM`.
     pub rss_bytes: Option<u64>,
     pub fd_count: Option<u32>,
     pub cpu_secs: Option<u32>,
-    /// How long a cell may live from its raise before the nest ends it.
     pub wall_clock_ms: Option<u64>,
     pub nice: Option<i32>,
 }
