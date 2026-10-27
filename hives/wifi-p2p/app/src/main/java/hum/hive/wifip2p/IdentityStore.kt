@@ -1,41 +1,55 @@
-// The bee is entered on the humd it lands on (`hum bee enter --hive
-// wifi-p2p`); the id that prints and the key filed under it are put in
-// the app's data dir as `hum/bee` and `hum/bees/<id>.key`. Same seed
-// format and signed message as hum-identity.
+// A bee is its key. `hum bee enter --hive wifi-p2p --role forager --as
+// <label>`, run on the humd the bee lands on, files the key and prints the
+// bee's id; both go in the app's files directory, as hum/bee and
+// hum/bees/<id>.key, the key the 32-byte seed hum filed. The hello is
+// signed as hum-identity signs it: ed25519 over
+// hum-bee-socket-v1:<hid>:<signedAt>.
 
 package hum.hive.wifip2p
 
-import java.io.File
-import java.security.MessageDigest
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import java.io.File
+import java.security.MessageDigest
 
-object IdentityStore {
-    private const val SOCKET_DOMAIN = "hum-bee-socket-v1"
+class BeeKey(seed: ByteArray) {
+    private val signing = Ed25519PrivateKeyParameters(seed.also { require(it.size == 32) }, 0)
+    val pubkey: ByteArray = signing.generatePublicKey().encoded
+    val hid: String = "bee_" + hex(sha256(pubkey))
 
-    fun signedAs(dataDir: String): Map<String, Any> {
-        val id = File(dataDir, "hum/bee").readText().trim()
-        require(Regex("^bee_[0-9a-f]{64}$").matches(id)) { "hum/bee names no bee: $id" }
-        val seed = File(dataDir, "hum/bees/$id.key").readBytes()
-        require(seed.size == 32) { "bee key for $id is ${seed.size} bytes, expected 32" }
-
-        val priv = Ed25519PrivateKeyParameters(seed, 0)
-        val pub = priv.generatePublicKey().encoded
-        val hid = "bee_" + hex(MessageDigest.getInstance("SHA-256").digest(pub))
-        require(hid == id) { "the key filed as $id is not that bee's key" }
-
-        val signedAt = System.currentTimeMillis()
+    fun sign(signedAt: Long): String {
+        val message = "${IdentityStore.DOMAIN}:$hid:$signedAt".toByteArray(Charsets.UTF_8)
         val signer = Ed25519Signer()
-        signer.init(true, priv)
-        val msg = "$SOCKET_DOMAIN:$hid:$signedAt".toByteArray()
-        signer.update(msg, 0, msg.size)
-        return mapOf(
-            "hid" to hid,
-            "pubkey" to hex(pub),
-            "signedAt" to signedAt,
-            "signature" to hex(signer.generateSignature()),
-        )
+        signer.init(true, signing)
+        signer.update(message, 0, message.size)
+        return hex(signer.generateSignature())
     }
 
-    private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+    /** What a hello carries to prove it comes from this key. */
+    fun proof(signedAt: Long): List<Pair<String, Any>> = listOf(
+        "hid" to hid,
+        "from" to hid,
+        "pubkey" to hex(pubkey),
+        "signedAt" to signedAt,
+        "signature" to sign(signedAt),
+    )
 }
+
+object IdentityStore {
+    const val DOMAIN = "hum-bee-socket-v1"
+    private val BEE_ID = Regex("^bee_[0-9a-f]{64}$")
+
+    fun load(dir: File): BeeKey {
+        val id = File(dir, "bee").readText().trim()
+        require(BEE_ID.matches(id)) { "${File(dir, "bee")} names no bee: $id" }
+        val seed = File(dir, "bees/$id.key").readBytes()
+        require(seed.size == 32) { "the key filed as $id is ${seed.size} bytes, not 32" }
+        val key = BeeKey(seed)
+        require(key.hid == id) { "the key filed as $id is not that bee's key" }
+        return key
+    }
+}
+
+internal fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
+
+internal fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }

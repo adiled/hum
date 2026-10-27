@@ -20,4 +20,7 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 portable-pty = "0.9"
+
+[dev-dependencies]
+hum-identity = { path = "../../hum-identity" }
 [workspace]

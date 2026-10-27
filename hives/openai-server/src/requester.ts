@@ -8,20 +8,32 @@
 // away mid-bloom.
 //
 // A reach for one of its caller's tools is held by callId until the caller
-// answers it. A reach for a sid whose bloom has already gone back to the
-// caller cannot be put to the caller any more, so it is answered at once
-// with an error asking the cell to call again. A reach the requester sends
-// itself, a scent, waits for its result by callId. An idle requester's
-// link closes after ten minutes and opens again on its next request.
+// answers it, for thirty minutes at most. A hold let go unanswered, as it
+// lapses or as the link closes, cancels its bloom, unless a prompt has
+// since opened another on its sid; the cancel's wilt is never taken for a
+// later bloom's. A link that ends on its own leaves its cancels to the
+// key's next link. A reach for a sid whose bloom has already gone back to
+// the caller cannot be put to the caller any more, so it is answered at
+// once with an error asking the cell to call again. A reach the requester
+// sends itself, a scent, waits for its result by callId. A requester's
+// link closes once it has been idle ten minutes, following no bloom and
+// holding no call, and opens again on its next request.
 
 import { randomUUID } from "node:crypto";
-import { Bee, Chi, Role, type Model, type Tone } from "../../../thrum-clients/ts/index.ts";
+import { Bee, Chi, Role, type Hello, type Model, type Tone } from "../../../thrum-clients/ts/index.ts";
 import pkg from "../package.json";
 import { HIVE } from "./config.ts";
 import { HttpError } from "./http.ts";
 
 export const SOURCE = "https://github.com/adiled/hum/tree/main/hives/openai-server";
 export const VERSION = pkg.version;
+
+export const HELLO: Hello = {
+  version: VERSION,
+  propensity: { statefulness: "stateful", richness: "rich", wire: "openai/api" },
+  chis: ["hello", "prompt", "cancel", "cleanup", "tendril-reach", "tendril-result", "unfurl", "wilt", "error", "tendril-info"],
+  source: SOURCE,
+};
 
 const IDLE_MS = 10 * 60_000;
 const READY_MS = 10_000;
@@ -48,10 +60,11 @@ export class Requester {
   #asked = new Map<string, (tone: Tone<"tendril-result">) => void>();
   #held = new Map<string, { sid: string; at: number }>();
   #rested = new Set<string>();
+  #stilled = new Set<string>();
 
   constructor(label: string, hum?: string) {
     this.label = label;
-    this.bee = new Bee({ hive: HIVE, as: label, role: Role.forager, hello: { version: VERSION, source: SOURCE }, hum });
+    this.bee = new Bee({ hive: HIVE, as: label, role: Role.forager, hello: HELLO, hum });
     this.bee.on(Chi.breath, (b) => {
       this.reach = { models: b.models ?? [], scents: b.scents ?? [], tools: b.tools ?? [] };
       this.#breathed = true;
@@ -81,6 +94,7 @@ export class Requester {
   }
 
   #stray(t: Tone): void {
+    if (t.sid && (t.chi === "wilt" || t.chi === "error")) this.#stilled.delete(t.sid);
     if (t.chi !== "tendril-reach" || !t.sid || !this.#rested.has(t.sid)) return;
     this.bee.send({
       chi: "tendril-result",
@@ -110,7 +124,10 @@ export class Requester {
     this.lastUsed = Date.now();
     this.#rested.delete(sid);
     this.#following.set(sid, fn);
-    this.bee.onSid(sid, fn);
+    this.bee.onSid(sid, (t) => {
+      if (t.chi === "wilt" && t.reason === "cancel" && this.#stilled.delete(sid)) return;
+      fn(t);
+    });
   }
 
   unfollow(sid: string, rest = false): void {
@@ -125,17 +142,48 @@ export class Requester {
 
   send(tone: Tone): void {
     this.lastUsed = Date.now();
+    if (tone.chi === "prompt" && tone.sid) {
+      for (const [id, h] of this.#held) if (h.sid === tone.sid) this.#held.delete(id);
+    }
     this.bee.send(tone);
+  }
+
+  cancel(sid: string): void {
+    this.#stilled.add(sid);
+    this.bee.send({ chi: "cancel", sid });
   }
 
   hold(sid: string, callId: string): void {
     this.#held.set(callId, { sid, at: Date.now() });
   }
 
+  #live(now: number): Array<{ sid: string; at: number }> {
+    return [...this.#held.values()].filter((h) => now - h.at <= HELD_MS);
+  }
+
+  lapse(now = Date.now()): void {
+    const lapsed = new Set<string>();
+    for (const [id, h] of this.#held) {
+      if (now - h.at <= HELD_MS) continue;
+      this.#held.delete(id);
+      lapsed.add(h.sid);
+    }
+    const live = new Set(this.#live(now).map((h) => h.sid));
+    for (const sid of lapsed) if (!live.has(sid) && !this.#following.has(sid)) this.cancel(sid);
+  }
+
+  letGo(): string[] {
+    const sids = [...new Set([...this.#held.values()].map((h) => h.sid))];
+    this.#held.clear();
+    return sids;
+  }
+
   heldSid(callIds: string[]): string | undefined {
     const now = Date.now();
-    for (const [id, h] of this.#held) if (now - h.at > HELD_MS) this.#held.delete(id);
-    const sids = new Set(callIds.map((id) => this.#held.get(id)?.sid));
+    const sids = new Set(callIds.map((id) => {
+      const h = this.#held.get(id);
+      return h && now - h.at <= HELD_MS ? h.sid : undefined;
+    }));
     if (sids.size !== 1) return undefined;
     const [sid] = sids;
     return sid;
@@ -161,17 +209,19 @@ export class Requester {
     });
   }
 
-  busy(): boolean {
-    return this.#following.size > 0 || this.#asked.size > 0;
+  idle(now = Date.now()): boolean {
+    return this.#following.size === 0 && this.#asked.size === 0 && this.#live(now).length === 0 && now - this.lastUsed > IDLE_MS;
   }
 
   close(): void {
+    for (const sid of this.letGo()) this.cancel(sid);
     void this.bee.close();
   }
 }
 
 export class Requesters {
   readonly #all = new Map<string, Requester>();
+  readonly #owed = new Map<string, string[]>();
   readonly #hum: string | undefined;
 
   constructor(hum?: string) {
@@ -179,7 +229,8 @@ export class Requesters {
     setInterval(() => {
       const now = Date.now();
       for (const [label, rq] of this.#all) {
-        if (!rq.busy() && now - rq.lastUsed > IDLE_MS) {
+        rq.lapse(now);
+        if (rq.idle(now)) {
           rq.close();
           this.#all.delete(label);
         }
@@ -198,12 +249,18 @@ export class Requesters {
       this.#all.set(label, born);
       born.bee.closed().catch((e) => {
         console.error(`[openai-server] ${label}: ${e}`);
-        if (this.#all.get(label) === born) this.#all.delete(label);
+        if (this.#all.get(label) !== born) return;
+        this.#all.delete(label);
+        const owed = born.letGo();
+        if (owed.length > 0) this.#owed.set(label, [...(this.#owed.get(label) ?? []), ...owed]);
       });
       rq = born;
     }
     rq.lastUsed = Date.now();
     await rq.ready();
+    const owed = this.#owed.get(label);
+    this.#owed.delete(label);
+    for (const sid of owed ?? []) rq.cancel(sid);
     return rq;
   }
 }

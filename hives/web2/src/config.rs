@@ -222,6 +222,9 @@ fn service(name: &str, raw: RawService, mcp_servers: &BTreeMap<String, RawMcp>, 
         (None, None, Some(mcp)) => Kind::Mcp(mcp_server(mcp)?),
         (None, None, None) => bail!("needs `openapi` or `mcp`, or an entry of the same name in `mcpServers`"),
     };
+    if raw.auth.is_some() && matches!(kind, Kind::Mcp(McpServer::Stdio { .. })) {
+        bail!("a stdio MCP server takes no `auth`: it reads its credentials from its environment, so give them in its `env` (`${{VAR}}` reads one from web2's)");
+    }
     Ok(Service {
         name: name.to_string(),
         kind,
@@ -330,8 +333,11 @@ fn auth(raw: &Value, port: u16) -> Result<Auth> {
 }
 
 pub fn edit(change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>) -> Result<()> {
-    let path = config_path();
-    let mut doc = match std::fs::read_to_string(&path) {
+    edit_at(&config_path(), change)
+}
+
+pub fn edit_at(path: &Path, change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>) -> Result<()> {
+    let mut doc = match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Value>(&text).with_context(|| format!("read {}", path.display()))? {
             Value::Object(obj) => obj,
             _ => bail!("{} is not a JSON object", path.display()),
@@ -347,7 +353,7 @@ pub fn edit(change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<(
     }
     let staged = path.with_extension(format!("json.{}", std::process::id()));
     crate::auth::write_private(&staged, text.as_bytes())?;
-    std::fs::rename(&staged, &path).with_context(|| format!("place {}", path.display()))
+    std::fs::rename(&staged, path).with_context(|| format!("place {}", path.display()))
 }
 
 pub fn add_to_list(doc: &mut serde_json::Map<String, Value>, service: &str, key: &str, names: &[String]) -> Vec<String> {
@@ -448,6 +454,19 @@ mod tests {
     }
 
     #[test]
+    fn a_stdio_server_is_refused_an_auth_and_pointed_at_its_env() {
+        for raw in [
+            r#"{ "services": { "x": { "mcp": { "command": "y" }, "auth": "bearer" } } }"#,
+            r#"{ "mcpServers": { "x": { "command": "y" } }, "services": { "x": { "auth": { "bearer": { "env": "T" } } } } }"#,
+        ] {
+            let err = format!("{:#}", parse(raw, PathBuf::new()).unwrap_err());
+            assert!(err.contains("services.x") && err.contains("takes no `auth`") && err.contains("`env`"), "{err}");
+        }
+        let c = parsed(r#"{ "services": { "x": { "mcp": { "url": "https://x/mcp" }, "auth": "bearer" } } }"#);
+        assert_eq!(c.services["x"].auth, Some(Auth::Bearer(Secret::Stored)));
+    }
+
+    #[test]
     fn interpolation_reads_the_environment_and_names_what_is_missing() {
         unsafe { std::env::set_var("WEB2_TEST_HOST", "api.example.com") };
         assert_eq!(interpolate("https://${WEB2_TEST_HOST}/v1").unwrap(), "https://api.example.com/v1");
@@ -461,6 +480,8 @@ mod tests {
         assert!(glob("*wiki*", "askwikiquestion"));
         assert!(glob("*", "anything"));
         assert!(glob("issues/create", "issues/create"));
+        assert!(glob("repos/*", "repos/delete-2.0"));
+        assert!(glob("*", ""));
         assert!(!glob("read*", "askwikiquestion"));
         assert!(!glob("get", "getx"));
     }

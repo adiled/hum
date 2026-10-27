@@ -6,7 +6,9 @@
 //!
 //! As in claude-cli, a cell never works the host it runs on: Claude
 //! Code's own host tools, [`HOST_TOOLS`], are always off, and its shell
-//! is the bloom's `bash` over the nest's MCP.
+//! is the bloom's `bash` over the nest's MCP. It is held to its nest's
+//! bounds too, laid on it as it spawns, since a PTY spawn takes no
+//! `pre_exec`.
 //!
 //! The cell is fed the sigil's tones and types a prompt's words; it gives
 //! back a `cell-ready` pulse once the REPL is perched.
@@ -75,6 +77,21 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     argv
 }
 
+pub fn claude_program() -> Result<std::path::PathBuf> {
+    if let Some(named) = std::env::var_os("CLAUDE_CLI_PATH").filter(|v| !v.is_empty()) {
+        return Ok(named.into());
+    }
+    let mut dirs = hum_paths::program_dirs();
+    dirs.push(hum_paths::home().join(".claude/local"));
+    hum_paths::find_program_in("claude", &dirs).ok_or_else(|| {
+        let looked: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        anyhow::anyhow!(
+            "no claude program in {}; install Claude Code, or name it in CLAUDE_CLI_PATH",
+            looked.join(":")
+        )
+    })
+}
+
 #[async_trait]
 impl Nurse for ClaudeReplNurse {
     fn ephemeral(&self) -> bool {
@@ -82,7 +99,7 @@ impl Nurse for ClaudeReplNurse {
     }
 
     async fn raise(&self, spec: Egg) -> Result<Cell> {
-        let cli = std::env::var("CLAUDE_CLI_PATH").unwrap_or_else(|_| "claude".into());
+        let cli = claude_program()?;
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -109,9 +126,16 @@ impl Nurse for ClaudeReplNurse {
             cmd.arg(a);
         }
 
-        let mut child = pair.slave.spawn_command(cmd).context("pty spawn")?;
+        let mut child = pair.slave.spawn_command(cmd).with_context(|| format!("pty spawn {}", cli.display()))?;
         let pid = child.process_id();
         drop(pair.slave);
+        if let Some(pid) = pid
+            && let Err(e) = spec.bounds.apply_to(pid)
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e).context("apply resource limits");
+        }
 
         let mut reader = pair.master.try_clone_reader().context("pty reader")?;
         let writer = pair.master.take_writer().context("pty writer")?;
@@ -229,5 +253,29 @@ fn words_of(tone: &Value) -> String {
         tone.get("text").and_then(Value::as_str).unwrap_or("").to_string()
     } else {
         words.join("\n")
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_cell_is_held_to_its_bounds() {
+        let cli = std::env::temp_dir().join(format!("hum-repl-bounds-{}", std::process::id()));
+        std::fs::write(&cli, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&cli, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("CLAUDE_CLI_PATH", &cli) };
+        let mut egg = Egg::new(hum_identity::HumId::mint(), "claude-haiku-4-5", std::env::temp_dir().to_string_lossy());
+        egg.bounds = hum_nest::limits::Bounds { rss_bytes: Some(1 << 30), fd_count: Some(64), ..Default::default() };
+        let cell = ClaudeReplNurse.raise(egg).await.expect("raise");
+        let pid = cell.mark.expect("pid");
+        let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap();
+        cell.still();
+        let _ = std::fs::remove_file(&cli);
+        let of = |name: &str| limits.lines().find(|l| l.starts_with(name)).unwrap()[name.len()..]
+            .split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        assert_eq!(of("Max address space"), "1073741824 1073741824");
+        assert_eq!(of("Max open files"), "64 64");
     }
 }

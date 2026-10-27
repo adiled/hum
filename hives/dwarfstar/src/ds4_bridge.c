@@ -222,7 +222,7 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
     rc = ds4_session_sync(bridge->session, &tokens, err, errlen);
     ds4_tokens_free(&tokens);
     if (rc == DS4_SESSION_SYNC_INTERRUPTED) {
-        wilt->reason = "cancelled";
+        wilt->reason = "cancel";
         return 0;
     }
     if (rc != 0) {
@@ -236,12 +236,12 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
         char *piece;
 
         if (atomic_load(&bridge->cancelled)) {
-            wilt->reason = "cancelled";
+            wilt->reason = "cancel";
             break;
         }
         if (wilt->tokens_out >= max_tokens ||
             ds4_session_pos(bridge->session) >= ds4_session_ctx(bridge->session)) {
-            wilt->reason = "length";
+            wilt->reason = "max_tokens";
             break;
         }
         token = ds4_session_sample(bridge->session, temperature, 0, DS4_DEFAULT_TOP_P,

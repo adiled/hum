@@ -31,9 +31,9 @@ web2: the web2 world as one tendril, wrepl.
   web2 serve               the bee: an attendant serving wrepl on the thrum
   web2 login <service>     sign a service in (a token at the prompt, or piped with --token-stdin; or OAuth in a browser)
   web2 logout <service>    forget what web2 holds for a service
-  web2 allow <service> <command|glob>...   turn writes on, by name; `*` matches any run of letters
+  web2 allow <service> <command|glob>...   turn writes on, by name; `*` matches any run of characters
   web2 deny <service> <command|glob>...    turn commands off, whatever else says
-  web2 review <service>    go through a service's commands that are off, and turn on the ones you choose
+  web2 review <service>    go through a service's writes that are off, and turn on the ones you choose
   web2 status              the services, and how each is signed in
   web2 refresh [service]   read specs and tool lists again
   web2 import [--dry-run]  copy in the MCP servers the harnesses on this machine already know
@@ -94,7 +94,9 @@ async fn run(words: &[String]) -> Result<ExitCode> {
         [one] => one.clone(),
         many => shlex::try_join(many.iter().map(String::as_str)).unwrap_or_else(|_| many.join(" ")),
     };
-    let answer = engine()?.run(&line).await;
+    let engine = engine()?;
+    let answer = engine.run(&line).await;
+    engine.close().await;
     if answer.is_error {
         eprintln!("{}", answer.output);
         return Ok(ExitCode::FAILURE);
@@ -105,6 +107,12 @@ async fn run(words: &[String]) -> Result<ExitCode> {
 
 async fn repl() -> Result<ExitCode> {
     let engine = engine()?;
+    let outcome = read_eval(&engine).await;
+    engine.close().await;
+    outcome
+}
+
+async fn read_eval(engine: &Engine) -> Result<ExitCode> {
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
         let mut failed = false;
@@ -171,24 +179,54 @@ async fn allow(args: &[String], key: &str) -> Result<ExitCode> {
         }
         Ok(())
     })?;
-    let verb = if key == "allow" { "on" } else { "off" };
-    match added.as_slice() {
-        [] => println!("{service}: already {key}s {}", names.join(" ")),
-        some => println!("{service}: {} {verb}", some.join(" ")),
+    if key == "deny" {
+        match added.as_slice() {
+            [] => println!("{service}: already denies {}", names.join(" ")),
+            some => println!("{service}: {} off", some.join(" ")),
+        }
+        return Ok(ExitCode::SUCCESS);
     }
-    if key == "allow"
-        && let Ok(off) = engine()?.off(service).await
-    {
+    let deny = &config.services[service].deny;
+    let covered = |p: &String| deny.iter().any(|d| config::glob(&catalogue::normalize(d), &catalogue::normalize(p)));
+    let on: Vec<&str> = added.iter().filter(|p| !covered(p)).map(String::as_str).collect();
+    if added.is_empty() {
+        println!("{service}: already allows {}", names.join(" "));
+    } else if !on.is_empty() {
+        println!("{service}: {} on", on.join(" "));
+    }
+    let (mut kept, open): (Vec<String>, Vec<String>) = names.iter().cloned().partition(|p| covered(p));
+    let engine = engine()?;
+    let off = engine.off(service).await.ok();
+    engine.close().await;
+    for c in off.iter().flatten().filter(|c| engine::named(&open, c) && engine::named(deny, c)) {
+        if !kept.contains(&c.name) {
+            kept.push(c.name.clone());
+        }
+    }
+    kept_off(service, &kept);
+    if let Some(off) = off {
         println!("{service} has {} command{} still off", off.len(), if off.len() == 1 { "" } else { "s" });
     }
     Ok(ExitCode::SUCCESS)
 }
 
+fn kept_off(service: &str, denied: &[String]) {
+    if !denied.is_empty() {
+        println!("{}: off by services.{service}.deny in web2.json, whatever allow says", denied.join(" "));
+    }
+}
+
 async fn review(args: &[String]) -> Result<ExitCode> {
     let [service] = args else { bail!("web2 review <service>") };
-    let off = engine()?.off(service).await?;
+    let engine = engine()?;
+    let off = engine.off(service).await;
+    engine.close().await;
+    let off = off?;
+    let deny = &engine.config.services[service].deny;
+    let (denied, off): (Vec<_>, Vec<_>) = off.into_iter().partition(|c| engine::named(deny, c));
+    kept_off(service, &denied.iter().map(|c| c.name.clone()).collect::<Vec<_>>());
     if off.is_empty() {
-        println!("{service} has nothing off");
+        println!("{service} has nothing {}off", if denied.is_empty() { "" } else { "else " });
         return Ok(ExitCode::SUCCESS);
     }
     let stdin = std::io::stdin();
@@ -269,6 +307,7 @@ async fn refresh(args: &[String]) -> Result<ExitCode> {
             }
         }
     }
+    engine.close().await;
     Ok(if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
@@ -300,7 +339,7 @@ fn import(args: &[String]) -> Result<ExitCode> {
     if dry {
         println!("(a dry run: {} not written)", path.display());
     } else {
-        import::apply(&path, existing, &plan)?;
+        import::apply(&path, &plan)?;
         println!("written to {}; each one only reads until web2.json turns its writes on", path.display());
     }
     Ok(ExitCode::SUCCESS)

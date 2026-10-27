@@ -16,9 +16,12 @@
 //!   reaches carry its sigil's sid.
 //! - **A live cell**: a cell is raised for how its blooms grow, its
 //!   prompt's `trellis` and `sepal`. It is fed the next prompt of its
-//!   sigil only while that prompt grows the same way, has words, and its
+//!   sigil only while it is not cancelled, its nurse is not
+//!   [`ephemeral`], and that prompt grows the same way, has words, and its
 //!   `graft` holds no bloom the cell did not grow; otherwise a fresh cell
-//!   is raised.
+//!   is raised. A sigil raises one cell at a time: its next prompt waits
+//!   for the cell being raised. A cell that outlives its nest's
+//!   `bounds.wallClockMs` is evicted.
 //! - **Growing on**: a prompt with no words grows on from its graft, so it
 //!   goes only to a nurse that [`grows_on`]; any other refuses it with
 //!   `cannot-grow-on`, and a prompt with neither words nor a graft is
@@ -34,6 +37,7 @@
 //! - **Cleanup**: `chi:"cleanup"` forgets the sigil's tools.
 //!
 //! [`grows_on`]: crate::Nurse::grows_on
+//! [`ephemeral`]: crate::Nurse::ephemeral
 //!
 //! A cell runs in its nest's directory, `hives/<hive>/nest` in the state
 //! root, never where its bloom builds: that host is a builder's, reached
@@ -46,6 +50,7 @@
 //! refused bee ends `serve_nurse` with the refusal, so the process exits
 //! non-zero and its supervisor decides.
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -110,6 +115,7 @@ pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert)
     info!(%mcp_url, "nurse.mcp.up");
 
     let cells: Arc<Mutex<LruCache<String, CellBundle>>> = Arc::new(Mutex::new(LruCache::new(pool)));
+    let gates = Arc::new(Gates::default());
 
     while let Some(event) = bee.next().await {
         let tone = match event {
@@ -132,12 +138,13 @@ pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert)
                 let nurse = nurse.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
+                let gates = gates.clone();
                 let mcp_url = mcp_url.clone();
                 let nest = nest.clone();
                 let home = home.clone();
                 let first_model = first_model.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_prompt(nurse, write_half, cells, nest, mcp_url, home, first_model, tone).await {
+                    if let Err(e) = handle_prompt(nurse, write_half, cells, gates, nest, mcp_url, home, first_model, tone).await {
                         warn!(err = %e, "nurse.prompt.handle.failed");
                     }
                 });
@@ -196,7 +203,31 @@ pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert)
     Ok(())
 }
 
+trait Sounds: Clone + Send + Sync + 'static {
+    fn send(&self, tone: Value);
+}
+
+impl Sounds for hum_thrum::Sender {
+    fn send(&self, tone: Value) {
+        hum_thrum::Sender::send(self, tone);
+    }
+}
+
+#[derive(Default)]
+struct Gates(parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl Gates {
+    fn of(&self, sid: &str) -> Arc<Mutex<()>> {
+        let mut gates = self.0.lock();
+        gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+        gates.entry(sid.to_string()).or_default().clone()
+    }
+}
+
+static RAISED: AtomicU64 = AtomicU64::new(0);
+
 struct CellBundle {
+    id: u64,
     feed: mpsc::Sender<Value>,
     cancel: tokio_util::sync::CancellationToken,
     wilted: Arc<AtomicBool>,
@@ -210,7 +241,7 @@ impl Drop for CellBundle {
 }
 
 async fn pulse(
-    write_half: &hum_thrum::Sender,
+    write_half: &impl Sounds,
     kind: &str,
     headroom: Value,
 ) {
@@ -227,10 +258,11 @@ fn grows_of(body: &thrum_core::PromptBody) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_prompt<N: Nurse + 'static>(
+async fn handle_prompt<N: Nurse + 'static, W: Sounds>(
     nurse: Arc<N>,
-    write_half: hum_thrum::Sender,
+    write_half: W,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+    gates: Arc<Gates>,
     nest: Arc<NestConfig>,
     mcp_url: String,
     home: String,
@@ -258,10 +290,13 @@ async fn handle_prompt<N: Nurse + 'static>(
         }
     }
 
+    let gate = gates.of(&sid);
+    let _raising = gate.lock().await;
     {
         let mut g = cells.lock().await;
         let stale = g.peek(&sid).is_some_and(|bundle| {
-            !worded || bundle.grows != grows || (grafted > 0 && bundle.grown.load(Ordering::SeqCst) != grafted)
+            nurse.ephemeral() || bundle.cancel.is_cancelled() || !worded || bundle.grows != grows
+                || (grafted > 0 && bundle.grown.load(Ordering::SeqCst) != grafted)
         });
         if stale {
             trace!(sid = %sid, grafted, "nurse.cell.raised-anew");
@@ -316,6 +351,7 @@ async fn handle_prompt<N: Nurse + 'static>(
     let wilted = Arc::new(AtomicBool::new(false));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
     let grown = Arc::new(AtomicU64::new(grafted));
+    let id = RAISED.fetch_add(1, Ordering::SeqCst);
 
     let dispatch = {
         let sid = sid.clone();
@@ -362,8 +398,7 @@ async fn handle_prompt<N: Nurse + 'static>(
             let age = now_ms().saturating_sub(last);
             if age >= nest_for_idle.idle_ms {
                 let live = {
-                    let mut g = cells_for_idle.lock().await;
-                    g.pop(&sid_for_idle).map(|_| g.len())
+                    pop_own(&mut *cells_for_idle.lock().await, &sid_for_idle, id)
                 };
                 if let Some(live) = live {
                     warn!(sid = %sid_for_idle, age_ms = age, "nurse.cell.idle.kill");
@@ -377,6 +412,7 @@ async fn handle_prompt<N: Nurse + 'static>(
     let live = {
         let mut g = cells.lock().await;
         g.put(sid.clone(), CellBundle {
+            id,
             feed,
             cancel: cancel.clone(),
             wilted: wilted.clone(),
@@ -387,6 +423,19 @@ async fn handle_prompt<N: Nurse + 'static>(
         g.len()
     };
     pulse(&write_half, "cell-spawned", nest.headroom(live)).await;
+
+    if let Some(ms) = nest.bounds.wall_clock_ms {
+        let outlived = outlived(cells.clone(), sid.clone(), id, cancel, std::time::Duration::from_millis(ms));
+        let write_for_wall = write_half.clone();
+        let nest_for_wall = nest.clone();
+        let sid_for_wall = sid.clone();
+        tokio::spawn(async move {
+            if let Some(live) = outlived.await {
+                warn!(sid = %sid_for_wall, wall_clock_ms = ms, "nurse.cell.wall-clock.kill");
+                pulse(&write_for_wall, "cell-evicted", nest_for_wall.headroom(live)).await;
+            }
+        });
+    }
 
     trace!(sid = %sid, "nurse.cell.spawned");
 
@@ -408,8 +457,7 @@ async fn handle_prompt<N: Nurse + 'static>(
             }));
         }
         let live = {
-            let mut g = cells_for_cleanup.lock().await;
-            g.pop(&sid_for_cleanup).map(|_| g.len())
+            pop_own(&mut *cells_for_cleanup.lock().await, &sid_for_cleanup, id)
         };
         if let Some(live) = live {
             pulse(&write_for_cleanup, "cell-died", nest_for_cleanup.headroom(live)).await;
@@ -418,6 +466,28 @@ async fn handle_prompt<N: Nurse + 'static>(
     });
 
     Ok(())
+}
+
+fn pop_own(cells: &mut LruCache<String, CellBundle>, sid: &str, id: u64) -> Option<usize> {
+    if cells.peek(sid)?.id != id {
+        return None;
+    }
+    cells.pop(sid);
+    Some(cells.len())
+}
+
+async fn outlived(
+    cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+    sid: String,
+    id: u64,
+    cancel: tokio_util::sync::CancellationToken,
+    wall_clock: std::time::Duration,
+) -> Option<usize> {
+    tokio::select! {
+        _ = cancel.cancelled() => return None,
+        _ = tokio::time::sleep(wall_clock) => {}
+    }
+    pop_own(&mut *cells.lock().await, &sid, id)
 }
 
 fn path_safe(sid: &str) -> String {
@@ -443,6 +513,7 @@ mod tests {
     fn bundle(cancel: CancellationToken) -> CellBundle {
         let (tx_in, _rx_in) = mpsc::channel::<Value>(1);
         CellBundle {
+            id: RAISED.fetch_add(1, Ordering::SeqCst),
             feed: tx_in,
             cancel,
             wilted: Arc::new(AtomicBool::new(false)),
@@ -479,6 +550,201 @@ mod tests {
         drop(popped);
         assert!(watch1.is_cancelled(), "evicted bundle should have cancelled on drop");
         assert!(!watch2.is_cancelled(), "remaining bundle untouched");
+    }
+
+    #[tokio::test]
+    async fn a_cell_outliving_its_wall_clock_is_evicted() {
+        let cells = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(2).unwrap())));
+        let cancel = CancellationToken::new();
+        let cell = bundle(cancel.clone());
+        let id = cell.id;
+        cells.lock().await.put("a".to_string(), cell);
+        let live = outlived(cells.clone(), "a".into(), id, cancel.clone(), std::time::Duration::from_millis(10)).await;
+        assert_eq!(live, Some(0));
+        assert!(cancel.is_cancelled(), "the outlived cell is stilled");
+        assert!(cells.lock().await.peek("a").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_wall_clock_leaves_the_cell_raised_after_its_own() {
+        let cells = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(2).unwrap())));
+        let first = CancellationToken::new();
+        let cell = bundle(first.clone());
+        let id = cell.id;
+        cells.lock().await.put("a".to_string(), cell);
+        let wall = tokio::spawn(outlived(cells.clone(), "a".into(), id, first.clone(), std::time::Duration::from_millis(50)));
+        let next = CancellationToken::new();
+        {
+            let mut g = cells.lock().await;
+            g.pop("a");
+            g.put("a".to_string(), bundle(next.clone()));
+        }
+        assert_eq!(wall.await.unwrap(), None);
+        assert!(!next.is_cancelled());
+        assert!(cells.lock().await.peek("a").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_old_cells_exit_leaves_the_cell_raised_after_it() {
+        use command_group::AsyncCommandGroup;
+        let child = tokio::process::Command::new("sleep").arg("60")
+            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            .group_spawn().expect("spawn sleep");
+        let (emerged, stilled) = crate::lifecycle::tend(child);
+        let old = bundle(stilled);
+        let old_id = old.id;
+        let mut cells: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cells.put("a".into(), old);
+
+        cells.pop("a");
+        let next = CancellationToken::new();
+        let successor = bundle(next.clone());
+        let next_id = successor.id;
+        cells.put("a".into(), successor);
+        tokio::time::timeout(std::time::Duration::from_secs(6), emerged).await
+            .expect("the old cell exits").expect("exit code");
+
+        assert_eq!(pop_own(&mut cells, "a", old_id), None);
+        assert!(!next.is_cancelled(), "the old cell's exit leaves its successor alive");
+        assert!(cells.peek("a").is_some());
+        assert_eq!(pop_own(&mut cells, "a", next_id), Some(0));
+        assert!(next.is_cancelled());
+    }
+
+    #[derive(Clone, Default)]
+    struct Heard(Arc<std::sync::Mutex<Vec<Value>>>);
+
+    impl Sounds for Heard {
+        fn send(&self, tone: Value) { self.0.lock().unwrap().push(tone); }
+    }
+
+    struct Raised {
+        stilled: CancellationToken,
+        fed: std::sync::Mutex<mpsc::Receiver<Value>>,
+        _alive: (mpsc::Sender<Value>, tokio::sync::oneshot::Sender<i32>),
+    }
+
+    impl Raised {
+        fn fed(&self) -> Vec<String> {
+            let mut fed = self.fed.lock().unwrap();
+            std::iter::from_fn(|| fed.try_recv().ok())
+                .filter_map(|tone| tone.get("text").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        }
+    }
+
+    #[derive(Default)]
+    struct Fake {
+        ephemeral: bool,
+        raising: std::time::Duration,
+        raised: std::sync::Mutex<Vec<Arc<Raised>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Nurse for Fake {
+        fn ephemeral(&self) -> bool { self.ephemeral }
+
+        async fn raise(&self, _egg: Egg) -> Result<crate::Cell> {
+            tokio::time::sleep(self.raising).await;
+            let (tx_feed, rx_feed) = mpsc::channel(8);
+            let (tx_mmm, rx_mmm) = mpsc::channel(8);
+            let (tx_exit, rx_exit) = tokio::sync::oneshot::channel();
+            let silence = CancellationToken::new();
+            self.raised.lock().unwrap().push(Arc::new(Raised {
+                stilled: silence.clone(),
+                fed: std::sync::Mutex::new(rx_feed),
+                _alive: (tx_mmm, tx_exit),
+            }));
+            Ok(crate::Cell { mark: None, feed: tx_feed, mmm: Arc::new(Mutex::new(rx_mmm)), emerged: rx_exit, ephemeral: self.ephemeral, silence })
+        }
+    }
+
+    struct Hosted {
+        nurse: Arc<Fake>,
+        cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+        gates: Arc<Gates>,
+    }
+
+    impl Hosted {
+        fn new(nurse: Fake) -> Self {
+            Self {
+                nurse: Arc::new(nurse),
+                cells: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(8).unwrap()))),
+                gates: Arc::new(Gates::default()),
+            }
+        }
+
+        fn prompt(&self, text: &str) -> impl std::future::Future<Output = Result<()>> + 'static {
+            handle_prompt(
+                self.nurse.clone(), Heard::default(), self.cells.clone(), self.gates.clone(),
+                Arc::new(NestConfig::default()), "http://127.0.0.1:0".into(),
+                std::env::temp_dir().to_string_lossy().into_owned(), "m".into(),
+                json!({ "chi": "prompt", "sid": "s", "text": text }),
+            )
+        }
+
+        fn raised(&self) -> Vec<Arc<Raised>> {
+            self.nurse.raised.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_cell_is_fed_its_sigils_next_prompt() {
+        let nest = Hosted::new(Fake::default());
+        nest.prompt("one").await.unwrap();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].fed(), ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_nurses_cell_grows_one_prompt() {
+        let nest = Hosted::new(Fake { ephemeral: true, ..Fake::default() });
+        nest.prompt("one").await.unwrap();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 2, "each prompt raises its own cell");
+        assert!(raised[0].stilled.is_cancelled());
+        assert_eq!(raised[0].fed(), ["one"]);
+        assert_eq!(raised[1].fed(), ["two"]);
+    }
+
+    #[tokio::test]
+    async fn two_prompts_on_one_sid_raise_one_cell() {
+        let nest = Hosted::new(Fake { raising: std::time::Duration::from_millis(50), ..Fake::default() });
+        let one = tokio::spawn(nest.prompt("one"));
+        let two = tokio::spawn(nest.prompt("two"));
+        one.await.unwrap().unwrap();
+        two.await.unwrap().unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1, "the second prompt waits for the cell the first raises");
+        assert!(!raised[0].stilled.is_cancelled());
+        let mut fed = raised[0].fed();
+        fed.sort();
+        assert_eq!(fed, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_cell_is_not_fed_again() {
+        let nest = Hosted::new(Fake::default());
+        nest.prompt("one").await.unwrap();
+        nest.cells.lock().await.peek("s").expect("a live cell").cancel.cancel();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 2, "a fresh cell grows the prompt after a cancel");
+        assert_eq!(raised[0].fed(), ["one"]);
+        assert_eq!(raised[1].fed(), ["two"]);
+    }
+
+    #[tokio::test]
+    async fn a_sigils_gate_is_forgotten_once_none_waits_on_it() {
+        let gates = Gates::default();
+        let held = gates.of("a");
+        drop(gates.of("b"));
+        let again = gates.of("a");
+        assert!(Arc::ptr_eq(&held, &again));
+        assert_eq!(gates.0.lock().len(), 1, "b's gate went with its last holder");
     }
 
     #[tokio::test]

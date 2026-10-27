@@ -300,7 +300,7 @@ static int take_gpu(const struct bloom *t) {
     if (ds4_bridge_ready(g_bridge, t->model_path)) return 0;
     rc = gpu_acquire(g_gpu, g_wait_ms, bloom_stopped, NULL, err, sizeof err);
     if (rc == 1) {
-        send_wilt(t, "cancelled", 0, NULL);
+        send_wilt(t, "cancel", 0, NULL);
         return -1;
     }
     if (rc != 0) {
@@ -538,7 +538,7 @@ static void on_cancel(const cJSON *tone) {
     while (dropped) {
         struct bloom *t = dropped;
         dropped = t->next;
-        send_wilt(t, "cancelled", 0, NULL);
+        send_wilt(t, "cancel", 0, NULL);
         free_bloom(t);
     }
 }

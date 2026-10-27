@@ -20,6 +20,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
 
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
+
 [build-dependencies]
 tonic-build = "0.12"
 

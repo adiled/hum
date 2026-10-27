@@ -63,6 +63,7 @@ class AdvisoryCode:
     RECONNECT_STORM = "reconnect-storm"
     DID_NOT_RETURN = "did-not-return"
     CWD_NOT_HUM = "cwd-not-hum"
+    REFUSED = "refused"
 
 
 Tone = Dict[str, Any]

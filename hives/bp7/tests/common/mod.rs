@@ -4,7 +4,8 @@
 //!
 //! The nurse answers `echo: <text>`, or by the first word of the text:
 //! `slow <ms> <text>` waits before it echoes, `big <n>` unfurls n bytes,
-//! `fail` breaks off with an error.
+//! `fail` breaks off with an error. It notes every sid it hears a
+//! `cleanup` for.
 
 #![allow(dead_code)]
 
@@ -13,7 +14,6 @@ pub mod near;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,7 @@ use bundle_protocol::primary::PrimaryBlockBuilder;
 use bundle_protocol::{dtn_time_now, Bundle, CreationTimestamp, EndpointID};
 use hum_thrum::{Bee, Event, Options, Sender};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use thrum_core::Role;
 use tokio::net::UdpSocket;
 
@@ -44,6 +45,7 @@ pub struct World {
     pub root: PathBuf,
     pub ensemble: bool,
     heard: Arc<Mutex<Vec<Heard>>>,
+    cleaned: Arc<Mutex<Vec<String>>>,
     busy: Arc<Mutex<HashMap<String, (usize, usize)>>>,
     rt: tokio::runtime::Handle,
     humd: Mutex<Option<Humd>>,
@@ -94,6 +96,7 @@ impl World {
             root,
             ensemble,
             heard: Arc::default(),
+            cleaned: Arc::default(),
             busy: Arc::default(),
             rt: rx.recv().unwrap(),
             humd: Mutex::new(Some(Humd::start(ensemble))),
@@ -125,12 +128,21 @@ impl World {
         self.heard.lock().unwrap().iter().filter(|h| h.text.contains(marker)).cloned().collect()
     }
 
+    pub async fn wait_cleaned(&self, sid: &str) {
+        let since = Instant::now();
+        while !self.cleaned.lock().unwrap().iter().any(|s| s == sid) {
+            assert!(since.elapsed() < WAIT, "no cleanup for {sid}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     pub fn peak(&self, group: &str) -> usize {
         self.busy.lock().unwrap().get(group).map(|(_, peak)| *peak).unwrap_or(0)
     }
 
     pub fn nurse(&self, hive: &str, model: &str) {
         let heard = self.heard.clone();
+        let cleaned = self.cleaned.clone();
         let busy = self.busy.clone();
         let (hive, model) = (hive.to_string(), model.to_string());
         let (nestled_tx, nestled_rx) = std::sync::mpsc::channel();
@@ -150,6 +162,10 @@ impl World {
                         continue;
                     }
                     Event::Tone(tone) if tone["chi"] == "prompt" => tone,
+                    Event::Tone(tone) if tone["chi"] == "cleanup" => {
+                        cleaned.lock().unwrap().push(tone["sid"].as_str().unwrap_or("").to_string());
+                        continue;
+                    }
                     _ => continue,
                 };
                 let sid = tone["sid"].as_str().unwrap_or("").to_string();
@@ -336,6 +352,11 @@ impl Forager {
         let any = "127.0.0.1:0".parse().unwrap();
         Forager::spawn(self.name.clone(), any, self.eid.clone(), self.spool.clone(), self.env.clone(), life).await
     }
+}
+
+pub fn sid_of(id: &str, attempt: u32) -> String {
+    let key: String = Sha256::digest(id.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    format!("bp7-{key}-{attempt}")
 }
 
 pub fn eid(s: &str) -> EndpointID {

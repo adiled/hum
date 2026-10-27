@@ -1,4 +1,14 @@
+# gsm-modem: hum on a burner phone. Set an ARG in the environment of
+# `hum hive gsm-modem install` to change it, for example
+# HUM_GSM_DEVICE=/dev/ttyUSB2. An empty ARG keeps the forager's own
+# default; the README says what each one is.
+
 ARG HUM_SRC=
+ARG HUM_GSM_DEVICE=
+ARG HUM_GSM_BAUD=
+ARG HUM_GSM_MODEL=
+ARG HUM_GSM_SYSTEM=
+ARG HUM_GSM_REPLY_LIMIT=
 
 SERVICE hive-install
 RUN ${HUM_SRC}/install
@@ -6,4 +16,9 @@ ONESHOT true
 
 SERVICE gsm-modem
 RUN ${HUM_SRC}/target/release/gsm-modem
+ENV HUM_GSM_DEVICE=${HUM_GSM_DEVICE}
+ENV HUM_GSM_BAUD=${HUM_GSM_BAUD}
+ENV HUM_GSM_MODEL=${HUM_GSM_MODEL}
+ENV HUM_GSM_SYSTEM=${HUM_GSM_SYSTEM}
+ENV HUM_GSM_REPLY_LIMIT=${HUM_GSM_REPLY_LIMIT}
 RESTART always

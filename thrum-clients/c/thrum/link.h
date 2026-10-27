@@ -69,6 +69,7 @@ extern "C" {
 #define THRUM_ADVISORY_RECONNECT_STORM "reconnect-storm"
 #define THRUM_ADVISORY_DID_NOT_RETURN "did-not-return"
 #define THRUM_ADVISORY_CWD_NOT_HUM "cwd-not-hum"
+#define THRUM_ADVISORY_REFUSED "refused"
 
 typedef struct thrum_bee thrum_bee;
 

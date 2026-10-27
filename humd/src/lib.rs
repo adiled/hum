@@ -341,7 +341,7 @@ where
     }
     let sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
-    let sid_growers: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>> =
+    let sid_growers: Arc<parking_lot::RwLock<HashMap<String, Grower>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     let tendril_routes: Arc<parking_lot::RwLock<HashMap<String, String>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -585,7 +585,7 @@ struct HumdSink {
     bees_snapshot_path: std::path::PathBuf,
     advisories: Arc<advise::Advisories>,
     sid_origins: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
-    sid_growers: Arc<parking_lot::RwLock<HashMap<String, ensemble::Hid>>>,
+    sid_growers: Arc<parking_lot::RwLock<HashMap<String, Grower>>>,
     tendril_routes: Arc<parking_lot::RwLock<HashMap<String, String>>>,
     build_sites: Arc<parking_lot::RwLock<HashMap<String, BuildSite>>>,
     forager_tools: Arc<parking_lot::RwLock<HashMap<String, Vec<String>>>>,
@@ -600,6 +600,12 @@ struct HumdSink {
     revoked: revoked::Revocations,
     hives: InstalledHives,
     bees: EnteredBees,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Grower {
+    humd: ensemble::Hid,
+    open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -996,7 +1002,7 @@ impl HumdSink {
     fn unserved(&self, nurse: &str, sid: &str, call_id: &str, why: Unserved) {
         let why = why.why();
         warn!(sid, call_id, %why, "tendril-reach.unserved");
-        self.thrum.thrum_to(nurse, unserved_result(sid, call_id, &why));
+        self.thrum.thrum_to(nurse, failed_grasp(sid, call_id, &why));
     }
 
     async fn reach_builder(&self, nurse: &str, sid: &str, call_id: &str, site: BuildSite, tone: Value) {
@@ -1038,7 +1044,8 @@ impl HumdSink {
             self.sid_growers.write().remove(sid)
         } else {
             self.sid_growers.read().get(sid).copied()
-        };
+        }
+        .map(|g| g.humd);
         let (Some(peer), Some(ens)) = (grower, &self.ensemble) else { return };
         let mut copy = tone.clone();
         if let Some(obj) = copy.as_object_mut() {
@@ -1048,6 +1055,36 @@ impl HumdSink {
         trace!(sid, to = %peer.short(), "sigil.follow.grower");
         if let Err(e) = ens.route(copy).await {
             warn!(sid, err = %e, "sigil.follow.grower.failed");
+        }
+    }
+
+    fn forget_sid(&self, sid: &str) {
+        self.sid_growers.write().remove(sid);
+        self.build_sites.write().remove(sid);
+        self.forager_tools.write().remove(sid);
+        self.waneman.forget(sid);
+    }
+
+    fn break_off_grown_on(&self, gone: ensemble::Hid) {
+        let lost: Vec<String> = self
+            .sid_growers
+            .write()
+            .iter_mut()
+            .filter(|(_, g)| g.humd == gone && g.open)
+            .map(|(sid, g)| {
+                g.open = false;
+                sid.clone()
+            })
+            .collect();
+        for sid in lost {
+            warn!(sid, peer = %gone.short(), "bloom.nurse-gone — the peer growing it left the ensemble");
+            let err = serde_json::json!({
+                "chi": "error",
+                "sid": sid,
+                "code": "nurse-gone",
+                "message": "the peer growing it left the ensemble; it may be grown again",
+            });
+            self.thrum.thrum_broadcast(&sid, err);
         }
     }
 
@@ -1160,6 +1197,23 @@ impl HumdSink {
         self.advise(client_id, entries);
     }
 
+    fn refuse_hello(&self, client_id: &str, rid: &str, hello: &Value, why: &str) {
+        let named = match ensemble::parse_socket_identity(hello) {
+            ensemble::SocketIdentity::Verified(hid)
+            | ensemble::SocketIdentity::Unsigned(Some(hid)) => Some(hid),
+            _ => None,
+        };
+        if let Some(hid) = named
+            && let Some(entry) = self.bees.entry(&hid)
+        {
+            self.advisories
+                .refused(&hid.to_hex(), &entry.hive, why, thrum_core::now_ms());
+        }
+        self.thrum
+            .thrum_to(client_id, thrumd::echo_tone(rid, false, Some(why)));
+        self.thrum.thrum_close(client_id);
+    }
+
     fn snapshot_bees(&self) {
         let json = {
             let m = self.manifests.read();
@@ -1174,9 +1228,14 @@ impl HumdSink {
 
 #[async_trait::async_trait]
 impl ToneSink for HumdSink {
-    async fn forget(&self, client_id: &str) {
+    async fn forget(&self, client_id: &str, sids: Vec<String>) {
         if client_id == "ensemble" {
             return;
+        }
+        for sid in sids {
+            if !self.thrum.holds(&sid) && !self.sid_origins.read().contains_key(&sid) {
+                self.forget_sid(&sid);
+            }
         }
         let had_manifest = self.manifests.write().remove(client_id).is_some();
         self.breathed.write().remove(client_id);
@@ -1261,7 +1320,7 @@ impl ToneSink for HumdSink {
                     } else {
                         format!("no bee serves {name} on the humd it was sent to")
                     };
-                    let mut result = unserved_result(sid, &call_id, &why);
+                    let mut result = failed_grasp(sid, &call_id, &why);
                     if let Some(obj) = result.as_object_mut() {
                         obj.insert("to".into(), Value::String(peer.to_hex()));
                         obj.insert("from".into(), Value::String(ens.me().to_hex()));
@@ -1296,9 +1355,8 @@ impl ToneSink for HumdSink {
                 .is_some_and(|man| man.plays(Role::Nurse));
             if matches!(chi, Some(Chi::TendrilReach)) && client_id != "ensemble" {
                 let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
-                if !sid.is_empty() {
-                    self.thrum.claim_sigil(client_id, thrum_core::sigil(&sid));
-                    self.thrum.claim_sigil(client_id, &sid);
+                if !sid.is_empty() && !is_nurse {
+                    self.thrum.hold(client_id, &sid);
                 }
                 let name = tone.get("name").and_then(Value::as_str).map(str::to_string);
                 let call_id = tone.get("callId").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1421,19 +1479,15 @@ impl ToneSink for HumdSink {
             }
         }
 
-        if matches!(chi, Some(Chi::Attach))
-            && client_id != "ensemble"
-            && let Some(sid) = tone.get("sid").and_then(Value::as_str)
-            && !sid.is_empty()
-        {
-            self.thrum
-                .claim_sigil(client_id, thrum_core::sigil(sid));
-            self.thrum.claim_sigil(client_id, sid.to_string());
-            let hear_only = tone
-                .get("hearOnly")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            trace!(client_id, sid, hear_only, "attach.local.claimed");
+        if let Some(sid) = tone.get("sid").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            match chi {
+                Some(Chi::Prompt) | Some(Chi::Attach) if client_id != "ensemble" => {
+                    self.thrum.hold(client_id, sid);
+                    trace!(client_id, sid, %chi_str, "sid.held");
+                }
+                Some(Chi::Cleanup) => self.thrum.release(sid),
+                _ => {}
+            }
         }
 
         if let Some(ensemble) = &self.ensemble
@@ -1449,18 +1503,29 @@ impl ToneSink for HumdSink {
         }
 
         if client_id == "ensemble" {
-            let is_reply = matches!(
-                chi,
-                Some(Chi::Unfurl)
-                    | Some(Chi::Wilt)
-                    | Some(Chi::Error)
-                    | Some(Chi::Pulse)
-                    | Some(Chi::TendrilReach)
-                    | Some(Chi::TendrilMeta)
-            );
+            let answers_a_reach = tone.get("callId").is_some();
+            let is_reply = match chi {
+                Some(Chi::Error) => !answers_a_reach,
+                _ => matches!(
+                    chi,
+                    Some(Chi::Unfurl)
+                        | Some(Chi::Wilt)
+                        | Some(Chi::Pulse)
+                        | Some(Chi::TendrilReach)
+                        | Some(Chi::TendrilMeta)
+                ),
+            };
             if is_reply {
                 let sid_opt = tone.get("sid").and_then(Value::as_str).map(str::to_string);
                 if let Some(sid) = sid_opt {
+                    let closes = matches!(chi, Some(Chi::Wilt) | Some(Chi::Error));
+                    let from = tone.get("from").and_then(Value::as_str).and_then(parse_humd_id);
+                    if closes
+                        && let Some(g) = self.sid_growers.write().get_mut(&sid)
+                        && Some(g.humd) == from
+                    {
+                        g.open = false;
+                    }
                     trace!(client_id, %chi_str, %sid, "thrum.recv.peer-reply.forward");
                     self.thrum.thrum_broadcast(&sid, tone);
                     return;
@@ -1485,11 +1550,7 @@ impl ToneSink for HumdSink {
                             "thrum.hello.proto-missing — hello declares no protoVersion. \
                              Not registered, not announced to the ensemble."
                         );
-                        self.thrum.thrum_to(
-                            client_id,
-                            thrumd::echo_tone(&rid, false, Some("protoVersion is required")),
-                        );
-                        self.thrum.thrum_close(client_id);
+                        self.refuse_hello(client_id, &rid, &tone, "protoVersion is required");
                         return;
                     }
                     Some(declared) => {
@@ -1510,15 +1571,7 @@ impl ToneSink for HumdSink {
                                     current = thrum_core::THRUM_VERSION,
                                     "thrum.hello.proto-incompatible — rejected, not announced"
                                 );
-                                self.thrum.thrum_to(
-                                    client_id,
-                                    thrumd::echo_tone(
-                                        &rid,
-                                        false,
-                                        Some("protoVersion incompatible"),
-                                    ),
-                                );
-                                self.thrum.thrum_close(client_id);
+                                self.refuse_hello(client_id, &rid, &tone, "protoVersion incompatible");
                                 return;
                             }
                         }
@@ -1539,9 +1592,7 @@ impl ToneSink for HumdSink {
                         "thrum.hello.hive-unrecognised — a bee is understood only through a hive \
                          installed here (`hum hive <ref> install`). Not registered, not announced."
                     );
-                    self.thrum
-                        .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                    self.thrum.thrum_close(client_id);
+                    self.refuse_hello(client_id, &rid, &tone, why);
                     return;
                 }
 
@@ -1549,9 +1600,7 @@ impl ToneSink for HumdSink {
                 if client_id != "ensemble" && role.is_none() {
                     let why = "hello names no role: forager | nurse | builder | attendant";
                     error!(client_id, hive = %hive, reason = why, "thrum.hello.role-missing — Not registered, not announced.");
-                    self.thrum
-                        .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                    self.thrum.thrum_close(client_id);
+                    self.refuse_hello(client_id, &rid, &tone, why);
                     return;
                 }
 
@@ -1587,9 +1636,7 @@ impl ToneSink for HumdSink {
                                 "thrum.hello.not-entered — a bee nestles only by signing as a key \
                                  its hive entered for its role (`hum bee enter --hive <hive> --role <role>`). Not registered, not announced."
                             );
-                            self.thrum
-                                .thrum_to(client_id, thrumd::echo_tone(&rid, false, Some(why)));
-                            self.thrum.thrum_close(client_id);
+                            self.refuse_hello(client_id, &rid, &tone, why);
                             return;
                         }
                     }
@@ -1602,6 +1649,7 @@ impl ToneSink for HumdSink {
                 } else {
                     thrumd::breath_tone(serde_json::json!({}))
                 };
+                self.thrum.admit(client_id);
                 self.thrum.thrum_to(client_id, breath);
 
                 let models: Vec<String> = tone
@@ -1694,8 +1742,9 @@ impl ToneSink for HumdSink {
 
                     if client_id != "ensemble" {
                         let mut m = self.manifests.write();
+                        let mut stale: Vec<String> = Vec::new();
                         if let Some(new_hid) = manifest.hid {
-                            let stale: Vec<String> = m
+                            stale = m
                                 .iter()
                                 .filter_map(|(cid, mf)| match mf.hid {
                                     Some(h) if h == new_hid && cid != client_id => {
@@ -1705,13 +1754,16 @@ impl ToneSink for HumdSink {
                                 })
                                 .collect();
                             for cid in &stale {
-                                trace!(stale_client_id = %cid, hid = %new_hid.short(),
-                                    "manifest.evict.stale-rehello");
+                                info!(stale_client_id = %cid, hid = %new_hid.short(),
+                                    "bee.replaced — the bee's newer connection replaces this one, which is closed");
                                 m.remove(cid);
                             }
                         }
                         m.insert(client_id.to_string(), manifest.clone());
                         drop(m);
+                        for cid in &stale {
+                            self.thrum.thrum_close(cid);
+                        }
                         self.snapshot_bees();
                         if matches!(role, Some(Role::Nurse) | Some(Role::Attendant)) {
                             self.breathe_foragers();
@@ -1794,9 +1846,6 @@ impl ToneSink for HumdSink {
                     self.thrum
                         .thrum_to(client_id, thrumd::echo_tone(rid, true, None));
                 }
-                self.thrum
-                    .claim_sigil(client_id, thrum_core::sigil(&sid));
-                self.thrum.claim_sigil(client_id, &sid);
                 let origin = if client_id == "ensemble" {
                     tone.get("from")
                         .and_then(Value::as_str)
@@ -1854,7 +1903,7 @@ impl ToneSink for HumdSink {
                     trace!(sid, ?model, peer = %peer.short(), "prompt.forward.remote");
                     match ens.route(forward).await {
                         Ok(()) => {
-                            self.sid_growers.write().insert(sid.clone(), peer);
+                            self.sid_growers.write().insert(sid.clone(), Grower { humd: peer, open: true });
                             return;
                         }
                         Err(e) => warn!(sid, peer = %peer.short(), err = %e,
@@ -1924,8 +1973,9 @@ impl ToneSink for HumdSink {
             Some(Chi::Cleanup) => {
                 if let Some(sid) = tone.get("sid").and_then(Value::as_str) {
                     self.follow_to_grower(client_id, sid, &tone, true).await;
-                    self.build_sites.write().remove(sid);
-                    self.forager_tools.write().remove(sid);
+                    self.forget_sid(sid);
+                    self.sid_origins.write().remove(sid);
+                    self.observers.write().remove(sid);
                     for bee in self.playing(&[Role::Nurse, Role::Builder]) {
                         self.thrum.thrum_to(&bee, tone.clone());
                     }
@@ -1960,24 +2010,19 @@ impl ToneSink for HumdSink {
                     } else {
                         warn!(client_id, sid, "attach.bad-from");
                     }
-                } else {
-                    self.thrum
-                        .claim_sigil(client_id, thrum_core::sigil(&sid));
-                    self.thrum.claim_sigil(client_id, &sid);
-                    if let Some(ensemble) = &self.ensemble
-                        && let Some(to) = tone.get("to").and_then(Value::as_str)
-                        && !to.is_empty()
-                        && to != ensemble.me().to_hex()
-                    {
-                        trace!(client_id, sid, to, hear_only, "attach.forward");
-                        let mut forward = tone.clone();
-                        if let Some(obj) = forward.as_object_mut() {
-                            obj.entry("from".to_string())
-                                .or_insert_with(|| Value::String(ensemble.me().to_hex()));
-                        }
-                        if let Err(e) = ensemble.route(forward).await {
-                            warn!(client_id, sid, err = %e, "attach.forward.failed");
-                        }
+                } else if let Some(ensemble) = &self.ensemble
+                    && let Some(to) = tone.get("to").and_then(Value::as_str)
+                    && !to.is_empty()
+                    && to != ensemble.me().to_hex()
+                {
+                    trace!(client_id, sid, to, hear_only, "attach.forward");
+                    let mut forward = tone.clone();
+                    if let Some(obj) = forward.as_object_mut() {
+                        obj.entry("from".to_string())
+                            .or_insert_with(|| Value::String(ensemble.me().to_hex()));
+                    }
+                    if let Err(e) = ensemble.route(forward).await {
+                        warn!(client_id, sid, err = %e, "attach.forward.failed");
                     }
                 }
             }
@@ -2052,6 +2097,7 @@ impl ToneSink for HumdSink {
                             trace!(peer = %gone.short(), "discovery.evicted");
                         }
                     }
+                    self.break_off_grown_on(gone);
                 }
             }
             Some(Chi::WaneSync) => {
@@ -2080,9 +2126,26 @@ impl ToneSink for HumdSink {
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 if let Some(cid) = call_id.as_deref() {
-                    let origin_peer = self.incoming_tendrils.read().get(cid).copied();
+                    let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("");
+                    let why = tone.get("message").and_then(Value::as_str).unwrap_or("the tendril broke off");
+                    let mut failed = failed_grasp(sid, cid, why);
+                    if let Some(obj) = failed.as_object_mut() {
+                        let said: serde_json::Map<String, Value> = ["code", "subtype"]
+                            .into_iter()
+                            .filter_map(|k| tone.get(k).map(|v| (k.to_string(), v.clone())))
+                            .collect();
+                        if !said.is_empty() {
+                            obj.insert("result".into(), Value::Object(said));
+                        }
+                        if let Some(ext) = tone.get("ext") {
+                            obj.insert("ext".into(), ext.clone());
+                        }
+                    }
+                    let origin_peer = self.incoming_tendrils.write().remove(cid);
+                    self.tendril_routes_peer.write().remove(cid);
+                    let reacher = self.tendril_routes.write().remove(cid);
                     if let (Some(origin_peer), Some(ens)) = (origin_peer, &self.ensemble) {
-                        let mut routed = tone.clone();
+                        let mut routed = failed;
                         if let Some(obj) = routed.as_object_mut() {
                             obj.insert("to".into(), Value::String(origin_peer.to_hex()));
                             obj.insert("from".into(), Value::String(ens.me().to_hex()));
@@ -2093,9 +2156,9 @@ impl ToneSink for HumdSink {
                         }
                         return;
                     }
-                    if let Some(originator) = self.tendril_routes.read().get(cid).cloned() {
-                        trace!(call_id = cid, %originator, "error.route.to-originator");
-                        self.thrum.thrum_to(&originator, tone.clone());
+                    if let Some(reacher) = reacher {
+                        trace!(call_id = cid, %reacher, "error.route.to-reacher");
+                        self.thrum.thrum_to(&reacher, failed);
                         return;
                     }
                 }
@@ -2200,7 +2263,7 @@ fn my_capabilities() -> PeerCapabilities {
     }
 }
 
-fn unserved_result(sid: &str, call_id: &str, why: &str) -> Value {
+fn failed_grasp(sid: &str, call_id: &str, why: &str) -> Value {
     let mut result = serde_json::json!({
         "chi": "tendril-result",
         "callId": call_id,

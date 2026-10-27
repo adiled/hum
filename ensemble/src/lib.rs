@@ -350,8 +350,10 @@ impl Ensemble {
 
     pub fn remove_peer(&self, id: &Hid) {
         self.kad.forget(id);
-        if let Some(p) = self.peers.write().remove(id) {
+        let gone = self.peers.write().remove(id);
+        if let Some(p) = gone {
             p.conn.close();
+            self.inbox.publish(peer_remove_tone(&self.me, id));
         }
     }
 
@@ -1788,5 +1790,22 @@ mod invariants {
             0,
             "a dead peer must not route"
         );
+    }
+
+    #[tokio::test]
+    async fn a_removed_peer_is_told_to_the_kernel_once() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let ensemble = Ensemble::new(me);
+        let (mine, _theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+        ensemble.add_peer(mine);
+        let mut inbox = ensemble.subscribe();
+
+        ensemble.remove_peer(&peer);
+        ensemble.remove_peer(&peer);
+        let told = inbox.try_recv().expect("the kernel hears the peer is gone");
+        assert_eq!(told["chi"], "peer-remove");
+        assert_eq!(told["humd_id"], hex::encode(peer.as_bytes()));
+        assert!(inbox.try_recv().is_err(), "a peer already gone is not told again");
     }
 }

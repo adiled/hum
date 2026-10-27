@@ -3,8 +3,9 @@
 // A key is a bearer token with a name. Keys live in secrets/keys.json in
 // the hive's state, mode 0600 in a 0700 directory, as the sha256 of each
 // token, so the file never holds one; `key add` prints a new token once.
-// The config's apiKey, if any, is a key named `default`. The file is read
-// again whenever it changes, so a key added or removed counts at once.
+// The config's apiKey, if any, is a key named `default`, a name `key add`
+// refuses, so the two never meet. The file is read again whenever it
+// changes, so a key added or removed counts at once.
 //
 // Each key is one forager bee of this hive, entered as `key-<name>`, so
 // humd hears every caller apart and `hum bee <id> exit` shuts one out.
@@ -16,6 +17,7 @@ import { join } from "node:path";
 import { stateDir } from "./config.ts";
 
 export const ANONYMOUS = "anonymous";
+export const CONFIGURED = "default";
 
 const NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$/;
 
@@ -74,7 +76,10 @@ export class Keys {
     for (const [name, k] of Object.entries(readStored())) {
       if (typeof k?.sha256 === "string" && k.sha256.length === 64) hashes.set(name, Buffer.from(k.sha256, "hex"));
     }
-    if (this.#configured) hashes.set("default", sha(this.#configured));
+    if (this.#configured) {
+      if (hashes.has(CONFIGURED)) console.error(`[hum-openai-server] apiKey is the key named ${CONFIGURED}, so the file's key of that name is not read; \`key remove ${CONFIGURED}\` removes it`);
+      hashes.set(CONFIGURED, sha(this.#configured));
+    }
     this.#hashes = hashes;
   }
 
@@ -96,7 +101,9 @@ export class Keys {
 }
 
 export function addKey(name: string): string {
-  if (!NAME_RE.test(name) || name === ANONYMOUS) throw new Error(`"${name}" is not a key name: letters, digits, - _ and ., not "${ANONYMOUS}"`);
+  if (!NAME_RE.test(name) || name === ANONYMOUS || name === CONFIGURED) {
+    throw new Error(`"${name}" is not a key name: letters, digits, - _ and ., not "${ANONYMOUS}" or "${CONFIGURED}", which is apiKey's`);
+  }
   const keys = readStored();
   if (keys[name]) throw new Error(`a key named ${name} already exists; remove it first`);
   const token = `sk-hum-${randomBytes(32).toString("base64url")}`;

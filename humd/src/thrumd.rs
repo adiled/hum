@@ -1,15 +1,20 @@
 //! thrumd — the NDJSON unix-socket server.
 //!
 //! One listener, many breaths. Each connected bee gets a `Reach`: a
-//! client id, an outbound channel, and a set of sigils it claims. Tones
+//! client id, an outbound channel, and the sids it holds. Tones
 //! arrive line-delimited over the socket; we validate the envelope (chi
-//! must be a non-empty string), check for dusk, auto-echo on receipt,
-//! then hand the tone to the caller's `ToneSink`.
+//! must be a non-empty string), check for dusk, refuse all but a hello
+//! until a breath admits the client, auto-echo on receipt, then hand the
+//! tone to the caller's `ToneSink`. `inject_tone` is the in-process way
+//! in, for the ensemble, whose peers are admitted by their own signed
+//! hello, and for simulators.
 //!
 //! Outbound: callers reach in via `thrum_to(client_id, tone)` or
 //! `thrum_broadcast(sid, tone)` — both are sync, lock-and-send, no await.
-//! The per-connection writer task drains the channel and writes to the
-//! socket; back-pressure is bounded by the channel's capacity.
+//! A broadcast reaches only the connections holding the sid, those that
+//! prompted or attached under it; a sid no connection holds reaches no
+//! one. The per-connection writer task drains the channel and writes to
+//! the socket; back-pressure is bounded by the channel's capacity.
 //!
 //! Delivery respects the chi scope a client declared in its hello. A
 //! client that declared nothing accepts every chi — see
@@ -19,11 +24,12 @@
 //! string, and the body is whatever JSON the sender packed in. Handlers
 //! deserialize into typed shapes from thrum-core when they want.
 //!
-//! [`ToneSink::forget`] fires when a client's connection drops. The
-//! sink should release per-client state keyed by `client_id` — humd
-//! evicts the bee's manifest there, so its tools stop being advertised
-//! the instant it disconnects rather than lingering until a same-hid
-//! re-hello.
+//! [`ToneSink::forget`] fires when a client's connection drops, with the
+//! sids it held. The sink should release per-client state keyed by
+//! `client_id` — humd evicts the bee's manifest there, so its tools stop
+//! being advertised the instant it disconnects rather than lingering
+//! until a same-hid re-hello — and what each sid held once no connection
+//! holds it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -51,7 +57,7 @@ pub type Tone = Value;
 pub trait ToneSink: Send + Sync + 'static {
     async fn hear(&self, client_id: &str, tone: Tone);
 
-    async fn forget(&self, _client_id: &str) {}
+    async fn forget(&self, _client_id: &str, _sids: Vec<String>) {}
 }
 
 pub fn default_socket_path() -> PathBuf {
@@ -131,16 +137,9 @@ impl Thrum {
         let reg = self.inner.clients.read();
         let mut sent = false;
         for reach in reg.iter() {
-            if reach.has_sigil(&sigil) && reach.accepts_chi(&chi) {
+            if reach.holds(sid) && reach.accepts_chi(&chi) {
                 let _ = reach.send(tone.clone());
                 sent = true;
-            }
-        }
-        if !sent {
-            for reach in reg.iter() {
-                if reach.sigil_count() == 0 && reach.accepts_chi(&chi) {
-                    let _ = reach.send(tone.clone());
-                }
             }
         }
         trace!(
@@ -161,10 +160,26 @@ impl Thrum {
         }
     }
 
-    pub fn claim_sigil(&self, client_id: &str, sigil: impl Into<String>) {
+    pub fn admit(&self, client_id: &str) {
+        if let Some(reach) = self.inner.clients.read().get(client_id) {
+            reach.admit();
+        }
+    }
+
+    pub fn hold(&self, client_id: &str, sid: &str) {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
-            reach.add_sigil(sigil.into());
+            reach.hold(sid.to_string());
+        }
+    }
+
+    pub fn holds(&self, sid: &str) -> bool {
+        self.inner.clients.read().iter().any(|reach| reach.holds(sid))
+    }
+
+    pub fn release(&self, sid: &str) {
+        for reach in self.inner.clients.read().iter() {
+            reach.release(sid);
         }
     }
 
@@ -194,8 +209,12 @@ impl Thrum {
         rx
     }
 
-    pub fn drop_synthetic(&self, client_id: &str) {
-        self.inner.clients.write().remove(client_id);
+    pub async fn drop_synthetic(&self, client_id: &str) {
+        let gone = self.inner.clients.write().remove(client_id);
+        let sink = self.inner.sink.read().clone();
+        if let (Some(reach), Some(sink)) = (gone, sink) {
+            sink.forget(client_id, reach.sids()).await;
+        }
     }
 
     pub fn thrum_close(&self, client_id: &str) {

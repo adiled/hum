@@ -2,18 +2,19 @@
 //
 // Flow:
 //   1. Enter as paid-oracle's buyer bee, through the thrum client.
-//   2. Reach with chi:"tendril-reach", name="quote" + args.pair.
-//   3. Receive chi:"error" 402 with x402 terms in ext["paid-oracle"]
-//      (nonce + recipient + atomic price + USDC contract).
+//   2. Reach with chi:"tendril-reach", name="quote", no args.
+//   3. Hear chi:"tendril-result" under the reach's callId, isError, its
+//      result { code: "402", x402 } the terms (nonce, recipient, atomic
+//      price, USDC contract, confirmations).
 //   4. Build USDC.transfer(recipient, amount) calldata, append the
 //      nonce as ASCII bytes so the bee can bind the payment to
 //      this challenge.
-//   5. Send tx on the configured chain, wait for inclusion.
+//   5. Send tx on the configured chain, wait for its confirmations.
 //   6. Reach again with args.paymentProof: {txHash, nonce}.
-//   7. Receive chi:"tendril-result" with the actual price.
+//   7. Hear chi:"tendril-result" with the price, or a refusal.
 //
 // Run:
-//   bun buy.ts ETH-USD
+//   bun buy.ts
 //
 // Requires the BUYER wallet (from keygen.ts) funded with:
 //   - Testnet ETH for gas (Base Sepolia faucet)
@@ -43,8 +44,6 @@ const keys = JSON.parse(readFileSync(keysPath, "utf-8")) as {
   buyer: { address: `0x${string}`; private_key: `0x${string}` };
 };
 
-const PAIR = process.argv[2] ?? "ETH-USD";
-
 interface X402Terms {
   chain: string;
   pay_to: `0x${string}`;
@@ -52,24 +51,24 @@ interface X402Terms {
   asset_kind: "erc20" | "native";
   decimals: number;
   price_atomic: string;
+  confirmations: number;
   nonce: string;
 }
 
 function log(...m: unknown[]): void { console.log("[buy]", ...m); }
 
-async function thrumCall(args: Record<string, unknown>): Promise<{ kind: "error"; body: any } | { kind: "result"; body: any }> {
+async function thrumCall(args: Record<string, unknown>): Promise<any> {
   const bee = new Bee({
     hive: "paid-oracle",
     as: "buyer",
     role: Role.forager,
-    hello: { version: "0.0.1", chis: ["hello", Chi.tendrilReach, Chi.tendrilResult, Chi.error] },
+    hello: { version: "0.0.1", chis: ["hello", Chi.tendrilReach, Chi.tendrilResult] },
   });
   const callId = `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const sid = `paid-oracle-buyer-${Date.now().toString(36)}`;
-  const answer = new Promise<{ kind: "error"; body: any } | { kind: "result"; body: any }>((resolve) => {
-    bee.onAny((msg) => {
-      if (msg.chi === Chi.error && msg.code === "402") resolve({ kind: "error", body: msg });
-      else if (msg.chi === Chi.tendrilResult) resolve({ kind: "result", body: msg });
+  const answer = new Promise<any>((resolve) => {
+    bee.onAny((msg: any) => {
+      if (msg.chi === Chi.tendrilResult && msg.callId === callId) resolve(msg);
     });
   });
   await bee.start();
@@ -103,15 +102,14 @@ function buildTransferCalldata(recipient: `0x${string}`, amountAtomic: bigint, n
 
 async function main(): Promise<void> {
   log(`buyer=${keys.buyer.address}`);
-  log(`pair=${PAIR}`);
 
   log("step 1: reach for a quote (no payment) →");
-  const first = await thrumCall({ pair: PAIR });
-  if (first.kind !== "error" || first.body.code !== "402") {
-    log("unexpected first response:", JSON.stringify(first.body, null, 2));
+  const first = await thrumCall({});
+  if (!first.isError || first.result?.code !== "402") {
+    log("unexpected first response:", JSON.stringify(first, null, 2));
     process.exit(2);
   }
-  const terms = first.body.ext?.["paid-oracle"]?.x402 as X402Terms;
+  const terms = first.result.x402 as X402Terms;
   const priceAtomic = BigInt(terms.price_atomic);
   log("  ↳ 402 challenge:");
   log(`    chain     = ${terms.chain}`);
@@ -119,6 +117,7 @@ async function main(): Promise<void> {
   log(`    asset     = ${terms.asset} (${terms.asset_kind}, ${terms.decimals} dp)`);
   log(`    price     = ${priceAtomic.toString()} atomic = $${Number(priceAtomic) / 10 ** terms.decimals}`);
   log(`    nonce     = ${terms.nonce}`);
+  log(`    confirmed = after ${terms.confirmations} block(s)`);
 
   if (terms.chain !== "base-sepolia") {
     log(`buyer.ts only knows base-sepolia today; got ${terms.chain}`);
@@ -162,22 +161,21 @@ async function main(): Promise<void> {
     value: 0n,
   });
   log(`  txHash=${txHash}`);
-  log("  waiting for inclusion…");
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  log(`  waiting for ${terms.confirmations} confirmation(s)…`);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, confirmations: terms.confirmations });
   log(`  block=${receipt.blockNumber} status=${receipt.status}`);
   if (receipt.status !== "success") { log("tx failed on-chain"); process.exit(6); }
 
   log("step 3: resubmitting with paymentProof →");
   const second = await thrumCall({
-    pair: PAIR,
     paymentProof: { txHash, nonce: terms.nonce },
   });
-  if (second.kind !== "result") {
-    log("unexpected second response:", JSON.stringify(second.body, null, 2));
+  if (second.isError) {
+    log(`refused ${second.result?.code}: ${second.output}`);
     process.exit(7);
   }
   log("  ↳ chi:tendril-result");
-  log(JSON.stringify(second.body.result, null, 2));
+  log(JSON.stringify(second.result, null, 2));
 }
 
 main().catch((err) => {

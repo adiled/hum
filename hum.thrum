@@ -252,7 +252,7 @@ CARRIES ensemble
 FIELD message string
 DOC what broke
 FIELD code string?
-DOC no-nurse when no nurse here or on a trusted peer grows the model; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft
+DOC no-nurse when no nurse here or on a trusted peer grows the model; nurse-gone from humd when the peer growing it left the ensemble mid-bloom, so it may be grown again; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft
 FIELD subtype string?
 DOC the cell's own word for what broke
 FIELD nectar any?
@@ -675,3 +675,7 @@ DOC the bee was nestled when humd stopped and had not come back 2 minutes after 
 ADVISORY cwd-not-hum
 BY humd
 DOC a prompt's `cwd` is not a `hum://` address, and was dropped
+
+ADVISORY refused
+BY humd
+DOC humd refused the bee's hello, and why; the bee heard it in the hello's echo

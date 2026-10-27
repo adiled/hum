@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install this hive on a humd: build its bee and keep it running. The bee
-# enters itself under the hive when it starts.
+# Install this hive on a humd: build its bees and keep every unit running
+# under orchd, the forager and the nurse. Each bee enters itself under the
+# hive when it starts.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +17,9 @@ while read -r name; do
   if [ -n "${!name:-}" ]; then args+=(--arg "$name=${!name}"); fi
 done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_HIVE)
 
+units=()
+while read -r unit; do units+=("$unit"); done < <(sed -n 's/^SERVICE \([A-Za-z0-9_.-]*\)$/\1/p' "$here/Orchfile" | grep -vx hive-install)
+
 run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
 run fell >/dev/null 2>&1 || true
-run grow "$hive"
+run grow "${units[@]}"

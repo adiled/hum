@@ -345,7 +345,7 @@ the bloom broke off
 | field | type | meaning |
 |---|---|---|
 | `message` | `string` | what broke |
-| `code` | `string?` | no-nurse when no nurse here or on a trusted peer grows the model; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft |
+| `code` | `string?` | no-nurse when no nurse here or on a trusted peer grows the model; nurse-gone from humd when the peer growing it left the ensemble mid-bloom, so it may be grown again; cannot-grow-on from a nurse that grows only from new words; empty-prompt for a prompt with neither words nor a graft |
 | `subtype` | `string?` | the cell's own word for what broke |
 | `nectar` | `any?` | what the bloom took before it broke off |
 
@@ -755,14 +755,20 @@ a bee only through its hive, and knows it only by its key. The ensemble
 layer (peer humds, gossip) and the on-chain layer (`HumdRegistry`) are
 additive opt-ins on top.
 
+Until a breath admits it, a connection is heard for nothing but its
+`hello`: any other tone is answered with an `echo` whose `ok` is false
+under its rid, and an `echo` or a `log` is dropped. One key is one bee:
+when a second connection signed by the same key is admitted, humd closes
+the first, and frees what it held as a closing connection does.
+
 The handshake doesn't distinguish where the bytes came from. A hello
 arriving on humd's local Unix socket and a hello bridged through the
 ensemble from a peer humd hit the same code path. Local-dev runs,
 local-prod-with-systemd setups, and distributed mesh deployments all
-exercise the same `chi:"hello"` shape — see
-[hives/foragers.md](../hives/) for the three deployment
-paradigms (local-dev / local-prod / distributed) that share this
-single protocol.
+exercise the same `chi:"hello"` shape. See
+[hives, Run a hive](./hives/README.md#run-a-hive) for the three
+deployment shapes (local dev, the ensemble, a managed service) that
+share this single protocol.
 
 ```json
 {
@@ -858,6 +864,14 @@ with no `modelId` goes to any nurse with room, which grows it with a
 model of its own, and one no nurse grows is refused with
 `code: "no-nurse"`.
 
+A bloom's tones go to the connections that prompted or attached under its
+sid, and to no one else; a sid no connection holds reaches no one. A
+`cleanup` frees what humd keeps for the sid, and so does the close of the
+last connection that held it, so a forager that takes a sid up again on a
+new connection `attach`es it first, and names its `cwd` again. When the
+peer growing a bloom leaves the ensemble mid-bloom, humd breaks the bloom
+off with `code: "nurse-gone"`, and its forager may prompt it again.
+
 #### Graft
 
 A prompt's `graft` is the blooms of its sigil before it, oldest first, as
@@ -916,7 +930,11 @@ humd → nurse:     chi:"tendril-result" { sid, callId, output, isError }
 
 A reach no bee can serve is answered by humd itself, with a
 `tendril-result` whose `isError` is true and whose `output` says why, so
-the cell does not wait for an answer that cannot come.
+the cell does not wait for an answer that cannot come. A bee that cannot
+or will not grasp a reach answers it the same way. An `error` sent under
+a reach's `callId` reaches the cell as that failed grasp too, its
+`message` as the `output`, its `code` and `subtype` as the `result`, and
+its `ext` whole.
 
 #### `bash`
 
@@ -1125,7 +1143,10 @@ enter, a revoked key, an incompatible protocol) and advises on the rest.
 An advisory reaches the bee as a `log` tone whose `fields.advisory` is
 one of these codes, and hum's client raises some itself before a tone
 leaves the bee. humd keeps them per bee in `advisories.json` in the state
-root, and `hum doctor` lists them.
+root, and `hum doctor` lists them. A refusal is kept there too, as
+`refused` with its reason, when the hello names a bee entered on this
+humd, so `hum bee --list` says why a bee that keeps dialling is not
+nestled; that bee is not heard from as having failed to return.
 
 <!-- thrum: advisories -->
 
@@ -1141,6 +1162,7 @@ root, and `hum doctor` lists them.
 | `reconnect-storm` | humd | the bee said hello 10 times within 10 minutes |
 | `did-not-return` | humd | the bee was nestled when humd stopped and had not come back 2 minutes after humd started |
 | `cwd-not-hum` | humd | a prompt's `cwd` is not a `hum://` address, and was dropped |
+| `refused` | humd | humd refused the bee's hello, and why; the bee heard it in the hello's echo |
 
 <!-- /thrum -->
 
@@ -1214,8 +1236,9 @@ interrupts and terminations: its life is the pipe's.
 
 A tone can also travel whole, as one message, with no line to split.
 hum's gRPC hive carries it as `Tone { chi, sid, rid, body }`: the JSON of
-the tone as `body` bytes, with `chi`, `sid` and `rid` lifted out so the
-bridge can multiplex without parsing a body. Inside one humd, the ensemble
+the tone as `body` bytes, with `chi`, `sid` and `rid` lifted out so a
+client can match what comes back without parsing a body; `body` is
+authoritative, and the bridge reads it. Inside one humd, the ensemble
 hands tones to the kernel as values, and `peer-add` and `peer-remove`
 travel only that way. Either way the tone is the same object, and a
 medium that carries it whole has no framing to specify.
@@ -1276,10 +1299,10 @@ link, or the wire itself. The wire, as hum's client speaks it:
 
 - [`hum.thrum`](./hum.thrum): the thrum itself, its envelope, range, shapes, kinds, patterns and advisories. The file wins on what a tone is.
 - [GLOSSARY.md](./GLOSSARY.md): what each word means.
-- [`thrum-core`](../thrum-core): the Rust reading of it (chi enum, views, helpers), held to the file.
-- [`hum-thrum`](../hum-thrum): the client, sans-IO at its core, and the link.
-- [`thrum-clients`](../thrum-clients): the generated client for TS, Python, Go and C.
-- [`codegen`](../codegen): what reads the file out, into the clients and into this document.
-- [`ensemble/README.md`](../ensemble/README.md): inter-humd routing.
-- [`hives/foragers.md`](../hives/foragers.md): typology and propensity axes.
+- [`thrum-core`](./thrum-core): the Rust reading of it (chi enum, views, helpers), held to the file.
+- [`hum-thrum`](./hum-thrum): the client, sans-IO at its core, and the link.
+- [`thrum-clients`](./thrum-clients): the generated client for TS, Python, Go and C.
+- [`codegen`](./codegen): what reads the file out, into the clients and into this document.
+- [`ensemble/README.md`](./ensemble/README.md): inter-humd routing.
+- [`hives/README.md`](./hives/README.md): roles, propensity axes, and how to build and run a hive.
 - [adiled.github.io/hum](https://adiled.github.io/hum/): the docs site.

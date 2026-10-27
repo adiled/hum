@@ -72,6 +72,7 @@ const (
 	AdvisoryReconnectStorm AdvisoryCode = "reconnect-storm"
 	AdvisoryDidNotReturn AdvisoryCode = "did-not-return"
 	AdvisoryCwdNotHum AdvisoryCode = "cwd-not-hum"
+	AdvisoryRefused AdvisoryCode = "refused"
 )
 
 type Tone = map[string]any

@@ -146,11 +146,23 @@ pub fn list() -> Result<()> {
                 .map(|e| if e.count > 1 { format!("{} ({}x)", e.code, e.count) } else { e.code.clone() })
                 .collect();
             println!("    advised:  {}  (hum doctor says what)", codes.join(", "));
+            let refusal = page
+                .advisories
+                .iter()
+                .filter(|e| e.code == "refused")
+                .max_by_key(|e| e.last)
+                .and_then(|e| e.fields.get("reason"))
+                .and_then(Value::as_str);
+            if nest_of(id).is_none()
+                && let Some(why) = refusal
+            {
+                println!("    refused:  {why}");
+            }
         }
         println!();
     }
 
     println!("● nestled in humd   ○ entered or exited, not nestled");
-    println!("verbs: hum bee enter --hive <hive> [--as <label>]   |   hum bee <id> exit | reenter");
+    println!("verbs: hum bee enter --hive <hive> --role <role> [--as <label>]   |   hum bee <id> exit | reenter");
     Ok(())
 }

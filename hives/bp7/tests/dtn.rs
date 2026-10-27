@@ -31,6 +31,16 @@ async fn a_json_ask_names_its_model_and_system() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_ask_that_names_no_model_goes_to_any_nurse() {
+    let f = Forager::start("anymodel", &[("BP7_MODEL", "")]).await;
+    let node = Node::new("anymodel").await;
+    node.send(&mut ask(&node.eid, &f.eid, b"anymodel-marker"), f.addr).await;
+    let reply = node.reply(WAIT).await.expect("a nurse with room grows it");
+    assert_eq!(reply.text, "echo: anymodel-marker");
+    assert_eq!(world().heard("anymodel-marker")[0].model, "", "the prompt names no model");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_reply_goes_to_the_route_not_to_the_send_port() {
     let router = Node::new("router").await;
     let route = router.addr().to_string();
@@ -288,7 +298,38 @@ async fn an_ask_outlives_the_forager() {
     let reply = node.reply(WAIT).await.expect("the ask survived the forager's restart");
     assert_eq!(reply.text, "echo: phoenix-marker");
     assert!(node.reply(Duration::from_secs(3)).await.is_none(), "and is answered once");
+    let tries = world().heard("phoenix-marker");
+    assert_eq!(tries.len(), 2, "{tries:?}");
+    for t in &tries {
+        world().wait_cleaned(&t.sid).await;
+    }
     drop(f);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sid_is_cleaned_up_once_its_bloom_is_over() {
+    let f = Forager::start("clean", &[]).await;
+    let node = Node::new("clean").await;
+
+    node.send(&mut ask(&node.eid, &f.eid, b"clean-answered"), f.addr).await;
+    node.reply(WAIT).await.expect("answered");
+    world().wait_cleaned(&world().heard("clean-answered")[0].sid).await;
+
+    let now = bundle_protocol::CreationTimestamp::now;
+    node.send(&mut ask_with(&node.eid, &f.eid, b"slow 5000 clean-expired", Duration::from_secs(1), now()), f.addr).await;
+    let since = std::time::Instant::now();
+    while world().heard("clean-expired").is_empty() {
+        assert!(since.elapsed() < WAIT, "the nurse never heard it");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    world().wait_cleaned(&world().heard("clean-expired")[0].sid).await;
+
+    let body = json!({"text": "clean-unserved", "modelId": "nobody"});
+    let mut unserved = ask_with(&node.eid, &f.eid, body.to_string().as_bytes(), Duration::from_secs(5), now());
+    let id = unserved.id();
+    node.send(&mut unserved, f.addr).await;
+    world().wait_cleaned(&sid_of(&id, 1)).await;
+    assert!(node.reply(QUIET).await.is_none(), "neither the expired ask nor the unserved one is answered");
 }
 
 #[tokio::test(flavor = "multi_thread")]

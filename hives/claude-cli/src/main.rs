@@ -7,14 +7,15 @@
 //!
 //! Env knobs:
 //!   HUM_THRUM_SOCK     thrum socket (default `$XDG_STATE_HOME/hum/thrum.sock`)
-//!   CLAUDE_CLI_PATH    claude binary (default `claude` on PATH)
+//!   CLAUDE_CLI_PATH    claude binary (default `claude`, by hum_paths::program_dirs and ~/.claude/local)
 //!   CLAUDE_MODELS      comma-separated models advertised on hello
-//!                       (default: claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5)
+//!                       (unset or empty: claude_cli::DEFAULT_MODELS)
 
 use std::sync::Arc;
 
 use anyhow::Result;
 use hum_nest::{serve_nurse, NurseAdvert};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -28,18 +29,15 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
+    match claude_cli::claude_program() {
+        Ok(cli) => info!(claude = %cli.display(), "claude-cli.program"),
+        Err(e) => warn!("claude-cli.program-missing — {e}"),
+    }
+
     let nurse = Arc::new(claude_cli::ClaudeCliNurse);
 
-    let models: Vec<String> = std::env::var("CLAUDE_MODELS")
-        .ok()
-        .map(|s| s.split(',').map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect())
-        .unwrap_or_else(|| vec![
-            "claude-opus-4-7".to_string(),
-            "claude-sonnet-4-6".to_string(),
-            "claude-haiku-4-5".to_string(),
-            "claude-sonnet-4-5".to_string(),
-            "claude-haiku-4-5-20251001".to_string(),
-        ]);
+    let models = claude_cli::advertised_models();
+    info!(?models, "claude-cli.models");
 
     let advert = NurseAdvert {
         hive: "claude-cli".to_string(),

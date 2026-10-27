@@ -1,4 +1,4 @@
 # A bee of wifi-p2p lives on an Android phone, as WifiP2pBeeService.
 # Installing this hive teaches a humd the kind; the bee is entered there
-# with `hum bee enter --hive wifi-p2p --as phone`, and the id and key go on
-# the phone. Nothing runs on the humd's own machine.
+# with `hum bee enter --hive wifi-p2p --role forager --as phone`, and the
+# id and key go on the phone. Nothing runs on the humd's own machine.

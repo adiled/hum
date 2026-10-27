@@ -149,7 +149,7 @@ export async function serve(at = 0): Promise<{ url: string; heard: Heard[]; abor
 }
 
 export async function upstream(): Promise<Upstream> {
-  const child = spawn("node", [import.meta.filename, "serve"], { stdio: ["ignore", "pipe", "inherit"] });
+  const child = spawn("node", [import.meta.filename, "serve"], { stdio: ["pipe", "pipe", "inherit"] });
   const url = await new Promise<string>((resolve, reject) => {
     child.stdout!.once("data", (b) => resolve(String(b).trim()));
     child.once("exit", (code) => reject(new Error(`the scripted upstream exited ${code}`)));
@@ -168,4 +168,6 @@ export async function upstream(): Promise<Upstream> {
 if (process.argv[2] === "serve") {
   const up = await serve();
   console.log(up.url);
+  process.stdin.once("end", () => process.exit(0));
+  process.stdin.resume();
 }

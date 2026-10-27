@@ -4,7 +4,7 @@
 //! `nurse` beside the forager's `main`: it serves the models in
 //! `OLLAMA_NURSE_MODELS` through Ollama's API.
 //!
-//! Environment:
+//! Environment, an empty value being no value:
 //!   OLLAMA_NURSE_URL      — Ollama API base URL (default: http://127.0.0.1:11434)
 //!   OLLAMA_NURSE_MODEL    — default model (default: smollm:1.7b)
 //!   OLLAMA_NURSE_MODELS   — comma-separated model list (default: OLLAMA_NURSE_MODEL)
@@ -21,6 +21,10 @@ use hum_nest::{serve_nurse, NurseAdvert};
 
 use crate::ollama::OllamaNurse;
 
+fn var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     hum_paths::init();
@@ -31,11 +35,9 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let default_model = std::env::var("OLLAMA_NURSE_MODEL")
-        .unwrap_or_else(|_| "smollm:1.7b".into());
-    let models_env = std::env::var("OLLAMA_NURSE_MODELS")
-        .unwrap_or_else(|_| default_model.clone());
-    let models: Vec<String> = models_env
+    let default_model = var("OLLAMA_NURSE_MODEL").unwrap_or_else(|| "smollm:1.7b".into());
+    let models: Vec<String> = var("OLLAMA_NURSE_MODELS")
+        .unwrap_or(default_model)
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

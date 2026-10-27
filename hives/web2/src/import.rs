@@ -4,11 +4,15 @@
 //!
 //! It reads Claude Code (`~/.claude.json`, and `.mcp.json` where it runs),
 //! Claude Desktop, Cursor, VS Code and Codex. A name web2 already has is
-//! left alone, and so is a server that is hum's own.
+//! left alone, and so is a server that is hum's own. A server is added only
+//! as web2 reads it wherever it runs: one the loader refuses, or one that
+//! fills a `${…}` from the environment, which the bee may not share, is
+//! left out with the reason, so an import never breaks web2.json.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
 pub struct Found {
@@ -56,7 +60,7 @@ pub fn read_source(label: &str, path: &Path) -> Result<Vec<Found>> {
     };
     Ok(servers
         .into_iter()
-        .filter(|(name, server)| crate::config::is_service_name(name) && !is_hum(name, server))
+        .filter(|(name, server)| !is_hum(name, server))
         .map(|(name, server)| Found { name, from: label.to_string(), server: tidy(server) })
         .collect())
 }
@@ -78,8 +82,31 @@ pub struct Plan {
     pub skipped: Vec<(String, String)>,
 }
 
+fn placeholders(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) => out.extend(s.match_indices("${").filter_map(|(i, _)| s[i..].find('}').map(|j| s[i..=i + j].to_string()))),
+        Value::Object(o) => o.values().for_each(|v| placeholders(v, out)),
+        _ => {}
+    }
+}
+
+fn unreadable(name: &str, server: &Value) -> Option<String> {
+    let mut filled = BTreeSet::new();
+    for key in ["url", "env", "headers"] {
+        if let Some(v) = server.get(key) {
+            placeholders(v, &mut filled);
+        }
+    }
+    if !filled.is_empty() {
+        let filled: Vec<String> = filled.into_iter().collect();
+        return Some(format!("it reads {} from the environment web2 runs in, which an import cannot check; add it by hand", filled.join(", ")));
+    }
+    let one = json!({ "mcpServers": Map::from_iter([(name.to_string(), server.clone())]) });
+    crate::config::parse(&one.to_string(), PathBuf::new()).err().map(|e| e.root_cause().to_string())
+}
+
 pub fn plan(existing: &Value, found: Vec<Found>) -> Plan {
-    let mut taken = std::collections::BTreeSet::new();
+    let mut taken = BTreeSet::new();
     for key in ["services", "mcpServers"] {
         if let Some(obj) = existing.get(key).and_then(Value::as_object) {
             taken.extend(obj.keys().cloned());
@@ -90,6 +117,8 @@ pub fn plan(existing: &Value, found: Vec<Found>) -> Plan {
     for f in found {
         if taken.contains(&f.name) {
             skipped.push((f.name, format!("web2 already has it (from {})", f.from)));
+        } else if let Some(why) = unreadable(&f.name, &f.server) {
+            skipped.push((f.name, format!("{why} (from {})", f.from)));
         } else {
             taken.insert(f.name.clone());
             added.push(f);
@@ -98,22 +127,16 @@ pub fn plan(existing: &Value, found: Vec<Found>) -> Plan {
     Plan { added, skipped }
 }
 
-pub fn apply(path: &Path, existing: Value, plan: &Plan) -> Result<()> {
-    let mut doc = match existing {
-        Value::Object(o) => o,
-        _ => Map::new(),
-    };
-    let servers = doc.entry("mcpServers").or_insert_with(|| json!({}));
-    if let Value::Object(servers) = servers {
+pub fn apply(path: &Path, plan: &Plan) -> Result<()> {
+    crate::config::edit_at(path, |doc| {
+        let Value::Object(servers) = doc.entry("mcpServers").or_insert_with(|| json!({})) else {
+            bail!("mcpServers in web2.json is not an object");
+        };
         for f in &plan.added {
-            servers.insert(f.name.clone(), f.server.clone());
+            servers.entry(f.name.clone()).or_insert_with(|| f.server.clone());
         }
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let text = serde_json::to_string_pretty(&Value::Object(doc))? + "\n";
-    crate::auth::write_private(path, text.as_bytes())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -156,11 +179,51 @@ mod tests {
         let p = plan(&existing, found);
         assert_eq!(p.added.len(), 1);
         assert_eq!(p.skipped.len(), 2);
-        apply(&path, existing, &p).unwrap();
+        std::fs::write(&path, existing.to_string()).unwrap();
+        apply(&path, &p).unwrap();
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["mcpServers"]["fs"]["command"], "npx");
         assert_eq!(written["maxOutput"], 1000);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let parsed = crate::config::load_from(&path).unwrap();
         assert!(parsed.services.contains_key("fs"));
+    }
+
+    #[test]
+    fn a_server_web2_cannot_read_everywhere_is_left_out_and_said_why() {
+        let found = |name: &str, server: Value| Found { name: name.into(), from: "VS Code".into(), server };
+        let p = plan(
+            &json!({}),
+            vec![
+                found("old", json!({ "type": "sse", "url": "https://x/sse" })),
+                found("asks", json!({ "command": "npx", "env": { "TOKEN": "${input:token}" } })),
+                found("home", json!({ "type": "http", "url": "https://x/mcp", "headers": { "X-Home": "${HOME}/${HOME}" } })),
+                found("bare", json!({ "args": ["x"] })),
+                found("dotted.name", json!({ "command": "x" })),
+                found("asks", json!({ "command": "npx", "args": ["${literal}"] })),
+            ],
+        );
+        let why: std::collections::HashMap<&str, &str> = p.skipped.iter().map(|(n, w)| (n.as_str(), w.as_str())).collect();
+        assert!(why["old"].starts_with("legacy SSE"), "{}", why["old"]);
+        assert!(why["asks"].contains("${input:token}") && why["asks"].ends_with("(from VS Code)"), "{}", why["asks"]);
+        assert!(why["home"].contains("reads ${HOME} from"), "{}", why["home"]);
+        assert!(why["bare"].contains("needs a `command`"), "{}", why["bare"]);
+        assert!(why["dotted.name"].contains("letters, digits"), "{}", why["dotted.name"]);
+        assert_eq!(p.added.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["asks"]);
+    }
+
+    #[test]
+    fn an_import_into_a_broken_config_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("web2.json");
+        let broken = r#"{ "services": { "x": { "openapi": "a", "colour": "red" } } }"#;
+        std::fs::write(&path, broken).unwrap();
+        let p = plan(&json!({}), vec![Found { name: "fs".into(), from: "Cursor".into(), server: json!({ "command": "npx" }) }]);
+        assert!(apply(&path, &p).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
     }
 }

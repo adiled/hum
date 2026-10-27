@@ -129,6 +129,7 @@ export function grow(
       clearTimeout(deadline);
       if (quiet) clearTimeout(quiet);
       rq.unfollow(sid, rest);
+      if (!rest) rq.release([...asked]);
       fn();
     };
     const cancel = () => rq.send({ chi: "cancel", sid });

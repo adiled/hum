@@ -1,26 +1,36 @@
-//! `ollama-server` — Ollama-compatible HTTP surface for hum.
+//! `ollama-server`: Ollama's chat and generate API in front of humd.
 //!
-//! Three endpoints, exact Ollama shape:
-//!   POST /api/chat      — multi-message; NDJSON streaming response
-//!   POST /api/generate  — single prompt;  NDJSON streaming response
-//!   GET  /api/tags      — list of available models (synthesized)
+//! Three endpoints, in Ollama's own shape:
+//!   POST /api/chat      a conversation; NDJSON streaming response
+//!   POST /api/generate  a single prompt; NDJSON streaming response
+//!   GET  /api/tags      the models its breath says it can reach
 //!
-//! Ollama's streaming response is already line-delimited JSON, which
-//! matches thrum's frame format — every text petal that unfurls maps to
-//! one output line, and a tendril that reaches to a `tool_calls` line.
-//! No SSE re-framing.
+//! Ollama's streaming response is already line-delimited JSON: every text
+//! petal that unfurls is one output line, and a tendril that reaches the
+//! client a `tool_calls` line. A stream holds its headers until its bloom
+//! has something to say, so a bloom that breaks off before its first word
+//! fails with its status, as Ollama's own does.
+//!
+//! Every request shares one link to humd ([`requester`]), a conversation
+//! keeps one sigil while it grows ([`conversation`]), and each bloom is
+//! followed to its end, or cancelled when its client goes away
+//! ([`growth`]).
 //!
 //! The hive's other bee, its nurse, calls Ollama itself; a call that
 //! carries its mark ([`hop::FROM_NURSE`]) is refused here, so the nurse
 //! never prompts hum through its own forager.
 
+mod conversation;
+mod growth;
 mod hop;
+mod requester;
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     body::Body,
     extract::State,
@@ -30,14 +40,19 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
-use hum_thrum::{Bee, Event, Options};
-use thrum_core::{Chi, PetalKind};
+use serde_json::{json, Map, Value};
+use thrum_core::{Bloom, Model, Petal};
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::conversation::{Message, Said, Sigils, Tail};
+use crate::growth::{Call, Failure, Grew, Growing, Opening};
+use crate::requester::Requester;
+
 const HIVE_NAME: &str = "ollama-server";
 const NESTLING_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PORT: u16 = 14624;
+const READY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
@@ -49,97 +64,114 @@ struct FileConfig {
     models: Option<Vec<String>>,
 }
 
-fn config_file_path() -> PathBuf {
-    hum_paths::hive_config(HIVE_NAME)
+fn read_file_config() -> FileConfig {
+    std::fs::read_to_string(hum_paths::hive_config(HIVE_NAME))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
 
-fn read_file_config() -> FileConfig {
-    let path = config_file_path();
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return FileConfig::default(),
-    };
-    serde_json::from_str::<FileConfig>(&raw).unwrap_or_default()
+fn var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
 #[derive(Debug, Clone)]
 struct Config {
     listen: String,
-    models: Vec<String>,
+    label: String,
+    models: Option<Vec<String>>,
     bind: Option<SocketAddr>,
 }
 
 impl Config {
     fn load() -> Self {
-        let file = read_file_config();
-        let port: u16 = match std::env::var("OLLAMA_SERVER_PORT") {
-            Ok(s) => s.parse().unwrap_or(11434),
-            Err(_) => file.port.unwrap_or(11434),
-        };
-        let host = std::env::var("OLLAMA_SERVER_HOST")
-            .ok()
-            .or(file.host)
-            .unwrap_or_else(|| "127.0.0.1".into());
-        let models: Vec<String> = match std::env::var("OLLAMA_SERVER_MODELS") {
-            Ok(raw) => raw
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            Err(_) => file.models.unwrap_or_else(|| {
-                vec![
-                    "claude-sonnet-4".into(),
-                    "claude-haiku-4.5".into(),
-                    "claude-opus-4.7".into(),
-                ]
-            }),
-        };
-        Self {
-            listen: format!("{host}:{port}"),
-            models,
-            bind: None,
+        Self::from(var, read_file_config())
+    }
+
+    fn from(var: impl Fn(&str) -> Option<String>, file: FileConfig) -> Self {
+        let port = var("OLLAMA_SERVER_PORT").and_then(|p| p.trim().parse().ok()).or(file.port).unwrap_or(PORT);
+        let host = var("OLLAMA_SERVER_HOST").map(|h| h.trim().to_string()).or(file.host).unwrap_or_else(|| "127.0.0.1".into());
+        let models = var("OLLAMA_SERVER_MODELS")
+            .map(|raw| raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .or(file.models)
+            .filter(|m: &Vec<String>| !m.is_empty());
+        let label = var("OLLAMA_SERVER_LABEL").map(|l| l.trim().to_string()).unwrap_or_else(|| "main".into());
+        Self { listen: format!("{host}:{port}"), label, models, bind: None }
+    }
+}
+
+struct Hive {
+    cfg: Config,
+    link: tokio::sync::Mutex<Option<Arc<Requester>>>,
+    sigils: Mutex<Sigils>,
+}
+
+impl Hive {
+    fn hello(&self) -> Value {
+        let mut hello = json!({
+            "version": NESTLING_VERSION,
+            "propensity": { "statefulness": "convention-stateful", "richness": "medium", "wire": "ollama/api" },
+            "chis": ["hello", "prompt", "cancel", "cleanup", "unfurl", "wilt", "error", "tendril-reach", "tendril-result"],
+            "source": "https://github.com/adiled/hum/tree/main/hives/ollama-server",
+        });
+        if let Some(addr) = self.cfg.bind {
+            hello["bind"] = json!({ "host": addr.ip().to_string(), "port": addr.port(), "scheme": "http" });
         }
+        hello
+    }
+
+    async fn requester(&self) -> Result<Arc<Requester>, Failure> {
+        let rq = {
+            let mut link = self.link.lock().await;
+            match link.as_ref().filter(|rq| !rq.gone()) {
+                Some(rq) => rq.clone(),
+                None => {
+                    let rq = Requester::link(HIVE_NAME, &self.cfg.label, self.hello())?;
+                    *link = Some(rq.clone());
+                    rq
+                }
+            }
+        };
+        rq.ready(READY).await?;
+        Ok(rq)
+    }
+
+    async fn rest(&self) {
+        let mut link = self.link.lock().await;
+        if link.as_ref().is_some_and(|rq| rq.gone() || (!rq.busy() && rq.idle_for() >= requester::IDLE))
+            && let Some(rq) = link.take()
+        {
+            rq.close();
+        }
+    }
+
+    fn sigils(&self) -> MutexGuard<'_, Sigils> {
+        self.sigils.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaMessage {
-    role: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolFunction {
-    name: String,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    parameters: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaTool {
-    #[serde(rename = "type")]
-    kind: String,
-    function: ToolFunction,
-}
-
-#[derive(Debug, Deserialize)]
 struct ChatRequest {
+    #[serde(default)]
     model: String,
-    messages: Vec<OllamaMessage>,
+    #[serde(default)]
+    messages: Vec<Message>,
     #[serde(default)]
     stream: Option<bool>,
     #[serde(default)]
-    tools: Option<Vec<OllamaTool>>,
+    tools: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GenerateRequest {
+    #[serde(default)]
     model: String,
+    #[serde(default)]
     prompt: String,
     #[serde(default)]
     system: Option<String>,
+    #[serde(default)]
+    images: Option<Vec<String>>,
     #[serde(default)]
     stream: Option<bool>,
 }
@@ -148,362 +180,243 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn messages_to_prompt(messages: &[OllamaMessage]) -> (Option<String>, String) {
-    let mut system_pieces = Vec::new();
-    let mut user_prompt = String::new();
-    for msg in messages {
-        match msg.role.as_str() {
-            "system" => system_pieces.push(msg.content.clone()),
-            "user" => user_prompt = msg.content.clone(),
-            _ => {}
-        }
-    }
-    let system = if system_pieces.is_empty() {
-        None
-    } else {
-        Some(system_pieces.join("\n\n"))
-    };
-    (system, user_prompt)
-}
-
-fn tools_to_thrum(tools: Option<Vec<OllamaTool>>) -> Option<Vec<Value>> {
-    let tools = tools?;
-    if tools.is_empty() {
-        return None;
-    }
-    let mut out = Vec::new();
-    for t in tools {
-        if t.kind != "function" {
-            continue;
-        }
-        let mut obj = serde_json::Map::new();
-        obj.insert("name".into(), Value::String(t.function.name));
-        if let Some(d) = t.function.description {
-            obj.insert("description".into(), Value::String(d));
-        }
-        if let Some(p) = t.function.parameters {
-            obj.insert("parameters".into(), p);
-        }
-        out.push(Value::Object(obj));
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-async fn open_prompt(
-    cfg: &Config,
-    sid: &str,
-    text: &str,
-    model: &str,
-    system: Option<&str>,
-    tools: Option<&[Value]>,
-) -> Result<(mpsc::Receiver<Value>, tokio::task::JoinHandle<()>)> {
-    let mut hello = serde_json::Map::new();
-    hello.insert("version".into(), Value::String(NESTLING_VERSION.into()));
-    hello.insert(
-        "propensity".into(),
-        json!({ "statefulness": "convention-stateful", "richness": "medium", "wire": "ollama/api" }),
-    );
-    hello.insert(
-        "chis".into(),
-        json!(["hello", "prompt", "cancel", "unfurl", "wilt", "error", "tendril-reach", "tendril-result"]),
-    );
-    hello.insert(
-        "source".into(),
-        Value::String("https://github.com/adiled/hum/tree/main/hives/ollama-server".into()),
-    );
-    if let Some(addr) = cfg.bind {
-        hello.insert(
-            "bind".into(),
-            json!({
-                "host": addr.ip().to_string(),
-                "port": addr.port(),
-                "scheme": "http",
-            }),
-        );
-    }
-    let mut bee = Bee::link(Options::new(HIVE_NAME, "main", thrum_core::Role::Forager).hello(Value::Object(hello)))
-        .await
-        .context("link the ollama-server bee")?;
-
-    let mut prompt = serde_json::Map::new();
-    prompt.insert("chi".into(), json!(Chi::Prompt));
-    prompt.insert("rid".into(), Value::String(format!("prompt-{sid}")));
-    prompt.insert("sid".into(), Value::String(sid.to_string()));
-    prompt.insert("text".into(), Value::String(text.to_string()));
-    prompt.insert("modelId".into(), Value::String(model.to_string()));
-    if let Some(sys) = system {
-        prompt.insert("systemPrompt".into(), Value::String(sys.to_string()));
-    }
-    if let Some(t) = tools {
-        prompt.insert("tools".into(), Value::Array(t.to_vec()));
-    }
-    bee.send(Value::Object(prompt));
-
-    let (tx, rx) = mpsc::channel::<Value>(128);
-    let sid_owned = sid.to_string();
-    let pump = tokio::spawn(async move {
-        while let Some(event) = bee.next().await {
-            let tone = match event {
-                Event::Tone(tone) => tone,
-                Event::Astray => json!({"chi": "error", "sid": sid_owned, "message": "humd went away mid-bloom"}),
-                Event::Refused(why) => json!({"chi": "error", "sid": sid_owned, "message": why}),
-                Event::Nestled | Event::Advisory(_) => continue,
-            };
-            if tone.get("sid").and_then(Value::as_str) != Some(sid_owned.as_str()) {
-                continue;
+fn tools_to_thrum(tools: Option<&[Value]>) -> Option<Vec<Value>> {
+    let out: Vec<Value> = tools?
+        .iter()
+        .filter(|t| t.get("type").is_none_or(|kind| kind == "function"))
+        .filter_map(|t| {
+            let f = t.get("function").unwrap_or(t);
+            let name = f.get("name").and_then(Value::as_str).filter(|n| !n.is_empty())?;
+            let schema = f.get("parameters").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
+            let mut tool = json!({ "name": name, "inputSchema": schema });
+            if let Some(d) = f.get("description").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+                tool["description"] = json!(d);
             }
-            let ends = tone.get("chi").and_then(Value::as_str) == Some("error");
-            if tx.send(tone).await.is_err() || ends {
-                break;
-            }
-        }
-        bee.close();
-    });
-    Ok((rx, pump))
-}
-
-async fn chat(
-    State(cfg): State<Arc<Config>>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
-    let stream = req.stream.unwrap_or(true);
-    let (system, user) = messages_to_prompt(&req.messages);
-    let tools = tools_to_thrum(req.tools);
-    let sid = hum_identity::HumId::mint().to_string();
-
-    let (rx, _pump) = match open_prompt(
-        &cfg, &sid, &user, &req.model, system.as_deref(), tools.as_deref(),
-    ).await {
-        Ok(p) => p,
-        Err(e) => return error_resp(StatusCode::BAD_GATEWAY, &e.to_string()),
-    };
-    if stream {
-        chat_stream(req.model, sid, rx).await
-    } else {
-        chat_collect(req.model, sid, rx).await
-    }
-}
-
-async fn generate(
-    State(cfg): State<Arc<Config>>,
-    Json(req): Json<GenerateRequest>,
-) -> Response {
-    let stream = req.stream.unwrap_or(true);
-    let sid = hum_identity::HumId::mint().to_string();
-    let (rx, _pump) = match open_prompt(
-        &cfg, &sid, &req.prompt, &req.model, req.system.as_deref(), None,
-    ).await {
-        Ok(p) => p,
-        Err(e) => return error_resp(StatusCode::BAD_GATEWAY, &e.to_string()),
-    };
-    if stream {
-        generate_stream(req.model, sid, rx).await
-    } else {
-        generate_collect(req.model, sid, rx).await
-    }
-}
-
-fn unfurled_text(tone: &Value) -> Option<&str> {
-    if tone.get("kind").and_then(Value::as_str) != Some(PetalKind::Text.as_str()) {
-        return None;
-    }
-    tone.get("text").and_then(Value::as_str)
-}
-
-async fn chat_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
-    let (tx, body_rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(128);
-    tokio::spawn(async move {
-        while let Some(tone) = rx.recv().await {
-            let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
-            match chi {
-                "unfurl" => {
-                    if let Some(text) = unfurled_text(&tone) {
-                        let line = json!({
-                            "model": model,
-                            "created_at": now_iso(),
-                            "message": { "role": "assistant", "content": text },
-                            "done": false,
-                        });
-                        let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    }
-                }
-                "tendril-reach" => {
-                    let name = tone.get("name").and_then(Value::as_str).unwrap_or("");
-                    let args = tone.get("args").cloned().unwrap_or(json!({}));
-                    let line = json!({
-                        "model": model,
-                        "created_at": now_iso(),
-                        "message": {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [{ "function": { "name": name, "arguments": args } }],
-                        },
-                        "done": false,
-                    });
-                    let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                }
-                "wilt" => {
-                    let reason = tone.get("reason").and_then(Value::as_str).unwrap_or("stop");
-                    let mut out = serde_json::Map::new();
-                    out.insert("model".into(), Value::String(model.clone()));
-                    out.insert("created_at".into(), Value::String(now_iso()));
-                    out.insert("message".into(), json!({ "role": "assistant", "content": "" }));
-                    out.insert("done".into(), Value::Bool(true));
-                    out.insert("done_reason".into(), Value::String(reason.into()));
-                    if let Some(nectar) = tone.get("nectar").and_then(Value::as_object) {
-                        for (k, v) in nectar {
-                            out.insert(k.clone(), v.clone());
-                        }
-                    }
-                    let _ = tx.send(Ok(format!("{}\n", Value::Object(out)).into())).await;
-                    break;
-                }
-                "error" => {
-                    let msg = tone.get("message").and_then(Value::as_str).unwrap_or("stream error");
-                    let line = json!({ "error": msg, "done": true });
-                    let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/x-ndjson")
-        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(body_rx)))
-        .unwrap()
-}
-
-async fn chat_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
-    let mut buf = String::new();
-    let mut reason = String::from("stop");
-    let mut nectar: serde_json::Map<String, Value> = serde_json::Map::new();
-    while let Some(tone) = rx.recv().await {
-        match tone.get("chi").and_then(Value::as_str) {
-            Some("unfurl") => {
-                if let Some(t) = unfurled_text(&tone) {
-                    buf.push_str(t);
-                }
-            }
-            Some("wilt") => {
-                if let Some(r) = tone.get("reason").and_then(Value::as_str) {
-                    reason = r.into();
-                }
-                if let Some(n) = tone.get("nectar").and_then(Value::as_object) {
-                    nectar = n.clone();
-                }
-                break;
-            }
-            Some("error") => break,
-            _ => {}
-        }
-    }
-    let mut out = serde_json::Map::new();
-    out.insert("model".into(), Value::String(model));
-    out.insert("created_at".into(), Value::String(now_iso()));
-    out.insert("message".into(), json!({ "role": "assistant", "content": buf }));
-    out.insert("done".into(), Value::Bool(true));
-    out.insert("done_reason".into(), Value::String(reason));
-    for (k, v) in nectar {
-        out.insert(k, v);
-    }
-    Json(Value::Object(out)).into_response()
-}
-
-async fn generate_stream(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
-    let (tx, body_rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(128);
-    tokio::spawn(async move {
-        while let Some(tone) = rx.recv().await {
-            match tone.get("chi").and_then(Value::as_str) {
-                Some("unfurl") => {
-                    if let Some(text) = unfurled_text(&tone) {
-                        let line = json!({
-                            "model": model,
-                            "created_at": now_iso(),
-                            "response": text,
-                            "done": false,
-                        });
-                        let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    }
-                }
-                Some("wilt") => {
-                    let reason = tone.get("reason").and_then(Value::as_str).unwrap_or("stop");
-                    let line = json!({
-                        "model": model,
-                        "created_at": now_iso(),
-                        "response": "",
-                        "done": true,
-                        "done_reason": reason,
-                    });
-                    let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    break;
-                }
-                Some("error") => {
-                    let msg = tone.get("message").and_then(Value::as_str).unwrap_or("stream error");
-                    let line = json!({ "error": msg, "done": true });
-                    let _ = tx.send(Ok(format!("{line}\n").into())).await;
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/x-ndjson")
-        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(body_rx)))
-        .unwrap()
-}
-
-async fn generate_collect(model: String, _sid: String, mut rx: mpsc::Receiver<Value>) -> Response {
-    let mut buf = String::new();
-    let mut reason = String::from("stop");
-    while let Some(tone) = rx.recv().await {
-        match tone.get("chi").and_then(Value::as_str) {
-            Some("unfurl") => {
-                if let Some(t) = unfurled_text(&tone) {
-                    buf.push_str(t);
-                }
-            }
-            Some("wilt") => {
-                if let Some(r) = tone.get("reason").and_then(Value::as_str) {
-                    reason = r.into();
-                }
-                break;
-            }
-            Some("error") => break,
-            _ => {}
-        }
-    }
-    Json(json!({
-        "model": model,
-        "created_at": now_iso(),
-        "response": buf,
-        "done": true,
-        "done_reason": reason,
-    }))
-    .into_response()
-}
-
-async fn tags(State(cfg): State<Arc<Config>>) -> Response {
-    let models: Vec<Value> = cfg.models.iter().map(|name| {
-        json!({
-            "name": name,
-            "model": name,
-            "modified_at": now_iso(),
-            "size": 0,
-            "digest": "",
-            "details": {
-                "parent_model": "",
-                "format": "hum",
-                "family": "claude",
-                "families": ["claude"],
-                "parameter_size": "",
-                "quantization_level": "",
-            }
+            Some(tool)
         })
-    }).collect();
+        .collect();
+    (!out.is_empty()).then_some(out)
+}
+
+fn prompt(sid: &str, model: &str, system: Option<&str>, content: &[Petal], graft: &[Bloom], tools: Option<Vec<Value>>) -> Value {
+    let mut tone = json!({ "chi": "prompt", "sid": sid, "content": content });
+    if !model.is_empty() {
+        tone["modelId"] = json!(model);
+    }
+    if let Some(system) = system.filter(|s| !s.is_empty()) {
+        tone["systemPrompt"] = json!(system);
+    }
+    if !graft.is_empty() {
+        tone["graft"] = json!(graft);
+    }
+    if let Some(tools) = tools {
+        tone["tools"] = json!(tools);
+    }
+    tone
+}
+
+#[derive(Clone, Copy)]
+enum Shape {
+    Chat,
+    Generate,
+}
+
+struct Turn {
+    hive: Arc<Hive>,
+    rq: Arc<Requester>,
+    said: Option<Said>,
+    model: String,
+    shape: Shape,
+}
+
+impl Turn {
+    fn line(&self, body: Value, done: bool) -> Map<String, Value> {
+        let mut line = Map::new();
+        line.insert("model".into(), json!(self.model));
+        line.insert("created_at".into(), json!(now_iso()));
+        match self.shape {
+            Shape::Chat => line.insert("message".into(), body),
+            Shape::Generate => line.insert("response".into(), body),
+        };
+        line.insert("done".into(), json!(done));
+        line
+    }
+
+    fn said(&self, text: &str) -> Value {
+        match self.shape {
+            Shape::Chat => json!({ "role": "assistant", "content": text }),
+            Shape::Generate => json!(text),
+        }
+    }
+
+    fn called(&self, text: &str, calls: &[Call]) -> Value {
+        let mut body = self.said(text);
+        if matches!(self.shape, Shape::Chat) && !calls.is_empty() {
+            body["tool_calls"] = calls
+                .iter()
+                .map(|c| json!({ "id": c.id, "function": { "index": c.index, "name": c.name, "arguments": c.args } }))
+                .collect();
+        }
+        body
+    }
+
+    fn done(&self, text: &str, calls: &[Call], reason: &str, nectar: Option<Map<String, Value>>) -> Value {
+        let mut line = self.line(self.called(text, calls), true);
+        line.insert("done_reason".into(), json!(reason));
+        if let Shape::Chat = self.shape {
+            line.extend(nectar.unwrap_or_default());
+        }
+        Value::Object(line)
+    }
+
+    fn remember(&self, text: &str, calls: &[Call], sid: &str) {
+        let Some(said) = &self.said else { return };
+        let mut after = said.blooms.clone();
+        if let Some(last) = after.last_mut() {
+            let grew = last.grew.get_or_insert_with(Vec::new);
+            if !text.is_empty() {
+                grew.push(conversation::text(text));
+            }
+            grew.extend(calls.iter().map(|c| conversation::tendril(&c.id, &c.name, &c.args)));
+        }
+        let gone = self.hive.sigils().remember(said.system.as_deref(), &after, sid);
+        if let Some(gone) = gone.filter(|g| !self.rq.following(g)) {
+            self.rq.send(json!({ "chi": "cleanup", "sid": gone }));
+        }
+    }
+}
+
+async fn chat(State(hive): State<Arc<Hive>>, Json(req): Json<ChatRequest>) -> Response {
+    let said = conversation::from_chat(&req.messages);
+    if said.tail == Tail::None {
+        return Failure::new(StatusCode::BAD_REQUEST, "messages holds nothing to answer").into_response();
+    }
+    let rq = match hive.requester().await {
+        Ok(rq) => rq,
+        Err(f) => return f.into_response(),
+    };
+    let growing = {
+        let mut sigils = hive.sigils();
+        let mut given = conversation::answers(&said);
+        let held = if given.is_empty() { None } else { rq.held(&mut given) };
+        match held.filter(|sid| !rq.following(sid)) {
+            Some(sid) => Growing::open(rq.clone(), sid, Opening::Answers(given), false),
+            None => {
+                let (graft, content) = conversation::opening(&said);
+                let sid = sigils.continuing(said.system.as_deref(), &graft, |s| rq.following(s));
+                let tools = tools_to_thrum(req.tools.as_deref());
+                let tone = prompt(&sid, &req.model, said.system.as_deref(), &content, &graft, tools);
+                Growing::open(rq.clone(), sid, Opening::Prompt(tone), false)
+            }
+        }
+    };
+    let turn = Turn { hive, rq, said: Some(said), model: req.model, shape: Shape::Chat };
+    answer(turn, growing, req.stream.unwrap_or(true)).await
+}
+
+async fn generate(State(hive): State<Arc<Hive>>, Json(req): Json<GenerateRequest>) -> Response {
+    let rq = match hive.requester().await {
+        Ok(rq) => rq,
+        Err(f) => return f.into_response(),
+    };
+    let sid = Sigils::fresh();
+    let content = conversation::content_of(Some(&req.prompt), req.images.as_deref());
+    let tone = prompt(&sid, &req.model, req.system.as_deref(), &content, &[], None);
+    let growing = Growing::open(rq.clone(), sid, Opening::Prompt(tone), true);
+    let turn = Turn { hive, rq, said: None, model: req.model, shape: Shape::Generate };
+    answer(turn, growing, req.stream.unwrap_or(true)).await
+}
+
+async fn answer(turn: Turn, mut growing: Growing, stream: bool) -> Response {
+    let mut text = String::new();
+    let mut calls: Vec<Call> = Vec::new();
+    if !stream {
+        loop {
+            match growing.next().await {
+                Ok(Grew::Text(t)) => text.push_str(&t),
+                Ok(Grew::Call(c)) => calls.push(c),
+                Ok(Grew::Done { reason, nectar }) => {
+                    turn.remember(&text, &calls, growing.sid());
+                    return Json(turn.done(&text, &calls, &reason, nectar)).into_response();
+                }
+                Err(f) => return f.into_response(),
+            }
+        }
+    }
+    let first = match growing.next().await {
+        Ok(grew) => grew,
+        Err(f) => return f.into_response(),
+    };
+    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(128);
+    tokio::spawn(async move {
+        let mut grew: Result<Grew, Failure> = Ok(first);
+        loop {
+            let (line, last) = match grew {
+                Ok(Grew::Text(t)) => {
+                    text.push_str(&t);
+                    (Value::Object(turn.line(turn.said(&t), false)), false)
+                }
+                Ok(Grew::Call(c)) => {
+                    let line = Value::Object(turn.line(turn.called("", std::slice::from_ref(&c)), false));
+                    calls.push(c);
+                    (line, false)
+                }
+                Ok(Grew::Done { reason, nectar }) => {
+                    turn.remember(&text, &calls, growing.sid());
+                    (turn.done("", &[], &reason, nectar), true)
+                }
+                Err(f) => {
+                    let mut line = f.line();
+                    line["done"] = json!(true);
+                    (line, true)
+                }
+            };
+            if tx.send(Ok(format!("{line}\n").into())).await.is_err() || last {
+                break;
+            }
+            grew = tokio::select! {
+                grew = growing.next() => grew,
+                _ = tx.closed() => break,
+            };
+        }
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
+async fn tags(State(hive): State<Arc<Hive>>) -> Response {
+    let models: Vec<Model> = match &hive.cfg.models {
+        Some(ids) => ids.iter().map(|id| Model { id: id.clone(), hive: "hum".into() }).collect(),
+        None => match hive.requester().await {
+            Ok(rq) => rq.models(),
+            Err(f) => return f.into_response(),
+        },
+    };
+    let mut seen = HashSet::new();
+    let models: Vec<Value> = models
+        .into_iter()
+        .filter(|m| seen.insert(m.id.clone()))
+        .map(|m| {
+            json!({
+                "name": m.id,
+                "model": m.id,
+                "modified_at": now_iso(),
+                "size": 0,
+                "digest": "",
+                "details": {
+                    "parent_model": "",
+                    "format": "hum",
+                    "family": m.hive,
+                    "families": [m.hive],
+                    "parameter_size": "",
+                    "quantization_level": "",
+                }
+            })
+        })
+        .collect();
     Json(json!({ "models": models })).into_response()
 }
 
@@ -511,17 +424,13 @@ async fn root() -> &'static str {
     "Ollama is running\n"
 }
 
-fn error_resp(code: StatusCode, msg: &str) -> Response {
-    let body = Json(json!({ "error": msg })).into_response();
-    (code, body).into_response()
-}
-
 async fn refuse_the_nurse(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if req.headers().contains_key(hop::FROM_NURSE) {
-        return error_resp(
+        return Failure::new(
             StatusCode::LOOP_DETECTED,
             "this is hum's own Ollama surface, not Ollama; point OLLAMA_NURSE_URL at Ollama itself",
-        );
+        )
+        .into_response();
     }
     next.run(req).await
 }
@@ -542,14 +451,23 @@ async fn main() -> Result<()> {
     cfg.bind = Some(bound);
     info!(listen = %listen, bound = %bound, "ollama-server.start");
 
-    let cfg = Arc::new(cfg);
+    let hive = Arc::new(Hive { cfg, link: Default::default(), sigils: Mutex::new(Sigils::new(4096)) });
+    tokio::spawn({
+        let hive = hive.clone();
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                hive.rest().await;
+            }
+        }
+    });
     let app = Router::new()
         .route("/", get(root))
         .route("/api/tags", get(tags))
         .route("/api/chat", post(chat))
         .route("/api/generate", post(generate))
         .layer(axum::middleware::from_fn(refuse_the_nurse))
-        .with_state(cfg);
+        .with_state(hive);
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -576,5 +494,35 @@ mod tests {
         assert_eq!(guarded().oneshot(marked).await.unwrap().status(), StatusCode::LOOP_DETECTED);
         let plain = axum::http::Request::post("/api/chat").body(Body::empty()).unwrap();
         assert_eq!(guarded().oneshot(plain).await.unwrap().status(), StatusCode::OK);
+    }
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string()).filter(|v| !v.trim().is_empty())
+    }
+
+    #[test]
+    fn an_empty_setting_keeps_the_default() {
+        let cfg = Config::from(env(&[("OLLAMA_SERVER_PORT", ""), ("OLLAMA_SERVER_HOST", ""), ("OLLAMA_SERVER_MODELS", "")]), FileConfig::default());
+        assert_eq!(cfg.listen, "127.0.0.1:14624", "beside hum's other surfaces, off Ollama's own port");
+        assert_eq!(cfg.models, None, "the breath's models");
+        assert_eq!(cfg.label, "main");
+
+        let file = FileConfig { host: Some("0.0.0.0".into()), port: Some(9), models: Some(vec!["m".into()]) };
+        let cfg = Config::from(env(&[("OLLAMA_SERVER_PORT", "11500"), ("OLLAMA_SERVER_MODELS", " a, ,b ")]), file);
+        assert_eq!(cfg.listen, "0.0.0.0:11500", "the environment wins over the file");
+        assert_eq!(cfg.models, Some(vec!["a".into(), "b".into()]));
+    }
+
+    #[test]
+    fn a_tool_always_carries_a_schema() {
+        let tools = tools_to_thrum(Some(&[
+            json!({"type": "function", "function": {"name": "a", "description": "the a", "parameters": {"type": "object"}}}),
+            json!({"type": "function", "function": {"name": "b"}}),
+            json!({"type": "retrieval"}),
+        ]));
+        assert_eq!(tools, Some(vec![
+            json!({"name": "a", "description": "the a", "inputSchema": {"type": "object"}}),
+            json!({"name": "b", "inputSchema": {"type": "object", "properties": {}}}),
+        ]));
     }
 }

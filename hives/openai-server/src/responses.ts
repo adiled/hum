@@ -6,7 +6,8 @@
 // follows `previous_response_id`, or that belongs to a `conversation`,
 // grows on from the blooms its predecessor left, which this server keeps
 // for the caller that made it. A response is kept for that caller to read
-// back, unless `store` is false.
+// back, unless `store` is false: the latest 2048 of them, and the latest of
+// each conversation only while it is among them.
 //
 // The output is items. The bloom's thinking is a reasoning item, its words
 // a message, a tool the bloom reaches the caller for a function call that
@@ -48,7 +49,7 @@ interface Body {
   presence_penalty?: number;
 }
 
-interface Kept {
+export interface Kept {
   label: string;
   sid: string;
   said: Said;
@@ -57,9 +58,18 @@ interface Kept {
 
 const KEPT_MOST = 2048;
 
-class Shelf {
-  readonly #byId = new Map<string, Kept>();
+export class Shelf {
+  readonly #most: number;
+  readonly #byId = new Map<string, Kept & { thread?: string }>();
   readonly #byConversation = new Map<string, string>();
+
+  constructor(most = KEPT_MOST) {
+    this.#most = most;
+  }
+
+  get size(): { responses: number; conversations: number } {
+    return { responses: this.#byId.size, conversations: this.#byConversation.size };
+  }
 
   get(label: string, id: string): Kept | undefined {
     const k = this.#byId.get(id);
@@ -72,16 +82,25 @@ class Shelf {
   }
 
   put(id: string, kept: Kept, conversation?: string): void {
-    this.#byId.set(id, kept);
-    if (conversation) this.#byConversation.set(`${kept.label}\0${conversation}`, id);
-    while (this.#byId.size > KEPT_MOST) {
+    const thread = conversation ? `${kept.label}\0${conversation}` : undefined;
+    this.#byId.set(id, { ...kept, thread });
+    if (thread) this.#byConversation.set(thread, id);
+    while (this.#byId.size > this.#most) {
       const [oldest] = this.#byId.keys();
-      this.#byId.delete(oldest);
+      this.#forget(oldest);
     }
   }
 
   drop(label: string, id: string): boolean {
-    return this.get(label, id) !== undefined && this.#byId.delete(id);
+    if (!this.get(label, id)) return false;
+    this.#forget(id);
+    return true;
+  }
+
+  #forget(id: string): void {
+    const thread = this.#byId.get(id)?.thread;
+    this.#byId.delete(id);
+    if (thread && this.#byConversation.get(thread) === id) this.#byConversation.delete(thread);
   }
 }
 

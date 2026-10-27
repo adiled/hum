@@ -76,6 +76,10 @@ impl Engine {
         self.pool.clone()
     }
 
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+
     pub async fn run(&self, line: &str) -> Answer {
         let Some(words) = shlex::split(line) else {
             return Answer::err("the line has a quote that never closes");
@@ -429,9 +433,20 @@ impl Engine {
         }
         let effective = self.auth(service).await.map_err(|e| anyhow!("{e}"))?;
         match effective {
-            None => bail!(
-                "{name} names no way to sign in, in its spec or in web2.json; give it an `auth` there (bearer, header, query, basic or oauth)"
-            ),
+            None => match self.spec(service).await.ok().and_then(|l| l.auth_hint.clone()) {
+                Some(AuthHint::OAuth { .. }) => bail!(
+                    "{name}'s spec signs in with OAuth, which needs the client id of an OAuth app whose redirect URL is {}; \
+                     give it one in web2.json: services.{name}.auth {{\"oauth\": {{\"clientId\": \"<client id>\"}}}}",
+                    auth::redirect_uri(self.config.redirect_port)
+                ),
+                Some(AuthHint::Basic) => bail!(
+                    "{name}'s spec signs in with HTTP basic, which needs the user name; \
+                     give it one in web2.json: services.{name}.auth {{\"basic\": \"<user>\"}}"
+                ),
+                _ => bail!(
+                    "{name} names no way to sign in, in its spec or in web2.json; give it an `auth` there (bearer, header, query, basic or oauth)"
+                ),
+            },
             Some(Auth::OAuth2(app)) => {
                 auth::login_oauth(name, &app, &self.creds, &self.http, |url| auth::show_sign_in(name, url)).await?;
                 Ok(format!("{name} is signed in"))
@@ -460,19 +475,20 @@ fn read_token(name: &str, from_stdin: bool) -> Result<String> {
     Ok(rpassword::prompt_password(format!("{name}'s token (it is not shown): "))?)
 }
 
+pub fn named(patterns: &[String], cmd: &Command) -> bool {
+    let (name, original) = (normalize(&cmd.name), normalize(&cmd.original));
+    patterns.iter().any(|p| {
+        let p = normalize(p);
+        crate::config::glob(&p, &name) || crate::config::glob(&p, &original)
+    })
+}
+
 pub fn allowed(service: &Service, cmd: &Command) -> Result<(), String> {
-    let named = |list: &[String]| {
-        let (name, original) = (normalize(&cmd.name), normalize(&cmd.original));
-        list.iter().any(|p| {
-            let p = normalize(p);
-            crate::config::glob(&p, &name) || crate::config::glob(&p, &original)
-        })
-    };
     let (s, c) = (&service.name, &cmd.name);
-    if named(&service.deny) {
+    if named(&service.deny, cmd) {
         return Err(format!("{s} {c} is turned off here (services.{s}.deny in web2.json)"));
     }
-    if cmd.write && !service.writes && !named(&service.allow) {
+    if cmd.write && !service.writes && !named(&service.allow, cmd) {
         return Err(format!(
             "{s} {c} writes, and {s} only reads here. A person turns it on in web2.json: \
              services.{s}.allow [\"{c}\"], or services.{s}.writes true for every write"
