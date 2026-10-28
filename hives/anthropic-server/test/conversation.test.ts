@@ -2,7 +2,7 @@
 // and the sigil it keeps.
 
 import { describe, expect, test } from "bun:test";
-import { answers, fromMessages, opening, Sigils, systemOf, trace } from "../src/conversation.ts";
+import { answers, fromMessages, opening, Sigils, systemOf } from "../src/conversation.ts";
 import { stopReasonOf, usageOf } from "../src/growth.ts";
 
 describe("fromMessages", () => {
@@ -80,27 +80,68 @@ describe("fromMessages", () => {
 });
 
 describe("a conversation keeps its sigil", () => {
-  test("the trace reads what a client sends back, whitespace and thinking aside", () => {
-    const a = fromMessages(undefined, [{ role: "user", content: "hi" }, { role: "assistant", content: "hello  there" }]);
-    const b = fromMessages(undefined, [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "thinking", thinking: "x", signature: "s" }, { type: "text", text: "hello there\n" }] }]);
-    expect(trace("default", undefined, a.blooms)).toBe(trace("default", undefined, b.blooms));
-    expect(trace("default", undefined, a.blooms)).not.toBe(trace("acme", undefined, a.blooms));
+  const use = (id: string) => ({ type: "tool_use", id, name: "zsh", input: {} });
+  const result = (id: string, content: string) => ({ type: "tool_result", tool_use_id: id, content });
+  const stepped = [
+    { role: "user", content: "check it" },
+    { role: "assistant", content: [{ type: "text", text: "I'll look." }, use("t1")] },
+    { role: "user", content: [result("t1", "a")] },
+    { role: "assistant", content: [{ type: "text", text: "Then this." }, use("t2")] },
+    { role: "user", content: [result("t2", "b")] },
+    { role: "assistant", content: "Done." },
+  ];
+  const grown = () => {
+    const sigils = new Sigils(() => {});
+    sigils.remember("default", fromMessages(undefined, stepped as never).blooms, "s-1");
+    return sigils;
+  };
+  const asked = (system: unknown, messages: unknown[]) => opening(fromMessages(system as never, [...messages, { role: "user", content: "and now?" }] as never)).graft;
+
+  test("though old tool pairs are dropped, words are missing between tool uses, or the system prompt changes", () => {
+    const dropped = [stepped[0], { role: "assistant", content: [{ type: "text", text: "I'll look. Then this." }, use("t2")] }, stepped[4], stepped[5]];
+    expect(grown().continuing("default", asked(undefined, dropped))).toBe("s-1");
+    const bare = [stepped[0], { role: "assistant", content: [use("t1")] }, stepped[2], { role: "assistant", content: [use("t2")] }, stepped[4], stepped[5]];
+    expect(grown().continuing("default", asked(undefined, bare))).toBe("s-1");
+    expect(grown().continuing("default", asked("[bookkeeping] deem it", stepped))).toBe("s-1");
   });
 
-  test("a sigil is continued only while it is not growing, and only by its tenant", () => {
+  test("with no tools, by its last two turns, whitespace and thinking aside", () => {
+    const sigils = new Sigils(() => {});
+    sigils.remember("default", fromMessages(undefined, [{ role: "user", content: "hi" }, { role: "assistant", content: "hello  there" }]).blooms, "s-1");
+    const thought = [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "thinking", thinking: "x", signature: "s" }, { type: "text", text: "hello there\n" }] }];
+    expect(sigils.continuing("default", asked(undefined, thought))).toBe("s-1");
+    const delivered = [...thought, { role: "assistant", content: [use("note_1")] }, { role: "user", content: [result("note_1", "a note")] }];
+    expect(sigils.continuing("default", opening(fromMessages(undefined, delivered as never)).graft)).toBe("s-1");
+  });
+
+  test("only from where it last left off: an earlier copy starts its own", () => {
+    const copy = [stepped[0], stepped[1], stepped[2], { role: "assistant", content: "Looks fine." }];
+    expect(grown().continuing("default", asked(undefined, copy))).not.toBe("s-1");
+    const sigils = new Sigils(() => {});
+    const chat = [{ role: "user", content: "hi" }, { role: "assistant", content: "Hello!" }, { role: "user", content: "joke" }, { role: "assistant", content: "Why did the bee..." }];
+    sigils.remember("default", fromMessages(undefined, chat as never).blooms, "s-1");
+    sigils.remember("default", fromMessages(undefined, [...chat, { role: "user", content: "another" }, { role: "assistant", content: "A wasp..." }] as never).blooms, "s-1");
+    expect(sigils.continuing("default", asked(undefined, chat))).not.toBe("s-1");
+  });
+
+  test("never for another tenant, nor while it is growing, and a line a client names is its own", () => {
     const forgot: string[] = [];
     const sigils = new Sigils((sid) => forgot.push(sid), 1);
     const blooms = fromMessages(undefined, [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }]).blooms;
-    expect(sigils.continuing("default", undefined, [])).not.toBe(sigils.continuing("default", undefined, []));
+    expect(sigils.continuing("default", [])).not.toBe(sigils.continuing("default", []));
     expect(sigils.fresh("acme")).toStartWith("acme:");
-    sigils.remember("default", undefined, blooms, "s-1");
-    expect(sigils.continuing("default", undefined, blooms)).toBe("s-1");
-    expect(sigils.continuing("acme", undefined, blooms)).not.toBe("s-1");
+    sigils.remember("default", blooms, "s-1");
+    expect(sigils.continuing("default", blooms)).toBe("s-1");
+    expect(sigils.continuing("acme", blooms)).not.toBe("s-1");
     sigils.begin("s-1");
-    expect(sigils.continuing("default", undefined, blooms)).not.toBe("s-1");
+    expect(sigils.continuing("default", blooms)).not.toBe("s-1");
     sigils.end("s-1");
-    sigils.remember("default", undefined, [...blooms, ...blooms], "s-2");
+    sigils.remember("default", [...blooms, ...blooms], "s-2");
     expect(forgot).toEqual(["s-1"]);
+    const mine = sigils.named("acme", "window-1");
+    expect(mine).toStartWith("acme:");
+    expect(sigils.named("acme", "window-1")).toBe(mine);
+    expect(sigils.named("other", "window-1")).not.toBe(mine);
   });
 });
 

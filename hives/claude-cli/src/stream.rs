@@ -60,10 +60,11 @@ pub fn said(petals: &[Petal]) -> Vec<Value> {
 
 pub const CONTINUE: &str = "Tool results came back after your turn ended. If a \"No response requested.\" sits between them and this line, the session added it when it resumed; you did not say it. Continue from where you left off.";
 
-pub fn heard(tone: &Value, preamble: &mut Option<String>) -> Option<String> {
+pub fn heard(tone: &Value, told: &mut Option<String>) -> Option<String> {
     match tone.get("chi").and_then(Value::as_str)? {
         "prompt" => {
             let body: PromptBody = serde_json::from_value(tone.clone()).ok()?;
+            let system = body.system_prompt.filter(|s| !s.is_empty());
             let petals = body.content.filter(|c| !c.is_empty()).unwrap_or_else(|| {
                 body.text.into_iter().map(|t| Petal { kind: PetalKind::Text.as_str().into(), text: Some(t), ..Petal::default() }).collect()
             });
@@ -71,8 +72,11 @@ pub fn heard(tone: &Value, preamble: &mut Option<String>) -> Option<String> {
             if content.is_empty() {
                 content.push(json!({ "type": "text", "text": CONTINUE }));
             }
-            if let Some(text) = preamble.take() {
-                content.insert(0, json!({ "type": "text", "text": text }));
+            if let Some(system) = system
+                && told.as_deref() != Some(system.as_str())
+            {
+                content.insert(0, json!({ "type": "text", "text": crate::instructions(&system) }));
+                *told = Some(system);
             }
             Some(json!({ "type": "user", "message": { "role": "user", "content": content } }).to_string())
         }
@@ -204,22 +208,25 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_is_heard_as_a_user_message_told_its_system_prompt_once() {
-        let prompt = json!({
-            "chi": "prompt", "sid": "s",
+    fn a_prompt_is_heard_as_a_user_message_told_its_system_prompt_when_it_changes() {
+        let prompt = |system: &str| json!({
+            "chi": "prompt", "sid": "s", "systemPrompt": system,
             "content": [
                 { "kind": "text", "text": "what is this?" },
                 { "kind": "pollen", "grain": { "kind": "image", "mediaType": "image/png", "data": "AAAA" } },
             ],
         });
-        let mut preamble = Some("<system>be brief</system>".to_string());
-        let first: Value = serde_json::from_str(&heard(&prompt, &mut preamble).unwrap()).unwrap();
+        let mut told = None;
+        let first: Value = serde_json::from_str(&heard(&prompt("be brief"), &mut told).unwrap()).unwrap();
         let parts = first["message"]["content"].as_array().unwrap();
-        assert_eq!(parts[0]["text"], "<system>be brief</system>");
+        assert_eq!(crate::instructed(parts[0]["text"].as_str().unwrap()), Some("be brief"));
         assert_eq!(parts[1]["text"], "what is this?");
         assert_eq!(parts[2]["source"]["media_type"], "image/png");
-        let again: Value = serde_json::from_str(&heard(&prompt, &mut preamble).unwrap()).unwrap();
+        let again: Value = serde_json::from_str(&heard(&prompt("be brief"), &mut told).unwrap()).unwrap();
         assert_eq!(again["message"]["content"][0]["text"], "what is this?", "told once");
+        let changed: Value = serde_json::from_str(&heard(&prompt("be terse"), &mut told).unwrap()).unwrap();
+        assert_eq!(crate::instructed(changed["message"]["content"][0]["text"].as_str().unwrap()), Some("be terse"));
+        assert_eq!(told.as_deref(), Some("be terse"));
     }
 
     #[test]

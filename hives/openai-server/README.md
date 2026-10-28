@@ -69,24 +69,27 @@ Every route answers without its `/v1` too. A request for words may leave
 `model` out, and any nurse with room grows it.
 
 **Conversations.** OpenAI's APIs send the whole conversation every time;
-hum keeps it in a sigil. A request's earlier turns travel as the prompt's
-`graft`, so any nurse can grow it, and its last turn as the prompt. A
-conversation that ends with tool answers or with the assistant's own
-words asks for a bloom that grows on: the prompt has no words, and the
-whole conversation is its graft. A conversation stays on one sigil while
-it only grows, so a nurse that keeps sessions picks up where it was. The
-sigil is found by the caller's key, the system prompt, the words of every
-turn and the id of every tool call and answer; a conversation no one has
-seen, one whose history was edited, or one already growing gets a sigil
-of its own, so callers on different keys never share one. A turn's
-words, calls and answers are each read in order but apart from one
-another, its words whitespace aside, so a caller that keeps a turn as one
-message, all its words and then all its calls, finds the sigil it grew
-on in steps. A tool the server ran is not read, so a caller finds its
-sigil whether it sends that call back or not. A conversation that ends
-in tool answers also finds the sigil it had before them, so an answer
-that came after its call was let go, or a call and answer a caller made
-up to hand the model news, grows on in the session that came before.
+hum keeps it in a sigil. A request's earlier turns travel as the
+prompt's `graft`, so any nurse can grow it, and its last turn as the
+prompt. A conversation that ends with tool answers or with the
+assistant's own words asks for a bloom that grows on: the prompt has no
+words, and the whole conversation is its graft. A conversation stays on
+one sigil while it grows, so a nurse that keeps sessions picks up where
+it was. A client may name its line with an `X-Hum-Sid` header, kept
+apart from every other caller's. Otherwise the sigil is found by the
+newest tool call or answer id the conversation holds that this caller
+was given, or, with no tools, by the words of its last two turns. The
+whole history is not compared: clients compact it all the time, dropping
+old tool pairs, trimming, sending a turn back as one message or without
+the words said between its calls, while a call's id comes back as it was
+given. A caller that edits an older turn keeps its sigil, but a sigil
+goes on only from where it last left off, so a copy of the conversation
+taken before then gets one of its own; a conversation already growing
+gets one of its own, and callers on different keys never share one. A
+conversation that ends in tool answers is also found by the turns before
+them, so an answer that came after its call was let go, or a call and
+answer a caller made up to hand the model news, grows on in the session
+that came before.
 
 **Settings.** `temperature`, `top_p`, the token cap, `stop`, `seed`, the
 JSON shape (`response_format`, `text.format`), `tool_choice`,

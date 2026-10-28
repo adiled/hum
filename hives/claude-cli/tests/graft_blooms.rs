@@ -232,3 +232,44 @@ fn an_answer_that_came_after_the_nest_gave_up_is_stitched_on() {
     let lines = lines_of(&path);
     assert_eq!(lines[before + 1]["message"]["content"][0]["content"], "job 17 finished (exit 0)");
 }
+
+#[test]
+fn a_late_answer_to_a_call_claude_holds_an_answer_for_is_stitched_as_its_own_call() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000007";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+    let gave_up = json!({"kind": "grasp", "callId": "toolu_9", "result": "MCP error -32000: never came", "isError": true});
+    let call = json!({"kind": "tendril", "callId": "toolu_9", "name": "zsh_check", "args": {"id": 17}});
+    graft(&prior_of(&held_with(vec![call.clone(), gave_up.clone()])), &path, session, &cwd, None).unwrap();
+    let before = lines_of(&path).len();
+
+    let again = graft(&prior_of(&held_with(vec![call.clone(), gave_up])), &path, session, &cwd, None).unwrap();
+    assert_eq!(again.grafted, 0, "the same call answered alike is held");
+
+    let answered = json!({"kind": "grasp", "callId": "toolu_9", "result": "job 17 finished"});
+    let late = graft(&prior_of(&held_with(vec![call, answered])), &path, session, &cwd, None).unwrap();
+    assert_eq!(late.grafted, 1);
+    let lines = lines_of(&path);
+    let id = lines[before]["message"]["content"][0]["id"].as_str().unwrap().to_owned();
+    assert_ne!(id, "toolu_9", "a call takes one answer, so the late one is a call of its own");
+    assert_eq!(lines[before + 1]["message"]["content"][0]["tool_use_id"], id);
+    assert_eq!(lines[before + 1]["message"]["content"][0]["content"], "job 17 finished");
+}
+
+#[test]
+fn a_transcript_says_which_system_prompt_it_was_told_last() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000008";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+    assert_eq!(claude_cli::graft::told(&path), None);
+    let mut prior = prior_of(&blooms());
+    assert!(tell(&mut prior, &claude_cli::instructions("be brief")));
+    graft(&prior, &path, session, &cwd, None).unwrap();
+    assert_eq!(claude_cli::graft::told(&path).as_deref(), Some("be brief"));
+}

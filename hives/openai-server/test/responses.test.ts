@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { Shelf, type Kept } from "../src/responses.ts";
 
-const kept = (label: string, sid: string): Kept => ({ label, sid, said: { blooms: [], tail: "assistant", served: new Set() }, response: {} });
+const kept = (label: string, sid: string): Kept => ({ label, sid, said: { blooms: [], tail: "assistant" }, response: {} });
 
 describe("the Responses store", () => {
   test("a conversation follows its latest response, for its own key", () => {

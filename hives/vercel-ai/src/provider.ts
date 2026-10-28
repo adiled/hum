@@ -87,7 +87,8 @@ export class HumModel implements LanguageModelV3 {
     const held = given.length > 0 ? forager.heldSid(given.map((a) => a.callId)) : undefined;
     const continuing = held !== undefined && !forager.sigils.growing(held);
     const { graft, content } = opening(said);
-    const sid = continuing ? held : forager.sigils.continuing(said.system, graft);
+    const line = opts.providerOptions?.hum?.sid;
+    const sid = continuing ? held : typeof line === "string" && line.length > 0 ? forager.sigils.named(line) : forager.sigils.continuing(graft);
     const tools = toolsOf(opts.tools);
     const own = new Set(tools?.map((t) => t.name));
     const translator = new HumTranslator(own, new Set(given.map((a) => a.callId)));
@@ -107,7 +108,7 @@ export class HumModel implements LanguageModelV3 {
       opts.abortSignal?.removeEventListener("abort", cancel);
       forager.unfollow(sid);
       forager.sigils.end(sid);
-      if (grown) forager.sigils.remember(said.system, after(), sid);
+      if (grown) forager.sigils.remember(after(), sid, translator.served);
       for (const part of parts) {
         try { controller.enqueue(part); } catch {}
       }

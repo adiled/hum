@@ -24,7 +24,9 @@
 //! grafted on it among the rest, so a cell that did not grow them grows
 //! from them. A nurse that can grow a bloom on from its graft, with
 //! no new words, says so with [`Nurse::grows_on`]; any other is never
-//! handed such a prompt.
+//! handed such a prompt. A nurse whose cell names its own tool calls reads
+//! that name with [`Nurse::call_id`], since only the nurse knows its cell's
+//! MCP client.
 //!
 //! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
 //! also lives here (patterns for chat-LLM context-loss detection).
@@ -176,6 +178,10 @@ pub trait Nurse: Send + Sync {
 
     fn grows_on(&self) -> bool {
         false
+    }
+
+    fn call_id(&self, _call: &Value) -> Option<String> {
+        None
     }
 
     async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {

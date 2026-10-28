@@ -92,14 +92,21 @@ images and documents, tools of any type but custom, a thinking config
 other than a budget, `cache_control`, `citations`, `metadata`,
 `service_tier` and `container` are all left out.
 
-**The sigil.** A conversation keeps one sigil while it only grows, so a
-nurse whose cell grew every bloom of the graft grows on from its own, and
-any other nurse grows from the graft. The sid a request continues is the
-one its conversation was last grown in, for its tenant; a conversation no
-one has seen, one whose history was edited, or one already growing gets
-a sigil of its own. The trace that finds it is the tenant, the system
-prompt, the words of every turn and the id of every tool use. The server
-keeps the 4096 latest, and sends `cleanup` for a sigil it forgets.
+**The sigil.** A conversation keeps one sigil while it grows, so a nurse
+whose cell grew every bloom of the graft grows on from its own, and any
+other nurse grows from the graft. A client may name its line with an
+`X-Hum-Sid` header, kept apart from every other tenant's. Otherwise the
+sigil is found by the newest tool use or result id the conversation
+holds that its tenant was given, or, with no tools, by the words of its
+last two turns. The whole history is not compared: clients compact it
+all the time, dropping old tool pairs, trimming, or sending a turn back
+without the words said between its tool uses, while a tool use's id
+comes back as it was given. A client that edits an older turn keeps its
+sigil, but a sigil goes on only from where it last left off, so a copy
+of the conversation taken before then gets one of its own; one already
+growing gets a sigil of its own, and tenants never share one. The server
+keeps 4096 ids and 4096 tails, and sends `cleanup` for a sigil no key
+finds any more.
 
 **The answer.** A request streams only when its body says
 `"stream": true`. A request without it gets one message: its text,

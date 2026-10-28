@@ -161,6 +161,11 @@ export function cors(req: IncomingMessage, res: ServerResponse, allowed: string[
   return true;
 }
 
+export function lineOf(req: IncomingMessage): string | undefined {
+  const named = req.headers["x-hum-sid"];
+  return typeof named === "string" && named.trim().length > 0 ? named.trim() : undefined;
+}
+
 export function bearerOf(req: IncomingMessage): string {
   const auth = req.headers.authorization;
   if (typeof auth === "string") {

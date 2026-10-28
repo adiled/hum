@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
-import { fromPrompt, opening, Sigils, trace } from "../src/conversation.ts";
+import { fromPrompt, opening, Sigils } from "../src/conversation.ts";
 
 const loop: LanguageModelV3Prompt = [
   { role: "system", content: "be terse" },
@@ -75,25 +75,51 @@ describe("fromPrompt", () => {
 });
 
 describe("sigils", () => {
-  test("a conversation that only grows keeps its sigil, and one edited or growing gets its own", () => {
+  test("a conversation keeps its sigil by its call ids, though the system prompt changes or old pairs are dropped", () => {
     const forgot: string[] = [];
     const sigils = new Sigils((sid) => forgot.push(sid), 2);
     const said = fromPrompt(loop);
     const sid = sigils.fresh();
-    sigils.remember(said.system, said.blooms, sid);
-    expect(sigils.continuing(said.system, said.blooms)).toBe(sid);
-    expect(sigils.continuing("other words", said.blooms)).not.toBe(sid);
+    sigils.remember(said.blooms, sid);
+    expect(sigils.continuing(said.blooms)).toBe(sid);
+    expect(sigils.continuing(fromPrompt([{ role: "system", content: "other words" }, ...loop.slice(2)]).blooms)).toBe(sid);
     sigils.begin(sid);
-    expect(sigils.continuing(said.system, said.blooms)).not.toBe(sid);
+    expect(sigils.continuing(said.blooms)).not.toBe(sid);
     sigils.end(sid);
-    sigils.remember(undefined, [{ content: [{ kind: "text", text: "b" }] }], "b");
-    sigils.remember(undefined, [{ content: [{ kind: "text", text: "c" }] }], "c");
-    expect(forgot).toEqual([sid]);
+    sigils.remember([{ content: [{ kind: "text", text: "b" }] }], "b");
+    sigils.remember([{ content: [{ kind: "text", text: "c" }] }], "c");
+    sigils.remember([{ content: [{ kind: "text", text: "d" }] }], "d");
+    expect(forgot).toContain("b");
   });
 
-  test("reasoning and spacing leave the trace alone", () => {
-    const a = trace("s", [{ content: [{ kind: "text", text: "hi  there" }], grew: [{ kind: "sepal", text: "x" }, { kind: "text", text: "yo" }] }]);
-    const b = trace(" s ", [{ content: [{ kind: "text", text: "hi there" }], grew: [{ kind: "text", text: "yo " }] }]);
-    expect(a).toBe(b);
+  test("with no tools, by its last two turns, reasoning and spacing aside", () => {
+    const sigils = new Sigils(() => {});
+    sigils.remember([{ content: [{ kind: "text", text: "hi  there" }], grew: [{ kind: "sepal", text: "x" }, { kind: "text", text: "yo" }] }], "s-1");
+    expect(sigils.continuing([{ content: [{ kind: "text", text: "hi there" }], grew: [{ kind: "text", text: "yo " }] }])).toBe("s-1");
+    expect(sigils.continuing([{ content: [{ kind: "text", text: "hi there" }], grew: [{ kind: "text", text: "yo " }, { kind: "tendril", callId: "n1", name: "note" }, { kind: "grasp", callId: "n1", result: "news" }] }])).toBe("s-1");
+    expect(sigils.continuing([{ content: [{ kind: "text", text: "hi there" }], grew: [{ kind: "text", text: "hey" }] }])).not.toBe("s-1");
+  });
+
+  test("only from where it last left off: an earlier copy starts its own", () => {
+    const sigils = new Sigils(() => {});
+    const turn = (id: string) => [{ kind: "tendril", callId: id, name: "f" }, { kind: "grasp", callId: id, result: "r" }];
+    sigils.remember([{ content: [{ kind: "text", text: "go" }], grew: [...turn("t1"), ...turn("t2"), { kind: "text", text: "done" }] }], "s-1");
+    expect(sigils.continuing([{ content: [{ kind: "text", text: "go" }], grew: [...turn("t2"), ...turn("t1"), { kind: "text", text: "done" }] }])).toBe("s-1");
+    expect(sigils.continuing([{ content: [{ kind: "text", text: "go" }], grew: [...turn("t1"), { kind: "text", text: "fine" }] }])).not.toBe("s-1");
+    const one = { content: [{ kind: "text", text: "hi" }], grew: [{ kind: "text", text: "hello" }] };
+    const two = { content: [{ kind: "text", text: "joke" }], grew: [{ kind: "text", text: "bee" }] };
+    sigils.remember([one], "s-2");
+    sigils.remember([one, two], "s-2");
+    expect(sigils.continuing([one])).not.toBe("s-2");
+    expect(sigils.continuing([one, two])).toBe("s-2");
+  });
+
+  test("a line an app names is one sigil", () => {
+    const sigils = new Sigils(() => {});
+    const mine = sigils.named("window-1");
+    expect(sigils.named("window-1")).toBe(mine);
+    expect(sigils.named("window-2")).not.toBe(mine);
+    sigils.begin(mine);
+    expect(sigils.named("window-1")).not.toBe(mine);
   });
 });

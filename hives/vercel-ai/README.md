@@ -113,12 +113,17 @@ conversation that ends with tool results, or with the assistant's own
 words, sends no content, and every bloom is the graft, for the nurse to
 grow on from.
 
-A conversation keeps one sigil while it only grows: a call whose earlier
-blooms are the ones this bee last grew on a sigil prompts on that sigil
-again, so a nurse whose cell grew them grows on from its own. A
-conversation the bee has not seen, one whose history was edited, or one
-already growing gets a sigil of its own, `vai-<uuid>`. The match reads
-the system prompt, the words of each turn and the ids of each tool call.
+A conversation keeps one sigil while it grows, so a nurse whose cell
+grew its blooms grows on from its own. A call may name its line with
+`providerOptions: { hum: { sid } }`. Otherwise the sigil is found by the
+newest tool call or result id the conversation holds that this bee was
+given, or, with no tools, by the words of its last two turns. The whole
+history is not compared: an app compacts it, dropping old tool pairs or
+trimming, while a call's id comes back as it was given. An app that
+edits an older turn keeps its sigil, but a sigil goes on only from where
+it last left off, so a copy of the conversation taken before then gets
+one of its own; a conversation the bee has not seen, or one already
+growing, gets a sigil of its own, `vai-<uuid>`.
 
 ## Tools
 

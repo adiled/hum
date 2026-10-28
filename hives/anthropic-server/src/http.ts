@@ -66,6 +66,11 @@ export async function readJson<T>(req: IncomingMessage): Promise<T> {
   }
 }
 
+export function lineOf(req: IncomingMessage): string | undefined {
+  const named = req.headers["x-hum-sid"];
+  return typeof named === "string" && named.trim().length > 0 ? named.trim() : undefined;
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   if (res.headersSent) return;
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
