@@ -15,11 +15,12 @@
 //!   wire carries it, so the tools a cell lists are its sigil's and its
 //!   reaches carry its sigil's sid.
 //! - **A live cell**: a cell is raised for how its blooms grow, its
-//!   prompt's `trellis` and `sepal`. It is fed the next prompt of its
-//!   sigil only while it is not cancelled, its nurse is not
-//!   [`ephemeral`], and that prompt grows the same way, has words, and its
-//!   `graft` holds no bloom the cell did not grow; otherwise a fresh cell
-//!   is raised. A sigil raises one cell at a time: its next prompt waits
+//!   prompt's `trellis` and `sepal`. It is fed the next prompt of its sigil
+//!   only while it is not cancelled, its nurse is not [`ephemeral`], and
+//!   that prompt grows the same way, has words, and its `graft` holds no
+//!   bloom the cell did not grow; otherwise a fresh cell is raised. A cell
+//!   that grew on from its graft grew its graft's last bloom on, not a bloom
+//!   of its own. A sigil raises one cell at a time: its next prompt waits
 //!   for the cell being raised. A cell that outlives its nest's
 //!   `bounds.wallClockMs` is evicted.
 //! - **Growing on**: a prompt with no words grows on from its graft, so it
@@ -355,7 +356,8 @@ async fn handle_prompt<N: Nurse + 'static, W: Sounds>(
     let cancel = cell.silence.clone();
     let wilted = Arc::new(AtomicBool::new(false));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
-    let grown = Arc::new(AtomicU64::new(grafted));
+    let held = if worded { grafted } else { grafted.saturating_sub(1) };
+    let grown = Arc::new(AtomicU64::new(held));
     let id = RAISED.fetch_add(1, Ordering::SeqCst);
 
     let dispatch = {
@@ -626,7 +628,8 @@ mod tests {
     struct Raised {
         stilled: CancellationToken,
         fed: std::sync::Mutex<mpsc::Receiver<Value>>,
-        _alive: (mpsc::Sender<Value>, tokio::sync::oneshot::Sender<i32>),
+        says: mpsc::Sender<Value>,
+        _exit: tokio::sync::oneshot::Sender<i32>,
     }
 
     impl Raised {
@@ -648,6 +651,7 @@ mod tests {
     #[async_trait::async_trait]
     impl Nurse for Fake {
         fn ephemeral(&self) -> bool { self.ephemeral }
+        fn grows_on(&self) -> bool { true }
 
         async fn raise(&self, _egg: Egg) -> Result<crate::Cell> {
             tokio::time::sleep(self.raising).await;
@@ -658,7 +662,8 @@ mod tests {
             self.raised.lock().unwrap().push(Arc::new(Raised {
                 stilled: silence.clone(),
                 fed: std::sync::Mutex::new(rx_feed),
-                _alive: (tx_mmm, tx_exit),
+                says: tx_mmm,
+                _exit: tx_exit,
             }));
             Ok(crate::Cell { mark: None, feed: tx_feed, mmm: Arc::new(Mutex::new(rx_mmm)), emerged: rx_exit, ephemeral: self.ephemeral, silence })
         }
@@ -680,11 +685,15 @@ mod tests {
         }
 
         fn prompt(&self, text: &str) -> impl std::future::Future<Output = Result<()>> + 'static {
+            self.tone(json!({ "chi": "prompt", "sid": "s", "text": text }))
+        }
+
+        fn tone(&self, tone: Value) -> impl std::future::Future<Output = Result<()>> + 'static {
             handle_prompt(
                 self.nurse.clone(), Heard::default(), self.cells.clone(), self.gates.clone(),
                 Arc::new(NestConfig::default()), "http://127.0.0.1:0".into(),
                 std::env::temp_dir().to_string_lossy().into_owned(), "m".into(),
-                json!({ "chi": "prompt", "sid": "s", "text": text }),
+                tone,
             )
         }
 
@@ -728,6 +737,28 @@ mod tests {
         let mut fed = raised[0].fed();
         fed.sort();
         assert_eq!(fed, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn a_cell_that_grew_on_from_its_graft_is_fed_the_next_prompt() {
+        let nest = Hosted::new(Fake::default());
+        let bloom = json!({
+            "content": [{ "kind": "text", "text": "start the build" }],
+            "grew": [{ "kind": "tendril", "callId": "c", "name": "check" }, { "kind": "grasp", "callId": "c", "result": "done" }],
+        });
+        nest.tone(json!({ "chi": "prompt", "sid": "s", "graft": [bloom] })).await.unwrap();
+        nest.raised()[0].says.send(json!({ "chi": "wilt", "reason": "stop" })).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !nest.cells.lock().await.peek("s").expect("a live cell").wilted.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the cell wilts its bloom");
+        nest.tone(json!({ "chi": "prompt", "sid": "s", "text": "and now?", "graft": [bloom] })).await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1, "the bloom it grew on is the graft's last, so the next prompt is its");
+        assert_eq!(raised[0].fed(), ["and now?"]);
     }
 
     #[tokio::test]
