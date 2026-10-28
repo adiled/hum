@@ -7,10 +7,10 @@
 // history once, as messages; strangers never share a conversation; every
 // sampling setting and image reaches the model; a caller's tools keep
 // their names, come back one turn at a time or several at once, and their
-// answers reach the model; a tool the server runs stays out of chat
-// completions and shows in a response; failures carry their status; a
-// caller that hangs up stops the model; and the Responses API, legacy
-// completions, embeddings and keys all hold.
+// answers reach the model; a tool the server runs rides on a chat
+// message as `mcp_calls` and shows in a response; failures carry their
+// status; a caller that hangs up stops the model; and the Responses API,
+// legacy completions, embeddings and keys all hold.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import OpenAI from "openai";
@@ -164,10 +164,25 @@ describe("chat completions", () => {
     expect((await heardSince(n))[0].body.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "tool"]);
   });
 
-  test("a tool the server runs stays out of chat completions", async () => {
-    const r = await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `LOOKUP ${tag()}` }] });
-    expect(r.choices[0].message.tool_calls).toBeUndefined();
-    expect(r.choices[0].message.content).toBe("after tools: found bees");
+  test("a tool the server runs rides on the message as mcp_calls, and is read back", async () => {
+    const t = tag();
+    const r = await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `LOOKUP ${t}` }] });
+    const m = r.choices[0].message as OpenAI.ChatCompletionMessage & { mcp_calls?: Array<{ type: string; name: string; output: string }> };
+    expect(m.tool_calls).toBeUndefined();
+    expect(m.content).toBe("after tools: found bees");
+    expect(m.mcp_calls?.map((c) => [c.type, c.name, c.output])).toEqual([["mcp_call", "lookup", "found bees"]]);
+
+    const n = (await heard()).length;
+    await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `LOOKUP ${t}` }, m, { role: "user", content: `next ${t}` }] });
+    const sent = (await heardSince(n))[0].body.messages as Array<{ role: string; content: string }>;
+    expect(sent.filter((x) => x.role === "tool").map((x) => x.content)).toEqual(["found bees"]);
+
+    const streamed = await ai.chat.completions.create({ model: "gpt-lab", stream: true, messages: [{ role: "user", content: `LOOKUP ${tag()}` }] });
+    const rode: string[] = [];
+    for await (const c of streamed) {
+      for (const call of (c.choices[0]?.delta as { mcp_calls?: Array<{ name: string }> } | undefined)?.mcp_calls ?? []) rode.push(call.name);
+    }
+    expect(rode).toEqual(["lookup"]);
   });
 
   test("failures carry their status", async () => {

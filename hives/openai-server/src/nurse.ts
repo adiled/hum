@@ -1,14 +1,17 @@
 // The nurse half: blooms grown by the OpenAI-compatible API upstream.
 //
 // The nurse keeps each sigil's conversation as OpenAI messages, its own
-// replies among them. A prompt whose graft holds blooms the nurse did not
-// grow, or a sigil it has never seen, starts the conversation over from
-// the graft. The prompt's words, images, audio and files are the next user
-// message, and how the bloom grows becomes the request's: `temperature`,
-// `top_p`, `max_completion_tokens`, `stop`, `seed`, `response_format`,
-// `tool_choice`, `parallel_tool_calls`, `reasoning_effort`, and the
-// penalties under this hive's `ext`. The prompt's tools are the request's
-// function tools.
+// replies among them, since they hold the calls the server ran that a
+// chat client may never send back. A prompt whose graft holds blooms the
+// nurse did not grow, or a sigil it has never seen, starts the
+// conversation over from the graft. Tool answers a caller adds to the last
+// bloom join the kept conversation by call id, which the caller was given
+// as the upstream gave it. The prompt's words, images, audio and files
+// are the next user message, and how the bloom grows becomes the
+// request's: `temperature`, `top_p`, `max_completion_tokens`, `stop`,
+// `seed`, `response_format`, `tool_choice`, `parallel_tool_calls`,
+// `reasoning_effort`, and the penalties under this hive's `ext`. The
+// prompt's tools are the request's function tools.
 //
 // The reply streams back as petals: its words as text, its reasoning as a
 // sepal. Tool calls close its petals as tendrils and reach, every one, and
@@ -94,6 +97,17 @@ export function messagesOf(graft: Bloom[]): Message[] {
     if (m) out.push(m);
     grown(b.grew ?? [], out);
   }
+  return out;
+}
+
+export function lateAnswers(known: Message[], bloom: Bloom | undefined): Message[] {
+  const answered = new Set(known.filter((m) => m.role === "tool").map((m) => m.tool_call_id));
+  const called = new Set(known.flatMap((m) => (m.tool_calls ?? []).map((c: Message) => c.id)));
+  const grew = bloom?.grew ?? [];
+  const callable = (id: string) => called.has(id) || grew.some((p) => p.kind === PetalKind.tendril && p.callId === id);
+  const late = new Set(grew.filter((p) => p.kind === PetalKind.grasp && !answered.has(p.callId) && callable(p.callId ?? "")).map((p) => p.callId));
+  const out: Message[] = [];
+  grown(grew.filter((p) => late.has(p.callId) && (p.kind === PetalKind.grasp || (p.kind === PetalKind.tendril && !called.has(p.callId)))), out);
   return out;
 }
 
@@ -183,6 +197,7 @@ export class Nurse {
   #sigil(sid: string, graft: Bloom[]): Sigil {
     const known = this.#sigils.get(sid);
     if (known && (graft.length === 0 || known.grown === graft.length)) {
+      known.messages.push(...lateAnswers(known.messages, graft[graft.length - 1]));
       this.#sigils.delete(sid);
       this.#sigils.set(sid, known);
       return known;

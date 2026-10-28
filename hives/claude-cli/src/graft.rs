@@ -12,10 +12,15 @@
 //! and tendrils of the cell as assistant turns and each grasp as the tool
 //! result that answered them. A tendril is named as the cell knew it, a
 //! tool of the nest's `hum` MCP server.
+//!
+//! Tool results a held transcript lacks are found by the tool and what it
+//! answered, not by their ids: claude names its own calls by its ids, and
+//! a client knows them by the nest's. A transcript may hold answers a
+//! client never saw, a tool the server ran or a call the nest gave up on.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -159,6 +164,14 @@ pub fn last_uuid(path: &Path) -> Option<String> {
     None
 }
 
+pub fn ends_in_grasps(blooms: &[thrum_core::Bloom]) -> bool {
+    blooms
+        .last()
+        .and_then(|b| b.grew.as_ref())
+        .and_then(|grew| grew.iter().rev().find(|p| p.kind != thrum_core::PetalKind::Sepal.as_str()))
+        .is_some_and(|p| p.kind == thrum_core::PetalKind::Grasp.as_str())
+}
+
 pub fn tell(prior: &mut [Value], instructions: &str) -> bool {
     let Some(first) = prior.iter_mut().find(|m| role_of(m) == "user") else { return false };
     match first.get_mut("content") {
@@ -253,18 +266,18 @@ fn count_turns(messages: &[Value]) -> usize {
     turns
 }
 
-/// Count completed turns in JSONL: user-with-text followed by an assistant
-/// before another user.
+fn opens_turn(entry: &Value) -> bool {
+    entry_type(entry) == "user"
+        && message_content(entry).is_some_and(|c| {
+            c.iter().any(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                && !c.iter().any(|p| p.get("text").and_then(Value::as_str) == Some(crate::stream::CONTINUE))
+        })
+}
+
 fn count_jsonl_turns(entries: &[Value]) -> usize {
     let mut turns = 0;
     for i in 0..entries.len() {
-        if entry_type(&entries[i]) != "user" {
-            continue;
-        }
-        let has_text = message_content(&entries[i])
-            .map(|c| c.iter().any(|p| p.get("type").and_then(Value::as_str) == Some("text")))
-            .unwrap_or(false);
-        if !has_text {
+        if !opens_turn(&entries[i]) {
             continue;
         }
         for j in (i + 1)..entries.len() {
@@ -306,6 +319,59 @@ fn skip_turns(messages: &[Value], n: usize) -> usize {
     messages.len()
 }
 
+fn parts_of<'a>(messages: &'a [Value], role: &'a str, kind: &'a str) -> impl Iterator<Item = &'a Value> {
+    messages
+        .iter()
+        .filter(move |m| role_of(m) == role)
+        .filter_map(|m| m.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(move |p| p.get("type").and_then(Value::as_str) == Some(kind))
+}
+
+fn answer_of(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+fn late_results(history: &[Value], entries: &[Value]) -> Vec<Value> {
+    let start = history.iter().rposition(|m| role_of(m) == "user").map_or(0, |i| i + 1);
+    let turn = &history[start..];
+    let opened = entries.iter().rposition(opens_turn).map_or(0, |i| i + 1);
+    let held_parts = || entries[opened..].iter().filter_map(message_content).flatten();
+    let kind = |p: &Value, k: &str| p.get("type").and_then(Value::as_str) == Some(k);
+    let named: HashMap<&str, &str> = held_parts()
+        .filter(|p| kind(p, "tool_use"))
+        .filter_map(|p| Some((p.get("id")?.as_str()?, p.get("name")?.as_str()?)))
+        .collect();
+    let mut held: Vec<(&str, String)> = held_parts()
+        .filter(|p| kind(p, "tool_result"))
+        .filter_map(|p| Some((*named.get(p.get("tool_use_id")?.as_str()?)?, answer_of(p.get("content")))))
+        .collect();
+    let calls: Vec<&Value> = parts_of(turn, "assistant", "tool-call").collect();
+    let mut late: Vec<(Value, Value)> = Vec::new();
+    for result in parts_of(turn, "tool", "tool-result") {
+        let id = result.get("toolCallId").and_then(Value::as_str);
+        let Some(call) = calls.iter().find(|c| id.is_some() && c.get("toolCallId").and_then(Value::as_str) == id) else { continue };
+        let name = call.get("toolName").and_then(Value::as_str).unwrap_or("");
+        let answer = answer_of(result.get("result"));
+        match held.iter().position(|(n, a)| *n == name && *a == answer) {
+            Some(i) => {
+                held.swap_remove(i);
+            }
+            None => late.push(((*call).clone(), result.clone())),
+        }
+    }
+    if late.is_empty() {
+        return Vec::new();
+    }
+    let (answered, results): (Vec<Value>, Vec<Value>) = late.into_iter().unzip();
+    vec![json!({ "role": "assistant", "content": answered }), json!({ "role": "tool", "content": results })]
+}
+
 /// Stitch a nestler's prior petals into the JSONL. UUID-anchored,
 /// count-based — does not hash text. Returns the new tail uuid.
 pub fn graft(
@@ -343,6 +409,14 @@ pub fn graft(
             .any(|e| e.get("uuid").and_then(Value::as_str) == Some(anchor))
     });
 
+    if j_users == p_users {
+        let late = late_results(&history, &existing);
+        if !late.is_empty() {
+            trace!(j_users, "graft.late-results");
+            let count = append_from_prompt(jsonl_path, session_id, &late, cwd)?;
+            return Ok(GraftResult { grafted: count, last_petal: last_uuid(jsonl_path) });
+        }
+    }
     if anchored && j_users >= p_users {
         trace!(anchor = ?last_synced, j_users, p_users, "graft.synced");
         return Ok(GraftResult { grafted: 0, last_petal: last_synced.map(str::to_owned) });

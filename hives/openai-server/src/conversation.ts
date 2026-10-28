@@ -16,8 +16,14 @@
 // caller; a conversation no one has seen, one whose history was edited,
 // or one already growing elsewhere gets a sigil of its own. The trace that
 // finds it is the caller's label, the system prompt, the words of every
-// turn and the ids of every tool call, which a client sends back as it
-// was given them.
+// turn and the ids of every tool call and answer, which a client sends
+// back as it was given them, though it may send a turn back as one
+// message, its words run together and then all its calls, where the turn
+// grew them in steps between. A tool the server ran is left out of the
+// trace, since a client may or may not send it back. A conversation that
+// ends in answers finds the sigil it had before them too: answers that
+// came after their call was let go, or a call and its answer a client
+// made up to hand the model news.
 
 import { createHash, randomUUID } from "node:crypto";
 import { PetalKind, type Bloom, type Grain, type Petal } from "../../../thrum-clients/ts/index.ts";
@@ -28,6 +34,7 @@ export interface Said {
   system?: string;
   blooms: Bloom[];
   tail: Tail;
+  served: Set<string>;
 }
 
 export interface Answer {
@@ -104,10 +111,19 @@ function partsOf(content: unknown): Petal[] {
   return out;
 }
 
+function servedPetals(served: Set<string>, id: string, name: string, args: unknown, output: unknown, error: unknown): Petal[] {
+  served.add(id);
+  return [
+    { kind: PetalKind.tendril, callId: id, name, args: argsOf(args) },
+    { kind: PetalKind.grasp, callId: id, result: resultOf(output ?? error), isError: Boolean(error) },
+  ];
+}
+
 class Reader {
   system: string[] = [];
   blooms: Bloom[] = [];
   tail: Tail = "none";
+  served = new Set<string>();
 
   #open(): Bloom {
     let last = this.blooms[this.blooms.length - 1];
@@ -133,8 +149,16 @@ class Reader {
 
   done(): Said {
     const system = this.system.filter((s) => s.length > 0).join("\n\n");
-    return { system: system || undefined, blooms: this.blooms, tail: this.tail };
+    return { system: system || undefined, blooms: this.blooms, tail: this.tail, served: this.served };
   }
+}
+
+export interface McpCall {
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+  output?: unknown;
+  error?: unknown;
 }
 
 export interface ChatMessage {
@@ -146,6 +170,7 @@ export interface ChatMessage {
   tool_call_id?: string;
   reasoning_content?: unknown;
   reasoning?: unknown;
+  mcp_calls?: McpCall[];
 }
 
 export function fromChat(messages: ChatMessage[]): Said {
@@ -163,6 +188,9 @@ export function fromChat(messages: ChatMessage[]): Said {
         const petals: Petal[] = [];
         const thought = typeof m.reasoning_content === "string" ? m.reasoning_content : typeof m.reasoning === "string" ? m.reasoning : "";
         if (thought) petals.push({ kind: PetalKind.sepal, text: thought });
+        for (const c of Array.isArray(m.mcp_calls) ? m.mcp_calls : []) {
+          petals.push(...servedPetals(r.served, c.id ?? "", c.name ?? "", c.arguments, c.output, c.error));
+        }
         petals.push(...partsOf(m.content));
         for (const c of m.tool_calls ?? []) {
           petals.push({ kind: PetalKind.tendril, callId: c.id ?? "", name: c.function?.name ?? "", args: argsOf(c.function?.arguments) });
@@ -192,6 +220,7 @@ export function fromResponses(input: unknown, instructions?: string, before?: Sa
     if (before.system) r.system.push(before.system);
     r.blooms = before.blooms.map((b) => ({ content: [...(b.content ?? [])], grew: [...(b.grew ?? [])] }));
     r.tail = before.tail;
+    r.served = new Set(before.served);
   }
   if (typeof instructions === "string" && instructions.length > 0) r.system = [instructions];
   const items: ResponsesItem[] = typeof input === "string" ? [{ type: "message", role: "user", content: input }] : Array.isArray(input) ? input : [];
@@ -215,10 +244,7 @@ export function fromResponses(input: unknown, instructions?: string, before?: Sa
         break;
       }
       case "mcp_call":
-        r.grew([
-          { kind: PetalKind.tendril, callId: item.id ?? "", name: item.name ?? "", args: argsOf(item.arguments) },
-          { kind: PetalKind.grasp, callId: item.id ?? "", result: resultOf(item.output ?? item.error), isError: Boolean(item.error) },
-        ], "assistant");
+        r.grew(servedPetals(r.served, item.id ?? "", item.name ?? "", item.arguments, item.output, item.error), "assistant");
         break;
     }
   }
@@ -247,7 +273,11 @@ function squeeze(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-export function trace(label: string, system: string | undefined, blooms: Bloom[]): string {
+function unspaced(s: string): string {
+  return s.replace(/\s+/g, "");
+}
+
+export function trace(label: string, system: string | undefined, blooms: Bloom[], served: Set<string> = new Set()): string {
   const h = createHash("sha256");
   h.update(`${label}\0${squeeze(system ?? "")}\0`);
   for (const b of blooms) {
@@ -256,22 +286,30 @@ export function trace(label: string, system: string | undefined, blooms: Bloom[]
       if (p.kind === PetalKind.text) h.update(`t${squeeze(p.text ?? "")}\0`);
       else if (p.kind === PetalKind.pollen) h.update(`p${p.grain?.kind ?? ""}\0`);
     }
-    h.update("G");
     let words = "";
+    let calls = "";
+    let answers = "";
     for (const p of b.grew ?? []) {
-      if (p.kind === PetalKind.text) {
-        words += p.text ?? "";
-        continue;
-      }
-      if (p.kind === PetalKind.tendril || p.kind === PetalKind.grasp) {
-        if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
-        words = "";
-        h.update(`${p.kind === PetalKind.tendril ? "c" : "r"}${p.callId ?? ""}\0`);
-      }
+      const ran = served.has(p.callId ?? "");
+      if (p.kind === PetalKind.text) words += p.text ?? "";
+      else if (p.kind === PetalKind.tendril && !ran) calls += `${p.callId ?? ""}\0`;
+      else if (p.kind === PetalKind.grasp && !ran) answers += `${p.callId ?? ""}\0`;
     }
-    if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
+    h.update(`G${unspaced(words)}\0c${calls}r${answers}`);
   }
   return h.digest("hex");
+}
+
+function beforeAnswers(blooms: Bloom[], withTheirCalls: boolean): Bloom[] {
+  const last = blooms[blooms.length - 1];
+  const grew = [...(last?.grew ?? [])];
+  const answered = new Set<string>();
+  while (grew.length > 0 && (grew[grew.length - 1].kind === PetalKind.grasp || grew[grew.length - 1].kind === PetalKind.sepal)) {
+    const p = grew.pop()!;
+    if (p.kind === PetalKind.grasp) answered.add(p.callId ?? "");
+  }
+  const kept = withTheirCalls ? grew.filter((p) => !(p.kind === PetalKind.tendril && answered.has(p.callId ?? ""))) : grew;
+  return [...blooms.slice(0, -1), { ...last, grew: kept }];
 }
 
 export class Sigils {
@@ -290,9 +328,11 @@ export class Sigils {
     return `oai-${randomUUID()}`;
   }
 
-  continuing(label: string, system: string | undefined, blooms: Bloom[]): string {
+  continuing(label: string, system: string | undefined, blooms: Bloom[], served?: Set<string>): string {
     if (blooms.length === 0) return this.fresh();
-    const sid = this.#byTrace.get(trace(label, system, blooms));
+    const sid = [blooms, beforeAnswers(blooms, false), beforeAnswers(blooms, true)]
+      .map((b) => this.#byTrace.get(trace(label, system, b, served)))
+      .find((found) => found !== undefined);
     return sid && !this.#growing.has(sid) ? sid : this.fresh();
   }
 
@@ -308,8 +348,8 @@ export class Sigils {
     this.#growing.delete(sid);
   }
 
-  remember(label: string, system: string | undefined, blooms: Bloom[], sid: string): void {
-    const key = trace(label, system, blooms);
+  remember(label: string, system: string | undefined, blooms: Bloom[], sid: string, served?: Set<string>): void {
+    const key = trace(label, system, blooms, served);
     this.#byTrace.delete(key);
     this.#byTrace.set(key, sid);
     this.#owner.set(sid, label);

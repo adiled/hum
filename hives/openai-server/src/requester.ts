@@ -8,16 +8,20 @@
 // away mid-bloom.
 //
 // A reach for one of its caller's tools is held by callId until the caller
-// answers it, for thirty minutes at most. A hold let go unanswered, as it
-// lapses or as the link closes, cancels its bloom, unless a prompt has
-// since opened another on its sid; the cancel's wilt is never taken for a
-// later bloom's. A link that ends on its own leaves its cancels to the
-// key's next link. A reach for a sid whose bloom has already gone back to
-// the caller cannot be put to the caller any more, so it is answered at
-// once with an error asking the cell to call again. A reach the requester
-// sends itself, a scent, waits for its result by callId. A requester's
-// link closes once it has been idle ten minutes, following no bloom and
-// holding no call, and opens again on its next request.
+// answers it, for ten minutes at most: the nest gives up on a reach a
+// little after the longest `bash` may run, ten minutes, and an answer held
+// past that would reach a call no one waits on any more. An answer that
+// comes once its hold is gone grows the bloom on from its graft instead. A
+// hold let go unanswered, as it lapses or as the link closes, cancels its
+// bloom, unless a prompt has since opened another on its sid; the cancel's
+// wilt is never taken for a later bloom's. A link that ends on its own
+// leaves its cancels to the key's next link. A reach for a sid whose bloom
+// has already gone back to the caller cannot be put to the caller any
+// more, so it is answered at once with an error asking the cell to call
+// again. A reach the requester sends itself, a scent, waits for its result
+// by callId. A requester's link closes once it has been idle ten minutes,
+// following no bloom and holding no call, and opens again on its next
+// request.
 
 import { randomUUID } from "node:crypto";
 import { Bee, Chi, Role, type Hello, type Model, type Tone } from "../../../thrum-clients/ts/index.ts";
@@ -37,7 +41,7 @@ export const HELLO: Hello = {
 
 const IDLE_MS = 10 * 60_000;
 const READY_MS = 10_000;
-const HELD_MS = 30 * 60_000;
+const HELD_MS = 10 * 60_000;
 
 export interface Reach {
   models: Model[];

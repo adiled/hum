@@ -12,10 +12,13 @@
 // asks.
 //
 // What it holds to: answers streamed and not, with usage; a conversation
-// remembered turn to turn on one sigil; a conversation the nurse never saw,
-// tool calls and all, grafted so claude knows it; a caller's tools, one or
-// several, answered and carried on; a tool the server runs, hidden from
-// chat completions and shown in a response; a JSON shape and a system
+// remembered turn to turn on one sigil, even sent back with a turn's steps
+// kept as one message; a conversation the nurse never saw, tool calls and
+// all, grafted so claude knows it; a caller's tools, one or several,
+// answered and carried on; a tool result the caller made up answered, as
+// claude grows on from it, even in a turn where the server ran a tool
+// the caller never saw; a tool the server runs, riding on a chat message
+// and shown in a response; a JSON shape and a system
 // prompt honoured; an image seen; the Responses API's function calls; a
 // hang-up that stops claude; two conversations at once kept apart; and
 // what claude cannot do refused plainly.
@@ -174,10 +177,80 @@ function nest(): string {
     expect(text).toContain("18");
   }, SLOW);
 
-  test("a tool the server runs stays out of chat completions, and shows in a response", async () => {
+  test("a turn sent back as one message, its words and then its calls, stays on its sigil", async () => {
+    let messages: OpenAI.ChatCompletionMessageParam[] = [{ role: "user", content: "What is the weather in Paris? Use the get_weather tool, then tell me the temperature." }];
+    const said: string[] = [];
+    const calls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const answers: OpenAI.ChatCompletionToolMessageParam[] = [];
+    for (let round = 0; round < 5; round++) {
+      const r = await ai.chat.completions.create({ model: MODEL, tools: [weather], messages });
+      const m = r.choices[0].message;
+      said.push(m.content ?? "");
+      if (!m.tool_calls || m.tool_calls.length === 0) break;
+      messages = [...messages, m];
+      for (const c of m.tool_calls) {
+        if (c.type !== "function") continue;
+        calls.push(c);
+        const city = String(JSON.parse(c.function.arguments || "{}").city ?? "").toLowerCase();
+        const answer = { role: "tool" as const, tool_call_id: c.id, content: forecast[city] ?? "unknown city" };
+        answers.push(answer);
+        messages.push(answer);
+      }
+    }
+    expect(calls.length).toBeGreaterThan(0);
+    const before = nurseLog.length;
+    const r = await ai.chat.completions.create({
+      model: MODEL,
+      tools: [weather],
+      messages: [
+        messages[0],
+        { role: "assistant", content: said.join(""), tool_calls: calls },
+        ...answers,
+        { role: "user", content: "Which city did you just look up? Reply with only its name, and do not call any tool." },
+      ],
+    });
+    expect(r.choices[0].message.content?.toLowerCase()).toContain("paris");
+    expect(nurseLog.slice(before)).toContain("nurse.cell.reused");
+  }, SLOW);
+
+  test("a tool result the caller made up is answered, claude growing on from it", async () => {
+    const r = await ai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: "user", content: "Start the build in the background, and tell me how it went once it finishes." },
+        { role: "assistant", content: "Started it as job 17; I'll report back when it finishes." },
+        { role: "assistant", content: null, tool_calls: [{ id: "check_17", type: "function", function: { name: "check", arguments: '{"id":17}' } }] },
+        { role: "tool", tool_call_id: "check_17", content: "job 17 finished (exit 0): build ok, 160 tests pass" },
+      ],
+    });
+    expect(r.choices[0].finish_reason).toBe("stop");
+    expect(r.choices[0].message.content).toContain("160");
+  }, SLOW);
+
+  test("a delivery reaches claude though the server ran a tool in that turn the caller never saw", async () => {
+    const ask: OpenAI.ChatCompletionMessageParam = { role: "user", content: "Call the lookup tool with q set to wasps, tell me what it returned, then start the build in the background and say you'll report back." };
+    const first = await ai.chat.completions.create({ model: MODEL, messages: [ask] });
+    expect(first.choices[0].message.content).toContain("found wasps");
+    const before = nurseLog.length;
+    const r = await ai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        ask,
+        { role: "assistant", content: first.choices[0].message.content },
+        { role: "assistant", content: null, tool_calls: [{ id: "check_42", type: "function", function: { name: "check", arguments: '{"id":42}' } }] },
+        { role: "tool", tool_call_id: "check_42", content: "job 42 finished (exit 0): build ok, 271 tests pass" },
+      ],
+    });
+    expect(r.choices[0].message.content).toContain("271");
+    expect(nurseLog.slice(before)).toContain("graft.late-results");
+  }, SLOW);
+
+  test("a tool the server runs rides on a chat message, and shows in a response", async () => {
     const chat = await ai.chat.completions.create({ model: MODEL, messages: [{ role: "user", content: "Call the lookup tool with q set to bees, then tell me exactly what it returned." }] });
-    expect(chat.choices[0].message.tool_calls).toBeUndefined();
-    expect(chat.choices[0].message.content).toContain("found bees");
+    const m = chat.choices[0].message as OpenAI.ChatCompletionMessage & { mcp_calls?: Array<{ name: string; output: string }> };
+    expect(m.tool_calls).toBeUndefined();
+    expect(m.content).toContain("found bees");
+    expect(m.mcp_calls?.map((c) => c.output)).toEqual(["found bees"]);
     const r = await ai.responses.create({ model: MODEL, input: "Call the lookup tool with q set to honey, then tell me exactly what it returned." });
     const served = r.output.find((o) => o.type === "mcp_call") as { name: string; output: string } | undefined;
     expect(served?.name).toBe("lookup");
