@@ -107,9 +107,14 @@ pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert)
     let pool = NonZeroUsize::new(nest.max_cells()).unwrap_or(NonZeroUsize::MIN);
     let sigils = pool.saturating_mul(NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN));
     let write_for_bridge = write_half.clone();
-    let bridge = Bridge::new(sigils, Arc::new(move |tone: Value| {
-        write_for_bridge.send(tone);
-    }));
+    let namer = nurse.clone();
+    let bridge = Bridge::new(
+        sigils,
+        Arc::new(move |tone: Value| {
+            write_for_bridge.send(tone);
+        }),
+        Arc::new(move |call: &Value| namer.call_id(call)),
+    );
     let mcp_addr = mcp::serve(bridge.clone()).await.context("serve the nest's mcp")?;
     let mcp_url = format!("http://{}", mcp_addr);
     info!(%mcp_url, "nurse.mcp.up");

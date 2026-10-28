@@ -11,17 +11,19 @@
 // stopped, and only the nurse has the person's user, as claude's sign-in
 // asks.
 //
-// What it holds to: answers streamed and not, with usage; a conversation
-// remembered turn to turn on one sigil, even sent back with a turn's steps
-// kept as one message; a conversation the nurse never saw, tool calls and
-// all, grafted so claude knows it; a caller's tools, one or several,
-// answered and carried on; a tool result the caller made up answered, as
-// claude grows on from it, even in a turn where the server ran a tool
+// What it holds to: answers streamed and not, with usage; a changed system
+// prompt told to claude on the same sigil; a line the caller names keeping
+// unrelated requests on one sigil; a conversation remembered turn to turn
+// on one sigil, even sent back with a turn's steps kept as one message; a
+// conversation the nurse never saw, tool calls and all, grafted so claude
+// knows it; a caller's tools, one or several, answered and carried on,
+// each call by claude's own id; a tool result the caller made up answered,
+// as claude grows on from it, even in a turn where the server ran a tool
 // the caller never saw; a tool the server runs, riding on a chat message
-// and shown in a response; a JSON shape and a system
-// prompt honoured; an image seen; the Responses API's function calls; a
-// hang-up that stops claude; two conversations at once kept apart; and
-// what claude cannot do refused plainly.
+// and shown in a response; a JSON shape and a system prompt honoured; an
+// image seen; the Responses API's function calls; a hang-up that stops
+// claude; two conversations at once kept apart; and what claude cannot do
+// refused plainly.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -58,6 +60,7 @@ async function untilAnswered(messages: OpenAI.ChatCompletionMessageParam[], tool
     messages = [...messages, m];
     for (const c of m.tool_calls) {
       if (c.type !== "function") continue;
+      expect(c.id).toMatch(/^toolu_/);
       const city = String(JSON.parse(c.function.arguments || "{}").city ?? "").toLowerCase();
       asked.push(`${c.function.name}:${city}`);
       messages.push({ role: "tool", tool_call_id: c.id, content: forecast[city] ?? "unknown city" });
@@ -118,6 +121,26 @@ function nest(): string {
     }
     expect(text).toContain("PONG-TWO");
     expect(total).toBeGreaterThan(0);
+  }, SLOW);
+
+  test("a changed system prompt reaches claude, and the conversation stays on its sigil", async () => {
+    const ask = (fruit: string, messages: OpenAI.ChatCompletionMessageParam[]) =>
+      ai.chat.completions.create({ model: MODEL, messages: [{ role: "system", content: `End every reply with the single word ${fruit}, in capitals.` }, ...messages] });
+    const first: OpenAI.ChatCompletionMessageParam[] = [{ role: "user", content: `Say hello in three words. ${tag()}` }];
+    const a = await ask("KIWI", first);
+    expect(a.choices[0].message.content?.trim()).toMatch(/KIWI\W*$/);
+    const before = nurseLog.length;
+    const b = await ask("MANGO", [...first, { role: "assistant", content: a.choices[0].message.content ?? "" }, { role: "user", content: "Now say goodbye in three words." }]);
+    expect(b.choices[0].message.content?.trim()).toMatch(/MANGO\W*$/);
+    expect(nurseLog.slice(before)).toContain("nurse.cell.reused");
+  }, SLOW);
+
+  test("a line the caller names keeps unrelated requests on one sigil", async () => {
+    const line = { headers: { "X-Hum-Sid": `live-${tag()}` } };
+    const word = `PLUM-${tag()}`;
+    await ai.chat.completions.create({ model: MODEL, messages: [{ role: "user", content: `Remember this codeword: ${word}. Reply only with OK.` }] }, line);
+    const r = await ai.chat.completions.create({ model: MODEL, messages: [{ role: "user", content: "What codeword did I ask you to remember? Reply with only the codeword." }] }, line);
+    expect(r.choices[0].message.content).toContain(word);
   }, SLOW);
 
   test("a conversation is remembered turn to turn, on one sigil", async () => {

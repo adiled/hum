@@ -12,12 +12,18 @@
 // grow on: the prompt has no content, and every bloom is its graft. The
 // results of the tool messages it ends with are its answers.
 //
-// A conversation keeps one sigil while it only grows. The sid a call
-// continues is the one its blooms so far were last grown in, by this bee;
-// a conversation no one has seen, one whose history was edited, or one
-// already growing elsewhere gets a sigil of its own. The trace that finds
-// it is the system prompt, the words of every turn and the ids of every
-// tool call, which the SDK sends back as it was given them.
+// A conversation keeps one sigil while it grows, for this bee; one already
+// growing elsewhere gets a sigil of its own. A call may name its line with
+// `providerOptions.hum.sid`. Otherwise the sigil is found by the newest
+// tool call or result id the conversation holds that this bee was given,
+// or by the words of its last two turns, and not by the whole history: an
+// app compacts and reshapes it, dropping old tool pairs or trimming, while
+// a call's id is echoed as it was given, since its result needs it, and
+// the newest turns are left alone. An app that edits an older turn keeps
+// its sigil. A sigil goes on only from where it last left off, so a copy
+// of the conversation taken before then starts its own. A conversation
+// that ends in tool results is found by its last two turns before them
+// too.
 
 import { createHash, randomUUID } from "node:crypto";
 import type { LanguageModelV3FilePart, LanguageModelV3Prompt, LanguageModelV3ToolResultOutput } from "@ai-sdk/provider";
@@ -144,35 +150,48 @@ function squeeze(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-export function trace(system: string | undefined, blooms: Bloom[]): string {
-  const h = createHash("sha256");
-  h.update(`${squeeze(system ?? "")}\0`);
-  for (const b of blooms) {
-    h.update("U");
+function unspaced(s: string): string {
+  return s.replace(/\s+/g, "");
+}
+
+function tailOf(blooms: Bloom[]): string | undefined {
+  let said = "";
+  let worded = false;
+  for (const b of blooms.slice(-2)) {
+    let user = "";
     for (const p of b.content ?? []) {
-      if (p.kind === PetalKind.text) h.update(`t${squeeze(p.text ?? "")}\0`);
-      else if (p.kind === PetalKind.pollen) h.update(`p${p.grain?.kind ?? ""}\0`);
+      if (p.kind === PetalKind.text) user += `${squeeze(p.text ?? "")}\0`;
+      else if (p.kind === PetalKind.pollen) user += `p${p.grain?.kind ?? ""}\0`;
     }
-    h.update("G");
-    let words = "";
-    for (const p of b.grew ?? []) {
-      if (p.kind === PetalKind.text) {
-        words += p.text ?? "";
-        continue;
-      }
-      if (p.kind === PetalKind.tendril || p.kind === PetalKind.grasp) {
-        if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
-        words = "";
-        h.update(`${p.kind === PetalKind.tendril ? "c" : "r"}${p.callId ?? ""}\0`);
-      }
-    }
-    if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
+    const words = unspaced((b.grew ?? []).filter((p) => p.kind === PetalKind.text).map((p) => p.text ?? "").join(""));
+    worded ||= words.length > 0 || (b.content ?? []).some((p) => p.kind === PetalKind.text && squeeze(p.text ?? "").length > 0);
+    said += `U${user}G${words}\0`;
   }
-  return h.digest("hex");
+  return worded ? createHash("sha256").update(said).digest("hex") : undefined;
+}
+
+function callIds(blooms: Bloom[]): string[] {
+  return blooms.flatMap((b) => (b.grew ?? []).filter((p) => (p.kind === PetalKind.tendril || p.kind === PetalKind.grasp) && p.callId).map((p) => p.callId as string));
+}
+
+function beforeAnswers(blooms: Bloom[], withTheirCalls: boolean): Bloom[] {
+  const last = blooms[blooms.length - 1];
+  const grew = [...(last?.grew ?? [])];
+  const answered = new Set<string>();
+  while (grew.length > 0 && (grew[grew.length - 1].kind === PetalKind.grasp || grew[grew.length - 1].kind === PetalKind.sepal)) {
+    const p = grew.pop()!;
+    if (p.kind === PetalKind.grasp) answered.add(p.callId ?? "");
+  }
+  const kept = withTheirCalls ? grew.filter((p) => !(p.kind === PetalKind.tendril && answered.has(p.callId ?? ""))) : grew;
+  return [...blooms.slice(0, -1), { ...last, grew: kept }];
 }
 
 export class Sigils {
-  readonly #byTrace = new Map<string, string>();
+  readonly #byCall = new Map<string, string>();
+  readonly #byTail = new Map<string, string>();
+  readonly #keys = new Map<string, number>();
+  readonly #latest = new Map<string, { call?: string; tail?: string }>();
+  readonly #ran = new Set<string>();
   readonly #cap: number;
   readonly #growing = new Set<string>();
   readonly #forget: (sid: string) => void;
@@ -186,9 +205,19 @@ export class Sigils {
     return `vai-${randomUUID()}`;
   }
 
-  continuing(system: string | undefined, blooms: Bloom[]): string {
+  named(name: string): string {
+    const sid = `vai-line-${createHash("sha256").update(name).digest("hex").slice(0, 32)}`;
+    return this.#growing.has(sid) ? this.fresh() : sid;
+  }
+
+  continuing(blooms: Bloom[]): string {
     if (blooms.length === 0) return this.fresh();
-    const sid = this.#byTrace.get(trace(system, blooms));
+    const ids = callIds(blooms);
+    const byCall = [...ids].reverse().map((id) => this.#byCall.get(id)).find((found) => found !== undefined);
+    const newest = byCall === undefined ? undefined : this.#latest.get(byCall)?.call;
+    const sid = (newest !== undefined && ids.includes(newest) ? byCall : undefined) ?? [blooms, beforeAnswers(blooms, false), beforeAnswers(blooms, true)]
+      .map((b) => this.#leftOff(tailOf(b)))
+      .find((found) => found !== undefined);
     return sid && !this.#growing.has(sid) ? sid : this.fresh();
   }
 
@@ -204,14 +233,49 @@ export class Sigils {
     this.#growing.delete(sid);
   }
 
-  remember(system: string | undefined, blooms: Bloom[], sid: string): void {
-    const key = trace(system, blooms);
-    this.#byTrace.delete(key);
-    this.#byTrace.set(key, sid);
-    while (this.#byTrace.size > this.#cap) {
-      const [oldest, gone] = this.#byTrace.entries().next().value as [string, string];
-      this.#byTrace.delete(oldest);
-      if (![...this.#byTrace.values()].includes(gone) && !this.#growing.has(gone)) this.#forget(gone);
+  remember(blooms: Bloom[], sid: string, ran: string[] = []): void {
+    for (const id of ran) {
+      this.#ran.delete(id);
+      this.#ran.add(id);
     }
+    while (this.#ran.size > this.#cap) this.#ran.delete(this.#ran.values().next().value as string);
+    const ids = callIds(blooms);
+    for (const id of ids) this.#keep(this.#byCall, id, sid);
+    const tail = tailOf(blooms);
+    if (tail !== undefined) this.#keep(this.#byTail, tail, sid);
+    this.#latest.set(sid, { call: [...ids].reverse().find((id) => !this.#ran.has(id)), tail });
+    for (const map of [this.#byCall, this.#byTail]) {
+      while (map.size > this.#cap) {
+        const [oldest, gone] = map.entries().next().value as [string, string];
+        map.delete(oldest);
+        this.#drop(gone);
+      }
+    }
+  }
+
+  #leftOff(key: string | undefined): string | undefined {
+    const sid = key === undefined ? undefined : this.#byTail.get(key);
+    return sid !== undefined && this.#latest.get(sid)?.tail === key ? sid : undefined;
+  }
+
+  #keep(map: Map<string, string>, key: string, sid: string): void {
+    const was = map.get(key);
+    map.delete(key);
+    map.set(key, sid);
+    if (was === sid) return;
+    this.#keys.set(sid, (this.#keys.get(sid) ?? 0) + 1);
+    if (was !== undefined) this.#drop(was);
+  }
+
+  #drop(sid: string): void {
+    const left = (this.#keys.get(sid) ?? 1) - 1;
+    if (left > 0) {
+      this.#keys.set(sid, left);
+      return;
+    }
+    this.#keys.delete(sid);
+    if (this.#growing.has(sid)) return;
+    this.#forget(sid);
+    this.#latest.delete(sid);
   }
 }

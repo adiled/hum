@@ -20,7 +20,7 @@ import type { Bloom, Petal, PromptBody, Tone } from "../../../thrum-clients/ts/i
 import { answers, fromMessages, opening, type Message, type Sigils } from "./conversation.ts";
 import type { Forager } from "./forager.ts";
 import { grewOf, grow, type Block, type Grown, type Listener, type Usage } from "./growth.ts";
-import { bad, gone, HttpError, readJson, sendJson, Sse } from "./http.ts";
+import { bad, gone, HttpError, lineOf, readJson, sendJson, Sse } from "./http.ts";
 import { tendrilsOf, toolsFromAnthropic } from "./tools.ts";
 
 export interface Ctx {
@@ -81,7 +81,8 @@ export async function messages(ctx: Ctx, tenant: string, req: IncomingMessage, r
   const given = answers(said);
   const held = given.length > 0 ? ctx.forager.heldSid(given.map((a) => a.callId)) : undefined;
   const { graft, content } = opening(said);
-  const sid = held !== undefined && !ctx.sigils.growing(held) ? held : ctx.sigils.continuing(tenant, said.system, graft);
+  const line = lineOf(req);
+  const sid = held !== undefined && !ctx.sigils.growing(held) ? held : line !== undefined ? ctx.sigils.named(tenant, line) : ctx.sigils.continuing(tenant, graft);
   const continuing = sid === held;
   const stream = body.stream === true;
   ctx.audit({ endpoint: "messages", tenant, model, sid, stream });
@@ -116,7 +117,7 @@ export async function messages(ctx: Ctx, tenant: string, req: IncomingMessage, r
   const after = said.blooms.map((b) => ({ content: b.content, grew: [...(b.grew ?? [])] }));
   const last = after[after.length - 1];
   if (last) last.grew = [...last.grew, ...grewOf(grown)];
-  ctx.sigils.remember(tenant, said.system, after, sid);
+  ctx.sigils.remember(tenant, after, sid);
   ctx.track(tenant, grown.usage);
 
   if (sse) {

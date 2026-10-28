@@ -26,10 +26,15 @@
 //!
 //! claude signed in with a subscription takes no system prompt of a
 //! caller's: `--system-prompt` and `--append-system-prompt` never reach the
-//! model. So a session's system prompt is told once, at the head of its
-//! first user turn, [`instructions`] wrapping it: in the turn fed to a new
-//! session, or in the first turn of a graft stitched into one. A session
-//! whose transcript already holds its first turn is not told again.
+//! model. So a session's system prompt is told at the head of a user
+//! turn, [`instructions`] wrapping it: the first, fed to a new session or
+//! stitched in with its graft, and again the turn it changes in. A cell
+//! raised on a session begun before reads what it was told from its
+//! transcript.
+//!
+//! Claude Code names each MCP call by its own tool use id, in the call's
+//! `_meta`, and the nest keeps it ([`hum_nest::Nurse::call_id`]), so a
+//! caller and claude's transcript name a call alike.
 //!
 //! How the bloom grows reaches claude where its CLI can take it: a
 //! `trellis` is its `--json-schema`, `"json"` being any object, and a
@@ -207,8 +212,14 @@ pub fn build_argv(spec: &Egg, session: Session<'_>) -> Vec<String> {
     argv
 }
 
+const TOLD_AFTER: &str = "\n</system>\nThose are the instructions for this conversation, as its system prompt, in place of any given before.";
+
 pub fn instructions(system: &str) -> String {
-    format!("<system>\n{system}\n</system>\nThose are the instructions for this whole conversation, as its system prompt.")
+    format!("<system>\n{system}{TOLD_AFTER}")
+}
+
+pub fn instructed(text: &str) -> Option<&str> {
+    text.strip_prefix("<system>\n")?.strip_suffix(TOLD_AFTER)
 }
 
 pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
@@ -236,6 +247,9 @@ impl Nurse for ClaudeCliNurse {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
     fn grows_on(&self) -> bool { true }
+    fn call_id(&self, call: &Value) -> Option<String> {
+        call.get("_meta")?.get("claudecode/toolUseId")?.as_str().map(str::to_owned)
+    }
 
     async fn curate(&self, sid: &hum_identity::HumId, cwd: &str) -> Result<hum_nest::CurateReport> {
         let derived = session_of(sid);
@@ -273,7 +287,7 @@ impl Nurse for ClaudeCliNurse {
         let path = graft::session_path(&cwd, &derived);
         let foreign = spec.prompt.resume.clone().filter(|r| !r.is_empty());
         let begun = foreign.is_some() || path.exists();
-        let mut preamble = spec.prompt.system_prompt.as_deref().filter(|s| !s.is_empty() && !begun).map(instructions);
+        let mut told = if begun { graft::told(&graft::session_path(&cwd, foreign.as_deref().unwrap_or(&derived))) } else { None };
         if foreign.is_none()
             && let Some(blooms) = spec.prompt.graft.as_ref().filter(|g| !g.is_empty())
         {
@@ -281,8 +295,11 @@ impl Nurse for ClaudeCliNurse {
                 graft::create_claude_session(&cwd, &derived)?;
             }
             let mut prior = graft::prior_of(blooms);
-            if preamble.as_deref().is_some_and(|text| graft::tell(&mut prior, text)) {
-                preamble = None;
+            if !begun
+                && let Some(system) = spec.prompt.system_prompt.as_deref().filter(|s| !s.is_empty())
+                && graft::tell(&mut prior, &instructions(system))
+            {
+                told = Some(system.to_owned());
             }
             let stitched = graft::graft(&prior, &path, &derived, &cwd, None)?;
             trace!(sid = %spec.sid, blooms = blooms.len(), grafted = stitched.grafted, "nurse.graft.stitched");
@@ -319,7 +336,7 @@ impl Nurse for ClaudeCliNurse {
 
         tokio::spawn(async move {
             while let Some(tone) = rx_in.recv().await {
-                let Some(line) = stream::heard(&tone, &mut preamble) else { continue };
+                let Some(line) = stream::heard(&tone, &mut told) else { continue };
                 let mut buf = line.into_bytes();
                 buf.push(b'\n');
                 if let Err(e) = stdin.write_all(&buf).await {
@@ -401,6 +418,13 @@ mod tests {
             "grew": [{ "kind": "tendril", "callId": "c-1", "name": "bash", "args": {} }, last],
         }]))
         .unwrap()
+    }
+
+    #[test]
+    fn a_call_keeps_claudes_own_id() {
+        let call = serde_json::json!({ "name": "bash", "arguments": {}, "_meta": { "claudecode/toolUseId": "toolu_01AB" } });
+        assert_eq!(ClaudeCliNurse.call_id(&call).as_deref(), Some("toolu_01AB"));
+        assert_eq!(ClaudeCliNurse.call_id(&serde_json::json!({ "name": "bash" })), None);
     }
 
     #[test]

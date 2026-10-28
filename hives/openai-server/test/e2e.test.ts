@@ -4,13 +4,14 @@
 //
 // Each finding of the hive's audit is pinned here: a request without
 // `stream` gets JSON; usage streams only when asked; a turn carries its
-// history once, as messages; strangers never share a conversation; every
-// sampling setting and image reaches the model; a caller's tools keep
-// their names, come back one turn at a time or several at once, and their
-// answers reach the model; a tool the server runs rides on a chat
-// message as `mcp_calls` and shows in a response; failures carry their
-// status; a caller that hangs up stops the model; and the Responses API,
-// legacy completions, embeddings and keys all hold.
+// history once, as messages; a line the caller names is one sigil;
+// strangers never share a conversation; every sampling setting and image
+// reaches the model; a caller's tools keep their names, come back one turn
+// at a time or several at once, and their answers reach the model; a tool
+// the server runs rides on a chat message as `mcp_calls` and shows in a
+// response; failures carry their status; a caller that hangs up stops the
+// model; and the Responses API, legacy completions, embeddings and keys
+// all hold.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import OpenAI from "openai";
@@ -87,6 +88,17 @@ describe("chat completions", () => {
     const sent = (await heardSince(n))[1].body.messages;
     expect(sent.map((m: { role: string }) => m.role)).toEqual(["system", "user", "assistant", "user"]);
     expect(sent[3].content).toBe(`second ${t}`);
+  });
+
+  test("a line the caller names with X-Hum-Sid is one sigil, whatever the messages say", async () => {
+    const t = tag();
+    const line = { headers: { "X-Hum-Sid": `window-${t}` } };
+    const n = (await heard()).length;
+    await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `one ${t}` }] }, line);
+    await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `two ${t}` }] }, line);
+    const sent = (await heardSince(n))[1].body.messages as Array<{ role: string; content: string }>;
+    expect(sent.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(sent[0].content).toBe(`one ${t}`);
   });
 
   test("strangers who open alike share nothing, and both are answered", async () => {

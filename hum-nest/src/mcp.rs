@@ -9,6 +9,10 @@
 //! the call's result, while a `chi:"tendril-info"` tells the forager the
 //! whole of it. MCP stops at the nest: past it, a tool call is a tendril.
 //!
+//! A call keeps the id its cell gave it, when the nurse can read one from
+//! the call (`Nurse::call_id`), so a caller, the forager and the cell's
+//! own record all name a call alike; otherwise the nest names it.
+//!
 //! A tool with no name is dropped, and one with no usable schema is given
 //! an empty object, because a cell's MCP client rejects the whole list
 //! over a single `inputSchema: null`. `parameters`, the older spelling of
@@ -130,18 +134,22 @@ impl Response {
     }
 }
 
+pub type CallNamer = Arc<dyn Fn(&Value) -> Option<String> + Send + Sync>;
+
 pub struct Bridge {
     offered: Mutex<LruCache<String, Vec<ToolDef>>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     reach: Arc<dyn Fn(Value) + Send + Sync>,
+    named: CallNamer,
 }
 
 impl Bridge {
-    pub fn new(sigils: NonZeroUsize, reach: Arc<dyn Fn(Value) + Send + Sync>) -> Arc<Self> {
+    pub fn new(sigils: NonZeroUsize, reach: Arc<dyn Fn(Value) + Send + Sync>, named: CallNamer) -> Arc<Self> {
         Arc::new(Self {
             offered: Mutex::new(LruCache::new(sigils)),
             pending: Mutex::new(HashMap::new()),
             reach,
+            named,
         })
     }
 
@@ -206,7 +214,9 @@ async fn call(bridge: &Bridge, sid: &str, id: Option<Value>, params: Value) -> R
         return Response::err(id, -32602, "Missing tool name");
     }
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-    let call_id = thrum_core::rid();
+    let call_id = (bridge.named)(&params)
+        .filter(|given| !given.is_empty() && !bridge.pending.lock().contains_key(given))
+        .unwrap_or_else(thrum_core::rid);
     let (tx, rx) = oneshot::channel::<Value>();
     bridge.pending.lock().insert(call_id.clone(), tx);
     (bridge.reach)(json!({
@@ -249,7 +259,20 @@ mod tests {
     }
 
     fn bridge(shipped: Arc<Mutex<Vec<Value>>>) -> Arc<Bridge> {
-        Bridge::new(NonZeroUsize::new(4).unwrap(), Arc::new(move |t| shipped.lock().push(t)))
+        Bridge::new(NonZeroUsize::new(4).unwrap(), Arc::new(move |t| shipped.lock().push(t)), Arc::new(|_| None))
+    }
+
+    async fn first_reach(shipped: &Arc<Mutex<Vec<Value>>>) -> Value {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(t) = shipped.lock().first().cloned() {
+                    return t;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
     }
 
     async fn post(addr: SocketAddr, path: &str, body: Value) -> Value {
@@ -320,6 +343,26 @@ mod tests {
         let info = shipped.lock().last().cloned().unwrap();
         assert_eq!(info["chi"], "tendril-info");
         assert_eq!(info["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn a_call_keeps_the_id_its_cell_gave_it() {
+        let shipped = Arc::new(Mutex::new(Vec::new()));
+        let sink = shipped.clone();
+        let bridge = Bridge::new(
+            NonZeroUsize::new(4).unwrap(),
+            Arc::new(move |t| sink.lock().push(t)),
+            Arc::new(|call: &Value| call.pointer("/_meta/cellCallId").and_then(Value::as_str).map(str::to_owned)),
+        );
+        bridge.offer("s", vec![def("bash")]);
+        let addr = serve(bridge.clone()).await.unwrap();
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "bash", "arguments": {}, "_meta": {"cellCallId": "cell_7"}}});
+        let answer = tokio::spawn(async move { post(addr, "/s/s", call).await });
+        let reach = first_reach(&shipped).await;
+        assert_eq!(reach["callId"], "cell_7");
+        assert!(bridge.resolve("cell_7", json!({"chi": "tendril-result", "callId": "cell_7", "output": "ok"})));
+        assert_eq!(answer.await.unwrap()["result"]["content"][0]["text"], "ok");
     }
 
     #[test]

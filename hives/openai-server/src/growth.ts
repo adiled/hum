@@ -218,10 +218,6 @@ export function grow(
   });
 }
 
-export function servedOf(said: { served: Set<string> }, grown: Grown): Set<string> {
-  return new Set([...said.served, ...grown.served.map((s) => s.callId)]);
-}
-
 export function mcpCallOf(s: Served): Record<string, unknown> {
   return {
     id: s.callId,

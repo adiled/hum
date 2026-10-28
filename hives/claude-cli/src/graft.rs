@@ -13,10 +13,12 @@
 //! result that answered them. A tendril is named as the cell knew it, a
 //! tool of the nest's `hum` MCP server.
 //!
-//! Tool results a held transcript lacks are found by the tool and what it
-//! answered, not by their ids: claude names its own calls by its ids, and
-//! a client knows them by the nest's. A transcript may hold answers a
-//! client never saw, a tool the server ran or a call the nest gave up on.
+//! Tool results a held transcript lacks are those it holds no answer like:
+//! the same call answered alike, or, for a call the nest named before it
+//! kept claude's ids, the same tool answered alike. A transcript may hold
+//! answers a client never saw, a tool the server ran or a call the nest
+//! gave up on; a late answer to a call claude already holds an answer for
+//! is stitched on as a call of its own, since a call takes one answer.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -347,9 +349,19 @@ fn late_results(history: &[Value], entries: &[Value]) -> Vec<Value> {
         .filter(|p| kind(p, "tool_use"))
         .filter_map(|p| Some((p.get("id")?.as_str()?, p.get("name")?.as_str()?)))
         .collect();
-    let mut held: Vec<(&str, String)> = held_parts()
+    let mut held: Vec<(&str, &str, String)> = held_parts()
         .filter(|p| kind(p, "tool_result"))
-        .filter_map(|p| Some((*named.get(p.get("tool_use_id")?.as_str()?)?, answer_of(p.get("content")))))
+        .filter_map(|p| {
+            let id = p.get("tool_use_id")?.as_str()?;
+            Some((id, *named.get(id)?, answer_of(p.get("content"))))
+        })
+        .collect();
+    let used: HashSet<&str> = entries
+        .iter()
+        .filter_map(message_content)
+        .flatten()
+        .filter(|p| kind(p, "tool_use"))
+        .filter_map(|p| p.get("id")?.as_str())
         .collect();
     let calls: Vec<&Value> = parts_of(turn, "assistant", "tool-call").collect();
     let mut late: Vec<(Value, Value)> = Vec::new();
@@ -358,7 +370,8 @@ fn late_results(history: &[Value], entries: &[Value]) -> Vec<Value> {
         let Some(call) = calls.iter().find(|c| id.is_some() && c.get("toolCallId").and_then(Value::as_str) == id) else { continue };
         let name = call.get("toolName").and_then(Value::as_str).unwrap_or("");
         let answer = answer_of(result.get("result"));
-        match held.iter().position(|(n, a)| *n == name && *a == answer) {
+        let same_call = held.iter().position(|(i, _, a)| Some(*i) == id && *a == answer);
+        match same_call.or_else(|| held.iter().position(|(_, n, a)| *n == name && *a == answer)) {
             Some(i) => {
                 held.swap_remove(i);
             }
@@ -368,8 +381,32 @@ fn late_results(history: &[Value], entries: &[Value]) -> Vec<Value> {
     if late.is_empty() {
         return Vec::new();
     }
+    for (call, result) in late.iter_mut() {
+        if id_of_call(call).is_some_and(|id| used.contains(id)) {
+            let fresh = format!("toolu_hum_{}", random_uuid_v4().replace('-', ""));
+            call["toolCallId"] = json!(fresh);
+            result["toolCallId"] = json!(fresh);
+        }
+    }
     let (answered, results): (Vec<Value>, Vec<Value>) = late.into_iter().unzip();
     vec![json!({ "role": "assistant", "content": answered }), json!({ "role": "tool", "content": results })]
+}
+
+fn id_of_call(call: &Value) -> Option<&str> {
+    call.get("toolCallId").and_then(Value::as_str)
+}
+
+pub fn told(path: &Path) -> Option<String> {
+    let entries = read_entries(path);
+    entries
+        .iter()
+        .rev()
+        .filter(|e| entry_type(e) == "user")
+        .filter_map(message_content)
+        .flat_map(|c| c.iter().rev())
+        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .find_map(crate::instructed)
+        .map(str::to_owned)
 }
 
 /// Stitch a nestler's prior petals into the JSONL. UUID-anchored,

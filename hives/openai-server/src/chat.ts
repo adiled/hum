@@ -15,9 +15,9 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answers, fromChat, opening, type ChatMessage } from "./conversation.ts";
-import { grow, mcpCallOf, servedOf, usageOf, type Grown, type Listener } from "./growth.ts";
+import { grow, mcpCallOf, usageOf, type Grown, type Listener } from "./growth.ts";
 import { growthOf, modelFor, prompt, type Caller, type Ctx } from "./hive.ts";
-import { bad, gone, HttpError, readJson, sendJson, Sse } from "./http.ts";
+import { bad, gone, HttpError, lineOf, readJson, sendJson, Sse } from "./http.ts";
 import { toolsFromOpenAI } from "./tools.ts";
 
 interface Body {
@@ -61,7 +61,8 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
   const held = given.length > 0 ? rq.heldSid(given.map((a) => a.callId)) : undefined;
   const continuing = held !== undefined && !ctx.sigils.growing(held);
   const { graft, content } = opening(said);
-  const sid = held !== undefined && continuing ? held : ctx.sigils.continuing(rq.label, said.system, graft, said.served);
+  const line = lineOf(req);
+  const sid = held !== undefined && continuing ? held : line !== undefined ? ctx.sigils.named(rq.label, line) : ctx.sigils.continuing(rq.label, graft);
   const open = continuing
     ? { answers: given }
     : {
@@ -126,7 +127,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
   const after = said.blooms.map((b) => ({ content: b.content, grew: [...(b.grew ?? [])] }));
   const last = after[after.length - 1];
   if (last) last.grew = [...(last.grew ?? []), ...grown.grew];
-  ctx.sigils.remember(rq.label, said.system, after, sid, servedOf(said, grown));
+  ctx.sigils.remember(rq.label, after, sid, grown.served.map((s) => s.callId));
 
   const used = usageOf(grown.nectar);
   ctx.usage.track(who.key, used.prompt, used.completion);

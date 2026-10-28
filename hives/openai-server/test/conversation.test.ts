@@ -1,7 +1,7 @@
 // An OpenAI conversation read as blooms, and what a request opens with.
 
 import { describe, expect, test } from "bun:test";
-import { answers, fromChat, fromResponses, opening, Sigils, trace } from "../src/conversation.ts";
+import { answers, fromChat, fromResponses, opening, Sigils } from "../src/conversation.ts";
 
 describe("fromChat", () => {
   test("each user turn opens a bloom, and what the assistant did grows in it", () => {
@@ -57,117 +57,188 @@ describe("fromResponses", () => {
   });
 });
 
-describe("a conversation keeps its sigil", () => {
-  test("the trace reads what a client sends back, whitespace aside", () => {
-    const a = fromChat([{ role: "user", content: "hi" }, { role: "assistant", content: "hello  there" }]);
-    const b = fromChat([{ role: "user", content: "hi" }, { role: "assistant", content: "hello there\n" }]);
-    expect(trace("key-a", undefined, a.blooms)).toBe(trace("key-a", undefined, b.blooms));
-    expect(trace("key-a", undefined, a.blooms)).not.toBe(trace("key-b", undefined, a.blooms));
-  });
-
-  test("a tool the server ran is read back from chat and from items, and the trace finds the sigil either way", () => {
+describe("a tool the server ran", () => {
+  test("is read back from a chat message and from items, as what grew", () => {
     const lookup = { id: "mcp-1", name: "lookup", arguments: '{"q":"bees"}', output: "found bees", error: null };
     const echoed = fromChat([
       { role: "user", content: "find bees" },
       { role: "assistant", content: "after tools: found bees", mcp_calls: [lookup] },
     ]);
-    expect(echoed.blooms[0].grew).toEqual([
+    const grew = [
       { kind: "tendril", callId: "mcp-1", name: "lookup", args: { q: "bees" } },
       { kind: "grasp", callId: "mcp-1", result: "found bees", isError: false },
       { kind: "text", text: "after tools: found bees" },
-    ]);
-    expect([...echoed.served]).toEqual(["mcp-1"]);
-    const dropped = fromChat([
-      { role: "user", content: "find bees" },
-      { role: "assistant", content: "after tools: found bees" },
-    ]);
+    ];
+    expect(echoed.blooms[0].grew).toEqual(grew);
     const items = fromResponses([
       { role: "user", content: "find bees" },
       { type: "mcp_call", ...lookup },
       { type: "message", role: "assistant", content: [{ type: "output_text", text: "after tools: found bees" }] },
     ]);
-    const kept = trace("key-a", undefined, echoed.blooms, echoed.served);
-    expect(trace("key-a", undefined, dropped.blooms, dropped.served)).toBe(kept);
-    expect(trace("key-a", undefined, items.blooms, items.served)).toBe(kept);
+    expect(items.blooms[0].grew).toEqual(grew);
+  });
+});
+
+const call = (id: string, name = "zsh") => ({ id, type: "function", function: { name, arguments: "{}" } });
+
+describe("a conversation keeps its sigil", () => {
+  const stepped = [
+    { role: "user", content: "check it" },
+    { role: "assistant", content: "I'll look.", tool_calls: [call("c1")] },
+    { role: "tool", tool_call_id: "c1", content: "a" },
+    { role: "assistant", content: "Then this.", tool_calls: [call("c2")] },
+    { role: "tool", tool_call_id: "c2", content: "b" },
+    { role: "assistant", content: "Done." },
+  ];
+  const grown = () => {
+    const sigils = new Sigils(() => {});
+    sigils.remember("key-a", fromChat(stepped).blooms, "oai-1");
+    return sigils;
+  };
+  const next = { role: "user", content: "and now?" };
+  const asked = (messages: Array<Record<string, unknown>>) => opening(fromChat(messages as never)).graft;
+
+  test("though old tool pairs are dropped", () => {
+    const kept = [
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.Then this.", tool_calls: [call("c2")] },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      { role: "assistant", content: "Done." },
+      next,
+    ];
+    expect(grown().continuing("key-a", asked(kept))).toBe("oai-1");
   });
 
-  test("the trace reads a turn kept as one message as the steps it grew in", () => {
-    const call = (id: string) => ({ id, type: "function", function: { name: "zsh", arguments: "{}" } });
-    const stepped = fromChat([
+  test("though a turn comes back as one message, its words run together", () => {
+    const squashed = [
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.\nThen this.\n\nDone.", tool_calls: [call("c1"), call("c2")] },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      next,
+    ];
+    expect(grown().continuing("key-a", asked(squashed))).toBe("oai-1");
+  });
+
+  test("though the words said between calls are missing in one request and back in the next", () => {
+    const sigils = new Sigils(() => {});
+    const midTurn = fromChat([
+      { role: "user", content: "check it" },
+      { role: "assistant", content: null, tool_calls: [call("c1")] },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      { role: "assistant", content: null, tool_calls: [call("c2")] },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+    ]);
+    sigils.remember("key-a", [{ ...midTurn.blooms[0], grew: [...(midTurn.blooms[0].grew ?? []), { kind: "text", text: "Done." }] }], "oai-1");
+    expect(sigils.continuing("key-a", asked([...stepped, next]))).toBe("oai-1");
+  });
+
+  test("though the system prompt changes", () => {
+    const told = fromChat([{ role: "system", content: "[bookkeeping] deem it" }, ...stepped, next] as never);
+    expect(told.system).toBe("[bookkeeping] deem it");
+    expect(grown().continuing("key-a", opening(told).graft)).toBe("oai-1");
+  });
+
+  test("though a call and its answer are made up to hand the model news", () => {
+    const delivered = [...stepped, { role: "assistant", content: null, tool_calls: [call("check_17", "check")] }, { role: "tool", tool_call_id: "check_17", content: "job 17 finished" }];
+    expect(grown().continuing("key-a", asked(delivered))).toBe("oai-1");
+  });
+
+  test("with no tools, by its last two turns, older turns compacted away", () => {
+    const sigils = new Sigils(() => {});
+    const chat = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "Hello!" },
+      { role: "user", content: "tell me a joke" },
+      { role: "assistant", content: "Why did the bee..." },
+      { role: "user", content: "another" },
+      { role: "assistant", content: "A wasp walks in..." },
+    ];
+    sigils.remember("key-a", fromChat(chat).blooms, "oai-1");
+    expect(sigils.continuing("key-a", asked([...chat, next]))).toBe("oai-1");
+    expect(sigils.continuing("key-a", asked([{ role: "system", content: "[summary] we said hi" }, ...chat.slice(2), next]))).toBe("oai-1");
+    const delivered = [...chat, { role: "assistant", content: null, tool_calls: [call("note_1", "note")] }, { role: "tool", tool_call_id: "note_1", content: "a note" }];
+    expect(sigils.continuing("key-a", asked(delivered))).toBe("oai-1");
+    expect(sigils.continuing("key-a", asked([...chat.slice(0, 5), { role: "assistant", content: "A hornet walks in..." }, next]))).not.toBe("oai-1");
+  });
+
+  test("though the calls of a squashed turn come back in another order", () => {
+    const reordered = [
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look. Then this. Done.", tool_calls: [call("c2"), call("c1")] },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      next,
+    ];
+    expect(grown().continuing("key-a", asked(reordered))).toBe("oai-1");
+  });
+
+  test("though its last call was one the server ran, and the client dropped it and reshaped the words", () => {
+    const lookup = { id: "m1", name: "lookup", arguments: "{}", output: "found bees", error: null };
+    const turn = [...stepped, { role: "user", content: "find bees" }, { role: "assistant", content: "Looking.\nFound bees.", mcp_calls: [lookup] }];
+    const back = [...stepped, { role: "user", content: "find bees" }, { role: "assistant", content: "Found bees." }, next];
+    const sigils = new Sigils(() => {});
+    sigils.remember("key-a", fromChat(turn as never).blooms, "oai-1", ["m1"]);
+    expect(sigils.continuing("key-a", asked(back))).toBe("oai-1");
+    const unaware = new Sigils(() => {});
+    unaware.remember("key-a", fromChat(turn as never).blooms, "oai-1");
+    expect(unaware.continuing("key-a", asked(back))).not.toBe("oai-1");
+  });
+
+  test("only from where it last left off: a copy taken before its newest call starts its own", () => {
+    const copy = [
       { role: "user", content: "check it" },
       { role: "assistant", content: "I'll look.", tool_calls: [call("c1")] },
       { role: "tool", tool_call_id: "c1", content: "a" },
-      { role: "assistant", content: "Then this.", tool_calls: [call("c2")] },
-      { role: "tool", tool_call_id: "c2", content: "b" },
-      { role: "assistant", content: "Done." },
-    ]);
-    const kept = fromChat([
-      { role: "user", content: "check it" },
-      { role: "assistant", content: "I'll look.Then this.\n\nDone.", tool_calls: [call("c1"), call("c2")] },
-      { role: "tool", tool_call_id: "c1", content: "a" },
-      { role: "tool", tool_call_id: "c2", content: "b" },
-    ]);
-    expect(trace("key-a", undefined, kept.blooms)).toBe(trace("key-a", undefined, stepped.blooms));
-    const reordered = fromChat([
-      { role: "user", content: "check it" },
-      { role: "assistant", content: "I'll look.Then this.Done.", tool_calls: [call("c2"), call("c1")] },
-      { role: "tool", tool_call_id: "c2", content: "b" },
-      { role: "tool", tool_call_id: "c1", content: "a" },
-    ]);
-    expect(trace("key-a", undefined, reordered.blooms)).not.toBe(trace("key-a", undefined, stepped.blooms));
-    const answered = fromChat([
-      { role: "user", content: "check it" },
-      { role: "assistant", content: "I'll look.Then this.Done.", tool_calls: [call("c1"), call("c2"), call("check_17")] },
-      { role: "tool", tool_call_id: "c1", content: "a" },
-      { role: "tool", tool_call_id: "c2", content: "b" },
-      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
-    ]);
-    expect(trace("key-a", undefined, answered.blooms)).not.toBe(trace("key-a", undefined, stepped.blooms));
+      { role: "assistant", content: "Looks fine." },
+      next,
+    ];
+    expect(grown().continuing("key-a", asked(copy))).not.toBe("oai-1");
   });
 
-  test("a conversation ending in answers finds the sigil it had before them", () => {
+  test("only from where it last left off: a tool-less copy taken before its latest turn starts its own", () => {
     const sigils = new Sigils(() => {});
-    const call = (id: string) => ({ id, type: "function", function: { name: "check", arguments: "{}" } });
-    const grown = fromChat([{ role: "user", content: "start the build" }, { role: "assistant", content: "Started job 17.", tool_calls: [call("c1")] }]);
-    sigils.remember("key-a", undefined, grown.blooms, "oai-1");
-    const late = fromChat([
-      { role: "user", content: "start the build" },
-      { role: "assistant", content: "Started job 17.", tool_calls: [call("c1")] },
-      { role: "tool", tool_call_id: "c1", content: "running" },
-    ]);
-    expect(sigils.continuing("key-a", undefined, late.blooms)).toBe("oai-1");
-
-    const told = fromChat([{ role: "user", content: "start the build" }, { role: "assistant", content: "Started job 17." }]);
-    sigils.remember("key-a", undefined, told.blooms, "oai-2");
-    const delivered = fromChat([
-      { role: "user", content: "start the build" },
-      { role: "assistant", content: "Started job 17." },
-      { role: "assistant", content: null, tool_calls: [call("check_17")] },
-      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
-    ]);
-    expect(sigils.continuing("key-a", undefined, delivered.blooms)).toBe("oai-2");
-
-    const edited = fromChat([
-      { role: "user", content: "start the build" },
-      { role: "assistant", content: "Started job 18." },
-      { role: "assistant", content: null, tool_calls: [call("check_17")] },
-      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
-    ]);
-    expect(sigils.continuing("key-a", undefined, edited.blooms)).not.toBe("oai-2");
+    const chat = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "Hello!" },
+      { role: "user", content: "tell me a joke" },
+      { role: "assistant", content: "Why did the bee..." },
+      { role: "user", content: "another" },
+      { role: "assistant", content: "A wasp walks in..." },
+    ];
+    sigils.remember("key-a", fromChat(chat.slice(0, 4)).blooms, "oai-1");
+    expect(sigils.continuing("key-a", asked([...chat.slice(0, 4), next]))).toBe("oai-1");
+    sigils.remember("key-a", fromChat(chat).blooms, "oai-1");
+    expect(sigils.continuing("key-a", asked([...chat.slice(0, 4), next]))).not.toBe("oai-1");
+    expect(sigils.continuing("key-a", asked([...chat, next]))).toBe("oai-1");
   });
 
-  test("a sigil is continued only while it is not growing, and only by its caller", () => {
-    const forgot: string[] = [];
-    const sigils = new Sigils((sid) => forgot.push(sid), 1);
-    const blooms = fromChat([{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }]).blooms;
-    expect(sigils.continuing("key-a", undefined, [])).not.toBe(sigils.continuing("key-a", undefined, []));
-    sigils.remember("key-a", undefined, blooms, "oai-1");
-    expect(sigils.continuing("key-a", undefined, blooms)).toBe("oai-1");
-    expect(sigils.continuing("key-b", undefined, blooms)).not.toBe("oai-1");
+  test("never for a stranger, nor while it is growing", () => {
+    const sigils = grown();
+    expect(sigils.continuing("key-b", asked([...stepped, next]))).not.toBe("oai-1");
     sigils.begin("oai-1");
-    expect(sigils.continuing("key-a", undefined, blooms)).not.toBe("oai-1");
+    expect(sigils.continuing("key-a", asked([...stepped, next]))).not.toBe("oai-1");
     sigils.end("oai-1");
-    sigils.remember("key-a", undefined, [...blooms, ...blooms], "oai-2");
+    expect(sigils.continuing("key-a", asked([...stepped, next]))).toBe("oai-1");
+    expect(sigils.continuing("key-a", [])).not.toBe(sigils.continuing("key-a", []));
+  });
+
+  test("a line a client names is its own, apart from every other caller's", () => {
+    const sigils = new Sigils(() => {});
+    const mine = sigils.named("key-a", "window-1");
+    expect(sigils.named("key-a", "window-1")).toBe(mine);
+    expect(sigils.named("key-b", "window-1")).not.toBe(mine);
+    sigils.begin(mine);
+    expect(sigils.named("key-a", "window-1")).not.toBe(mine);
+  });
+
+  test("a sigil no key finds any more is forgotten", () => {
+    const forgot: string[] = [];
+    const sigils = new Sigils((sid) => forgot.push(sid), 2);
+    sigils.remember("key-a", fromChat([{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }]).blooms, "oai-1");
+    sigils.remember("key-a", fromChat([{ role: "user", content: "yo" }, { role: "assistant", content: "hey" }]).blooms, "oai-2");
+    expect(forgot).toEqual([]);
+    sigils.remember("key-a", fromChat([{ role: "user", content: "sup" }, { role: "assistant", content: "hi" }]).blooms, "oai-3");
     expect(forgot).toEqual(["oai-1"]);
   });
 });

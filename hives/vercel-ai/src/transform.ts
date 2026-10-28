@@ -14,7 +14,7 @@
 // by an attendant or a builder, is told whole by tendril-info and becomes a
 // provider-executed tool-call and its tool-result; tendril-info for a reach
 // the call itself answers, or reached, is old news. What grew is kept as
-// petals, in order, for the conversation's trace. One translator serves one
+// petals, in order, for the conversation's sigil. One translator serves one
 // doStream call, so no end is ever emitted without its start. Anything else
 // (perf-mark, pulse, breath, echo, drone-retrofit, …) is out-of-band
 // signalling this pure provider ignores.
@@ -75,6 +75,7 @@ type Block = { kind: string; id: string; petal?: Petal };
 
 export class HumTranslator {
   readonly grew: Petal[] = [];
+  readonly served: string[] = [];
   private blocks = new Map<number, Block>();
   private started = new Set<string>();
   private called = new Set<string>();
@@ -122,6 +123,7 @@ export class HumTranslator {
       }
       yield { type: "tool-call", toolCallId: msg.callId, toolName, input: inputOf(msg.args), ...served };
       yield { type: "tool-result", toolCallId: msg.callId, toolName, result: (msg.result ?? "") as NonNullable<JSONValue>, ...(msg.isError ? { isError: true } : {}), dynamic: true };
+      this.served.push(msg.callId);
       this.grew.push(
         { kind: PetalKind.tendril, callId: msg.callId, name: toolName, args: msg.args ?? {} },
         { kind: PetalKind.grasp, callId: msg.callId, result: msg.result ?? "", ...(msg.isError ? { isError: true } : {}) },

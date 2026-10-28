@@ -11,19 +11,21 @@
 // with tool answers or with the assistant's own words asks for a bloom to
 // grow on: the prompt has no content, and every bloom is its graft.
 //
-// A conversation keeps one sigil while it only grows. The sid a request
-// continues is the one its blooms so far were last grown in, by this
-// caller; a conversation no one has seen, one whose history was edited,
-// or one already growing elsewhere gets a sigil of its own. The trace that
-// finds it is the caller's label, the system prompt, the words of every
-// turn and the ids of every tool call and answer, which a client sends
-// back as it was given them, though it may send a turn back as one
-// message, its words run together and then all its calls, where the turn
-// grew them in steps between. A tool the server ran is left out of the
-// trace, since a client may or may not send it back. A conversation that
-// ends in answers finds the sigil it had before them too: answers that
-// came after their call was let go, or a call and its answer a client
-// made up to hand the model news.
+// A conversation keeps one sigil while it grows, by this caller; strangers
+// never share one, and one already growing elsewhere gets a sigil of its
+// own. A client may name its line with `X-Hum-Sid`. Otherwise the sigil is
+// found by the newest tool call or answer id the conversation holds that
+// this caller was given, or by the words of its last two turns, and not by
+// the whole history: a client compacts and reshapes it all the time,
+// dropping old tool pairs, trimming, sending a turn back as one message or
+// without the words said between its calls, while a call's id is echoed as
+// it was given, since the answer needs it, and the newest turns are left
+// alone. A client that edits an older turn keeps its sigil. A sigil goes
+// on only from where it last left off, so a copy of the conversation taken
+// before then starts its own. A conversation that ends in answers is found
+// by its last two turns before them too: answers that came after their
+// call was let go, or a call and its answer a client made up to hand the
+// model news.
 
 import { createHash, randomUUID } from "node:crypto";
 import { PetalKind, type Bloom, type Grain, type Petal } from "../../../thrum-clients/ts/index.ts";
@@ -34,7 +36,6 @@ export interface Said {
   system?: string;
   blooms: Bloom[];
   tail: Tail;
-  served: Set<string>;
 }
 
 export interface Answer {
@@ -111,8 +112,7 @@ function partsOf(content: unknown): Petal[] {
   return out;
 }
 
-function servedPetals(served: Set<string>, id: string, name: string, args: unknown, output: unknown, error: unknown): Petal[] {
-  served.add(id);
+function servedPetals(id: string, name: string, args: unknown, output: unknown, error: unknown): Petal[] {
   return [
     { kind: PetalKind.tendril, callId: id, name, args: argsOf(args) },
     { kind: PetalKind.grasp, callId: id, result: resultOf(output ?? error), isError: Boolean(error) },
@@ -123,7 +123,6 @@ class Reader {
   system: string[] = [];
   blooms: Bloom[] = [];
   tail: Tail = "none";
-  served = new Set<string>();
 
   #open(): Bloom {
     let last = this.blooms[this.blooms.length - 1];
@@ -149,7 +148,7 @@ class Reader {
 
   done(): Said {
     const system = this.system.filter((s) => s.length > 0).join("\n\n");
-    return { system: system || undefined, blooms: this.blooms, tail: this.tail, served: this.served };
+    return { system: system || undefined, blooms: this.blooms, tail: this.tail };
   }
 }
 
@@ -189,7 +188,7 @@ export function fromChat(messages: ChatMessage[]): Said {
         const thought = typeof m.reasoning_content === "string" ? m.reasoning_content : typeof m.reasoning === "string" ? m.reasoning : "";
         if (thought) petals.push({ kind: PetalKind.sepal, text: thought });
         for (const c of Array.isArray(m.mcp_calls) ? m.mcp_calls : []) {
-          petals.push(...servedPetals(r.served, c.id ?? "", c.name ?? "", c.arguments, c.output, c.error));
+          petals.push(...servedPetals(c.id ?? "", c.name ?? "", c.arguments, c.output, c.error));
         }
         petals.push(...partsOf(m.content));
         for (const c of m.tool_calls ?? []) {
@@ -220,7 +219,6 @@ export function fromResponses(input: unknown, instructions?: string, before?: Sa
     if (before.system) r.system.push(before.system);
     r.blooms = before.blooms.map((b) => ({ content: [...(b.content ?? [])], grew: [...(b.grew ?? [])] }));
     r.tail = before.tail;
-    r.served = new Set(before.served);
   }
   if (typeof instructions === "string" && instructions.length > 0) r.system = [instructions];
   const items: ResponsesItem[] = typeof input === "string" ? [{ type: "message", role: "user", content: input }] : Array.isArray(input) ? input : [];
@@ -244,7 +242,7 @@ export function fromResponses(input: unknown, instructions?: string, before?: Sa
         break;
       }
       case "mcp_call":
-        r.grew(servedPetals(r.served, item.id ?? "", item.name ?? "", item.arguments, item.output, item.error), "assistant");
+        r.grew(servedPetals(item.id ?? "", item.name ?? "", item.arguments, item.output, item.error), "assistant");
         break;
     }
   }
@@ -277,27 +275,24 @@ function unspaced(s: string): string {
   return s.replace(/\s+/g, "");
 }
 
-export function trace(label: string, system: string | undefined, blooms: Bloom[], served: Set<string> = new Set()): string {
-  const h = createHash("sha256");
-  h.update(`${label}\0${squeeze(system ?? "")}\0`);
-  for (const b of blooms) {
-    h.update("U");
+function tailOf(label: string, blooms: Bloom[]): string | undefined {
+  let said = "";
+  let worded = false;
+  for (const b of blooms.slice(-2)) {
+    let user = "";
     for (const p of b.content ?? []) {
-      if (p.kind === PetalKind.text) h.update(`t${squeeze(p.text ?? "")}\0`);
-      else if (p.kind === PetalKind.pollen) h.update(`p${p.grain?.kind ?? ""}\0`);
+      if (p.kind === PetalKind.text) user += `${squeeze(p.text ?? "")}\0`;
+      else if (p.kind === PetalKind.pollen) user += `p${p.grain?.kind ?? ""}\0`;
     }
-    let words = "";
-    let calls = "";
-    let answers = "";
-    for (const p of b.grew ?? []) {
-      const ran = served.has(p.callId ?? "");
-      if (p.kind === PetalKind.text) words += p.text ?? "";
-      else if (p.kind === PetalKind.tendril && !ran) calls += `${p.callId ?? ""}\0`;
-      else if (p.kind === PetalKind.grasp && !ran) answers += `${p.callId ?? ""}\0`;
-    }
-    h.update(`G${unspaced(words)}\0c${calls}r${answers}`);
+    const words = unspaced((b.grew ?? []).filter((p) => p.kind === PetalKind.text).map((p) => p.text ?? "").join(""));
+    worded ||= words.length > 0 || (b.content ?? []).some((p) => p.kind === PetalKind.text && squeeze(p.text ?? "").length > 0);
+    said += `U${user}G${words}\0`;
   }
-  return h.digest("hex");
+  return worded ? createHash("sha256").update(`${label}\0${said}`).digest("hex") : undefined;
+}
+
+function callIds(blooms: Bloom[]): string[] {
+  return blooms.flatMap((b) => (b.grew ?? []).filter((p) => (p.kind === PetalKind.tendril || p.kind === PetalKind.grasp) && p.callId).map((p) => p.callId as string));
 }
 
 function beforeAnswers(blooms: Bloom[], withTheirCalls: boolean): Bloom[] {
@@ -313,7 +308,11 @@ function beforeAnswers(blooms: Bloom[], withTheirCalls: boolean): Bloom[] {
 }
 
 export class Sigils {
-  readonly #byTrace = new Map<string, string>();
+  readonly #byCall = new Map<string, string>();
+  readonly #byTail = new Map<string, string>();
+  readonly #keys = new Map<string, number>();
+  readonly #latest = new Map<string, { call?: string; tail?: string }>();
+  readonly #ran = new Set<string>();
   readonly #cap: number;
   readonly #growing = new Set<string>();
   readonly #owner = new Map<string, string>();
@@ -328,10 +327,18 @@ export class Sigils {
     return `oai-${randomUUID()}`;
   }
 
-  continuing(label: string, system: string | undefined, blooms: Bloom[], served?: Set<string>): string {
+  named(label: string, name: string): string {
+    const sid = `oai-${createHash("sha256").update(`${label}\0${name}`).digest("hex").slice(0, 32)}`;
+    return this.#growing.has(sid) ? this.fresh() : sid;
+  }
+
+  continuing(label: string, blooms: Bloom[]): string {
     if (blooms.length === 0) return this.fresh();
-    const sid = [blooms, beforeAnswers(blooms, false), beforeAnswers(blooms, true)]
-      .map((b) => this.#byTrace.get(trace(label, system, b, served)))
+    const ids = callIds(blooms);
+    const byCall = [...ids].reverse().map((id) => this.#byCall.get(`${label}\0${id}`)).find((found) => found !== undefined);
+    const newest = byCall === undefined ? undefined : this.#latest.get(byCall)?.call;
+    const sid = (newest !== undefined && ids.includes(newest) ? byCall : undefined) ?? [blooms, beforeAnswers(blooms, false), beforeAnswers(blooms, true)]
+      .map((b) => this.#leftOff(tailOf(label, b)))
       .find((found) => found !== undefined);
     return sid && !this.#growing.has(sid) ? sid : this.fresh();
   }
@@ -348,18 +355,51 @@ export class Sigils {
     this.#growing.delete(sid);
   }
 
-  remember(label: string, system: string | undefined, blooms: Bloom[], sid: string, served?: Set<string>): void {
-    const key = trace(label, system, blooms, served);
-    this.#byTrace.delete(key);
-    this.#byTrace.set(key, sid);
+  remember(label: string, blooms: Bloom[], sid: string, ran: string[] = []): void {
+    for (const id of ran) {
+      this.#ran.delete(`${label}\0${id}`);
+      this.#ran.add(`${label}\0${id}`);
+    }
+    while (this.#ran.size > this.#cap) this.#ran.delete(this.#ran.values().next().value as string);
     this.#owner.set(sid, label);
-    while (this.#byTrace.size > this.#cap) {
-      const [oldest, gone] = this.#byTrace.entries().next().value as [string, string];
-      this.#byTrace.delete(oldest);
-      if (![...this.#byTrace.values()].includes(gone) && !this.#growing.has(gone)) {
-        this.#forget(gone, this.#owner.get(gone) ?? "");
-        this.#owner.delete(gone);
+    const ids = callIds(blooms);
+    for (const id of ids) this.#keep(this.#byCall, `${label}\0${id}`, sid);
+    const tail = tailOf(label, blooms);
+    if (tail !== undefined) this.#keep(this.#byTail, tail, sid);
+    this.#latest.set(sid, { call: [...ids].reverse().find((id) => !this.#ran.has(`${label}\0${id}`)), tail });
+    for (const map of [this.#byCall, this.#byTail]) {
+      while (map.size > this.#cap) {
+        const [oldest, gone] = map.entries().next().value as [string, string];
+        map.delete(oldest);
+        this.#drop(gone);
       }
     }
+  }
+
+  #leftOff(key: string | undefined): string | undefined {
+    const sid = key === undefined ? undefined : this.#byTail.get(key);
+    return sid !== undefined && this.#latest.get(sid)?.tail === key ? sid : undefined;
+  }
+
+  #keep(map: Map<string, string>, key: string, sid: string): void {
+    const was = map.get(key);
+    map.delete(key);
+    map.set(key, sid);
+    if (was === sid) return;
+    this.#keys.set(sid, (this.#keys.get(sid) ?? 0) + 1);
+    if (was !== undefined) this.#drop(was);
+  }
+
+  #drop(sid: string): void {
+    const left = (this.#keys.get(sid) ?? 1) - 1;
+    if (left > 0) {
+      this.#keys.set(sid, left);
+      return;
+    }
+    this.#keys.delete(sid);
+    if (this.#growing.has(sid)) return;
+    this.#forget(sid, this.#owner.get(sid) ?? "");
+    this.#owner.delete(sid);
+    this.#latest.delete(sid);
   }
 }

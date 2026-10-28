@@ -20,9 +20,9 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answers, fromResponses, opening, type Said } from "./conversation.ts";
-import { grow, mcpCallOf, servedOf, usageOf, type Grown, type Listener } from "./growth.ts";
+import { grow, mcpCallOf, usageOf, type Grown, type Listener } from "./growth.ts";
 import { growthOf, modelFor, prompt, type Caller, type Ctx } from "./hive.ts";
-import { bad, gone, HttpError, readJson, sendJson, Sse } from "./http.ts";
+import { bad, gone, HttpError, lineOf, readJson, sendJson, Sse } from "./http.ts";
 import { toolsFromOpenAI } from "./tools.ts";
 
 interface Body {
@@ -128,7 +128,14 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
   const held = given.length > 0 ? rq.heldSid(given.map((a) => a.callId)) : undefined;
   const continuing = held !== undefined && !ctx.sigils.growing(held);
   const { graft, content } = opening(said);
-  const sid = held !== undefined && continuing ? held : before?.sid && !ctx.sigils.growing(before.sid) ? before.sid : ctx.sigils.continuing(rq.label, said.system, graft, said.served);
+  const line = lineOf(req);
+  const sid = held !== undefined && continuing
+    ? held
+    : before?.sid && !ctx.sigils.growing(before.sid)
+      ? before.sid
+      : line !== undefined
+        ? ctx.sigils.named(rq.label, line)
+        : ctx.sigils.continuing(rq.label, graft);
   const format = body.text?.format;
   const open = continuing
     ? { answers: given }
@@ -276,8 +283,7 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
   const after = said.blooms.map((b) => ({ content: b.content, grew: [...(b.grew ?? [])] }));
   const last = after[after.length - 1];
   if (last) last.grew = [...(last.grew ?? []), ...grown.grew];
-  const served = servedOf(said, grown);
-  ctx.sigils.remember(rq.label, said.system, after, sid, served);
+  ctx.sigils.remember(rq.label, after, sid, grown.served.map((s) => s.callId));
 
   const used = usageOf(grown.nectar);
   ctx.usage.track(who.key, used.prompt, used.completion);
@@ -293,7 +299,7 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
     usage,
     ...(incomplete ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
   });
-  if (body.store !== false) kept.put(id, { label: rq.label, sid, said: { ...said, blooms: after, tail: "assistant", served }, response: final }, conversation);
+  if (body.store !== false) kept.put(id, { label: rq.label, sid, said: { ...said, blooms: after, tail: "assistant" }, response: final }, conversation);
 
   if (sse) {
     emit(incomplete ? "response.incomplete" : "response.completed", { response: final });
