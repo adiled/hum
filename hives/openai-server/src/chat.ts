@@ -92,7 +92,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
   const stream = body.stream === true;
   const sse = stream ? new Sse(res) : undefined;
   const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
-    id, object: "chat.completion.chunk", created, model: echoed, system_fingerprint: null,
+    id, object: "chat.completion.chunk", created, model: echoed,
     choices: [{ index: 0, delta, logprobs: null, finish_reason: finish }],
   });
   let spoke = false;
@@ -142,7 +142,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
     if (!spoke) sse.data(chunk({ role: "assistant", content: "" }));
     sse.data(chunk({}, grown.finish));
     if (body.stream_options?.include_usage === true) {
-      sse.data({ id, object: "chat.completion.chunk", created, model: echoed, system_fingerprint: null, choices: [], usage });
+      sse.data({ id, object: "chat.completion.chunk", created, model: echoed, choices: [], usage });
     }
     sse.data("[DONE]");
     sse.end();
@@ -153,7 +153,6 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
     object: "chat.completion",
     created,
     model: echoed,
-    system_fingerprint: null,
     choices: [{
       index: 0,
       message: {

@@ -69,10 +69,11 @@ export interface Opening {
   answers?: Answer[];
 }
 
-export function usageOf(nectar: Nectar | undefined): { prompt: number; completion: number; cached: number } {
+export function usageOf(nectar: Nectar | undefined): { prompt: number; completion: number; cached: number; written: number } {
   const cached = nectar?.cache_read_input_tokens ?? 0;
-  const prompt = (nectar?.input_tokens ?? 0) + cached + (nectar?.cache_creation_input_tokens ?? 0);
-  return { prompt, completion: nectar?.output_tokens ?? 0, cached };
+  const written = nectar?.cache_creation_input_tokens ?? 0;
+  const prompt = (nectar?.input_tokens ?? 0) + cached + written;
+  return { prompt, completion: nectar?.output_tokens ?? 0, cached, written };
 }
 
 export function finishOf(reason: string | undefined): Finish {
@@ -226,7 +227,7 @@ export function mcpCallOf(s: Served): Record<string, unknown> {
     server_label: "hum",
     name: s.name,
     arguments: s.args,
-    output: s.result,
-    error: s.isError ? s.result : null,
+    output: s.isError ? null : s.result,
+    error: s.isError ? { type: "mcp_tool_execution_error", content: [{ type: "text", text: s.result }] } : null,
   };
 }

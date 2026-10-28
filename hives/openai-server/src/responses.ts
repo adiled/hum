@@ -42,11 +42,22 @@ interface Body {
   max_output_tokens?: number;
   temperature?: number;
   top_p?: number;
+  top_logprobs?: number;
+  max_tool_calls?: number;
   metadata?: Record<string, string>;
   truncation?: string;
   user?: string;
+  safety_identifier?: string;
+  prompt_cache_key?: string;
+  service_tier?: string;
   frequency_penalty?: number;
   presence_penalty?: number;
+}
+
+function echoedTool(tool: unknown): unknown {
+  const t = tool as Record<string, unknown> | null;
+  if (!t || t.type !== "function") return tool;
+  return { ...t, description: t.description ?? null, parameters: t.parameters ?? null, strict: t.strict ?? null };
 }
 
 export interface Kept {
@@ -121,6 +132,8 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
   } else if (conversation) {
     before = kept.latest(rq.label, conversation);
   }
+  const unread = (Array.isArray(body.input) ? body.input : []).map((i) => (i as { type?: string })?.type).find((t) => t === "item_reference" || t === "compaction");
+  if (unread) throw bad(`an input item of type ${unread} is not read here, since its words are kept elsewhere; send the items themselves, or previous_response_id`, "input");
   const said = fromResponses(body.input, body.instructions, before?.said);
   if (said.tail === "none") throw bad("input holds nothing to answer", "input");
 
@@ -170,18 +183,28 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
     output,
     instructions: body.instructions ?? null,
     previous_response_id: body.previous_response_id ?? null,
-    tools: body.tools ?? [],
+    tools: (body.tools ?? []).map(echoedTool),
     tool_choice: body.tool_choice ?? "auto",
     parallel_tool_calls: body.parallel_tool_calls ?? true,
-    temperature: body.temperature ?? null,
-    top_p: body.top_p ?? null,
+    temperature: body.temperature ?? 1,
+    top_p: body.top_p ?? 1,
+    top_logprobs: body.top_logprobs ?? 0,
+    frequency_penalty: body.frequency_penalty ?? 0,
+    presence_penalty: body.presence_penalty ?? 0,
     max_output_tokens: body.max_output_tokens ?? null,
+    max_tool_calls: body.max_tool_calls ?? null,
     reasoning: { effort: body.reasoning?.effort ?? null, summary: body.reasoning?.summary ?? null },
     text: { format: format ?? { type: "text" } },
     truncation: body.truncation ?? "disabled",
     metadata: body.metadata ?? {},
     store: body.store !== false,
+    background: false,
+    service_tier: body.service_tier ?? "default",
     user: body.user ?? null,
+    safety_identifier: body.safety_identifier ?? null,
+    prompt_cache_key: body.prompt_cache_key ?? null,
+    access_programs: null,
+    completed_at: null,
     error: null,
     incomplete_details: null,
     usage: null,
@@ -268,7 +291,8 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
     ctx.sigils.end(sid);
     const err = e instanceof HttpError ? e : new HttpError(500, String(e));
     if (sse?.begun) {
-      emit("response.failed", { response: shape("failed", output, { error: { code: err.code ?? "server_error", message: err.message } }) });
+      const code = err.status === 429 ? "rate_limit_exceeded" : err.status === 400 ? "invalid_prompt" : "server_error";
+      emit("response.failed", { response: shape("failed", output, { error: { code, message: err.message, type: err.code ?? err.type, param: err.param } }) });
       sse.end();
     } else if (sse) {
       sse.fail(err);
@@ -289,7 +313,7 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
   ctx.usage.track(who.key, used.prompt, used.completion);
   const usage = {
     input_tokens: used.prompt,
-    input_tokens_details: { cached_tokens: used.cached },
+    input_tokens_details: { cached_tokens: used.cached, cache_write_tokens: used.written },
     output_tokens: used.completion,
     output_tokens_details: { reasoning_tokens: 0 },
     total_tokens: used.prompt + used.completion,
@@ -297,6 +321,7 @@ export async function responses(ctx: Ctx, who: Caller, req: IncomingMessage, res
   const incomplete = grown.finish === "length";
   const final = shape(incomplete ? "incomplete" : "completed", output, {
     usage,
+    completed_at: Math.floor(Date.now() / 1000),
     ...(incomplete ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
   });
   if (body.store !== false) kept.put(id, { label: rq.label, sid, said: { ...said, blooms: after, tail: "assistant" }, response: final }, conversation);
@@ -317,5 +342,5 @@ export function readResponse(who: Caller, id: string, res: ServerResponse): void
 
 export function dropResponse(who: Caller, id: string, res: ServerResponse): void {
   if (!kept.drop(who.rq.label, id)) throw new HttpError(404, `No response found with id '${id}'.`, "response_not_found");
-  sendJson(res, 200, { id, object: "response", deleted: true });
+  sendJson(res, 200, { id, object: "response.deleted", deleted: true });
 }

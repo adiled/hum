@@ -4,12 +4,14 @@
 //
 // It lists two chat models and an embedding model, records every request
 // it is sent, and answers by what the last user turn says: ONE calls
-// readFile once, PAR calls it twice at once, LOOKUP calls lookup, SLOW
-// streams twenty ticks slowly, LEN stops for length, FAIL answers 500.
-// Anything else is echoed back, or, after tool answers, the answers are.
-// It refuses a conversation with a tool call nobody answered, as OpenAI
-// does. /embeddings scores each text by its length and its vowels, and
-// /completions completes a prompt with a marker and its suffix.
+// readFile once, PAR calls it twice at once, LOOKUP calls lookup, NOTFOUND
+// calls it for nothing, which it fails to find, a question about the
+// weather calls the weather tool it was offered, SLOW streams twenty ticks
+// slowly, LEN stops for length, FAIL answers 500. Anything else is echoed
+// back, or, after tool answers, the answers are. It refuses a conversation
+// with a tool call nobody answered, as OpenAI does. /embeddings scores
+// each text by its length and its vowels, and /completions completes a
+// prompt with a marker and its suffix.
 
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
@@ -111,8 +113,15 @@ export async function serve(at = 0): Promise<{ url: string; heard: Heard[]; abor
       } else if (tooling && said.includes("ONE")) {
         call(0, "call_one", "readFile", '{"path":"x"}');
         res.write(mk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }));
+      } else if (tooling && said.includes("NOTFOUND")) {
+        call(0, "call_none", "lookup", '{"q":"nothing"}');
+        res.write(mk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }));
       } else if (tooling && said.includes("LOOKUP")) {
         call(0, "call_look", "lookup", '{"q":"bees"}');
+        res.write(mk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }));
+      } else if (tooling && /weather/i.test(said) && body.tools?.length > 0) {
+        const tool = body.tools.find((t: any) => /weather/i.test(t.function?.name ?? "")) ?? body.tools[0];
+        call(0, "call_weather", tool.function.name, '{"location":"San Francisco, CA"}');
         res.write(mk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }));
       } else if (said.includes("SLOW")) {
         for (let i = 0; i < 20 && !gone; i++) {
