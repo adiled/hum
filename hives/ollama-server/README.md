@@ -219,9 +219,10 @@ A bloom grows through Ollama's `/api/chat`:
   `cancel` wilts it `cancel`.
 - **Growing on.** A prompt with no words whose graft is plain grown text
   goes to `/api/generate` instead, as that text raw, or with the prompt's
-  `scion` as its `suffix`. A graft that holds a conversation cannot grow
-  on that way, and is refused with `cannot-grow-on`; a prompt with
-  neither words nor a graft, with `empty-prompt`.
+  `scion` as its `suffix`. A conversation that ends in tool answers goes
+  to `/api/chat` as it stands. Any other conversation is refused with
+  `cannot-grow-on`; a prompt with neither words nor a graft, with
+  `empty-prompt`.
 - **Errors.** `ollama_connection_error` when Ollama cannot be reached,
   `ollama_api_error` when it answers with an error,
   `ollama_stream_ended` when its reply ends before it is done, and

@@ -13,8 +13,9 @@
 //! A prompt with no words grows on from its graft through `/api/generate`:
 //! a graft that is plain text, grown by no one's prompt, is the text to
 //! grow on from as it stands, and a `scion` is the suffix the growth meets.
-//! A graft that holds a conversation cannot grow on that way, and is
-//! refused with `cannot-grow-on`.
+//! A conversation that ends in tool answers grows on through `/api/chat`
+//! as it stands. `/api/chat` cannot carry on the model's own words, so any
+//! other conversation is refused with `cannot-grow-on`.
 //!
 //! A cell lives for its sigil: it grows each prompt the nest feeds it, in
 //! turn, each from that prompt's own graft, until the nest stills it. A
@@ -155,6 +156,23 @@ pub fn plain_text(graft: &[Bloom]) -> Option<String> {
     Some(graft.iter().map(|b| words(b.grew.as_deref().unwrap_or(&[]))).collect::<Vec<_>>().join(""))
 }
 
+pub fn ends_in_grasps(graft: &[Bloom]) -> bool {
+    graft
+        .last()
+        .and_then(|b| b.grew.as_deref())
+        .and_then(|grew| grew.iter().rev().find(|p| !is(p, PetalKind::Sepal)))
+        .is_some_and(|p| is(p, PetalKind::Grasp))
+}
+
+fn worded(prompt: &PromptBody) -> bool {
+    prompt.content.as_deref().is_some_and(|c| !c.is_empty()) || prompt.text.as_deref().is_some_and(|t| !t.is_empty())
+}
+
+pub fn grows_on_from(prompt: &PromptBody) -> bool {
+    let graft = prompt.graft.as_deref().unwrap_or(&[]);
+    plain_text(graft).is_some() || (prompt.scion.is_none() && ends_in_grasps(graft))
+}
+
 pub fn options(prompt: &PromptBody, ctx: u64) -> Value {
     let mut o = Map::new();
     o.insert("num_ctx".into(), json!(ctx));
@@ -185,8 +203,9 @@ pub fn request(model: &str, system: Option<&str>, prompt: &PromptBody, ctx: u64)
     let graft = prompt.graft.as_deref().unwrap_or(&[]);
     let content = prompt.content.as_deref().unwrap_or(&[]);
     let opts = options(prompt, ctx);
-    if content.is_empty() && prompt.text.as_deref().is_none_or(str::is_empty) {
-        let text = plain_text(graft).unwrap_or_default();
+    if !worded(prompt)
+        && let Some(text) = plain_text(graft)
+    {
         let mut body = json!({ "model": model, "prompt": text, "stream": true, "options": opts });
         match prompt.scion.as_ref() {
             Some(scion) => body["suffix"] = json!(scion),
@@ -194,10 +213,9 @@ pub fn request(model: &str, system: Option<&str>, prompt: &PromptBody, ctx: u64)
         }
         return ("/api/generate", body);
     }
-    let content: Vec<Petal> = if content.is_empty() {
-        vec![Petal { kind: PetalKind::Text.as_str().into(), text: prompt.text.clone(), ..Petal::default() }]
-    } else {
-        content.to_vec()
+    let content: Vec<Petal> = match prompt.text.as_ref().filter(|t| content.is_empty() && !t.is_empty()) {
+        Some(text) => vec![Petal { kind: PetalKind::Text.as_str().into(), text: Some(text.clone()), ..Petal::default() }],
+        None => content.to_vec(),
     };
     let mut body = json!({
         "model": model,
@@ -315,10 +333,8 @@ struct Grower {
 impl Grower {
     async fn grow(&self, prompt: &PromptBody, tx: &mpsc::Sender<Value>, stilled: &CancellationToken) {
         let model = prompt.model_id.as_deref().filter(|m| !m.is_empty()).unwrap_or(&self.model);
-        let words_given = prompt.content.as_deref().is_some_and(|c| !c.is_empty())
-            || prompt.text.as_deref().is_some_and(|t| !t.is_empty());
-        if !words_given && plain_text(prompt.graft.as_deref().unwrap_or(&[])).is_none() {
-            let _ = tx.send(fail("cannot-grow-on", "ollama grows on only from plain text, and this graft holds a conversation".into())).await;
+        if !worded(prompt) && !grows_on_from(prompt) {
+            let _ = tx.send(fail("cannot-grow-on", "ollama grows on only from plain text or tool results, and this graft ends in neither".into())).await;
             return;
         }
         let (path, body) = request(model, prompt.system_prompt.as_deref(), prompt, self.ctx);
@@ -456,6 +472,42 @@ mod tests {
             grew: Some(vec![petal(json!({"kind": "text", "text": "hello"}))]),
         }];
         assert!(plain_text(&graft).is_none());
+    }
+
+    fn delivered(last: Value) -> PromptBody {
+        PromptBody {
+            graft: Some(vec![Bloom {
+                content: Some(vec![petal(json!({"kind": "text", "text": "start the build"}))]),
+                grew: Some(vec![
+                    petal(json!({"kind": "text", "text": "Started job 17."})),
+                    petal(json!({"kind": "tendril", "callId": "check_17", "name": "check", "args": {"id": 17}})),
+                    petal(json!({"kind": "grasp", "callId": "check_17", "result": "job 17 finished"})),
+                    petal(last),
+                ]),
+            }]),
+            ..PromptBody::default()
+        }
+    }
+
+    #[test]
+    fn a_conversation_ending_in_tool_answers_grows_on_through_chat() {
+        let prompt = delivered(json!({"kind": "sepal", "text": "hm"}));
+        assert!(grows_on_from(&prompt), "thinking aside");
+        let (path, body) = request("m", Some("be brief"), &prompt, 4096);
+        assert_eq!(path, "/api/chat");
+        let messages = body["messages"].as_array().unwrap();
+        let roles: Vec<&str> = messages.iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+        assert_eq!(messages[2]["tool_calls"][0]["function"]["name"], "check");
+        assert_eq!(messages[3]["content"], "job 17 finished");
+    }
+
+    #[test]
+    fn a_conversation_ending_in_words_or_meeting_a_scion_is_not_grown_on() {
+        assert!(!grows_on_from(&delivered(json!({"kind": "text", "text": "Job 17 is"}))));
+        let scion = PromptBody { scion: Some("done".into()), ..delivered(json!({"kind": "sepal", "text": "hm"})) };
+        assert!(!grows_on_from(&scion));
+        assert!(!grows_on_from(&PromptBody::default()));
     }
 
     async fn ollama() -> String {

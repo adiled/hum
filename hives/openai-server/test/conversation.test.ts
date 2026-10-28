@@ -65,6 +65,32 @@ describe("a conversation keeps its sigil", () => {
     expect(trace("key-a", undefined, a.blooms)).not.toBe(trace("key-b", undefined, a.blooms));
   });
 
+  test("a tool the server ran is read back from chat and from items, and the trace finds the sigil either way", () => {
+    const lookup = { id: "mcp-1", name: "lookup", arguments: '{"q":"bees"}', output: "found bees", error: null };
+    const echoed = fromChat([
+      { role: "user", content: "find bees" },
+      { role: "assistant", content: "after tools: found bees", mcp_calls: [lookup] },
+    ]);
+    expect(echoed.blooms[0].grew).toEqual([
+      { kind: "tendril", callId: "mcp-1", name: "lookup", args: { q: "bees" } },
+      { kind: "grasp", callId: "mcp-1", result: "found bees", isError: false },
+      { kind: "text", text: "after tools: found bees" },
+    ]);
+    expect([...echoed.served]).toEqual(["mcp-1"]);
+    const dropped = fromChat([
+      { role: "user", content: "find bees" },
+      { role: "assistant", content: "after tools: found bees" },
+    ]);
+    const items = fromResponses([
+      { role: "user", content: "find bees" },
+      { type: "mcp_call", ...lookup },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "after tools: found bees" }] },
+    ]);
+    const kept = trace("key-a", undefined, echoed.blooms, echoed.served);
+    expect(trace("key-a", undefined, dropped.blooms, dropped.served)).toBe(kept);
+    expect(trace("key-a", undefined, items.blooms, items.served)).toBe(kept);
+  });
+
   test("the trace reads a turn kept as one message as the steps it grew in", () => {
     const call = (id: string) => ({ id, type: "function", function: { name: "zsh", arguments: "{}" } });
     const stepped = fromChat([
@@ -97,6 +123,37 @@ describe("a conversation keeps its sigil", () => {
       { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
     ]);
     expect(trace("key-a", undefined, answered.blooms)).not.toBe(trace("key-a", undefined, stepped.blooms));
+  });
+
+  test("a conversation ending in answers finds the sigil it had before them", () => {
+    const sigils = new Sigils(() => {});
+    const call = (id: string) => ({ id, type: "function", function: { name: "check", arguments: "{}" } });
+    const grown = fromChat([{ role: "user", content: "start the build" }, { role: "assistant", content: "Started job 17.", tool_calls: [call("c1")] }]);
+    sigils.remember("key-a", undefined, grown.blooms, "oai-1");
+    const late = fromChat([
+      { role: "user", content: "start the build" },
+      { role: "assistant", content: "Started job 17.", tool_calls: [call("c1")] },
+      { role: "tool", tool_call_id: "c1", content: "running" },
+    ]);
+    expect(sigils.continuing("key-a", undefined, late.blooms)).toBe("oai-1");
+
+    const told = fromChat([{ role: "user", content: "start the build" }, { role: "assistant", content: "Started job 17." }]);
+    sigils.remember("key-a", undefined, told.blooms, "oai-2");
+    const delivered = fromChat([
+      { role: "user", content: "start the build" },
+      { role: "assistant", content: "Started job 17." },
+      { role: "assistant", content: null, tool_calls: [call("check_17")] },
+      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
+    ]);
+    expect(sigils.continuing("key-a", undefined, delivered.blooms)).toBe("oai-2");
+
+    const edited = fromChat([
+      { role: "user", content: "start the build" },
+      { role: "assistant", content: "Started job 18." },
+      { role: "assistant", content: null, tool_calls: [call("check_17")] },
+      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
+    ]);
+    expect(sigils.continuing("key-a", undefined, edited.blooms)).not.toBe("oai-2");
   });
 
   test("a sigil is continued only while it is not growing, and only by its caller", () => {

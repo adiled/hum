@@ -19,15 +19,10 @@
 //!
 //! A prompt's graft is stitched into the session's transcript before the
 //! cell resumes it, so a cell that did not grow those blooms grows on as if
-//! it had; a transcript that already holds them is left as it is, but for
-//! tool results the graft's last turn holds that it lacks.
+//! it had, and a transcript is given only what it lacks.
 //!
-//! A prompt with no words grows on from its graft only where that ends in
-//! tool results, [`graft::answered`]: they stay the transcript's last
-//! entries, and the cell asks claude to answer them with
-//! [`stream::CONTINUE`], since claude takes a turn only from a user
-//! message. Any other prompt with no words, words that stopped mid-way,
-//! plain text, or a `scion` to meet, is refused with `cannot-grow-on`.
+//! claude cannot be handed words to carry on, nor a `scion` to grow
+//! toward, so a prompt with no words grows on only from tool results.
 //!
 //! claude signed in with a subscription takes no system prompt of a
 //! caller's: `--system-prompt` and `--append-system-prompt` never reach the
@@ -114,7 +109,6 @@ pub const SESSION_NS: Uuid = Uuid::from_bytes([
     0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
 ]);
 
-/// A cell that grows nothing: it errs with `code` and ends.
 fn refused(code: &str, message: &str) -> Cell {
     let (feed, mut fed) = mpsc::channel::<Value>(1);
     tokio::spawn(async move { while fed.recv().await.is_some() {} });
@@ -132,10 +126,8 @@ fn refused(code: &str, message: &str) -> Cell {
     }
 }
 
-/// Whether claude can grow on from a prompt with no words: one whose
-/// graft ends in tool results, with no `scion` to meet.
 pub fn grows_on_from(prompt: &thrum_core::PromptBody) -> bool {
-    prompt.scion.is_none() && graft::answered(prompt.graft.as_deref().unwrap_or(&[]))
+    prompt.scion.is_none() && graft::ends_in_grasps(prompt.graft.as_deref().unwrap_or(&[]))
 }
 
 pub struct ClaudeCliNurse;

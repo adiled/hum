@@ -5,16 +5,17 @@
 // answers. The bloom's words stream as `content` deltas and its thinking
 // as `reasoning_content`; a tool the bloom reaches the caller for streams
 // as `tool_calls` and finishes the turn with `finish_reason: "tool_calls"`.
-// A tool the server ran never shows here: chat completions has no place
-// for a result the caller did not produce, so the caller sees only what
-// the model said after it. Without `stream` the same arrives as one
-// `chat.completion`. Usage comes in a last chunk only when
-// `stream_options.include_usage` asks for it, and always without stream.
+// Chat completions has no place for a tool the server ran, so it rides on
+// the message as `mcp_calls`, each shaped as the Responses API's
+// `mcp_call` item, and is read back when the caller sends it. Without
+// `stream` the same arrives as one `chat.completion`. Usage comes in a
+// last chunk only when `stream_options.include_usage` asks for it, and
+// always without stream.
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answers, fromChat, opening, type ChatMessage } from "./conversation.ts";
-import { grow, grewOf, usageOf, type Grown, type Listener } from "./growth.ts";
+import { grow, mcpCallOf, servedOf, usageOf, type Grown, type Listener } from "./growth.ts";
 import { growthOf, modelFor, prompt, type Caller, type Ctx } from "./hive.ts";
 import { bad, gone, HttpError, readJson, sendJson, Sse } from "./http.ts";
 import { toolsFromOpenAI } from "./tools.ts";
@@ -60,7 +61,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
   const held = given.length > 0 ? rq.heldSid(given.map((a) => a.callId)) : undefined;
   const continuing = held !== undefined && !ctx.sigils.growing(held);
   const { graft, content } = opening(said);
-  const sid = held !== undefined && continuing ? held : ctx.sigils.continuing(rq.label, said.system, graft);
+  const sid = held !== undefined && continuing ? held : ctx.sigils.continuing(rq.label, said.system, graft, said.served);
   const open = continuing
     ? { answers: given }
     : {
@@ -94,6 +95,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
     choices: [{ index: 0, delta, logprobs: null, finish_reason: finish }],
   });
   let spoke = false;
+  let ran = 0;
   const speak = (delta: Record<string, unknown>) => {
     if (!sse) return;
     if (!spoke) {
@@ -106,6 +108,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
     text: (d) => speak({ content: d }),
     thought: (d) => speak({ reasoning_content: d }),
     call: (c) => speak({ tool_calls: [{ index: c.index, id: c.id, type: "function", function: { name: c.name, arguments: c.args } }] }),
+    served: (s) => speak({ mcp_calls: [{ index: ran++, ...mcpCallOf(s) }] }),
   };
 
   ctx.sigils.begin(sid);
@@ -122,8 +125,8 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
 
   const after = said.blooms.map((b) => ({ content: b.content, grew: [...(b.grew ?? [])] }));
   const last = after[after.length - 1];
-  if (last) last.grew = [...(last.grew ?? []), ...grewOf(grown)];
-  ctx.sigils.remember(rq.label, said.system, after, sid);
+  if (last) last.grew = [...(last.grew ?? []), ...grown.grew];
+  ctx.sigils.remember(rq.label, said.system, after, sid, servedOf(said, grown));
 
   const used = usageOf(grown.nectar);
   ctx.usage.track(who.key, used.prompt, used.completion);
@@ -157,6 +160,7 @@ export async function chat(ctx: Ctx, who: Caller, req: IncomingMessage, res: Ser
         content: grown.text.length > 0 ? grown.text : grown.calls.length > 0 ? null : "",
         refusal: null,
         ...(grown.thought ? { reasoning_content: grown.thought } : {}),
+        ...(grown.served.length > 0 ? { mcp_calls: grown.served.map(mcpCallOf) } : {}),
         ...(grown.calls.length > 0
           ? { tool_calls: grown.calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args } })) }
           : {}),

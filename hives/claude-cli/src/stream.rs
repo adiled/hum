@@ -4,16 +4,12 @@
 //! user messages and writes events. [`heard`] turns a tone the cell is fed
 //! into the line claude reads: a prompt's words and images as a user
 //! message, the first of a session's carrying its system prompt at its
-//! head; a prompt with no words, which grows on from the tool results its
-//! graft stitched in, as [`CONTINUE`]; an answer to a tool claude called
-//! outside its sigil's tools as that tool's result; a cancel as claude's
-//! own cancel request.
+//! head; an answer to a tool claude called outside its sigil's tools as
+//! that tool's result; a cancel as claude's own cancel request.
 //!
-//! claude takes a turn only from a user message, and one that resumes a
-//! transcript ending in tool results first answers them itself with an
-//! empty reply of its own, "No response requested.". So a bloom that grows
-//! on from tool results is asked to with [`CONTINUE`], which tells claude
-//! that reply was not its.
+//! claude takes a turn only from a user message, and resuming a transcript
+//! that ends in tool results it first answers them with an empty "No
+//! response requested." of its own, which [`CONTINUE`] disowns.
 //!
 //! [`Grower`] turns claude's events into tones. Its init is a `cell-ready`
 //! pulse. Each content block unfurls as one petal by its index, text as
@@ -62,8 +58,6 @@ pub fn said(petals: &[Petal]) -> Vec<Value> {
         .collect()
 }
 
-/// What a prompt with no words says, so claude grows on from the tool
-/// results stitched before it.
 pub const CONTINUE: &str = "Tool results came back after your turn ended. If a \"No response requested.\" sits between them and this line, the session added it when it resumed; you did not say it. Continue from where you left off.";
 
 pub fn heard(tone: &Value, preamble: &mut Option<String>) -> Option<String> {

@@ -3,7 +3,8 @@
 //! Each bloom becomes a user turn of its words, then the cell's words and
 //! tendrils as assistant turns and each grasp as the tool result that
 //! answered them, the tendril named as the cell knew it over MCP. A
-//! transcript that already holds the graft's blooms is left as it is.
+//! transcript that already holds the graft's blooms is given only what it
+//! lacks.
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -97,14 +98,14 @@ fn delivered(mut b: Vec<Bloom>) -> Vec<Bloom> {
 }
 
 #[test]
-fn only_a_graft_ending_in_tool_results_is_answered() {
-    use claude_cli::graft::answered;
-    assert!(!answered(&blooms()), "it ends in words");
-    assert!(answered(&delivered(blooms())));
+fn a_graft_ends_in_grasps_thinking_aside() {
+    use claude_cli::graft::ends_in_grasps;
+    assert!(!ends_in_grasps(&blooms()), "it ends in words");
+    assert!(ends_in_grasps(&delivered(blooms())));
     let mut thought = delivered(blooms());
     thought.last_mut().unwrap().grew.as_mut().unwrap().push(petal(json!({"kind": "sepal", "text": "hm"})));
-    assert!(answered(&thought), "thinking aside");
-    assert!(!answered(&[]));
+    assert!(ends_in_grasps(&thought), "thinking aside");
+    assert!(!ends_in_grasps(&[]));
 }
 
 #[test]
@@ -181,4 +182,53 @@ fn the_continue_line_opens_no_turn() {
     let next = graft(&prior_of(&grown), &path, session, &cwd, None).unwrap();
     assert_eq!(next.grafted, 1, "a turn grown elsewhere is still stitched");
     assert_eq!(lines_of(&path).last().unwrap()["message"]["content"][0]["text"], "Now this.");
+}
+
+fn held_with(extra: Vec<Value>) -> Vec<Bloom> {
+    let mut b = blooms();
+    b.last_mut().unwrap().grew.as_mut().unwrap().extend(extra.into_iter().map(petal));
+    b
+}
+
+#[test]
+fn a_delivery_is_stitched_on_though_the_transcript_holds_answers_the_client_never_saw() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000005";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+
+    graft(&prior_of(&held_with(vec![
+        json!({"kind": "tendril", "callId": "toolu_lookup", "name": "lookup", "args": {"q": "paris"}}),
+        json!({"kind": "grasp", "callId": "toolu_lookup", "result": "18C"}),
+    ])), &path, session, &cwd, None).unwrap();
+    let before = lines_of(&path).len();
+
+    let late = graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    assert_eq!(late.grafted, 1, "the server's own call does not hide the delivery");
+    let lines = lines_of(&path);
+    assert_eq!(lines.len(), before + 2);
+    assert_eq!(lines[before + 1]["message"]["content"][0]["tool_use_id"], "check_17");
+}
+
+#[test]
+fn an_answer_that_came_after_the_nest_gave_up_is_stitched_on() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000006";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+
+    graft(&prior_of(&held_with(vec![
+        json!({"kind": "tendril", "callId": "toolu_9", "name": "zsh_check", "args": {"id": 17}}),
+        json!({"kind": "grasp", "callId": "toolu_9", "result": "MCP error -32000: tendril-result for callId r-9 never came", "isError": true}),
+    ])), &path, session, &cwd, None).unwrap();
+    let before = lines_of(&path).len();
+
+    let late = graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    assert_eq!(late.grafted, 1);
+    let lines = lines_of(&path);
+    assert_eq!(lines[before + 1]["message"]["content"][0]["content"], "job 17 finished (exit 0)");
 }

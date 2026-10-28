@@ -53,6 +53,7 @@ export interface Grown {
   thought: string;
   calls: Call[];
   served: Served[];
+  grew: Petal[];
   nectar?: Nectar;
 }
 
@@ -118,7 +119,7 @@ export function grow(
   on: Listener = {},
 ): Promise<Grown> {
   return new Promise<Grown>((resolve, reject) => {
-    const grown: Grown = { finish: "stop", text: "", thought: "", calls: [], served: [] };
+    const grown: Grown = { finish: "stop", text: "", thought: "", calls: [], served: [], grew: [] };
     const asked = new Set<string>();
     let quiet: NodeJS.Timeout | undefined;
     let settled = false;
@@ -152,6 +153,9 @@ export function grow(
           if (t.closed || !t.text) return;
           if (t.kind === "text") {
             grown.text += t.text;
+            const last = grown.grew[grown.grew.length - 1];
+            if (last?.kind === "text") last.text = (last.text ?? "") + t.text;
+            else grown.grew.push({ kind: "text", text: t.text });
             on.text?.(t.text);
           } else if (t.kind === "sepal") {
             grown.thought += t.text;
@@ -164,6 +168,7 @@ export function grow(
           asked.add(t.callId);
           const call: Call = { index: grown.calls.length, id: t.callId, name: t.name, args: json(t.args) };
           grown.calls.push(call);
+          grown.grew.push({ kind: "tendril", callId: call.id, name: call.name, args: call.args });
           rq.hold(sid, t.callId);
           on.call?.(call);
           if (quiet) clearTimeout(quiet);
@@ -183,6 +188,10 @@ export function grow(
             isError: t.isError === true,
           };
           grown.served.push(served);
+          grown.grew.push(
+            { kind: "tendril", callId: served.callId, name: served.name, args: served.args },
+            { kind: "grasp", callId: served.callId, result: served.result, isError: served.isError },
+          );
           on.served?.(served);
           return;
         }
@@ -209,9 +218,19 @@ export function grow(
   });
 }
 
-export function grewOf(grown: Grown): Petal[] {
-  const petals: Petal[] = [];
-  if (grown.text) petals.push({ kind: "text", text: grown.text });
-  for (const c of grown.calls) petals.push({ kind: "tendril", callId: c.id, name: c.name, args: c.args });
-  return petals;
+export function servedOf(said: { served: Set<string> }, grown: Grown): Set<string> {
+  return new Set([...said.served, ...grown.served.map((s) => s.callId)]);
+}
+
+export function mcpCallOf(s: Served): Record<string, unknown> {
+  return {
+    id: s.callId,
+    type: "mcp_call",
+    status: s.isError ? "failed" : "completed",
+    server_label: "hum",
+    name: s.name,
+    arguments: s.args,
+    output: s.result,
+    error: s.isError ? s.result : null,
+  };
 }

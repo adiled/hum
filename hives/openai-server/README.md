@@ -82,7 +82,11 @@ of its own, so callers on different keys never share one. A turn's
 words, calls and answers are each read in order but apart from one
 another, its words whitespace aside, so a caller that keeps a turn as one
 message, all its words and then all its calls, finds the sigil it grew
-on in steps.
+on in steps. A tool the server ran is not read, so a caller finds its
+sigil whether it sends that call back or not. A conversation that ends
+in tool answers also finds the sigil it had before them, so an answer
+that came after its call was let go, or a call and answer a caller made
+up to hand the model news, grows on in the session that came before.
 
 **Settings.** `temperature`, `top_p`, the token cap, `stop`, `seed`, the
 JSON shape (`response_format`, `text.format`), `tool_choice`,
@@ -97,23 +101,25 @@ it for, by their exact names, in the chat shape or the Responses one; a
 tool of any other type, one only OpenAI runs, is left out. Calls come
 back as `tool_calls`, or `function_call` items, several at once when the
 model makes several, and the caller's answers, on the same key, carry the
-bloom on. The server holds each call for thirty minutes, and keeps the
-key's link open while it holds one. A call it lets go unanswered, as the
-thirty minutes pass or as the key's link ends, cancels the bloom that
+bloom on. The server holds each call for ten minutes, less than the nest
+waits for it, and keeps the key's link open while it holds one. A call
+it lets go unanswered, as the ten minutes pass or as the key's link
+ends, cancels the bloom that
 reached for it, unless a prompt has since opened another bloom on the
 same sigil; a link that ends on its own leaves the cancel to the key's
 next one. An answer that comes after the server has let its call go,
-past those thirty minutes or across a restart, opens a bloom that grows
+past those ten minutes or across a restart, opens a bloom that grows
 on from the whole conversation, which a nurse that cannot grow on from a
 graft refuses with a 400.
 
 A tool an attendant serves runs there, and an attendant on this humd
 takes a name even from the caller's own tool, so `GET /v1/models` lists
 these under each model's `tools` for a client to keep its own names
-apart. Chat completions has no place for a result the caller did not
-produce, so such a call stays out of it and the caller sees what the
-model said after; a response shows it as an `mcp_call` item, output and
-all. The hive's prompts name no `cwd` and its foragers do not build, so
+apart. A response shows such a call as an `mcp_call` item, output and
+all. Chat completions has no place for it, so it rides on the assistant
+message as `mcp_calls`, each shaped as that item, streamed as a delta
+like `tool_calls`; a caller that sends the message back sends them too,
+and they are read as what grew. The hive's prompts name no `cwd` and its foragers do not build, so
 its blooms build nowhere: a reach for `bash` comes back unserved, unless
 the caller offered a tool named `bash`, which reaches the caller like any
 other.
