@@ -16,8 +16,11 @@
 // caller; a conversation no one has seen, one whose history was edited,
 // or one already growing elsewhere gets a sigil of its own. The trace that
 // finds it is the caller's label, the system prompt, the words of every
-// turn and the ids of every tool call, which a client sends back as it
-// was given them.
+// turn and the ids of every tool call and answer, which a client sends
+// back as it was given them. A turn's words, calls and answers are each
+// read in order but apart from one another, its words as one, whitespace
+// aside: a client may keep a turn as one message of all its words and
+// then all its calls, where the turn grew them in steps between.
 
 import { createHash, randomUUID } from "node:crypto";
 import { PetalKind, type Bloom, type Grain, type Petal } from "../../../thrum-clients/ts/index.ts";
@@ -247,6 +250,10 @@ function squeeze(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+function unspaced(s: string): string {
+  return s.replace(/\s+/g, "");
+}
+
 export function trace(label: string, system: string | undefined, blooms: Bloom[]): string {
   const h = createHash("sha256");
   h.update(`${label}\0${squeeze(system ?? "")}\0`);
@@ -256,20 +263,15 @@ export function trace(label: string, system: string | undefined, blooms: Bloom[]
       if (p.kind === PetalKind.text) h.update(`t${squeeze(p.text ?? "")}\0`);
       else if (p.kind === PetalKind.pollen) h.update(`p${p.grain?.kind ?? ""}\0`);
     }
-    h.update("G");
     let words = "";
+    let calls = "";
+    let answers = "";
     for (const p of b.grew ?? []) {
-      if (p.kind === PetalKind.text) {
-        words += p.text ?? "";
-        continue;
-      }
-      if (p.kind === PetalKind.tendril || p.kind === PetalKind.grasp) {
-        if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
-        words = "";
-        h.update(`${p.kind === PetalKind.tendril ? "c" : "r"}${p.callId ?? ""}\0`);
-      }
+      if (p.kind === PetalKind.text) words += p.text ?? "";
+      else if (p.kind === PetalKind.tendril) calls += `${p.callId ?? ""}\0`;
+      else if (p.kind === PetalKind.grasp) answers += `${p.callId ?? ""}\0`;
     }
-    if (squeeze(words)) h.update(`t${squeeze(words)}\0`);
+    h.update(`G${unspaced(words)}\0c${calls}r${answers}`);
   }
   return h.digest("hex");
 }

@@ -84,3 +84,101 @@ fn a_graft_is_stitched_once() {
     let again = graft(&prior_of(&blooms()), &path, session, &cwd, None).unwrap();
     assert_eq!(again.grafted, 0, "a transcript that holds the blooms is left as it is");
 }
+
+fn lines_of(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+fn delivered(mut b: Vec<Bloom>) -> Vec<Bloom> {
+    let last = b.last_mut().unwrap().grew.get_or_insert_with(Vec::new);
+    last.push(petal(json!({"kind": "tendril", "callId": "check_17", "name": "zsh_check", "args": {"id": 17}})));
+    last.push(petal(json!({"kind": "grasp", "callId": "check_17", "result": "job 17 finished (exit 0)"})));
+    b
+}
+
+#[test]
+fn only_a_graft_ending_in_tool_results_is_answered() {
+    use claude_cli::graft::answered;
+    assert!(!answered(&blooms()), "it ends in words");
+    assert!(answered(&delivered(blooms())));
+    let mut thought = delivered(blooms());
+    thought.last_mut().unwrap().grew.as_mut().unwrap().push(petal(json!({"kind": "sepal", "text": "hm"})));
+    assert!(answered(&thought), "thinking aside");
+    assert!(!answered(&[]));
+}
+
+#[test]
+fn a_graft_ending_in_tool_results_keeps_them_last() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000002";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+
+    graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    let lines = lines_of(&path);
+    let last = lines.last().unwrap();
+    assert_eq!(last["type"], "user");
+    assert_eq!(last["message"]["content"][0]["type"], "tool_result");
+    assert_eq!(last["message"]["content"][0]["tool_use_id"], "check_17");
+}
+
+#[test]
+fn tool_results_a_held_transcript_lacks_are_stitched_on() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000003";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+
+    graft(&prior_of(&blooms()), &path, session, &cwd, None).unwrap();
+    let before = lines_of(&path).len();
+    let late = graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    assert_eq!(late.grafted, 1, "the late call is written");
+    let lines = lines_of(&path);
+    assert_eq!(lines.len(), before + 2, "only the late call and its result");
+    assert_eq!(lines[before]["message"]["content"][0]["type"], "tool_use");
+    assert_eq!(lines[before]["message"]["content"][0]["id"], "check_17");
+    assert_eq!(lines[before + 1]["message"]["content"][0]["tool_use_id"], "check_17");
+
+    let again = graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    assert_eq!(again.grafted, 0, "held results are not stitched twice");
+    assert_eq!(lines_of(&path).len(), before + 2);
+}
+
+#[test]
+fn the_continue_line_opens_no_turn() {
+    let (dir, _guard) = home();
+    let cwd = dir.path().join("nest");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let session = "00000000-0000-4000-8000-000000000004";
+    create_claude_session(&cwd, session).unwrap();
+    let path = session_path(&cwd, session);
+
+    graft(&prior_of(&delivered(blooms())), &path, session, &cwd, None).unwrap();
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    use std::io::Write;
+    for entry in [
+        json!({"type": "assistant", "uuid": "s-1", "message": {"role": "assistant", "model": "<synthetic>", "content": [{"type": "text", "text": "No response requested."}]}}),
+        json!({"type": "user", "uuid": "s-2", "message": {"role": "user", "content": claude_cli::stream::CONTINUE}}),
+        json!({"type": "assistant", "uuid": "s-3", "message": {"role": "assistant", "content": [{"type": "text", "text": "Job 17 is done."}]}}),
+    ] {
+        writeln!(file, "{entry}").unwrap();
+    }
+    let before = lines_of(&path).len();
+    let mut grown = delivered(blooms());
+    grown.last_mut().unwrap().grew.as_mut().unwrap().push(petal(json!({"kind": "text", "text": "Job 17 is done."})));
+    let held = graft(&prior_of(&grown), &path, session, &cwd, None).unwrap();
+    assert_eq!(held.grafted, 0, "the transcript holds every turn");
+    assert_eq!(lines_of(&path).len(), before);
+
+    grown.push(Bloom {
+        content: Some(vec![petal(json!({"kind": "text", "text": "and now?"}))]),
+        grew: Some(vec![petal(json!({"kind": "text", "text": "Now this."}))]),
+    });
+    let next = graft(&prior_of(&grown), &path, session, &cwd, None).unwrap();
+    assert_eq!(next.grafted, 1, "a turn grown elsewhere is still stitched");
+    assert_eq!(lines_of(&path).last().unwrap()["message"]["content"][0]["text"], "Now this.");
+}

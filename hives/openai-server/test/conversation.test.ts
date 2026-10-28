@@ -65,6 +65,40 @@ describe("a conversation keeps its sigil", () => {
     expect(trace("key-a", undefined, a.blooms)).not.toBe(trace("key-b", undefined, a.blooms));
   });
 
+  test("the trace reads a turn kept as one message as the steps it grew in", () => {
+    const call = (id: string) => ({ id, type: "function", function: { name: "zsh", arguments: "{}" } });
+    const stepped = fromChat([
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.", tool_calls: [call("c1")] },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      { role: "assistant", content: "Then this.", tool_calls: [call("c2")] },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      { role: "assistant", content: "Done." },
+    ]);
+    const kept = fromChat([
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.Then this.\n\nDone.", tool_calls: [call("c1"), call("c2")] },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+    ]);
+    expect(trace("key-a", undefined, kept.blooms)).toBe(trace("key-a", undefined, stepped.blooms));
+    const reordered = fromChat([
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.Then this.Done.", tool_calls: [call("c2"), call("c1")] },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+    ]);
+    expect(trace("key-a", undefined, reordered.blooms)).not.toBe(trace("key-a", undefined, stepped.blooms));
+    const answered = fromChat([
+      { role: "user", content: "check it" },
+      { role: "assistant", content: "I'll look.Then this.Done.", tool_calls: [call("c1"), call("c2"), call("check_17")] },
+      { role: "tool", tool_call_id: "c1", content: "a" },
+      { role: "tool", tool_call_id: "c2", content: "b" },
+      { role: "tool", tool_call_id: "check_17", content: "job 17 finished" },
+    ]);
+    expect(trace("key-a", undefined, answered.blooms)).not.toBe(trace("key-a", undefined, stepped.blooms));
+  });
+
   test("a sigil is continued only while it is not growing, and only by its caller", () => {
     const forgot: string[] = [];
     const sigils = new Sigils((sid) => forgot.push(sid), 1);

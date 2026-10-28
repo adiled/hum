@@ -19,7 +19,15 @@
 //!
 //! A prompt's graft is stitched into the session's transcript before the
 //! cell resumes it, so a cell that did not grow those blooms grows on as if
-//! it had; a transcript that already holds them is left as it is.
+//! it had; a transcript that already holds them is left as it is, but for
+//! tool results the graft's last turn holds that it lacks.
+//!
+//! A prompt with no words grows on from its graft only where that ends in
+//! tool results, [`graft::answered`]: they stay the transcript's last
+//! entries, and the cell asks claude to answer them with
+//! [`stream::CONTINUE`], since claude takes a turn only from a user
+//! message. Any other prompt with no words, words that stopped mid-way,
+//! plain text, or a `scion` to meet, is refused with `cannot-grow-on`.
 //!
 //! claude signed in with a subscription takes no system prompt of a
 //! caller's: `--system-prompt` and `--append-system-prompt` never reach the
@@ -105,6 +113,30 @@ pub const HOST_TOOLS: &[&str] = &[
 pub const SESSION_NS: Uuid = Uuid::from_bytes([
     0x68, 0x75, 0x6d, 0x2d, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x2d, 0x6e, 0x73, 0x00, 0x01,
 ]);
+
+/// A cell that grows nothing: it errs with `code` and ends.
+fn refused(code: &str, message: &str) -> Cell {
+    let (feed, mut fed) = mpsc::channel::<Value>(1);
+    tokio::spawn(async move { while fed.recv().await.is_some() {} });
+    let (tx_evt, rx_evt) = mpsc::channel::<Value>(1);
+    let _ = tx_evt.try_send(serde_json::json!({ "chi": "error", "code": code, "message": message }));
+    let (exit, emerged) = tokio::sync::oneshot::channel();
+    let _ = exit.send(0);
+    Cell {
+        mark: None,
+        feed,
+        mmm: std::sync::Arc::new(Mutex::new(rx_evt)),
+        emerged,
+        ephemeral: false,
+        silence: Default::default(),
+    }
+}
+
+/// Whether claude can grow on from a prompt with no words: one whose
+/// graft ends in tool results, with no `scion` to meet.
+pub fn grows_on_from(prompt: &thrum_core::PromptBody) -> bool {
+    prompt.scion.is_none() && graft::answered(prompt.graft.as_deref().unwrap_or(&[]))
+}
 
 pub struct ClaudeCliNurse;
 
@@ -211,6 +243,7 @@ pub fn build_env(spec: &Egg) -> Vec<(String, String)> {
 impl Nurse for ClaudeCliNurse {
     fn ephemeral(&self) -> bool { false }
     fn propensity(&self) -> Propensity { Propensity::StatefulSession }
+    fn grows_on(&self) -> bool { true }
 
     async fn curate(&self, sid: &hum_identity::HumId, cwd: &str) -> Result<hum_nest::CurateReport> {
         let derived = session_of(sid);
@@ -238,6 +271,11 @@ impl Nurse for ClaudeCliNurse {
     }
 
     async fn raise(&self, spec: Egg) -> Result<Cell> {
+        let worded = spec.prompt.content.as_ref().is_some_and(|c| !c.is_empty())
+            || spec.prompt.text.as_ref().is_some_and(|t| !t.is_empty());
+        if !worded && !grows_on_from(&spec.prompt) {
+            return Ok(refused("cannot-grow-on", "claude grows on only from tool results, and this graft does not end in them"));
+        }
         let derived = session_of(&spec.sid);
         let cwd = std::fs::canonicalize(&spec.cwd).unwrap_or_else(|_| spec.cwd.clone().into());
         let path = graft::session_path(&cwd, &derived);
@@ -363,6 +401,41 @@ mod tests {
 
     fn egg() -> Egg {
         Egg::new(hum_identity::HumId::mint(), "claude-haiku-4-5", "/tmp")
+    }
+
+    fn graft_ending(last: serde_json::Value) -> Vec<thrum_core::Bloom> {
+        serde_json::from_value(serde_json::json!([{
+            "content": [{ "kind": "text", "text": "build it" }],
+            "grew": [{ "kind": "tendril", "callId": "c-1", "name": "bash", "args": {} }, last],
+        }]))
+        .unwrap()
+    }
+
+    #[test]
+    fn claude_grows_on_only_from_tool_results() {
+        let mut prompt = thrum_core::PromptBody {
+            graft: Some(graft_ending(serde_json::json!({ "kind": "grasp", "callId": "c-1", "result": "ok" }))),
+            ..Default::default()
+        };
+        assert!(grows_on_from(&prompt));
+        prompt.scion = Some("}".into());
+        assert!(!grows_on_from(&prompt), "a scion is not met");
+        prompt.scion = None;
+        prompt.graft = Some(graft_ending(serde_json::json!({ "kind": "text", "text": "Buil" })));
+        assert!(!grows_on_from(&prompt), "words are not continued");
+        assert!(ClaudeCliNurse.grows_on());
+    }
+
+    #[tokio::test]
+    async fn a_prompt_it_cannot_grow_on_is_refused_without_a_claude() {
+        let mut spec = egg();
+        spec.prompt.graft = Some(graft_ending(serde_json::json!({ "kind": "text", "text": "Buil" })));
+        let cell = ClaudeCliNurse.raise(spec).await.unwrap();
+        let tone = cell.mmm.lock().await.recv().await.unwrap();
+        assert_eq!(tone["chi"], "error");
+        assert_eq!(tone["code"], "cannot-grow-on");
+        assert!(cell.mmm.lock().await.recv().await.is_none(), "and nothing else");
+        assert_eq!(cell.emerged.await.unwrap(), 0);
     }
 
     #[test]

@@ -76,9 +76,13 @@ words asks for a bloom that grows on: the prompt has no words, and the
 whole conversation is its graft. A conversation stays on one sigil while
 it only grows, so a nurse that keeps sessions picks up where it was. The
 sigil is found by the caller's key, the system prompt, the words of every
-turn and the id of every tool call; a conversation no one has seen, one
-whose history was edited, or one already growing gets a sigil of its
-own, so callers on different keys never share one.
+turn and the id of every tool call and answer; a conversation no one has
+seen, one whose history was edited, or one already growing gets a sigil
+of its own, so callers on different keys never share one. A turn's
+words, calls and answers are each read in order but apart from one
+another, its words whitespace aside, so a caller that keeps a turn as one
+message, all its words and then all its calls, finds the sigil it grew
+on in steps.
 
 **Settings.** `temperature`, `top_p`, the token cap, `stop`, `seed`, the
 JSON shape (`response_format`, `text.format`), `tool_choice`,

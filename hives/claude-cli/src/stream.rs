@@ -4,8 +4,16 @@
 //! user messages and writes events. [`heard`] turns a tone the cell is fed
 //! into the line claude reads: a prompt's words and images as a user
 //! message, the first of a session's carrying its system prompt at its
-//! head; an answer to a tool claude called outside its sigil's tools as
-//! that tool's result; a cancel as claude's own cancel request.
+//! head; a prompt with no words, which grows on from the tool results its
+//! graft stitched in, as [`CONTINUE`]; an answer to a tool claude called
+//! outside its sigil's tools as that tool's result; a cancel as claude's
+//! own cancel request.
+//!
+//! claude takes a turn only from a user message, and one that resumes a
+//! transcript ending in tool results first answers them itself with an
+//! empty reply of its own, "No response requested.". So a bloom that grows
+//! on from tool results is asked to with [`CONTINUE`], which tells claude
+//! that reply was not its.
 //!
 //! [`Grower`] turns claude's events into tones. Its init is a `cell-ready`
 //! pulse. Each content block unfurls as one petal by its index, text as
@@ -54,6 +62,10 @@ pub fn said(petals: &[Petal]) -> Vec<Value> {
         .collect()
 }
 
+/// What a prompt with no words says, so claude grows on from the tool
+/// results stitched before it.
+pub const CONTINUE: &str = "Tool results came back after your turn ended. If a \"No response requested.\" sits between them and this line, the session added it when it resumed; you did not say it. Continue from where you left off.";
+
 pub fn heard(tone: &Value, preamble: &mut Option<String>) -> Option<String> {
     match tone.get("chi").and_then(Value::as_str)? {
         "prompt" => {
@@ -62,6 +74,9 @@ pub fn heard(tone: &Value, preamble: &mut Option<String>) -> Option<String> {
                 body.text.into_iter().map(|t| Petal { kind: PetalKind::Text.as_str().into(), text: Some(t), ..Petal::default() }).collect()
             });
             let mut content = said(&petals);
+            if content.is_empty() {
+                content.push(json!({ "type": "text", "text": CONTINUE }));
+            }
             if let Some(text) = preamble.take() {
                 content.insert(0, json!({ "type": "text", "text": text }));
             }
@@ -211,6 +226,14 @@ mod tests {
         assert_eq!(parts[2]["source"]["media_type"], "image/png");
         let again: Value = serde_json::from_str(&heard(&prompt, &mut preamble).unwrap()).unwrap();
         assert_eq!(again["message"]["content"][0]["text"], "what is this?", "told once");
+    }
+
+    #[test]
+    fn a_prompt_with_no_words_is_heard_as_the_continue_line() {
+        let mut none = None;
+        let on: Value = serde_json::from_str(&heard(&json!({ "chi": "prompt", "sid": "s", "graft": [] }), &mut none).unwrap()).unwrap();
+        assert_eq!(on["type"], "user");
+        assert_eq!(on["message"]["content"], json!([{ "type": "text", "text": CONTINUE }]));
     }
 
     #[test]
