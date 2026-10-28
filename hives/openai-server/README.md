@@ -135,7 +135,14 @@ follows the thread's latest; there is no `/v1/conversations` here.
 Responses are kept in memory, the latest 2048, so none outlives a
 restart. A thread is kept only while its latest response is: once that
 response is deleted or among those forgotten, the thread's next response
-starts it over. `background` is refused.
+starts it over. `background` is refused, and so is an input item that
+holds its words elsewhere, an `item_reference` or a `compaction`, since
+dropping it would lose them; a record of a tool only OpenAI runs is left
+out. A failed response's `error.code` is one of OpenAI's, and hum's own
+code is its `type`. A response says every field both OpenAI and Open
+Responses ask of one, an `mcp_call` aside: that item is OpenAI's, kept
+for its clients, though Open Responses would want it named with a
+prefix of hum's.
 
 **Completions.** Each prompt is a bloom of its own, carried as a graft of
 plain text with no words of its own, so the nurse grows on from where the
@@ -245,7 +252,12 @@ bun test
 The end-to-end tests run the official OpenAI SDK against this server
 under Node, a humd of their own built from this checkout, a scripted
 upstream, and an attendant serving one tool; `test/holds.test.ts` adds a
-nurse that grows nothing and hears every cancel. `test/claude.live.test.ts`
+nurse that grows nothing and hears every cancel. Every request they send
+and every answer and stream event they get back is checked against
+OpenAI's OpenAPI spec and the Open Responses spec, kept in `spec/` at a
+pinned commit (`bun spec/fetch.ts` takes them again), and they send the
+HTTP cases of the Open Responses compliance suite as it writes them. Its
+WebSocket cases and `/responses/compact` are not served here. `test/claude.live.test.ts`
 runs only with `HUM_LIVE_CLAUDE=1`: real claude behind this server,
 through the claude-cli nurse (build it first with `cargo build` in
 `hives/claude-cli`), signed in and spending as the person's own Claude

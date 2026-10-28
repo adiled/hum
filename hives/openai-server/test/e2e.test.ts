@@ -11,12 +11,17 @@
 // the server runs rides on a chat message as `mcp_calls` and shows in a
 // response; failures carry their status; a caller that hangs up stops the
 // model; and the Responses API, legacy completions, embeddings and keys
-// all hold.
+// all hold. Every exchange is held to OpenAI's spec and the Open Responses
+// spec (spec.ts), and the Open Responses compliance suite's HTTP cases are
+// sent as it writes them, from its commit 8907bc3b7c43.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import OpenAI from "openai";
 import { hum, type Hum } from "./hum.ts";
+import { wire } from "./spec.ts";
 import { upstream, type Upstream } from "./upstream.ts";
+
+const offSpec: string[] = [];
 
 let up: Upstream;
 let h: Hum;
@@ -30,8 +35,12 @@ const readFile = { type: "function" as const, function: { name: "readFile", para
 beforeAll(async () => {
   up = await upstream();
   h = await hum(up.url, { keys: ["lab"] });
-  ai = new OpenAI({ baseURL: h.base, apiKey: h.keys.lab, maxRetries: 0, timeout: 20_000 });
+  ai = new OpenAI({ baseURL: h.base, apiKey: h.keys.lab, maxRetries: 0, timeout: 20_000, fetch: wire(offSpec) });
 }, 120_000);
+
+afterEach(() => {
+  expect(offSpec.splice(0)).toEqual([]);
+});
 
 afterAll(async () => {
   await h?.close();
@@ -207,6 +216,17 @@ describe("chat completions", () => {
     expect((embedder as InstanceType<typeof OpenAI.APIError>).status).toBe(400);
   }, 30_000);
 
+  test("a streamed tool call and a failure are told as the spec tells them", async () => {
+    const deltas: string[] = [];
+    for await (const c of await ai.chat.completions.create({ model: "gpt-lab", tools: [readFile], stream: true, messages: [{ role: "user", content: `ONE ${tag()}` }] })) {
+      for (const t of c.choices[0]?.delta.tool_calls ?? []) deltas.push(t.function?.name ?? "");
+      if (c.choices[0]?.finish_reason) deltas.push(c.choices[0].finish_reason);
+    }
+    expect(deltas).toEqual(["readFile", "tool_calls"]);
+    const broke = await ai.chat.completions.create({ model: "gpt-lab", stream: true, messages: [{ role: "user", content: `FAIL ${tag()}` }] }).catch((e) => e);
+    expect((broke as InstanceType<typeof OpenAI.APIError>).status).toBe(502);
+  });
+
   test("a bloom cut short says length", async () => {
     const r = await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `LEN ${tag()}` }] });
     expect(r.choices[0].finish_reason).toBe("length");
@@ -238,6 +258,38 @@ describe("responses", () => {
     expect(types[0]).toBe("response.created");
     expect(types).toContain("response.output_text.delta");
     expect(types.at(-1)).toBe("response.completed");
+  });
+
+  test("every kind of response streams as the spec tells it, and a deleted one says so", async () => {
+    const typesOf = async (body: OpenAI.Responses.ResponseCreateParamsStreaming) => {
+      const types: string[] = [];
+      try {
+        for await (const ev of await ai.responses.create(body)) types.push(ev.type);
+      } catch (e) {
+        types.push(`threw ${(e as Error).constructor.name}`);
+      }
+      return types;
+    };
+    const tools = [{ type: "function" as const, name: "readFile", parameters: { type: "object", properties: {} }, strict: false }];
+    const called = await typesOf({ model: "gpt-lab", tools, input: `ONE ${tag()}`, stream: true });
+    expect(called).toContain("response.function_call_arguments.done");
+    const served = await typesOf({ model: "gpt-lab", input: `LOOKUP ${tag()}`, stream: true });
+    expect(served).toContain("response.output_item.done");
+    expect(served.at(-1)).toBe("response.completed");
+    const cut = await typesOf({ model: "gpt-lab", input: `LEN ${tag()}`, stream: true });
+    expect(cut.at(-1)).toBe("response.incomplete");
+    const failed = await typesOf({ model: "gpt-lab", input: `FAIL ${tag()}`, stream: true });
+    expect(failed.some((t) => t === "response.failed" || t.startsWith("threw"))).toBe(true);
+
+    const kept = await ai.responses.create({ model: "gpt-lab", input: `keep ${tag()}` });
+    await ai.responses.delete(kept.id);
+    const gone = await ai.responses.retrieve(kept.id).catch((e) => e);
+    expect(gone).toBeInstanceOf(OpenAI.NotFoundError);
+  });
+
+  test("an input item that holds its words elsewhere is refused, not dropped", async () => {
+    const refused = await ai.responses.create({ model: "gpt-lab", input: [{ type: "item_reference", id: "msg_elsewhere" }, { role: "user", content: `go ${tag()}` }] }).catch((e) => e);
+    expect((refused as InstanceType<typeof OpenAI.APIError>).status).toBe(400);
   });
 
   test("instructions and developer words are the system prompt", async () => {
@@ -272,6 +324,18 @@ describe("responses", () => {
     expect(r.output_text).toBe("after tools: found bees");
   });
 
+  test("a tool the server ran that failed shows as a failed mcp_call, its error as the spec shapes it", async () => {
+    const r = await ai.responses.create({ model: "gpt-lab", input: `NOTFOUND ${tag()}` });
+    const failed = r.output.find((o) => o.type === "mcp_call") as { status: string; output: string | null; error: { type: string; content: Array<{ text: string }> } } | undefined;
+    expect(failed?.status).toBe("failed");
+    expect(failed?.output).toBeNull();
+    expect(failed?.error.type).toBe("mcp_tool_execution_error");
+    expect(failed?.error.content[0].text).toBe("nothing found");
+    const chat = await ai.chat.completions.create({ model: "gpt-lab", messages: [{ role: "user", content: `NOTFOUND ${tag()}` }] });
+    const rode = (chat.choices[0].message as { mcp_calls?: Array<{ error: { type: string } }> }).mcp_calls;
+    expect(rode?.[0].error.type).toBe("mcp_tool_execution_error");
+  });
+
   test("a response follows the one before it", async () => {
     const t = tag();
     const n = (await heard()).length;
@@ -280,6 +344,96 @@ describe("responses", () => {
     const sent = (await heardSince(n))[1].body.messages;
     expect(sent.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "user"]);
   });
+});
+
+describe("the Open Responses compliance cases, over HTTP", () => {
+  type Case = { id: string; body: Record<string, unknown>; streaming?: boolean; outputType?: string };
+  const RED_HEART = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAABmklEQVR42tyWAaTyUBzFew/eG4AHz+MBSAHKBiJRGFKwIgQQJKLUIioBIhCAiCAAEizAQIAECaASqFFJq84nudjnaqvuPnxzgP9xfrq5938csPn7PwHTKSoViCIEAYEAMhmoKsU2mUCWEQqB5xEMIp/HaGQG2G6RSuH9HQ7H34rFrtPbdz4jl6PbwmEsl3QA1mt4vcRKk8dz9eg6IpF7tt9fzGY0gCgafFRFo5Blc5vLhf3eCOj1yNhM5GRMVK0aATxPZoz09YXjkQDmczJgquGQAPp9WwCNBgG027YACgUC6HRsAZRKBDAY2AJoNv/ZnwzA6WScznG3p4UAymXGAEkyXrTFAh8fLAGqagQAyGaZpYsi7bHTNPz8MEj//LxuFPo+UBS8vb0KaLXubrRa7aX0RMLCykwmn0z3+XA4WACcTpCkh9MFAZpmuVXo+mO/w+/HZvNgbblcUCxaSo/Hyck80Yu6XXDcvfVZr79cvMZjuN2U9O9vKAqjZrfbIZ0mV4TUi9Xqz6jddNy//7+e3n8Fhf/Llo2kxi8AQyGRoDkmAhAAAAAASUVORK5CYII=";
+  const cases: Case[] = [
+    { id: "basic-response", body: { input: [{ type: "message", role: "user", content: "Say hello in exactly 3 words." }] } },
+    {
+      id: "assistant-phase",
+      body: {
+        input: [
+          { type: "message", role: "assistant", phase: "commentary", content: "I should answer with the saved number." },
+          { type: "message", role: "assistant", phase: "final_answer", content: "The number is four." },
+          { type: "message", role: "user", content: "Repeat only the number." },
+        ],
+      },
+    },
+    { id: "streaming-response", streaming: true, body: { input: [{ type: "message", role: "user", content: "Count from 1 to 5." }] } },
+    {
+      id: "system-prompt",
+      body: {
+        input: [
+          { type: "message", role: "system", content: "You are a pirate. Always respond in pirate speak." },
+          { type: "message", role: "user", content: "Say hello." },
+        ],
+      },
+    },
+    {
+      id: "tool-calling",
+      outputType: "function_call",
+      body: {
+        input: [{ type: "message", role: "user", content: "What's the weather like in San Francisco?" }],
+        tools: [{
+          type: "function",
+          name: "get_weather",
+          description: "Get the current weather for a location",
+          parameters: { type: "object", properties: { location: { type: "string", description: "The city and state, e.g. San Francisco, CA" } }, required: ["location"] },
+        }],
+      },
+    },
+    {
+      id: "image-input",
+      body: {
+        input: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "What do you see in this image? Answer in one sentence." },
+            { type: "input_image", image_url: RED_HEART },
+          ],
+        }],
+      },
+    },
+    {
+      id: "multi-turn",
+      body: {
+        input: [
+          { type: "message", role: "user", content: "My name is Alice." },
+          { type: "message", role: "assistant", content: "Hello Alice! Nice to meet you. How can I help you today?" },
+          { type: "message", role: "user", content: "What is my name?" },
+        ],
+      },
+    },
+  ];
+
+  let open: OpenAI;
+  beforeAll(() => {
+    open = new OpenAI({ baseURL: h.base, apiKey: h.keys.lab, maxRetries: 0, timeout: 20_000, fetch: wire(offSpec, "openresponses") });
+  });
+
+  for (const c of cases) {
+    test(c.id, async () => {
+      const ai = open;
+      const body = { model: "gpt-lab", ...c.body, input: c.body.input } as OpenAI.Responses.ResponseCreateParams;
+      let response: OpenAI.Responses.Response | undefined;
+      if (c.streaming) {
+        const types: string[] = [];
+        for await (const ev of await ai.responses.create({ ...body, stream: true } as OpenAI.Responses.ResponseCreateParamsStreaming)) {
+          types.push(ev.type);
+          if (ev.type === "response.completed") response = ev.response;
+        }
+        expect(types.length).toBeGreaterThan(0);
+      } else {
+        response = await ai.responses.create({ ...body, stream: false } as OpenAI.Responses.ResponseCreateParamsNonStreaming);
+      }
+      expect(response?.output.length ?? 0).toBeGreaterThan(0);
+      if (c.outputType) expect(response?.output.some((o) => o.type === c.outputType)).toBe(true);
+      else expect(response?.status).toBe("completed");
+    });
+  }
 });
 
 describe("completions and embeddings", () => {

@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
+    "ajv": "8.17.1",
     "openai": "^6.49.0",
     "tsup": "^8.5.1",
     "typescript": "^5.7.0"

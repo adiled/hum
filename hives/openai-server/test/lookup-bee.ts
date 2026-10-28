@@ -1,5 +1,5 @@
-// An attendant for the end-to-end tests: one tool, `lookup`, that always
-// finds what it is asked for.
+// An attendant for the end-to-end tests: one tool, `lookup`, that finds
+// what it is asked for, and fails to find "nothing".
 
 import { Bee, Chi, Role } from "../../../thrum-clients/ts/index.ts";
 
@@ -11,7 +11,8 @@ const bee = new Bee({
 });
 bee.on(Chi.tendrilReach, (t) => {
   const q = (t.args as { q?: string } | undefined)?.q ?? "";
-  bee.send({ chi: "tendril-result", callId: t.callId, ...(t.sid ? { sid: t.sid } : {}), output: `found ${q}` });
+  const found = q === "nothing" ? { output: "nothing found", isError: true } : { output: `found ${q}` };
+  bee.send({ chi: "tendril-result", callId: t.callId, ...(t.sid ? { sid: t.sid } : {}), ...found });
 });
 await bee.start();
 console.log("lookup nestled");

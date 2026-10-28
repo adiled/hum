@@ -112,10 +112,16 @@ function partsOf(content: unknown): Petal[] {
   return out;
 }
 
+function failureOf(error: unknown): unknown {
+  if (!error || typeof error !== "object") return error;
+  const e = error as { message?: unknown; content?: unknown };
+  return e.message ?? e.content ?? error;
+}
+
 function servedPetals(id: string, name: string, args: unknown, output: unknown, error: unknown): Petal[] {
   return [
     { kind: PetalKind.tendril, callId: id, name, args: argsOf(args) },
-    { kind: PetalKind.grasp, callId: id, result: resultOf(output ?? error), isError: Boolean(error) },
+    { kind: PetalKind.grasp, callId: id, result: resultOf(output ?? failureOf(error)), isError: Boolean(error) },
   ];
 }
 
