@@ -1,0 +1,5 @@
+SERVICE apple-fm-worker
+RUN ${HOME}/.local/bin/apple-fm-worker
+ENV APPLE_FM_MODEL=apple-3b-on-device
+ENV APPLE_FM_MODELS=apple-3b-on-device
+RESTART always

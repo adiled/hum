@@ -1,0 +1,24 @@
+[package]
+name = "apple-fm-worker"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "WorkerBee that runs Apple's on-device 3B FoundationModel via FoundationModels — a local LLM with no network and no key."
+
+[[bin]]
+name = "apple-fm-worker"
+path = "src/main.rs"
+
+[dependencies]
+hum-paths  = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-nest   = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+[workspace]
