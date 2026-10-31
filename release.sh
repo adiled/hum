@@ -29,6 +29,7 @@ EXTRA_VERSIONED_FILES=(
   hives/openai-server/package.json
   hives/paid-oracle/Cargo.toml
   hives/vercel-ai/package.json
+  hives/web2/Cargo.toml
 )
 # -----------------------------------------------------------------------------
 
