@@ -242,7 +242,7 @@ checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 
 [[package]]
 name = "claude-repl"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "anyhow",
  "regex",
@@ -756,7 +756,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hum-identity"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "hum-nest"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "jsonschema",
  "serde",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "hum-thrum"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "anyhow",
  "hum-identity",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.33.1"
+version = "0.34.0"
 dependencies = [
  "codegen",
  "hex",

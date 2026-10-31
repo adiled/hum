@@ -1,6 +1,6 @@
 [package]
 name = "paid-oracle"
-version = "0.33.1"
+version = "0.34.0"
 edition = "2024"
 license = "MIT"
 description = "An attendant that sells a price per call for USDC, x402-style, verified on chain."
