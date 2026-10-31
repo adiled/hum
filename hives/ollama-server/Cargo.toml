@@ -1,6 +1,6 @@
 [package]
 name = "ollama-server"
-version = "0.34.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
 description = "Ollama for hum, both ways: an Ollama-compatible HTTP surface for any Ollama client, and a nurse that calls Ollama's API."

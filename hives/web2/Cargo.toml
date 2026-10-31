@@ -1,6 +1,6 @@
 [package]
 name = "web2"
-version = "0.34.0"
+version = "0.34.1"
 edition = "2024"
 description = "hum hive: the web2 world as one tendril, wrepl"
 license = "Apache-2.0"

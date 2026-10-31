@@ -86,7 +86,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bash-builder"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "hum-paths",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "regex",
@@ -627,7 +627,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "hum-identity"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "jsonschema",
  "serde",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "hum-thrum"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "hum-identity",
@@ -1830,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "codegen",
  "hex",

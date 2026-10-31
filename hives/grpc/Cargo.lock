@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "codegen"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "regex",
@@ -885,7 +885,7 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "ensemble"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "grpc-forager"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1412,7 +1412,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hum-identity"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "ed25519-dalek 2.2.0",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "hum-nest"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "hum-paths"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "jsonschema",
  "serde",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "hum-thrum"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "hum-identity",
@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "humd"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4041,7 +4041,7 @@ dependencies = [
 
 [[package]]
 name = "thehum"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "thrum-core"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "codegen",
  "hex",

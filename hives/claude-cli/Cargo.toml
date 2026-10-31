@@ -1,6 +1,6 @@
 [package]
 name = "claude-cli"
-version = "0.34.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
 description = "A nurse: `claude -p` over a pipe. Builds the CLI command line from an Egg, parses stream-json stdout."
