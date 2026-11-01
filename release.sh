@@ -19,6 +19,7 @@ set -euo pipefail
 # what `hum hive install` publishes, so those track the same number.
 EXTRA_VERSIONED_FILES=(
   hives/anthropic-server/package.json
+  hives/apple-fm/Cargo.toml
   hives/bash/Cargo.toml
   hives/bp7/Cargo.toml
   hives/claude-cli/Cargo.toml

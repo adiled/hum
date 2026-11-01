@@ -20,6 +20,7 @@ A honeybee on the plant pot by your bed is still a bee; you just need to know wh
 | [`claude-cli`](claude-cli) | nurse | `claude-cli-nurse` | `claude -p` stream-json over a pipe |
 | [`claude-repl`](claude-repl) | nurse | `claude-repl-nurse` | the `claude` REPL over a PTY |
 | [`dwarfstar`](dwarfstar) | nurse, one bee per model | `dwarfstar-bee` | the DwarfStar engine (`antirez/ds4`) linked into the bee, on Metal |
+| [`apple-fm`](apple-fm) | nurse | `apple-fm-nurse` | Apple's on-device foundation model, through `apple-fm-gen`, a Swift bridge to FoundationModels |
 | [`ollama-server`](ollama-server) | forager, nurse | `ollama-server`, `ollama-nurse` | Ollama `/api/chat` and `/api/generate`, both ways |
 | [`openai-server`](openai-server) | forager, nurse, attendant | `node dist/index.js` | OpenAI `/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/embeddings` in front, an OpenAI-compatible API behind |
 | [`anthropic-server`](anthropic-server) | forager | `node dist/index.js` | Anthropic `/v1/messages`, streamed or not |

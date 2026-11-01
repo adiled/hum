@@ -1,0 +1,27 @@
+# apple-fm: Apple's on-device foundation model as a nurse, grown through
+# apple-fm-gen, the Swift bridge ./build makes beside it. Set an ARG in
+# the environment of `hum hive apple-fm install` to change it, for
+# example APPLE_FM_MODEL=apple-on-device. An empty ARG keeps the bee's
+# own default; the README says what each one is.
+#
+# The nurse waits unnestled while Apple Intelligence is off or its model
+# is still downloading, and on a Mac that cannot run the model it exits
+# 0, so its unit stays down; RESTART on-failure restarts it only when it
+# fails.
+
+ARG HUM_SRC=
+ARG APPLE_FM_MODEL=
+ARG APPLE_FM_PROBE_MS=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
+SERVICE apple-fm
+RUN ${HUM_SRC}/target/release/apple-fm-nurse
+ENV APPLE_FM_MODEL=${APPLE_FM_MODEL}
+ENV APPLE_FM_PROBE_MS=${APPLE_FM_PROBE_MS}
+RESTART on-failure
+RESTART_DELAY 5s
+START_LIMIT_BURST 3
+START_LIMIT_INTERVAL 1m
