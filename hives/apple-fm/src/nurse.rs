@@ -12,7 +12,9 @@
 //! A cell lives for its sigil and remembers what it grew. A prompt that
 //! carries a graft is grown from that graft; one that carries none, as a
 //! forager that sends only the new words does, is grown from the turns the
-//! cell has grown so far. So a sigil holds its conversation either way.
+//! cell has grown so far. So a sigil holds its conversation either way. The
+//! oldest turns the bridge dropped to fit the model's context, the cell
+//! forgets too.
 //!
 //! A still kills the bridge mid-bloom and wilts the bloom `cancel`, and a
 //! prompt still waiting is told it was not grown.
@@ -78,7 +80,8 @@ impl Nurse for AppleFm {
                     Some(graft) if !graft.is_empty() => bridge::turns(graft),
                     _ => grew.clone(),
                 };
-                if let Some(turn) = grow(&bridge, &prompt, &before, &tx_mmm, &stilled).await {
+                if let Some((turn, dropped)) = grow(&bridge, &prompt, &before, &tx_mmm, &stilled).await {
+                    before.drain(..dropped.min(before.len()));
                     before.push(turn);
                     grew = before;
                 }
@@ -142,7 +145,7 @@ async fn grow(
     before: &[Turn],
     tx: &mpsc::Sender<Value>,
     stilled: &CancellationToken,
-) -> Option<Turn> {
+) -> Option<(Turn, usize)> {
     let ask = match bridge::ask(prompt, before) {
         Ok(ask) => ask,
         Err(refusal) => {
@@ -222,15 +225,23 @@ async fn grow(
                     let _ = child.kill().await;
                     unfurler.close().await;
                     let _ = tx.send(json!({ "chi": "wilt", "reason": "stop" })).await;
-                    return Some(turn(said));
+                    return Some((turn(said), 0));
                 }
             }
-            Said::Finish { input_tokens, output_tokens } => {
+            Said::Finish { reason, dropped, input_tokens, output_tokens } => {
+                let dropped = dropped.unwrap_or(0) as usize;
+                if dropped > 0 {
+                    info!(dropped, kept = before.len().saturating_sub(dropped), "apple-fm.trimmed");
+                }
                 let thawed = frost.thaw();
                 said.push_str(&thawed);
                 unfurler.grow(PetalKind::Text, &thawed).await;
                 unfurler.close().await;
-                let ran_out = matches!((prompt.season, output_tokens), (Some(season), Some(out)) if out >= season);
+                let ran_out = match reason.as_deref() {
+                    Some("max_tokens") => true,
+                    Some("stop") => false,
+                    _ => matches!((prompt.season, output_tokens), (Some(season), Some(out)) if out >= season),
+                };
                 let mut wilt = json!({ "chi": "wilt", "reason": if ran_out { "max_tokens" } else { "stop" } });
                 if input_tokens.is_some() || output_tokens.is_some() {
                     wilt["nectar"] = json!({
@@ -239,13 +250,13 @@ async fn grow(
                     });
                 }
                 let _ = tx.send(wilt).await;
-                let _ = child.wait().await;
-                return Some(turn(said));
+                let _ = child.kill().await;
+                return Some((turn(said), dropped));
             }
             Said::Error { code, message } => {
                 unfurler.close().await;
                 let _ = tx.send(fail(&format!("apple_fm_{code}"), message)).await;
-                let _ = child.wait().await;
+                let _ = child.kill().await;
                 return None;
             }
             Said::Probe { .. } => {}
@@ -281,6 +292,9 @@ case "$words" in
   hang*) echo '{"event":"delta","text":"hanging"}'; exec sleep 30 ;;
   frost*) echo '{"event":"delta","text":"one two TH"}'; echo '{"event":"delta","text":"REE four"}'; exec sleep 30 ;;
   long*) echo '{"event":"delta","text":"on and on"}'; echo '{"event":"finish","inputTokens":4,"outputTokens":8}'; exit 0 ;;
+  capped*) echo '{"event":"delta","text":"cut"}'; echo '{"event":"finish","reason":"max_tokens","outputTokens":3}'; exit 0 ;;
+  trim*) echo '{"event":"delta","text":"trimmed"}'; echo '{"event":"finish","reason":"stop","dropped":2}'; exit 0 ;;
+  linger*) echo '{"event":"delta","text":"lingering"}'; echo '{"event":"finish"}'; exec sleep 30 ;;
 esac
 echo '{"event":"delta","text":"heard "}'
 printf '{"event":"delta","text":"%s. "}\n' "$words"
@@ -442,6 +456,41 @@ echo '{"event":"finish","inputTokens":7,"outputTokens":3}'
         roomy["season"] = json!(9);
         cell.feed.send(roomy).await.unwrap();
         assert_eq!(ends(&closing(&cell, 1).await)[0]["reason"], "stop");
+    }
+
+    #[tokio::test]
+    async fn the_bridge_s_own_reason_is_the_wilt_s() {
+        let stub = Stub::new();
+        let cell = raised(&stub).await;
+        cell.feed.send(fed("capped")).await.unwrap();
+        assert_eq!(ends(&closing(&cell, 1).await)[0]["reason"], "max_tokens", "a reply the bridge held to the room left ran out");
+    }
+
+    #[tokio::test]
+    async fn the_turns_the_bridge_dropped_the_cell_forgets() {
+        let stub = Stub::new();
+        let cell = raised(&stub).await;
+        for words in ["one", "two", "three", "trim now", "after"] {
+            cell.feed.send(fed(words)).await.unwrap();
+        }
+        closing(&cell, 5).await;
+        let asked = stub.asked();
+        assert_eq!(asked[3]["turns"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            asked[4]["turns"],
+            json!([{"prompt": "three", "response": "heard three. "}, {"prompt": "trim now", "response": "trimmed"}]),
+            "the two oldest turns are gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bridge_that_lingers_after_its_finish_does_not_hold_the_cell() {
+        let stub = Stub::new();
+        let cell = raised(&stub).await;
+        cell.feed.send(fed("linger")).await.unwrap();
+        cell.feed.send(fed("next")).await.unwrap();
+        let tones = closing(&cell, 2).await;
+        assert_eq!(said(&tones), "lingeringheard next. ");
     }
 
     #[tokio::test]

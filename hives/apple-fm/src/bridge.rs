@@ -7,7 +7,8 @@
 //! becomes Apple's generation options: `temperature`, `season` as the most
 //! tokens it may grow, and `prune` and `seed` as how it samples, greedily
 //! at a temperature of 0. The bridge answers in NDJSON, each line a
-//! [`Said`].
+//! [`Said`]; its finish says how many of the oldest turns it dropped to fit
+//! the model's context.
 //!
 //! Apple's model grows words from words. A prompt that carries pollen or
 //! asks for a `trellis` is refused rather than grown as if it had not.
@@ -55,6 +56,8 @@ pub enum Said {
         text: String,
     },
     Finish {
+        reason: Option<String>,
+        dropped: Option<u64>,
         #[serde(rename = "inputTokens")]
         input_tokens: Option<u64>,
         #[serde(rename = "outputTokens")]
@@ -313,10 +316,13 @@ mod tests {
         let read = |s: &str| serde_json::from_str::<Said>(s).unwrap();
         assert_eq!(read(r#"{"text":"hi","event":"delta"}"#), Said::Delta { text: "hi".into() });
         assert_eq!(
-            read(r#"{"event":"finish","inputTokens":3,"outputTokens":2}"#),
-            Said::Finish { input_tokens: Some(3), output_tokens: Some(2) }
+            read(r#"{"event":"finish","reason":"max_tokens","dropped":2,"inputTokens":3,"outputTokens":2}"#),
+            Said::Finish { reason: Some("max_tokens".into()), dropped: Some(2), input_tokens: Some(3), output_tokens: Some(2) }
         );
-        assert_eq!(read(r#"{"event":"finish"}"#), Said::Finish { input_tokens: None, output_tokens: None });
+        assert_eq!(
+            read(r#"{"event":"finish"}"#),
+            Said::Finish { reason: None, dropped: None, input_tokens: None, output_tokens: None }
+        );
         assert_eq!(
             read(r#"{"event":"error","code":"refusal","message":"no"}"#),
             Said::Error { code: "refusal".into(), message: "no".into() }

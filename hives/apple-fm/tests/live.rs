@@ -71,6 +71,21 @@ async fn a_conversation_grows_through_apple_s_model() {
     assert_eq!(seasoned.ended(), "wilt max_tokens", "{seasoned:?}");
     assert_eq!(seasoned.end["nectar"]["output_tokens"], 12, "{seasoned:?}");
 
+    let filler = json!({
+        "content": [{"kind": "text", "text": "Tell me about the history of beekeeping in Europe. ".repeat(45)}],
+        "grew": [{"kind": "text", "text": "Beekeeping in Europe goes back thousands of years. ".repeat(45)}],
+    });
+    let mut graft = vec![filler; 5];
+    graft.push(json!({
+        "content": [{"kind": "text", "text": "Name a red fruit in one word."}],
+        "grew": [{"kind": "text", "text": "Strawberry"}],
+    }));
+    f.send(ask("long", &m, "Which fruit did you just name? Reply with that one word.", json!({"temperature": 0.0, "graft": graft})));
+    let long = f.bloom("long").await;
+    assert_eq!(long.ended(), "wilt stop", "a conversation past the model's context still grows: {long:?}");
+    assert!(long.said.to_lowercase().contains("strawberry"), "the newest turns are the ones kept: {long:?}");
+    nurse.wait_for("apple-fm.trimmed dropped=").await;
+
     f.send(ask("cancel", &m, "Write a 2000 word essay about the history of beekeeping.", json!({})));
     let first = f.on("cancel").await;
     assert_eq!(first["chi"], "unfurl", "{first}");

@@ -11,9 +11,17 @@
 // and writes NDJSON on stdout, each line as soon as it is known:
 //
 //   {"event": "delta", "text": "..."}          the words new since the last line
-//   {"event": "finish", "inputTokens": n, "outputTokens": n}
-//                                              (counts on macOS 26.4 and later)
+//   {"event": "finish", "reason": "stop" | "max_tokens", "dropped": n,
+//    "inputTokens": n, "outputTokens": n}      (reason and counts on macOS 26.4 and later)
 //   {"event": "error", "code": "...", "message": "..."}
+//
+// The model's context is small (4096 tokens), so the oldest turns that do not
+// fit are dropped and counted in the finish's `dropped`: the newest turns are
+// kept that leave room for the reply, its `maximumResponseTokens` or 1024
+// tokens, and a reply with no `maximumResponseTokens` is held to the room that
+// is left, so it ends `max_tokens` rather than overflowing. Where Apple cannot
+// count tokens, a transcript Apple refuses as too long is retried with the
+// older half of its turns dropped.
 //
 // `gen --probe` reads nothing and writes one line,
 // {"event": "probe", "available": true|false, "reason": "..."}.
@@ -54,6 +62,7 @@ struct Event: Encodable {
     var message: String? = nil
     var inputTokens: Int? = nil
     var outputTokens: Int? = nil
+    var dropped: Int? = nil
 }
 
 @main
@@ -115,6 +124,32 @@ struct Gen {
         [.text(Transcript.TextSegment(content: s))]
     }
 
+    static func exchange(_ turn: Turn) -> [Transcript.Entry] {
+        [
+            .prompt(Transcript.Prompt(segments: text(turn.prompt))),
+            .response(Transcript.Response(assetIDs: [], segments: text(turn.response))),
+        ]
+    }
+
+    static let reply = 1024
+
+    @available(macOS 26.4, *)
+    static func fit(_ turns: [Turn], around fixed: [Transcript.Entry], reserving: Int?) async -> (kept: [Turn], cap: Int)? {
+        let model = SystemLanguageModel.default
+        let context = model.contextSize
+        let reserve = min(reserving ?? reply, context / 2)
+        guard var used = try? await model.tokenCount(for: fixed) else { return nil }
+        var kept = 0
+        for turn in turns.reversed() {
+            guard let counted = try? await model.tokenCount(for: exchange(turn)) else { return nil }
+            let cost = max(0, counted - 1)
+            if used + cost + reserve > context { break }
+            used += cost
+            kept += 1
+        }
+        return (Array(turns.suffix(kept)), max(1, context - used - 16))
+    }
+
     static func main() async {
         if CommandLine.arguments.dropFirst().contains("--probe") {
             let why = unavailable()
@@ -130,48 +165,66 @@ struct Gen {
             fail("unavailable", why)
         }
 
-        var entries: [Transcript.Entry] = []
+        var head: [Transcript.Entry] = []
         if let instructions = request.instructions, !instructions.isEmpty {
-            entries.append(.instructions(Transcript.Instructions(segments: text(instructions), toolDefinitions: [])))
+            head.append(.instructions(Transcript.Instructions(segments: text(instructions), toolDefinitions: [])))
         }
-        for turn in request.turns ?? [] {
-            entries.append(.prompt(Transcript.Prompt(segments: text(turn.prompt))))
-            entries.append(.response(Transcript.Response(assetIDs: [], segments: text(turn.response))))
+        let asked: Transcript.Entry = .prompt(Transcript.Prompt(segments: text(request.prompt)))
+        var turns = request.turns ?? []
+        var dropped = 0
+        var cap = request.maximumResponseTokens
+        if #available(macOS 26.4, *), let fitted = await fit(turns, around: head + [asked], reserving: request.maximumResponseTokens) {
+            dropped = turns.count - fitted.kept.count
+            turns = fitted.kept
+            if cap == nil { cap = fitted.cap }
         }
-        let session = LanguageModelSession(model: .default, transcript: Transcript(entries: entries))
         let options = GenerationOptions(
             sampling: sampling(request.sampling),
             temperature: request.temperature,
-            maximumResponseTokens: request.maximumResponseTokens
+            maximumResponseTokens: cap
         )
 
         var said = ""
         var sent = 0
-        do {
-            for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
-                said = snapshot.content
-                let scalars = said.unicodeScalars
-                let count = scalars.count
-                if count > sent {
-                    var delta = String.UnicodeScalarView()
-                    delta.append(contentsOf: scalars.dropFirst(sent))
-                    say(Event(event: "delta", text: String(delta)))
-                    sent = count
+        while true {
+            let session = LanguageModelSession(model: .default, transcript: Transcript(entries: head + turns.flatMap(exchange)))
+            do {
+                for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
+                    said = snapshot.content
+                    let scalars = said.unicodeScalars
+                    let count = scalars.count
+                    if count > sent {
+                        var delta = String.UnicodeScalarView()
+                        delta.append(contentsOf: scalars.dropFirst(sent))
+                        say(Event(event: "delta", text: String(delta)))
+                        sent = count
+                    }
                 }
+                break
+            } catch LanguageModelSession.GenerationError.exceededContextWindowSize where sent == 0 && !turns.isEmpty {
+                let older = (turns.count + 1) / 2
+                turns.removeFirst(older)
+                dropped += older
+            } catch let error as LanguageModelSession.GenerationError {
+                fail(code(error), error.localizedDescription)
+            } catch {
+                fail("generation_failed", String(describing: error))
             }
-        } catch let error as LanguageModelSession.GenerationError {
-            fail(code(error), error.localizedDescription)
-        } catch {
-            fail("generation_failed", String(describing: error))
         }
 
         var finish = Event(event: "finish")
+        if dropped > 0 {
+            finish.dropped = dropped
+        }
         if #available(macOS 26.4, *) {
-            let asked = entries + [.prompt(Transcript.Prompt(segments: text(request.prompt)))]
-            finish.inputTokens = try? await SystemLanguageModel.default.tokenCount(for: asked)
-            if let counted = try? await SystemLanguageModel.default.tokenCount(for: said),
-               let framing = try? await SystemLanguageModel.default.tokenCount(for: "") {
+            let model = SystemLanguageModel.default
+            finish.inputTokens = try? await model.tokenCount(for: head + turns.flatMap(exchange) + [asked])
+            if let counted = try? await model.tokenCount(for: said),
+               let framing = try? await model.tokenCount(for: "") {
                 finish.outputTokens = max(0, counted - framing)
+            }
+            if let out = finish.outputTokens, let cap {
+                finish.reason = out >= cap ? "max_tokens" : "stop"
             }
         }
         say(finish)

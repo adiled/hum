@@ -61,7 +61,10 @@ A bloom grows through one run of the bridge:
   a graft is grown from its graft. One that carries none, as from a
   forager that sends only a sigil's new words, is grown from the turns
   its cell has grown so far, so a sigil keeps its conversation either
-  way.
+  way. The model's context is 4096 tokens, so the bridge keeps the
+  newest turns that leave room for the reply (its `season`, else 1024
+  tokens) and drops the older ones, and the cell forgets them too; the
+  nurse logs `apple-fm.trimmed`.
 - **How it grows.** `temperature` and `season` become Apple's
   `temperature` and `maximumResponseTokens`. A `temperature` of 0
   samples greedily; `prune.k` samples from the top k, else `prune.p`
@@ -72,15 +75,20 @@ A bloom grows through one run of the bridge:
 - **The reply.** Its words unfurl as a text petal as the model grows
   them, each unfurl only the words new since the last. The bloom wilts
   `stop`, or `max_tokens` when it grew all of its `season`, with Apple's
-  token counts as nectar (macOS 26.4 and later). A `cancel` kills the
-  bridge and wilts it `cancel`.
+  token counts as nectar. A reply with no `season` is held to the
+  context left after the conversation, so a long one wilts `max_tokens`
+  rather than overflowing. A `cancel` kills the bridge and wilts it
+  `cancel`. (Counts, and the room the reply is held to, need macOS 26.4
+  or later; before it the bridge drops the older half of the turns
+  whenever Apple refuses a conversation as too long.)
 - **Refused.** Apple's model grows words from words, so a prompt whose
   petals carry pollen is refused with `apple_fm_words_only`, and one
   with a `trellis` with `apple_fm_no_trellis`. The nurse does not grow
   on: a prompt with no words is refused by its nest with
   `cannot-grow-on`, or `empty-prompt` when it carries no graft either.
 - **Errors.** Apple's own become `apple_fm_<reason>`:
-  `apple_fm_exceeded_context_window` past the model's 4096 tokens,
+  `apple_fm_exceeded_context_window` when the prompt alone overflows
+  the model's context,
   `apple_fm_guardrail_violation`, `apple_fm_refusal`,
   `apple_fm_unsupported_language`, `apple_fm_rate_limited`,
   `apple_fm_assets_unavailable`, and `apple_fm_unavailable` when the
@@ -112,12 +120,13 @@ stdin   {"instructions": "...", "turns": [{"prompt": "...", "response": "..."}],
          "sampling": {"mode": "greedy" | "top" | "nucleus", "k": 40, "p": 0.9, "seed": 7},
          "prompt": "..."}
 stdout  {"event": "delta", "text": "..."}
-        {"event": "finish", "inputTokens": 15, "outputTokens": 75}
+        {"event": "finish", "reason": "stop", "dropped": 2, "inputTokens": 15, "outputTokens": 75}
         {"event": "error", "code": "guardrail_violation", "message": "..."}
 ```
 
 Apple streams each snapshot of the reply whole; the bridge writes only
-what is new in it. `apple-fm-gen --probe` reads nothing and writes
+what is new in it. `dropped` counts the oldest turns it left out to fit
+the context. `apple-fm-gen --probe` reads nothing and writes
 `{"event": "probe", "available": true}`, or `false` with a `reason`:
 `apple_intelligence_not_enabled`, `model_not_ready` or
 `device_not_eligible`.
@@ -164,9 +173,10 @@ unfurls and wilts back with its nectar, the sigil's next prompt grows on
 from what its cell grew, a cancel kills the bridge, a nurse waits
 unnestled until the model is ready and then grows, one on a Mac that
 cannot run the model exits 0, and one whose bridge cannot run fails.
-Its cells' tests cover the turns a cell keeps and a graft that overrides
-them, a still, a stop, a season that ran out, and each way a bridge can
-fail; the unit tests cover the request a prompt becomes, its sampling,
+Its cells' tests cover the turns a cell keeps, a graft that overrides
+them and the turns the bridge dropped, a still, a stop, a season that
+ran out, a bridge that lingers after it finished, and each way a bridge
+can fail; the unit tests cover the request a prompt becomes, its sampling,
 what is refused, what the bridge says, and how `frost` holds back what
 may be a stop.
 
@@ -177,7 +187,9 @@ Against Apple's own model, on a Mac that can run it:
 ```
 
 It holds a conversation through humd, streams a count with each unfurl
-new, stops at a stop, wilts `max_tokens` at its season, and cancels.
+new, stops at a stop, wilts `max_tokens` at its season, grows a
+conversation longer than the model's context from its newest turns, and
+cancels.
 
 ## Use
 
