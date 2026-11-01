@@ -18,8 +18,8 @@
 // The model's context is small (4096 tokens), so the oldest turns that do not
 // fit are dropped and counted in the finish's `dropped`: the newest turns are
 // kept that leave room for the reply, its `maximumResponseTokens` or 1024
-// tokens, and a reply with no `maximumResponseTokens` is held to the room that
-// is left, so it ends `max_tokens` rather than overflowing. Where Apple cannot
+// tokens, and the reply is held to the room that is left, so it ends
+// `max_tokens` rather than overflowing. Where Apple cannot
 // count tokens, a transcript Apple refuses as too long is retried with the
 // older half of its turns dropped.
 //
@@ -176,7 +176,7 @@ struct Gen {
         if #available(macOS 26.4, *), let fitted = await fit(turns, around: head + [asked], reserving: request.maximumResponseTokens) {
             dropped = turns.count - fitted.kept.count
             turns = fitted.kept
-            if cap == nil { cap = fitted.cap }
+            cap = min(cap ?? fitted.cap, fitted.cap)
         }
         let options = GenerationOptions(
             sampling: sampling(request.sampling),

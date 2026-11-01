@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -263,9 +264,15 @@ async fn grow(
         }
     }
 
-    let status = child.wait().await.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+    let status = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(status) => status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string()),
+        Err(_) => {
+            let _ = child.kill().await;
+            "it closed its stdout and lived on, so it was killed".to_string()
+        }
+    };
     let complaint = match complaint {
-        Some(task) => task.await.unwrap_or_default(),
+        Some(task) => tokio::time::timeout(Duration::from_secs(2), task).await.ok().and_then(Result::ok).unwrap_or_default(),
         None => String::new(),
     };
     unfurler.close().await;
@@ -278,7 +285,6 @@ async fn grow(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     const STUB: &str = r#"#!/bin/sh
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -295,6 +301,7 @@ case "$words" in
   capped*) echo '{"event":"delta","text":"cut"}'; echo '{"event":"finish","reason":"max_tokens","outputTokens":3}'; exit 0 ;;
   trim*) echo '{"event":"delta","text":"trimmed"}'; echo '{"event":"finish","reason":"stop","dropped":2}'; exit 0 ;;
   linger*) echo '{"event":"delta","text":"lingering"}'; echo '{"event":"finish"}'; exec sleep 30 ;;
+  mute*) echo '{"event":"delta","text":"muted"}'; exec 1>&-; exec sleep 30 ;;
 esac
 echo '{"event":"delta","text":"heard "}'
 printf '{"event":"delta","text":"%s. "}\n' "$words"
@@ -491,6 +498,19 @@ echo '{"event":"finish","inputTokens":7,"outputTokens":3}'
         cell.feed.send(fed("next")).await.unwrap();
         let tones = closing(&cell, 2).await;
         assert_eq!(said(&tones), "lingeringheard next. ");
+    }
+
+    #[tokio::test]
+    async fn a_bridge_that_falls_silent_but_lives_on_is_killed() {
+        let stub = Stub::new();
+        let cell = raised(&stub).await;
+        cell.feed.send(fed("mute")).await.unwrap();
+        cell.feed.send(fed("next")).await.unwrap();
+        let tones = closing(&cell, 2).await;
+        let ends = ends(&tones);
+        assert_eq!(ends[0]["code"], "apple_fm_bridge_died");
+        assert!(ends[0]["message"].as_str().unwrap().contains("killed"), "{}", ends[0]);
+        assert_eq!(ends[1]["reason"], "stop", "and the cell grows on");
     }
 
     #[tokio::test]

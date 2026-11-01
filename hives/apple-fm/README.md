@@ -75,9 +75,9 @@ A bloom grows through one run of the bridge:
 - **The reply.** Its words unfurl as a text petal as the model grows
   them, each unfurl only the words new since the last. The bloom wilts
   `stop`, or `max_tokens` when it grew all of its `season`, with Apple's
-  token counts as nectar. A reply with no `season` is held to the
-  context left after the conversation, so a long one wilts `max_tokens`
-  rather than overflowing. A `cancel` kills the bridge and wilts it
+  token counts as nectar. A reply is held to the context left after
+  the conversation, whatever its `season`, so a long one wilts
+  `max_tokens` rather than overflowing. A `cancel` kills the bridge and wilts it
   `cancel`. (Counts, and the room the reply is held to, need macOS 26.4
   or later; before it the bridge drops the older half of the turns
   whenever Apple refuses a conversation as too long.)
@@ -175,8 +175,8 @@ unnestled until the model is ready and then grows, one on a Mac that
 cannot run the model exits 0, and one whose bridge cannot run fails.
 Its cells' tests cover the turns a cell keeps, a graft that overrides
 them and the turns the bridge dropped, a still, a stop, a season that
-ran out, a bridge that lingers after it finished, and each way a bridge
-can fail; the unit tests cover the request a prompt becomes, its sampling,
+ran out, a bridge that lingers after it finished or falls silent but
+lives on, and each way a bridge can fail; the unit tests cover the request a prompt becomes, its sampling,
 what is refused, what the bridge says, and how `frost` holds back what
 may be a stop.
 
