@@ -1,4 +1,8 @@
 //! Read paths: tail (live), range (file scan), replay (boot reconstruct).
+//!
+//! A replay handler must be pure — no clocks, no rng, no env reads. Use
+//! `event.ts_ms` for any time-shaped value, so a rebuild lands on the
+//! same state as the original run.
 
 use std::path::Path;
 
@@ -9,16 +13,10 @@ use tokio::sync::broadcast;
 use crate::{Event, Seq, TheHum};
 
 impl TheHum {
-    /// Subscribe to new events as they're appended. Lagged subscribers
-    /// see a `RecvError::Lagged(n)` if they fall behind by >1024 events.
     pub fn tail(&self) -> broadcast::Receiver<Event> {
         self.live_tx.subscribe()
     }
 
-    /// Stream the historical range [from_seq, ..) for `author`. Includes
-    /// events authored by this humd from the local log. (Other authors'
-    /// events arrive via gossip; range over the local log is the canonical
-    /// answer for THIS humd's history.)
     pub fn range(&self, author: &str, from_seq: Seq) -> Result<Vec<Event>> {
         let mut events = scan_all(&self.dir).context("scan log files")?;
         events.retain(|e| e.author == author && e.seq >= from_seq);
@@ -26,10 +24,6 @@ impl TheHum {
         Ok(events)
     }
 
-    /// Replay every event in this humd's log (in seq order) through
-    /// `handler`. Use to rebuild materialized views on cold-boot.
-    /// Handler must be PURE: no clocks, no rng, no env reads — use
-    /// `event.ts_ms` for any time-shaped value.
     pub fn replay<F: FnMut(&Event)>(&self, mut handler: F) -> Result<()> {
         let mut events = scan_all(&self.dir).context("scan log files")?;
         events.sort_by_key(|e| (e.author.clone(), e.seq));
@@ -67,8 +61,6 @@ fn scan_all(dir: &Path) -> Result<Vec<Event>> {
     Ok(out)
 }
 
-/// Verify every event in a vec — signature valid, prev_hash chains,
-/// seqs monotonic per author. Returns first violation or Ok(()).
 pub fn verify_chain(events: &[Event], pubkey: &ed25519_dalek::VerifyingKey) -> Result<()> {
     let mut last_hash_per_author: std::collections::HashMap<String, [u8; 32]> = Default::default();
     let mut last_seq_per_author: std::collections::HashMap<String, Seq> = Default::default();

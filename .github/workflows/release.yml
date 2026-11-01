@@ -2,7 +2,8 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -13,36 +14,18 @@ jobs:
   # whole release. Reintroduce when there's a reliable cross-platform
   # path; for now consumers build from source via `cargo install` or
   # the installer at hum.sh.
-  publish:
+  #
+  # hum is not published to crates.io, so there is no publish step.
+  # The version bump, the lockfiles and the tag are done locally by
+  # ./release.sh; this workflow only publishes the release.
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Compose release notes
-        id: notes
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          # Prefer an annotated-tag message; else fall back to changelog
-          # since the previous tag.
-          BODY=$(git for-each-ref "refs/tags/$TAG" --format='%(contents)' 2>/dev/null)
-          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
-            PREV=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
-            BODY=$(git log --pretty=format:"- %s" ${PREV}..${TAG} 2>/dev/null || echo "Release $TAG")
-          fi
-          {
-            echo "tag=$TAG"
-            echo 'body<<EOF'
-            echo "$BODY"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub release
-        run: |
-          gh release create "${{ steps.notes.outputs.tag }}" \
-            --title "${{ steps.notes.outputs.tag }}" \
-            --notes "${{ steps.notes.outputs.body }}"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

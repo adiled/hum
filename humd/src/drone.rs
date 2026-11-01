@@ -9,8 +9,15 @@
 //! Drone is **LLM-agnostic**. It knows nothing about Claude, GPT, or
 //! any specific model — context-loss pattern detection plugs in via
 //! the [`Classifier`] trait. The default [`NoopClassifier`] never
-//! flags anything; concrete classifiers live in nest-side crates
-//! (e.g. `hum-nest::RegexClassifier`).
+//! flags anything; concrete classifiers live with the hives that host
+//! cells (e.g. `hum-nest::RegexClassifier`).
+//!
+//! The verdict is what the dispatch loop branches on. `Ok` is nominal.
+//! `Resync` means wane drifted and the host should resync state.
+//! `TearDown` means missed beats passed the threshold and the channel
+//! should come down. `Suspect` means a suspicious response was detected
+//! and the host should retry the last bloom. `EchoTimeout` means the echo
+//! never came back and the tracked tone should be re-sent.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,33 +29,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thrum_core::{Chi, Tone};
 
-/// What the drone thinks the host should do.
-///
-/// `unified` is the one-word verdict the host actually steers on;
-/// `raw` carries the full diagnostic — populated even when unified is `Ok`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assessment {
     pub unified: Verdict,
     pub raw: RawAssessment,
 }
 
-/// Coarse verdict — the only thing the dispatch loop should branch on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
-    /// nominal
     Ok,
-    /// wane drift / desync — host should resync state
     Drift,
-    /// missed beats past threshold — host should tear the channel down
     Dead,
-    /// suspicious response detected — host should retry the last turn
     Swallow,
-    /// echo timed out — host should re-send the tracked tone
     Retry,
 }
 
-/// Detailed read of the state at the moment of [`Drone::assess`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawAssessment {
     pub sigil: String,
@@ -56,16 +52,12 @@ pub struct RawAssessment {
     pub suspicion: Suspicion,
     pub missed_beats: u32,
     pub inflight_tools: u32,
-    pub pending_permissions: u32,
     pub pending_echoes: u32,
     pub local_wane: u64,
     pub remote_wane: u64,
-    /// Why the unified verdict came out the way it did, free-form.
     pub reason: String,
 }
 
-/// Pre-verdict mood — kebab-case strings on the `raw` channel, kept
-/// separate from [`Verdict`] so they can't compete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Health {
@@ -76,8 +68,6 @@ pub enum Health {
 }
 
 impl Health {
-    /// Beat interval (ms) that pairs with this mood. The host uses it
-    /// to schedule the next [`DroneBeat`].
     pub fn rhythm_ms(self) -> u64 {
         match self {
             Health::Serene => 30_000,
@@ -88,9 +78,6 @@ impl Health {
     }
 }
 
-/// Per-sigil ledger. Mutated by [`Drone::heard`] / [`Drone::observed`],
-/// read by [`Drone::assess`]. Public for inspection; construct via
-/// [`create_drone_state`] or let the [`Drone`] manage it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneState {
     pub sigil: String,
@@ -103,7 +90,6 @@ pub struct DroneState {
     pub last_beat_received: i64,
     pub missed_beats: u32,
     pub inflight_tools: u32,
-    pub pending_permissions: u32,
     pub tokens_burned: u64,
     pub response_text: String,
     pub suspicious: Suspicion,
@@ -129,36 +115,29 @@ pub fn create_drone_state(sigil: impl Into<String>) -> DroneState {
         last_beat_received: 0,
         missed_beats: 0,
         inflight_tools: 0,
-        pending_permissions: 0,
         tokens_burned: 0,
         response_text: String::new(),
         suspicious: Suspicion::None,
     }
 }
 
-/// What the nestler tells us about the LLM stream.
 #[derive(Debug, Clone)]
 pub enum Observed {
-    ToolStart {
+    TendrilReach {
         name: Option<String>,
     },
-    ToolEnd {
+    TendrilResult {
         name: Option<String>,
     },
-    Tokens {
+    Nectar {
         delta: u64,
     },
-    PermissionAsk,
-    PermissionResolved,
-    TextDelta {
+    Unfurl {
         text: String,
     },
-    /// Turn boundary — triggers suspicion classification on response_text.
-    TurnEnd,
+    Wilt,
 }
 
-/// Periodic heartbeat payload. Hosts serialize this into a `chi:"drone"`
-/// tone body and emit on the rhythm tick.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroneBeat {
     pub sigil: String,
@@ -172,23 +151,16 @@ pub struct DroneBeat {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeatLoad {
     pub active_sigils: u32,
-    pub pending_permissions: u32,
     pub inflight_tools: u32,
     pub tokens_burned: u64,
 }
 
-/// Plug-in seat for an LLM-driven judge. v0 ships only the heuristic;
-/// a future crate can implement this trait to refine `swallow`.
 pub trait Evaluator: Send + Sync {
-    /// Probability (0.0..=1.0) that `text` represents real context loss
-    /// given `state`. The host calls this only when the heuristic
-    /// flagged a suspicion — it is not on the hot path.
     fn evaluate(&self, text: &str, state: &DroneState) -> f32;
 }
 
-/// chis we track for echo correlation. Mirrors `Drone.TRACKED_CHI` in TS.
 fn tracked(chi: Chi) -> bool {
-    matches!(chi, Chi::Prompt | Chi::Cancel | Chi::ReleasePermit)
+    matches!(chi, Chi::Prompt | Chi::Cancel)
 }
 
 fn now_ms() -> i64 {
@@ -198,7 +170,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// The sentinel. Cheap to clone — internal state lives behind an `Arc`.
 #[derive(Clone)]
 pub struct Drone {
     inner: Arc<Inner>,
@@ -218,10 +189,6 @@ impl Default for Drone {
 }
 
 impl Drone {
-    /// Pure channel-health drone. No context-loss detection — the
-    /// classifier is a no-op. Use this when the host has no opinion
-    /// about LLM output patterns and only wants the wane/echo/beat
-    /// machinery.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -233,9 +200,6 @@ impl Drone {
         }
     }
 
-    /// Drone with a pluggable classifier. Pass a regex-bank impl
-    /// (e.g. `nest_common::RegexClassifier`) to enable the swallow
-    /// path on context-loss patterns.
     pub fn with_classifier(classifier: Arc<dyn Classifier>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -247,10 +211,6 @@ impl Drone {
         }
     }
 
-    /// Drone with both a classifier and an LLM judge. The classifier
-    /// is the cheap regex first-gate; the evaluator is the optional
-    /// adjudicator the drone consults when the classifier flags
-    /// `Soft` or `Heavy`.
     pub fn with_classifier_and_evaluator(
         classifier: Arc<dyn Classifier>,
         evaluator: Arc<dyn Evaluator>,
@@ -266,16 +226,10 @@ impl Drone {
         }
     }
 
-    /// Back-compat: drone with only an LLM judge, classifier = noop.
-    /// Equivalent to `with_classifier_and_evaluator(NoopClassifier, …)`
-    /// but `NoopClassifier::classify` always returns `None`, so the
-    /// evaluator is unreachable in practice. Prefer
-    /// `with_classifier_and_evaluator`.
     pub fn with_evaluator(evaluator: Arc<dyn Evaluator>, swallow_threshold: f32) -> Self {
         Self::with_classifier_and_evaluator(Arc::new(NoopClassifier), evaluator, swallow_threshold)
     }
 
-    /// Observe an outgoing tone — track its rid if it deserves an echo.
     pub fn sent(&self, tone: &Tone) {
         if matches!(tone.chi(), Chi::Drone | Chi::Echo) {
             return;
@@ -292,7 +246,7 @@ impl Drone {
                 tone.rid().to_string(),
                 PendingEcho {
                     rid: tone.rid().to_string(),
-                    chi: chi_label(tone.chi()).to_string(),
+                    chi: tone.chi().as_str().to_string(),
                     time_ms: now_ms(),
                     retries: 0,
                 },
@@ -300,7 +254,6 @@ impl Drone {
         }
     }
 
-    /// Observe an incoming tone — clear echoes, sync wane, reset missed beats.
     pub fn heard(&self, tone: &Tone) {
         match tone.chi() {
             Chi::Echo => {
@@ -334,8 +287,6 @@ impl Drone {
                 let state = states
                     .entry(sigil.clone())
                     .or_insert_with(|| create_drone_state(sigil));
-                // Process-death pulses reset per-process counters but leave the
-                // cross-process channel state (wane, echoes, missed beats) alone.
                 if tone.chi() == Chi::Pulse {
                     let kind = tone.body.get("kind").and_then(Value::as_str);
                     if matches!(kind, Some("cell-died" | "cell-evicted" | "cell-idle")) {
@@ -348,42 +299,30 @@ impl Drone {
         }
     }
 
-    /// Observe an LLM-stream event surfaced by the nestler.
     pub fn observed(&self, sigil: &str, event: Observed) {
         let mut states = self.inner.states.write();
         let state = states
             .entry(sigil.to_string())
             .or_insert_with(|| create_drone_state(sigil.to_string()));
         match event {
-            Observed::ToolStart { .. } => state.inflight_tools += 1,
-            Observed::ToolEnd { .. } => {
+            Observed::TendrilReach { .. } => state.inflight_tools += 1,
+            Observed::TendrilResult { .. } => {
                 state.inflight_tools = state.inflight_tools.saturating_sub(1);
             }
-            Observed::Tokens { delta } => {
+            Observed::Nectar { delta } => {
                 state.tokens_burned = state.tokens_burned.saturating_add(delta)
             }
-            Observed::PermissionAsk => state.pending_permissions += 1,
-            Observed::PermissionResolved => {
-                state.pending_permissions = state.pending_permissions.saturating_sub(1);
-            }
-            Observed::TextDelta { text } => state.response_text.push_str(&text),
-            Observed::TurnEnd => {
+            Observed::Unfurl { text } => state.response_text.push_str(&text),
+            Observed::Wilt => {
                 if state.response_text.len() > 20 {
                     state.suspicious = self.inner.classifier.classify(&state.response_text);
                 }
-                // response_text stays until assess() consumes it — the optional
-                // LLM judge wants to see it.
             }
         }
         state.health = derive_health(state);
         state.rhythm_ms = state.health.rhythm_ms();
     }
 
-    /// Snapshot-and-judge. Returns the unified verdict the host steers on.
-    ///
-    /// This is the only place `Verdict::Swallow` can fire — and only if
-    /// either the heuristic is `Critical` or the optional [`Evaluator`]
-    /// agrees past the swallow threshold.
     pub fn assess(&self, sigil: &str) -> Assessment {
         let mut states = self.inner.states.write();
         let state = states
@@ -417,8 +356,6 @@ impl Drone {
             }
         }
 
-        // Suspicion is independent of channel health: a stream may be
-        // "serene" by metrics while spewing a context-loss greeting.
         let suspicion_now = if state.response_text.len() > 20 {
             self.inner.classifier.classify(&state.response_text)
         } else {
@@ -449,7 +386,6 @@ impl Drone {
             suspicion: suspicion_now,
             missed_beats: state.missed_beats,
             inflight_tools: state.inflight_tools,
-            pending_permissions: state.pending_permissions,
             pending_echoes: state.pending_echoes.len() as u32,
             local_wane: state.local_wane,
             remote_wane: state.remote_wane,
@@ -462,8 +398,6 @@ impl Drone {
         }
     }
 
-    /// Bump the local wane after a tone is committed. Hosts call this
-    /// from the same path that bumps the `WaneTracker`.
     pub fn set_local_wane(&self, sigil: &str, wane: u64) {
         let mut states = self.inner.states.write();
         let state = states
@@ -472,8 +406,6 @@ impl Drone {
         state.local_wane = wane;
     }
 
-    /// Mark a missed beat — the host's silence timer calls this when the
-    /// remote didn't speak within `rhythm * 2`.
     pub fn mark_missed_beat(&self, sigil: &str) {
         let mut states = self.inner.states.write();
         let state = states
@@ -482,8 +414,6 @@ impl Drone {
         state.missed_beats = state.missed_beats.saturating_add(1);
     }
 
-    /// Bump retries on a pending echo. Host calls after re-sending.
-    /// Returns the new retry count if the rid was tracked.
     pub fn note_retry(&self, sigil: &str, rid: &str) -> Option<u32> {
         let mut states = self.inner.states.write();
         let state = states.get_mut(sigil)?;
@@ -493,12 +423,10 @@ impl Drone {
         Some(entry.retries)
     }
 
-    /// Drop a sigil's state — the host calls this on `cleanup`.
     pub fn forget(&self, sigil: &str) {
         self.inner.states.write().remove(sigil);
     }
 
-    /// Build the periodic beat payload. Caller wraps it in a tone.
     pub fn beat(&self, sigil: &str) -> DroneBeat {
         let mut states = self.inner.states.write();
         let active = states.len() as u32;
@@ -514,15 +442,12 @@ impl Drone {
             pending_echoes: state.pending_echoes.keys().cloned().collect(),
             load: BeatLoad {
                 active_sigils: active,
-                pending_permissions: state.pending_permissions,
                 inflight_tools: state.inflight_tools,
                 tokens_burned: state.tokens_burned,
             },
         }
     }
 
-    /// Serialize a beat as a tone body — convenience for the host's
-    /// thrum-send path.
     pub fn beat_body(beat: &DroneBeat) -> Map<String, Value> {
         match serde_json::to_value(beat) {
             Ok(Value::Object(m)) => m,
@@ -530,7 +455,6 @@ impl Drone {
         }
     }
 
-    /// Snapshot a single sigil's state. Returns `None` if unknown.
     pub fn inspect(&self, sigil: &str) -> Option<DroneState> {
         self.inner.states.read().get(sigil).cloned()
     }
@@ -553,8 +477,7 @@ fn derive_health(state: &DroneState) -> Health {
         return Health::Critical;
     }
 
-    if state.pending_permissions > 0 || state.inflight_tools > 3 || !state.pending_echoes.is_empty()
-    {
+    if state.inflight_tools > 3 || !state.pending_echoes.is_empty() {
         return Health::Tense;
     }
 
@@ -563,45 +486,6 @@ fn derive_health(state: &DroneState) -> Health {
     }
 
     Health::Serene
-}
-
-fn chi_label(chi: Chi) -> &'static str {
-    match chi {
-        Chi::Hello => "hello",
-        Chi::Prompt => "prompt",
-        Chi::Cancel => "cancel",
-        Chi::Cleanup => "cleanup",
-        Chi::Curate => "curate",
-        Chi::ReleasePermit => "release-permit",
-        Chi::TendrilResult => "tendril-result",
-        Chi::ToolResult => "tool-result",
-        Chi::PetalCell => "petal-cell",
-        Chi::Breath => "breath",
-        Chi::Chunk => "chunk",
-        Chi::Finish => "finish",
-        Chi::Error => "error",
-        Chi::SessionReady => "session-ready",
-        Chi::Pulse => "pulse",
-        Chi::PermissionAsk => "permission-ask",
-        Chi::TendrilReach => "tendril-reach",
-        Chi::ToolCall => "tool-call",
-        Chi::ToolMeta => "tool-meta",
-        Chi::Echo => "echo",
-        Chi::PerfMark => "perf-mark",
-        Chi::Log => "log",
-        Chi::Drone => "drone",
-        Chi::DroneRetrofit => "drone-retrofit",
-        Chi::PeerAdd => "peer-add",
-        Chi::PeerRemove => "peer-remove",
-        Chi::Attach => "attach",
-        Chi::Detach => "detach",
-        Chi::WaneSync => "wane-sync",
-        Chi::GossipPublish => "gossip-publish",
-        Chi::KadFindNode => "kad-find-node",
-        Chi::KadFindNodeResp => "kad-find-node-resp",
-        Chi::ToolInfo => "tool-info",
-        Chi::Backfill => "backfill",
-    }
 }
 
 #[cfg(test)]
@@ -654,9 +538,6 @@ mod tests {
         assert!(st.pending_echoes.is_empty());
     }
 
-    // Canned classifiers exercise the drone's branching logic without
-    // depending on a particular pattern bank — pattern banks live in
-    // nest-side crates (see `hum-nest`).
     struct AlwaysCritical;
     impl Classifier for AlwaysCritical {
         fn classify(&self, _: &str) -> Suspicion {
@@ -675,11 +556,11 @@ mod tests {
         let d = Drone::with_classifier(Arc::new(AlwaysCritical));
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::Critical);
@@ -690,11 +571,11 @@ mod tests {
         let d = Drone::with_classifier(Arc::new(AlwaysSoft));
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::Soft);
@@ -713,25 +594,25 @@ mod tests {
             Drone::with_classifier_and_evaluator(Arc::new(AlwaysSoft), Arc::new(YesEvaluator), 0.7);
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "anything past twenty characters".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_eq!(a.unified, Verdict::Swallow);
     }
 
     #[test]
     fn noop_classifier_never_swallows() {
-        let d = Drone::new(); // NoopClassifier
+        let d = Drone::new();
         d.observed(
             "s1",
-            Observed::TextDelta {
+            Observed::Unfurl {
                 text: "I don't have any previous context — could you share more?".into(),
             },
         );
-        d.observed("s1", Observed::TurnEnd);
+        d.observed("s1", Observed::Wilt);
         let a = d.assess("s1");
         assert_ne!(a.unified, Verdict::Swallow);
         assert_eq!(a.raw.suspicion, Suspicion::None);
@@ -752,8 +633,8 @@ mod tests {
     #[test]
     fn pulse_death_resets_inflight() {
         let d = Drone::new();
-        d.observed("s1", Observed::ToolStart { name: None });
-        d.observed("s1", Observed::ToolStart { name: None });
+        d.observed("s1", Observed::TendrilReach { name: None });
+        d.observed("s1", Observed::TendrilReach { name: None });
         let mut env = Envelope::new(Chi::Pulse, "rid-p");
         env.sigil = Some("s1".into());
         let mut t = Tone::new(env);

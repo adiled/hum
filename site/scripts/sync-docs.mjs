@@ -9,7 +9,8 @@
 // What's publishable:
 //   - Every `*.md` outside any `docs/` directory.
 //   - Excluded by name at any depth: AGENTS.md, CLAUDE.md.
-//   - Skipped directories: .git, .claude, node_modules, target, dist, site.
+//   - Skipped directories: .git, .claude, node_modules, target, dist, site,
+//     and vendor, where a hive keeps third-party source it fetched.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -25,7 +26,7 @@ const DEST_ROOT = path.resolve(__dirname, "../src/content/docs/");
 const SITE_BASE = (process.env.HUM_SITE_BASE ?? "/hum/").replace(/\/?$/, "/");
 
 const SKIP_DIRS = new Set([
-  ".git", ".claude", "node_modules", "target", "dist", "docs", "site",
+  ".git", ".claude", "node_modules", "target", "dist", "docs", "site", "vendor",
 ]);
 const SKIP_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
 
@@ -50,8 +51,8 @@ async function* walk(dir = REPO_ROOT, rel = "") {
  *
  *   README.md                    → "index"
  *   ensemble/README.md           → "ensemble/index"
- *   thrum/WIRE.md                → "thrum/wire"
- *   VOCABULARY.md                → "vocabulary"
+ *   THRUM.md                     → "thrum"
+ *   GLOSSARY.md                  → "glossary"
  *   reports/compat-v0.10.3.md    → "reports/compat-v0.10.3"
  */
 function deriveSlug(rel) {

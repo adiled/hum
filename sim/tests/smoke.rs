@@ -13,7 +13,7 @@ async fn two_humds_wired_see_each_other() {
     let ha = sim.spawn_humd(a).await;
     let hb = sim.spawn_humd(b).await;
 
-    sim.wire(a, b).expect("wire");
+    sim.wire_unauthenticated(a, b).expect("wire");
 
     let peers_a = ha.ensemble.peers();
     let peers_b = hb.ensemble.peers();

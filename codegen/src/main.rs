@@ -1,17 +1,29 @@
 //! CLI front for the codegen library. Manual regen:
 //!
-//!   cargo run -p codegen                # regen all targets (ts, python, go)
+//!   cargo run -p codegen                # regen all targets (ts, python, go, c)
 //!   cargo run -p codegen -- ts          # one target
 //!   cargo run -p codegen -- --check     # exit nonzero if any target drifted
 //!
-//! The same logic runs from `thrum-core/build.rs` on every cargo build,
-//! so manual invocation should rarely be needed. Output locations live
-//! in `codegen::paths` — never hand-write them here.
+//! Every run first holds thrum-core's Rust to `hum.thrum` and stops on
+//! a difference: the file is the thrum, and a client emitted while the
+//! Rust disagrees would be a client of two thrums. The same logic runs
+//! from `thrum-core/build.rs` on every cargo build, so manual invocation
+//! should rarely be needed. Output locations live in `codegen::paths`;
+//! never hand-write them here.
+//!
+//! A target is the files it owns: the registry and the views projected
+//! from `hum.thrum`, and the client itself, each language's template
+//! from `codegen/templates/` with the link's constants read from
+//! hum-thrum. Every source file of every client is generated. After the
+//! targets, THRUM.md's marked regions are filled from the same file.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use codegen::{paths, ChiSpec};
+
+type Emit<'a> = Box<dyn Fn(&Path) -> Result<()> + 'a>;
 
 fn main() -> ExitCode {
     match run() {
@@ -33,97 +45,139 @@ fn run() -> Result<()> {
         }
     }
     let targets: Vec<String> = if positional.is_empty() {
-        vec!["ts".into(), "python".into(), "go".into()]
+        vec!["ts".into(), "python".into(), "go".into(), "c".into()]
     } else {
         positional
     };
 
-    let spec = codegen::parse(&paths::chi_rs(), &paths::lib_rs()).context("parse chi spec")?;
-    let proto = codegen::protocol::protocol_spec(
+    let thrum = codegen::thrum::parse(&paths::hum_thrum()).context("read the thrum")?;
+    codegen::rust::check(
+        &thrum,
+        &paths::chi_rs(),
         &paths::views_rs(),
         &paths::envelope_rs(),
         &paths::lib_rs(),
-    )
-    .context("parse protocol spec")?;
+    )?;
+    eprintln!("codegen: thrum-core agrees with {}", paths::HUM_THRUM_REL);
+    let spec = thrum.chi_spec()?;
+    let proto = thrum.protocol_spec();
+    let link = codegen::link::link_spec(&paths::link_rs(), &paths::core_rs(), &thrum)
+        .context("read the link")?;
 
     for t in &targets {
-        run_target(t, &spec, &proto, check)?;
+        run_target(t, &spec, &proto, &link, check)?;
+    }
+    run_document(&thrum, check)
+}
+
+fn run_document(thrum: &codegen::thrum::Thrum, check: bool) -> Result<()> {
+    let out = paths::thrum_md();
+    let emit: Emit = Box::new(move |p| codegen::document::emit(thrum, &paths::thrum_md(), p));
+    if check {
+        check_against(&out, &emit)?;
+        eprintln!("codegen: {} up to date", out.display());
+    } else {
+        emit(&out)?;
+        eprintln!(
+            "codegen document: {} regions of {} filled from {}",
+            codegen::document::REGIONS.len(),
+            out.display(),
+            paths::HUM_THRUM_REL
+        );
     }
     Ok(())
+}
+
+fn outputs<'a>(
+    target: &str,
+    spec: &'a ChiSpec,
+    proto: &'a codegen::protocol::ProtocolSpec,
+    link: &'a codegen::link::LinkSpec,
+) -> Result<Vec<(PathBuf, Emit<'a>)>> {
+    let target = if target == "py" { "python" } else { target };
+    let mut out = registry(target, spec, proto)?;
+    for client in paths::CLIENTS.iter().filter(|c| c.target == target) {
+        out.push((
+            client.output_path(),
+            Box::new(move |p| codegen::link::emit_client(link, client, p)),
+        ));
+    }
+    Ok(out)
+}
+
+fn registry<'a>(
+    target: &str,
+    spec: &'a ChiSpec,
+    proto: &'a codegen::protocol::ProtocolSpec,
+) -> Result<Vec<(PathBuf, Emit<'a>)>> {
+    Ok(match target {
+        "ts" => vec![
+            (paths::ts_chi(), Box::new(|p| codegen::emit_ts(spec, p))),
+            (
+                paths::ts_protocol(),
+                Box::new(|p| codegen::protocol::emit_protocol_ts(proto, p)),
+            ),
+        ],
+        "python" => vec![
+            (paths::py_chi(), Box::new(|p| codegen::emit_py(spec, p))),
+            (
+                paths::py_protocol(),
+                Box::new(|p| codegen::protocol::emit_protocol_py(proto, p)),
+            ),
+        ],
+        "go" => vec![
+            (paths::go_chi(), Box::new(|p| codegen::emit_go(spec, p))),
+            (
+                paths::go_protocol(),
+                Box::new(|p| codegen::protocol::emit_protocol_go(proto, p)),
+            ),
+        ],
+        "c" => vec![
+            (paths::c_chi(), Box::new(|p| codegen::emit_c(spec, p))),
+            (
+                paths::c_protocol(),
+                Box::new(|p| codegen::protocol::emit_protocol_c(proto, p)),
+            ),
+        ],
+        other => anyhow::bail!("unknown target {other}; valid: ts, python, go, c"),
+    })
 }
 
 fn run_target(
     target: &str,
     spec: &ChiSpec,
     proto: &codegen::protocol::ProtocolSpec,
+    link: &codegen::link::LinkSpec,
     check: bool,
 ) -> Result<()> {
-    let (chi_out, helpers_out, protocol_out, emit_chi, emit_helpers, emit_protocol): (
-        std::path::PathBuf,
-        std::path::PathBuf,
-        std::path::PathBuf,
-        Box<dyn Fn(&std::path::Path) -> Result<()>>,
-        Box<dyn Fn(&std::path::Path) -> Result<()>>,
-        Box<dyn Fn(&std::path::Path) -> Result<()>>,
-    ) = match target {
-        "ts" => (
-            paths::ts_chi(),
-            paths::ts_helpers(),
-            paths::ts_protocol(),
-            Box::new(|p| codegen::emit_ts(spec, p)),
-            Box::new(codegen::emit_helpers),
-            Box::new(|p| codegen::protocol::emit_protocol_ts(proto, p)),
-        ),
-        "python" | "py" => (
-            paths::py_chi(),
-            paths::py_helpers(),
-            paths::py_protocol(),
-            Box::new(|p| codegen::emit_py(spec, p)),
-            Box::new(codegen::emit_py_helpers),
-            Box::new(|p| codegen::protocol::emit_protocol_py(proto, p)),
-        ),
-        "go" => (
-            paths::go_chi(),
-            paths::go_helpers(),
-            paths::go_protocol(),
-            Box::new(|p| codegen::emit_go(spec, p)),
-            Box::new(codegen::emit_go_helpers),
-            Box::new(|p| codegen::protocol::emit_protocol_go(proto, p)),
-        ),
-        other => anyhow::bail!("unknown target {other}; valid: ts, python, go"),
-    };
+    let outputs = outputs(target, spec, proto, link)?;
+    let names = outputs
+        .iter()
+        .map(|(out, _)| out.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" + ");
 
     if check {
-        check_against(&chi_out, &emit_chi)?;
-        check_against(&helpers_out, &emit_helpers)?;
-        check_against(&protocol_out, &emit_protocol)?;
-        eprintln!(
-            "codegen: {} + {} + {} up to date",
-            chi_out.display(),
-            helpers_out.display(),
-            protocol_out.display()
-        );
+        for (out, emit) in &outputs {
+            check_against(out, emit)?;
+        }
+        eprintln!("codegen: {names} up to date");
     } else {
-        emit_chi(&chi_out)?;
-        emit_helpers(&helpers_out)?;
-        emit_protocol(&protocol_out)?;
+        for (out, emit) in &outputs {
+            emit(out)?;
+        }
         eprintln!(
-            "codegen {target}: {} ({} chi, {} pulse) -> {} + {} + {}",
+            "codegen {target}: {} ({} chi, {} pulse, {} petal) -> {names}",
             spec.version,
             spec.chi.len(),
             spec.pulse.len(),
-            chi_out.display(),
-            helpers_out.display(),
-            protocol_out.display(),
+            spec.petal.len(),
         );
     }
     Ok(())
 }
 
-fn check_against(
-    output: &std::path::Path,
-    emit: &dyn Fn(&std::path::Path) -> Result<()>,
-) -> Result<()> {
+fn check_against(output: &Path, emit: &dyn Fn(&Path) -> Result<()>) -> Result<()> {
     let tmp = tempfile_path(output);
     emit(&tmp)?;
     let generated = std::fs::read(&tmp).context("read tmp")?;
@@ -138,7 +192,7 @@ fn check_against(
     Ok(())
 }
 
-fn tempfile_path(target: &std::path::Path) -> std::path::PathBuf {
+fn tempfile_path(target: &Path) -> PathBuf {
     let mut p = target.to_path_buf();
     let name = format!(
         ".{}.codegen-check",

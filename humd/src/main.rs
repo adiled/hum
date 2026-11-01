@@ -4,12 +4,12 @@
 //! humd is the daemon AND the daemon-inspection CLI. Default invocation
 //! (no args) is daemon mode. `--version` / `--help` are the minimum
 //! handshake any CLI should support; richer inspection subcommands
-//! (peers, drift, drone) will plug in once humd exposes an RPC control
+//! (peers, drone) will plug in once humd exposes an RPC control
 //! socket on `cfg.http_path`.
 
 use anyhow::Result;
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 use tracing_subscriber::EnvFilter;
 
 use humd::DaemonConfig;
@@ -24,18 +24,16 @@ fn print_help() {
     println!("  humd --help        this surface");
     println!();
     println!("User-facing CLI is `hum`. humd's own subcommands will grow as");
-    println!("the daemon RPC surface lands (peers, drift, drone, sessions).");
+    println!("the daemon RPC surface lands (peers, drone, sessions).");
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Minimum CLI handshake — anything beyond `humd` invokes inspection
-    // surface (TODO: clap subcommands once humd RPC exists).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         match args[0].as_str() {
             "--version" | "-V" => {
-                println!("humd {} (thrum {})", env!("CARGO_PKG_VERSION"), THRUM_VERSION);
+                println!("humd {} (thrum {})", env!("HUM_VERSION"), THRUM_VERSION);
                 return Ok(());
             }
             "--help" | "-h" | "help" => {
@@ -51,7 +49,7 @@ async fn main() -> Result<()> {
 
     hum_paths::init();
     let filter = EnvFilter::try_from_env("HUM_LOG_LEVEL")
-        .unwrap_or_else(|_| EnvFilter::new("trace"));
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -59,15 +57,17 @@ async fn main() -> Result<()> {
         .init();
     info!(version = %THRUM_VERSION, "humd.booting");
 
-    // A daemon must not boot on an invalid config. Validate hum.json
-    // against the schema and exit non-zero (violations verbatim) before
-    // any state is built.
+    for key in hum_paths::config::migrate_file() {
+        info!(key = %key, "config.retired_key_dropped");
+    }
     hum_paths::config::validate_or_exit();
+
+    if let Err(e) = humd::guard::spawn() {
+        warn!(err = %e, "guard.unavailable — the hum roots go unwatched");
+    }
 
     let cfg = DaemonConfig::from_env();
     info!(
-        max_active_cells = cfg.hum_cfg.nest.max_active_cells,
-        default_hive = %cfg.hum_cfg.nest.default,
         fs_roots = cfg.hum_cfg.fs.roots.len(),
         "config.loaded"
     );
@@ -75,7 +75,6 @@ async fn main() -> Result<()> {
     humd::run(cfg, wait_for_shutdown()).await
 }
 
-/// Resolves the first time SIGTERM, SIGINT, or ctrl-c arrives.
 async fn wait_for_shutdown() {
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
     let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");

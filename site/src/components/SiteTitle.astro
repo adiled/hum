@@ -1,0 +1,12 @@
+---
+import logo from "../assets/hum-logo.png";
+
+const { siteTitleHref } = Astro.props;
+---
+
+<a href={siteTitleHref} class="site-title sl-flex">
+  <img class="hum-logo" src={logo.src} width={logo.width} height={logo.height} alt="" />
+  <span class="hum-word" translate="no" aria-label="hum">
+    <span class="hum-h" aria-hidden="true">h</span><span class="hum-u" aria-hidden="true">u</span><span class="hum-m" aria-hidden="true">m</span>
+  </span>
+</a>

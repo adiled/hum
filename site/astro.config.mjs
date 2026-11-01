@@ -116,6 +116,7 @@ export default defineConfig({
       ],
       social: { github: "https://github.com/adiled/hum" },
       customCss: ["./src/styles/spacecraft.css"],
+      components: { SiteTitle: "./src/components/SiteTitle.astro" },
       sidebar: [
         ...(rootIndex ? [{ label: "Overview", link: "/" }] : []),
         ...treeSidebar,

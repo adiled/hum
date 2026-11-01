@@ -1,21 +1,27 @@
 [package]
 name = "bp7"
-version = "0.32.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
 description = "RFC 9171 Bundle Protocol v7 forager hive — interplanetary store-and-forward bridge to hum."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bundle-protocol = { package = "bp7", version = "0.10" }
+bundle-protocol = { package = "bp7", version = "0.12" }
+sha2 = "0.10"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
 
 [[bin]]
 name = "bp7-forager"

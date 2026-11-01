@@ -1,15 +1,15 @@
 [package]
 name = "grpc-forager"
-version = "0.32.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
 description = "gRPC bridge to hum — bidi stream, every chi flows through; transport-only bee."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-thrum = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tonic = "0.12"
@@ -19,6 +19,10 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
 
 [build-dependencies]
 tonic-build = "0.12"

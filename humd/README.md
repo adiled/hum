@@ -1,6 +1,6 @@
 ---
 title: "humd"
-description: "The hum daemon. One per machine install. Holds the nest, owns the thrum socket, joins the ensemble. Built as a binary for production and as a library so simulators and tests can spawn humds in-process."
+description: "The hum daemon. One per machine install. A coordination node: owns the thrum socket, admits bees, routes between them, joins the ensemble. Built as a binary for production and as a library so simulators and tests can spawn humds in-process."
 ---
 
 # humd
@@ -9,11 +9,11 @@ description: "The hum daemon. One per machine install. Holds the nest, owns the 
 
 A **humd** is the single process every other piece of hum talks to: bees
 hello in over the thrum socket, peer humds dial in over the ensemble
-transports, the OS hands it a state directory and a runtime directory,
-and it owns one **nest** for the lifetime of the process. Everything
-mesh-shaped (routing, gossip, drift, capacity advertise) happens here.
-Everything LLM-shaped (worker bees, cells, prompts) happens in the
-nest this daemon hosts.
+transports, and the OS hands it a state directory and a runtime
+directory. It is a coordination node: everything mesh-shaped (admission,
+routing, gossip) happens here, and nothing LLM-shaped does. Cells live in
+the nests of the hives that host them, and a nurse's claimed headroom
+is how humd knows where a prompt can go.
 
 The crate ships two entry points off the same code:
 
@@ -24,7 +24,7 @@ The crate ships two entry points off the same code:
 
 The same `run` function backs both. Tests and simulators never
 duplicate the wiring; they hand in a [`DaemonConfig`] with the bits
-they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
+they want to swap (`thrum_override`, `ensemble`, `hives`, `bees`,
 `waneman`, etc.).
 
 ## Boot order
@@ -40,7 +40,7 @@ they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
 3. **identity load**. `identity::load_or_mint_key()` reads
    `$XDG_STATE_HOME/hum/humd.key` (32 raw bytes, mode `0o600`) or mints
    and persists a fresh Ed25519 keypair on first boot.
-4. **trackers**. `drift::Drift`, `penny::Penny`, the metrics exporter
+4. **trackers**. `comb::Comb`, the metrics exporter
    (Prometheus on `humd.metricsAddr`).
 5. **thehum**. The signed append-only chi log at
    `$XDG_STATE_HOME/hum/thehum/`. Every tone that crosses the daemon
@@ -51,11 +51,9 @@ they want to swap (`thrum_override`, `ensemble`, `capacity_override`,
    `hum.json`. Walk `peers.json` and dial outbound. Detach an accept
    loop per transport.
 7. **thrum**. Bind the unix socket at
-   `$XDG_RUNTIME_DIR/hum/thrum.sock`. Worker and forager bees connect
-   here and exchange tones.
-8. **MCP**. Bind the HTTP listener at `cfg.http_path` so bees can
-   expose tools to their compute via MCP if they want.
-9. **wait for shutdown**. SIGTERM, SIGINT, or ctrl-c.
+   `$XDG_STATE_HOME/hum/thrum.sock`. Every bee connects here, whatever
+   its role, and exchanges tones.
+8. **wait for shutdown**. SIGTERM, SIGINT, or ctrl-c.
 
 ## Inspection surface
 
@@ -67,7 +65,7 @@ humd --version  # print "humd <ver> (thrum <wire ver>)"
 humd --help     # print the surface above
 ```
 
-Richer inspection (`humd peers`, `humd drift`, `humd drone`,
+Richer inspection (`humd peers`, `humd drone`,
 `humd sessions`) plugs in once the daemon exposes an RPC control
 socket on `cfg.http_path`. The user-facing CLI is
 [`hum`](../hum). It talks to a running humd through the same artifacts
@@ -108,15 +106,16 @@ transport-agnostic. The hints a remote peer would paste into its
 ## DaemonConfig and embedding
 
 `DaemonConfig::from_env()` is production defaults: real XDG paths, mint
-identity if absent, bind a real thrum socket, MCP HTTP on `cfg.http_path`,
-metrics on `humd.metricsAddr`. Embedders override the bits they need:
+identity if absent, bind a real thrum socket, metrics on
+`humd.metricsAddr`. Embedders override the bits they need:
 
 | field | who sets it |
 |-------|-------------|
 | `thrum_override` | sim, to bypass socket binding |
 | `ensemble` | sim, to install pre-wired `InMemoryEndpoint` peers |
 | `bind_mcp` | sim, to skip the HTTP MCP listener |
-| `capacity_override` | sim, to force `Some(0)` for overflow tests |
+| `hives` | sim, to install hives in memory |
+| `bees` | sim, to enter bees in memory |
 | `waneman` | sim, to share a `WaneTracker` across humds |
 | `humd_key` | tests, to spawn ephemeral identities |
 | `bootstrap_peers` | tests, to inject specific `peers.json` rows |

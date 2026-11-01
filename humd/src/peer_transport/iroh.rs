@@ -32,11 +32,21 @@ use tracing::{info, warn};
 
 use crate::peers::PeerConfig;
 
-/// Build the iroh transport with `humd_key` pinned as the iroh
-/// SecretKey. Returns the transport plus the `peers.json` hints a
-/// remote peer would use to dial this humd back.
-pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, Vec<String>)> {
-    let transport = IrohTransport::bind_direct_with_key(humd_key).await?;
+pub(crate) async fn bind(
+    humd_key: &HumdKey,
+    port: u16,
+) -> anyhow::Result<(IrohTransport, Vec<String>)> {
+    let transport = match IrohTransport::bind_direct_with_key_on(humd_key, port_nonzero(port)).await {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(
+                port,
+                err = %e,
+                "peer.iroh.fixed_port.bind_failed — taking an ephemeral port; the address peers hold goes stale on restart"
+            );
+            IrohTransport::bind_direct_with_key(humd_key).await?
+        }
+    };
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
     let discovered: Vec<SocketAddr> = transport
         .endpoint()
@@ -51,6 +61,10 @@ pub(crate) async fn bind(humd_key: &HumdKey) -> anyhow::Result<(IrohTransport, V
         "peer.iroh.bound"
     );
     Ok((transport, hints))
+}
+
+fn port_nonzero(port: u16) -> Option<u16> {
+    if port == 0 { None } else { Some(port) }
 }
 
 fn dial_hints(node_id_hex: &str, addrs: &[SocketAddr]) -> Vec<String> {
@@ -94,25 +108,22 @@ pub(crate) async fn dial_and_install_peer(
     }
 }
 
-/// Open one iroh connection per bootstrap peer entry, install signed.
-/// Entries without an `iroh:` hint are skipped — those are for other
-/// transports.
 pub(crate) async fn dial_all(
     transport: &IrohTransport,
     ens: &Arc<Ensemble>,
     key: &HumdKey,
     peers: &[PeerConfig],
     my_caps: &PeerCapabilities,
-) {
+) -> Vec<String> {
+    let mut reached = Vec::new();
     for peer in peers {
-        dial_and_install_peer(transport, ens, key, peer, my_caps).await;
+        if dial_and_install_peer(transport, ens, key, peer, my_caps).await {
+            reached.push(peer.humd_id.to_hex());
+        }
     }
+    reached
 }
 
-/// Detach the accept loop. Each accepted connection is installed via
-/// [`Ensemble::install`] (signed hello, same as the dial path). Per-
-/// accept failures are logged and retried after a short backoff so one
-/// bad client can't take the listener down.
 pub(crate) fn spawn_listener(
     transport: Arc<IrohTransport>,
     ens: Arc<Ensemble>,
@@ -153,9 +164,6 @@ mod tests {
     use ensemble::{Ensemble, HumdKey};
     use std::time::Duration;
 
-    /// Bind two iroh transports, each pinned to its own HumdKey, wire
-    /// them with `iroh:` + `iroh-ip:` hints, and verify both sides see
-    /// each other in their peer registry after the handshake.
     #[tokio::test]
     async fn dial_then_accept_meet_via_signed_hello() {
         let _ = tracing_subscriber::fmt()
@@ -176,14 +184,14 @@ mod tests {
 
         let caps = PeerCapabilities::default();
 
-        let (a_tx, a_hints) = match bind(&a_key).await {
+        let (a_tx, a_hints) = match bind(&a_key, 0).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("skipping: iroh bind A failed: {e}");
                 return;
             }
         };
-        let (b_tx, _b_hints) = match bind(&b_key).await {
+        let (b_tx, _b_hints) = match bind(&b_key, 0).await {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("skipping: iroh bind B failed: {e}");

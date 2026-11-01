@@ -13,7 +13,7 @@ async fn pair() -> (std::sync::Arc<Sim>, ensemble::Hid, ensemble::Hid) {
     sim.spawn_humd(b).await;
     sim.await_ready(a).await.expect("a ready");
     sim.await_ready(b).await.expect("b ready");
-    sim.wire(a, b).expect("wire");
+    sim.wire_unauthenticated(a, b).expect("wire");
     sim.await_handshake(a, b).await.expect("handshake");
     (std::sync::Arc::new(sim), a, b)
 }
@@ -26,10 +26,6 @@ fn liveness(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) -> Option<L
         .map(|(_, l)| l)
 }
 
-/// Transport death propagates asynchronously: killing a link drops the
-/// sender, humd's drain loop ends, and only then does the lease flip to
-/// TransportClosed. Poll for it rather than assuming a fixed sleep is long
-/// enough — under CI load it is not.
 async fn await_dead(sim: &Sim, observer: ensemble::Hid, peer: ensemble::Hid) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while liveness(sim, observer, peer) != Some(Liveness::Dead) {
@@ -142,8 +138,8 @@ async fn eviction_only_touches_the_dead_peer() {
         sim.spawn_humd(id).await;
         sim.await_ready(id).await.expect("ready");
     }
-    sim.wire(a, b).expect("wire ab");
-    sim.wire(a, c).expect("wire ac");
+    sim.wire_unauthenticated(a, b).expect("wire ab");
+    sim.wire_unauthenticated(a, c).expect("wire ac");
     sim.await_handshake(a, b).await.expect("ab");
     sim.await_handshake(a, c).await.expect("ac");
     let sim = std::sync::Arc::new(sim);

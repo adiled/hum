@@ -1,10 +1,10 @@
 //! humctl — humd operator. Bootstrap registers humd as a user service; humctl
-//! drives it after that. Bee supervision lives in orchd; use `hum bee` /
-//! `hum hive` to talk to it.
+//! drives it after that. Bees are their hives' to run; `hum hive` and
+//! `hum bee` install hives and sign bees in.
 
 use std::process::{Command, ExitCode};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use service_manager::{
     ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
 };
@@ -20,6 +20,12 @@ Usage:
   humctl logs   [-n LINES]
   humctl health
   humctl thehum
+  humctl revoke    <hid>...
+  humctl unrevoke  <hid>...
+  humctl revocations
+
+A revoked hid is refused the socket at hello. The list is read when humd
+starts, so restart after revoking.
 ";
 
 fn main() -> ExitCode {
@@ -50,6 +56,9 @@ fn run() -> Result<()> {
         "logs" => logs(parse_lines(args.collect::<Vec<_>>())),
         "health" => health(),
         "thehum" => thehum(),
+        "revoke" => revoke(args.collect::<Vec<_>>()),
+        "unrevoke" => unrevoke(args.collect::<Vec<_>>()),
+        "revocations" => revocations(),
         other => bail!("unknown verb '{other}'\n{USAGE}"),
     }
 }
@@ -57,12 +66,11 @@ fn run() -> Result<()> {
 fn parse_lines(rest: Vec<String>) -> u32 {
     let mut it = rest.iter();
     while let Some(a) = it.next() {
-        if a == "-n" || a == "--lines" {
-            if let Some(v) = it.next() {
-                if let Ok(n) = v.parse() {
-                    return n;
-                }
-            }
+        if matches!(a.as_str(), "-n" | "--lines")
+            && let Some(v) = it.next()
+            && let Ok(n) = v.parse()
+        {
+            return n;
         }
     }
     200
@@ -154,7 +162,7 @@ fn health() -> Result<()> {
         UnixStream::connect(&sock).with_context(|| format!("connect {}", sock.display()))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
     s.set_write_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"humctl-health\",\"bee\":[\"worker\"]}\n")?;
+    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"humctl-health\"}\n")?;
     let mut buf = [0u8; 256];
     match s.read(&mut buf) {
         Ok(0) => bail!("socket closed without breath"),
@@ -187,10 +195,10 @@ fn thehum() -> Result<()> {
         if ft.is_file() {
             total_bytes += ent.metadata().map(|m| m.len()).unwrap_or(0);
             let path = ent.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("ndjson") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    ndjson.push(stem.to_string());
-                }
+            if path.extension().and_then(|x| x.to_str()) == Some("ndjson")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                ndjson.push(stem.to_string());
             }
         }
     }
@@ -226,7 +234,6 @@ fn thehum() -> Result<()> {
         }
         Err(_) => 0,
     };
-    // snapshots/ bytes count toward total too.
     if let Ok(it) = std::fs::read_dir(&snap_dir) {
         for e in it.flatten() {
             if e.file_type().map(|f| f.is_file()).unwrap_or(false) {
@@ -253,4 +260,59 @@ fn thehum() -> Result<()> {
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn geteuid() -> u32;
+}
+
+fn revoke(hids: Vec<String>) -> Result<()> {
+    if hids.is_empty() {
+        bail!("revoke needs at least one hid\n{USAGE}");
+    }
+    let mut list = hum_paths::Revocations::read();
+    let mut added = 0usize;
+    for hid in &hids {
+        if list.revoke(hid) {
+            println!("revoked {hid}");
+            added += 1;
+        } else {
+            println!("already revoked {hid}");
+        }
+    }
+    list.write().context("write revocation list")?;
+    if added > 0 {
+        println!("restart humd for this to take effect");
+    }
+    Ok(())
+}
+
+fn unrevoke(hids: Vec<String>) -> Result<()> {
+    if hids.is_empty() {
+        bail!("unrevoke needs at least one hid\n{USAGE}");
+    }
+    let mut list = hum_paths::Revocations::read();
+    let mut removed = 0usize;
+    for hid in &hids {
+        if list.unrevoke(hid) {
+            println!("unrevoked {hid}");
+            removed += 1;
+        } else {
+            println!("not revoked {hid}");
+        }
+    }
+    list.write().context("write revocation list")?;
+    if removed > 0 {
+        println!("restart humd for this to take effect");
+    }
+    Ok(())
+}
+
+fn revocations() -> Result<()> {
+    let list = hum_paths::Revocations::read();
+    if list.revoked.is_empty() {
+        println!("no revoked bees");
+        return Ok(());
+    }
+    println!("{} revoked:", list.revoked.len());
+    for hid in &list.revoked {
+        println!("  {hid}");
+    }
+    Ok(())
 }

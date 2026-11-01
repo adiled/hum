@@ -184,6 +184,6 @@ extra index files.
 
 - [`ensemble/`](../ensemble) — carries `chi:"backfill"` between humds.
 - [`humd/`](../humd) — owns the `TheHum` instance and feeds it.
-- [WIRE.md](../WIRE.md) — the chi values that ride the log.
+- [THRUM.md](../THRUM.md) — the chi values that ride the log.
 - [`ids/`](../ids) — `HumId`, the content-addressed handle used for
   authors and sids.

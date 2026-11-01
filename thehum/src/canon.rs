@@ -8,8 +8,6 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// Sorted-key canonical JSON bytes for the event MINUS the `sig` field.
-/// Hash + signature are computed over this output.
 pub fn canonical_bytes(event_without_sig: &Value) -> Vec<u8> {
     let sorted = sort_value(event_without_sig);
     serde_json::to_vec(&sorted).expect("canonical serialization")
@@ -30,8 +28,6 @@ fn sort_value(v: &Value) -> Value {
     }
 }
 
-/// Same shape but for an Event built in-code (not parsed from JSON).
-/// Excludes `sig` from the hash + sign domain.
 pub fn canonical_bytes_of(event: &crate::Event) -> Vec<u8> {
     let v = serde_json::to_value(event).expect("event → value");
     canonical_bytes(&v)

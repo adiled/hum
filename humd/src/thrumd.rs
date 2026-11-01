@@ -1,60 +1,69 @@
 //! thrumd — the NDJSON unix-socket server.
 //!
 //! One listener, many breaths. Each connected bee gets a `Reach`: a
-//! client id, an outbound channel, and a set of sigils it claims. Tones
+//! client id, an outbound channel, and the sids it holds. Tones
 //! arrive line-delimited over the socket; we validate the envelope (chi
-//! must be a non-empty string), check for dusk, auto-echo on receipt,
-//! then hand the tone to the caller's `ToneSink`.
+//! must be a non-empty string), check for dusk, refuse all but a hello
+//! until a breath admits the client, auto-echo on receipt, then hand the
+//! tone to the caller's `ToneSink`. `inject_tone` is the in-process way
+//! in, for the ensemble, whose peers are admitted by their own signed
+//! hello, and for simulators.
 //!
 //! Outbound: callers reach in via `thrum_to(client_id, tone)` or
 //! `thrum_broadcast(sid, tone)` — both are sync, lock-and-send, no await.
-//! The per-connection writer task drains the channel and writes to the
-//! socket; back-pressure is bounded by the channel's capacity.
+//! A broadcast reaches only the connections holding the sid, those that
+//! prompted or attached under it; a sid no connection holds reaches no
+//! one. The per-connection writer task drains the channel and writes to
+//! the socket; back-pressure is bounded by the channel's capacity.
+//!
+//! Delivery respects the chi scope a client declared in its hello. A
+//! client that declared nothing accepts every chi — see
+//! [`registry::Reach::accepts_chi`].
+//!
+//! The envelope is loose here: `chi` must be a present, non-empty
+//! string, and the body is whatever JSON the sender packed in. Handlers
+//! deserialize into typed shapes from thrum-core when they want.
+//!
+//! [`ToneSink::forget`] fires when a client's connection drops, with the
+//! sids it held. The sink should release per-client state keyed by
+//! `client_id` — humd evicts the bee's manifest there, so its tools stop
+//! being advertised the instant it disconnects rather than lingering
+//! until a same-hid re-hello — and what each sid held once no connection
+//! holds it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use parking_lot::RwLock;
-use serde_json::{json, Value};
-use thrum_core::THRUM_VERSION;
 use governor::{Quota, RateLimiter};
+use parking_lot::RwLock;
+use serde_json::{Value, json};
+use thrum_core::THRUM_VERSION;
 use tokio::net::UnixListener;
 use tracing::{info, trace, warn};
 
+mod audit;
 mod conn;
 mod registry;
 
+pub use audit::WireCheck;
+
 pub use registry::{ClientId, Reach};
 
-/// A tone, on the wire, in flight. We stay loose at this layer — the
-/// envelope shape is enforced (chi must be a non-empty string) but the
-/// body is whatever JSON the sender packed in. Handlers can deserialize
-/// into typed shapes from thrum-core when they want.
 pub type Tone = Value;
 
-/// Handler the caller plugs in. Called once per validated incoming tone,
-/// after dusk check and after auto-echo. Must not block the runtime.
 #[async_trait]
 pub trait ToneSink: Send + Sync + 'static {
     async fn hear(&self, client_id: &str, tone: Tone);
 
-    /// Called once when a client's connection drops (EOF/error). The
-    /// sink should release any per-client state keyed by `client_id`
-    /// — e.g. humd evicting the bee's manifest so its tools stop being
-    /// advertised the instant it disconnects, rather than lingering
-    /// until a same-hid re-hello. Default: no-op.
-    async fn forget(&self, _client_id: &str) {}
+    async fn forget(&self, _client_id: &str, _sids: Vec<String>) {}
 }
 
-/// Canonical thrum socket path. Delegates to `hum_paths::thrum_sock()`.
 pub fn default_socket_path() -> PathBuf {
     hum_paths::thrum_sock()
 }
 
-/// The thrum's living state — registry plus optional handler. Cloning is
-/// cheap (Arc inside). Hand a clone to spawned tasks; keep one in main.
 #[derive(Clone)]
 pub struct Thrum {
     inner: Arc<ThrumInner>,
@@ -63,6 +72,7 @@ pub struct Thrum {
 struct ThrumInner {
     clients: RwLock<registry::Registry>,
     sink: RwLock<Option<Arc<dyn ToneSink>>>,
+    audit: Arc<audit::Audit>,
 }
 
 impl Thrum {
@@ -71,29 +81,39 @@ impl Thrum {
             inner: Arc::new(ThrumInner {
                 clients: RwLock::new(registry::Registry::new()),
                 sink: RwLock::new(None),
+                audit: Arc::default(),
             }),
         }
     }
 
-    /// Install the tone sink. Replaces any previous one.
     pub fn set_sink(&self, sink: Arc<dyn ToneSink>) {
         *self.inner.sink.write() = Some(sink);
     }
 
-    /// True if a sink is currently installed.
+    pub fn set_wire_check(&self, mode: WireCheck) {
+        self.inner.audit.set(mode);
+    }
+
+    pub fn wire_strays(&self) -> Vec<String> {
+        self.inner.audit.strays()
+    }
+
+    pub(crate) fn reach(&self, client_id: String) -> (registry::Reach, tokio::sync::mpsc::Receiver<Value>) {
+        registry::Reach::audited(client_id, self.inner.audit.clone())
+    }
+
+    pub(crate) fn heard(&self, client_id: &str, tone: &Value) {
+        self.inner.audit.heard(client_id, tone);
+    }
+
     pub fn has_sink(&self) -> bool {
         self.inner.sink.read().is_some()
     }
 
-    /// True if the given client_id still has a live thrum connection
-    /// (either a real UDS conn or a synthetic registration). Lets the
-    /// host prune stale registry entries lazily on access.
     pub fn is_connected(&self, client_id: &str) -> bool {
         self.inner.clients.read().get(client_id).is_some()
     }
 
-    /// Send to one specific client. Drops silently if the client is gone
-    /// or its outbound queue is full — callers can probe with `has_client`.
     pub fn thrum_to(&self, client_id: &str, tone: Tone) {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
@@ -106,30 +126,20 @@ impl Thrum {
         }
     }
 
-    /// Send to every client claiming the given sid's sigil. Falls back to
-    /// every unregistered client (no sigils claimed) if nobody owns it.
-    /// `nest` selects which nest-kind namespace to compute the sigil
-    /// under (e.g. "claude-cli", "claude-repl").
-    pub fn thrum_broadcast(&self, sid: &str, nest: &str, mut tone: Tone) {
-        let sigil = thrum_core::sigil(sid, nest);
+    pub fn thrum_broadcast(&self, sid: &str, mut tone: Tone) {
+        let sigil = thrum_core::sigil(sid);
         if let Some(obj) = tone.as_object_mut() {
             obj.entry("sid").or_insert(json!(sid));
             obj.entry("sigil").or_insert(json!(sigil));
             obj.insert("from".into(), json!("daemon"));
         }
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         let mut sent = false;
         for reach in reg.iter() {
-            if reach.has_sigil(&sigil) {
+            if reach.holds(sid) && reach.accepts_chi(&chi) {
                 let _ = reach.send(tone.clone());
                 sent = true;
-            }
-        }
-        if !sent {
-            for reach in reg.iter() {
-                if reach.sigil_count() == 0 {
-                    let _ = reach.send(tone.clone());
-                }
             }
         }
         trace!(
@@ -140,20 +150,43 @@ impl Thrum {
         );
     }
 
-    /// Send to every connected client, regardless of sigils.
     pub fn thrum_all(&self, tone: Tone) {
+        let chi = chi_of(&tone).unwrap_or("").to_string();
         let reg = self.inner.clients.read();
         for reach in reg.iter() {
-            let _ = reach.send(tone.clone());
+            if reach.accepts_chi(&chi) {
+                let _ = reach.send(tone.clone());
+            }
         }
     }
 
-    /// Claim a sigil for a client — call from your `ToneSink::hear` when
-    /// you observe a `hello` (or any chi that establishes ownership).
-    pub fn claim_sigil(&self, client_id: &str, sigil: impl Into<String>) {
+    pub fn admit(&self, client_id: &str) {
+        if let Some(reach) = self.inner.clients.read().get(client_id) {
+            reach.admit();
+        }
+    }
+
+    pub fn hold(&self, client_id: &str, sid: &str) {
         let reg = self.inner.clients.read();
         if let Some(reach) = reg.get(client_id) {
-            reach.add_sigil(sigil.into());
+            reach.hold(sid.to_string());
+        }
+    }
+
+    pub fn holds(&self, sid: &str) -> bool {
+        self.inner.clients.read().iter().any(|reach| reach.holds(sid))
+    }
+
+    pub fn release(&self, sid: &str) {
+        for reach in self.inner.clients.read().iter() {
+            reach.release(sid);
+        }
+    }
+
+    pub fn claim_chis(&self, client_id: &str, chis: Vec<String>) {
+        let reg = self.inner.clients.read();
+        if let Some(reach) = reg.get(client_id) {
+            reach.replace_chis(chis);
         }
     }
 
@@ -165,37 +198,35 @@ impl Thrum {
         self.inner.clients.read().len()
     }
 
-    /// Register a synthetic in-process client. The returned receiver
-    /// drains outbound tones bound for this client; `client_id` becomes
-    /// addressable via [`thrum_to`] and [`thrum_broadcast`]. Used by
-    /// sim to fake a connected nestler without a socket.
-    pub fn register_synthetic(&self, client_id: impl Into<String>) -> tokio::sync::mpsc::Receiver<Value> {
+    pub fn register_synthetic(
+        &self,
+        client_id: impl Into<String>,
+    ) -> tokio::sync::mpsc::Receiver<Value> {
         let cid: String = client_id.into();
-        let (reach, rx) = registry::Reach::new(cid);
+        let (reach, rx) = self.reach(cid);
         let mut reg = self.inner.clients.write();
         reg.insert(Arc::new(reach));
         rx
     }
 
-    /// Drop a previously-registered synthetic client.
-    pub fn drop_synthetic(&self, client_id: &str) {
-        self.inner.clients.write().remove(client_id);
+    pub async fn drop_synthetic(&self, client_id: &str) {
+        let gone = self.inner.clients.write().remove(client_id);
+        let sink = self.inner.sink.read().clone();
+        if let (Some(reach), Some(sink)) = (gone, sink) {
+            sink.forget(client_id, reach.sids()).await;
+        }
     }
 
-
-    /// Drop a client from the registry. Any tones already queued for it
-    /// still drain; once the queue empties the socket handler sees the
-    /// channel close and the connection ends. Used to refuse a bee that
-    /// failed admission instead of leaving it connected but unregistered.
     pub fn thrum_close(&self, client_id: &str) {
-        self.inner.clients.write().remove(client_id);
+        let mut reg = self.inner.clients.write();
+        if let Some(reach) = reg.get(client_id) {
+            reach.close();
+        }
+        reg.remove(client_id);
     }
 
-    /// Inject a tone as if it arrived from `client_id`. Bypasses the
-    /// NDJSON socket and goes straight to the installed sink. No
-    /// envelope validation, no auto-echo — sim drives the shape it
-    /// wants. The sink must be installed beforehand.
     pub async fn inject_tone(&self, client_id: &str, tone: Tone) {
+        self.heard(client_id, &tone);
         let sink = self.inner.sink.read().clone();
         if let Some(sink) = sink {
             sink.hear(client_id, tone).await;
@@ -215,11 +246,10 @@ pub async fn serve(thrum: Thrum, path: impl AsRef<Path>) -> Result<()> {
     serve_with_hook(thrum, path, |_| {}).await
 }
 
-/// Like [`serve`], but `on_bound` fires after `bind()` succeeds and
-/// before the accept loop starts. humd uses this to publish its
-/// `runtime.json` rendezvous file.
 pub async fn serve_with_hook<F>(thrum: Thrum, path: impl AsRef<Path>, on_bound: F) -> Result<()>
-where F: FnOnce(&Path) + Send + 'static {
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -228,8 +258,8 @@ where F: FnOnce(&Path) + Send + 'static {
     if path.exists() {
         std::fs::remove_file(path).with_context(|| format!("remove stale socket {:?}", path))?;
     }
-    let listener = UnixListener::bind(path)
-        .with_context(|| format!("bind unix socket {:?}", path))?;
+    let listener =
+        UnixListener::bind(path).with_context(|| format!("bind unix socket {:?}", path))?;
     info!(path = %path.display(), version = %THRUM_VERSION, "thrum.listening");
     on_bound(path);
 
@@ -251,7 +281,6 @@ where F: FnOnce(&Path) + Send + 'static {
     }
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
 
 pub(crate) fn chi_of(tone: &Value) -> Option<&str> {
     tone.get("chi").and_then(|v| v.as_str())
@@ -265,8 +294,6 @@ pub(crate) fn short(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-/// Validate envelope: chi must be a present, non-empty string. Returns
-/// None on success, Some(reason) on rejection — caller traces and drops.
 pub(crate) fn validate_envelope(tone: &Value) -> Option<&'static str> {
     let Some(obj) = tone.as_object() else {
         return Some("not-object");
@@ -283,13 +310,7 @@ pub(crate) fn validate_envelope(tone: &Value) -> Option<&'static str> {
     None
 }
 
-/// Wrap thrum-core's is_dusk — it expects a typed Tone we don't yet have,
-/// so we re-implement against the loose Value envelope until thrum-core
-/// exposes a JSON-friendly variant. Behaviour: dusk is `now_ms` past the
-/// `dusk` field if present and numeric.
 pub(crate) fn tone_is_dusk(tone: &Value) -> bool {
-    // Prefer thrum-core's primitive when the shape lines up; otherwise
-    // walk the value ourselves. Cheap either way.
     if let Some(dusk) = tone.get("dusk").and_then(|v| v.as_u64()) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -300,18 +321,15 @@ pub(crate) fn tone_is_dusk(tone: &Value) -> bool {
     false
 }
 
-/// Build the breath handshake tone — daemon stamps its sessions view and
-/// protoVersion. Per-session shape is opaque here; callers compose it.
-pub fn breath_tone(sessions: Value) -> Tone {
+pub fn breath_tone(sigils: Value) -> Tone {
     json!({
         "chi": "breath",
         "from": "daemon",
-        "sessions": sessions,
+        "sigils": sigils,
         "protoVersion": THRUM_VERSION,
     })
 }
 
-/// Build the echo tone for `rid`.
 pub fn echo_tone(rid: &str, ok: bool, error: Option<&str>) -> Tone {
     let mut v = json!({ "chi": "echo", "rid": rid, "ok": ok });
     if let Some(e) = error {
@@ -320,8 +338,6 @@ pub fn echo_tone(rid: &str, ok: bool, error: Option<&str>) -> Tone {
     v
 }
 
-
-/// How a bee's declared `protoVersion` compares to the one humd speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtoVerdict {
     Same,

@@ -12,7 +12,7 @@ async fn two_humds_ping_pong() {
 
     sim.await_ready(a.id).await.expect("a ready");
     sim.await_ready(b.id).await.expect("b ready");
-    sim.wire(a.id, b.id).expect("wire humd-A and humd-B");
+    sim.wire_unauthenticated(a.id, b.id).expect("wire humd-A and humd-B");
 
     let a_id = a.id;
     let sim_arc = std::sync::Arc::new(sim);
@@ -29,7 +29,7 @@ async fn two_humds_ping_pong() {
         "sid": "ping-sid",
         "to": a.id.to_hex(),
         "from": b.id.to_hex(),
-        "mark": "ping",
+        "note": "ping",
     });
     sim_arc
         .nestler_send(b.id, tone)

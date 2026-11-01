@@ -1,11 +1,14 @@
 name: Wire protocol
 
-# views.rs is the single source of truth for every chi body and the
-# envelope. These checks keep the generated client mirrors (TS/Python/Go)
-# and the golden fixture byte-locked to it.
+# hum.thrum is the thrum: the envelope, every chi and its body, who sounds
+# and hears it. hum-thrum is the one client. These checks hold thrum-core's
+# Rust to the file, keep the generated clients (TS/Python/Go/C) and the
+# golden fixture byte-locked to it, and the conformance run holds every
+# language to the same bee.
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -17,12 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Every chi has a body view (fails the build otherwise)
+      - name: thrum-core builds, and says where its Rust strays from hum.thrum
         run: cargo build -p thrum-core
-      - name: Generated mirrors are byte-identical to views.rs
+      - name: The Rust agrees with hum.thrum, and the generated clients are byte-identical to it
         run: cargo run -p codegen -- --check
+      - name: The kernel speaks in code
+        run: python3 tools/speech.py
+      - name: The kernel writes where hum-paths says
+        run: python3 tools/paths.py
       - name: Codegen unit tests
         run: cargo test -p codegen --lib
+      - name: The client's core, fed by hand
+        run: cargo test -p hum-thrum
       - name: Golden fixture round-trips through views
         run: cargo test -p thrum-core
 
@@ -40,7 +49,7 @@ jobs:
         #   Pin<Box<dyn Future>>; the lint fires in macro expansion, not our source.
         # Both lints landed after this branch's local toolchain (1.98.1), so they
         # are allowed rather than fixed blind.
-        run: cargo clippy -p ensemble -p hum-paths --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
+        run: cargo clippy -p ensemble -p hum-paths -p hum-thrum --all-targets -- -D warnings -A clippy::type_complexity -A clippy::double_must_use
       - name: Ensemble, daemon and mesh simulation
         run: cargo test --locked -p ensemble -p sim -p humd -p hum -p humctl
 
@@ -51,7 +60,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Golden-wire parse + rid parity
+      - name: Golden-wire parse, and the client builds
         working-directory: thrum-clients/go
         run: |
           go build ./...
@@ -65,5 +74,52 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Golden-wire parse + rid parity (stdlib only)
+      - name: Golden-wire parse (stdlib only)
         run: python -m unittest discover -s thrum-clients/python/tests
+
+  ts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: The client and the echo bee typecheck
+        working-directory: thrum-clients/ts
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cJSON, from the distribution
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libcjson-dev
+      - name: Golden-wire views, and the client builds warning-free
+        working-directory: thrum-clients/c
+        run: |
+          make
+          make test
+
+  conform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: cJSON, from the distribution
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libcjson-dev
+      - name: Every language is the same bee, against a real humd
+        env:
+          THRUM_CONFORM_REQUIRE: ts,py,go,c
+        run: cargo test --locked -p hum --test conform -- --nocapture

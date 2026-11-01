@@ -21,14 +21,13 @@ pub struct LivenessConfig {
 impl Default for LivenessConfig {
     fn default() -> Self {
         Self {
-            ttl: Duration::from_secs(30),
+            ttl: ensemble::LIVENESS_TTL,
             interval: Duration::from_secs(10),
             backoff_base: Duration::from_secs(1),
             backoff_max: Duration::from_secs(300),
         }
     }
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepReport {
     pub evicted: Vec<Hid>,

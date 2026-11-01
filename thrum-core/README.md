@@ -15,14 +15,14 @@ across repos.
 
 ## What's in it
 
-- `Chi` — every wire-known message kind, kebab-case on serde. Bump
+- `Chi`: every wire-known message kind, kebab-case on serde. Bump
   `THRUM_VERSION` whenever you add a variant.
-- `THRUM_VERSION` — the version string handed back in every `hello`.
-- `WaneTracker` — Lamport-clock per sigil for drift detection +
+- `THRUM_VERSION`: the version string handed back in every `hello`.
+- `WaneTracker`: Lamport-clock per sigil for drift detection +
   partition reconciliation.
-- `Tone` — the loose JSON envelope every chi rides inside.
-- `sigil(nest, sid)` — content-addressable handle for an inference
-  context.
+- `Tone`: the loose JSON envelope every chi rides inside.
+- `sigil(sid)`: content-addressable handle for a session, the same
+  on every humd.
 
 ## Build a bee
 
@@ -35,7 +35,7 @@ use tokio::net::UnixStream;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Connect to the local humd socket — humd binds it at
-    // $XDG_RUNTIME_DIR/hum/thrum.sock by default.
+    // $XDG_STATE_HOME/hum/thrum.sock by default.
     let sock = UnixStream::connect(humd_socket_path()).await?;
     let (rd, mut wr) = sock.into_split();
     let mut lines = BufReader::new(rd).lines();
@@ -46,10 +46,11 @@ async fn main() -> anyhow::Result<()> {
         "chi": Chi::Hello,
         "rid": "hello-1",
         "from": "my-bee",
-        "bee": "my-bee",
+        "hive": "my-hive",
+        "role": "nurse",
         "version": env!("CARGO_PKG_VERSION"),
         "protoVersion": THRUM_VERSION,
-        "chis": ["hello", "prompt", "chunk", "finish"],
+        "chis": ["hello", "prompt", "unfurl", "wilt"],
     });
     wr.write_all(format!("{hello}\n").as_bytes()).await?;
 
@@ -58,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         let tone: serde_json::Value = serde_json::from_str(&line)?;
         match tone.get("chi").and_then(|v| v.as_str()) {
             Some("breath") => { /* daemon's handshake reply */ }
-            Some("prompt") => { /* a turn arrived */ }
+            Some("prompt") => { /* a bloom is asked for */ }
             _ => continue,
         }
     }
@@ -66,9 +67,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn humd_socket_path() -> std::path::PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::geteuid() }));
-    std::path::PathBuf::from(runtime).join("hum/thrum.sock")
+    let state = std::env::var("XDG_STATE_HOME")
+        .unwrap_or_else(|_| format!("{}/.local/state", std::env::var("HOME").unwrap_or_default()));
+    std::path::PathBuf::from(state).join("hum/thrum.sock")
 }
 ```
 
@@ -96,7 +97,7 @@ a wire-protocol event. Bees warn on `THRUM_VERSION` mismatch.
 ## See also
 
 - `ensemble/` — the mesh of humds. Bees discover each other
-  through `bee_advertise` / `hive_discover` on the
+  through `bee_advertise` / `bee_discover` on the
   `hum/hives/announce` gossip topic.
 - [`hives/`](../hives) — reference implementations. One
   canonical catalogue; don't enumerate them here.

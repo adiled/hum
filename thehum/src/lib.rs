@@ -11,6 +11,11 @@
 //! - Archive — keep all logs forever
 //! - Rolling — drop daily files older than N days
 //! - Light — keep snapshots + own-sids only
+//!
+//! `Event::prev_hash` is the sha256 of the prior event's canonical
+//! bytes, so the log is a hash chain: any tampering invalidates every
+//! downstream hash. `Event::ts_ms` is the append time, and reading code
+//! uses it — never `now()`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,66 +42,41 @@ pub type Seq = u64;
 pub type Hash32 = [u8; 32];
 pub type StateRoot = Hash32;
 
-/// One canonical chi-log line: envelope + author + chain + sig.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
-    /// The chi kind (e.g. "hello", "prompt", "chunk", "tool-call",
-    /// "finish", "snapshot", "backfill").
     pub chi: String,
-    /// Session id this event belongs to. None for events that don't
-    /// scope to a sid (some "hello", network-wide "snapshot").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sid: Option<HumId>,
-    /// Correlation id (the rid in chi envelopes).
     pub rid: HumId,
-    /// The rest of the wire body, verbatim.
     pub body: serde_json::Value,
-    /// Author humd's hid hex form.
     pub author: String,
-    /// Strictly monotonic per author. Gap = missing event.
     pub seq: Seq,
-    /// Wall-clock at append time, ms since epoch. Reading code uses
-    /// this, NEVER `now()`.
     pub ts_ms: i64,
-    /// Hex of sha256 over the prior event's canonical bytes. Chain
-    /// integrity: any tampering invalidates downstream hashes.
     pub prev_hash: String,
-    /// Hex of 64-byte ed25519 signature over the canonical pre-sig
-    /// bytes of THIS event.
     pub sig: String,
 }
 
-/// Retention mode for this humd's chi log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RetentionMode {
+    #[default]
     Archive,
     Rolling,
     Light,
 }
 
-impl Default for RetentionMode {
-    fn default() -> Self { Self::Archive }
-}
-
-/// Persistence configuration. Read from `hum.json` `thehum` section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub mode: RetentionMode,
-    /// For Rolling mode: drop daily files older than this.
     #[serde(default = "default_days")]
     pub days: u32,
-    /// Snapshot every N events (whichever fires first).
     #[serde(default = "default_snapshot_events")]
     pub snapshot_every_events: u64,
-    /// Snapshot every N seconds (whichever fires first).
     #[serde(default = "default_snapshot_seconds")]
     pub snapshot_every_seconds: u64,
-    /// Encrypt-at-rest (v0: not wired; field reserved).
     #[serde(default)]
     pub encrypt_at_rest: bool,
-    /// fsync per event (true) or batched (false). Per-event by default.
     #[serde(default = "default_fsync")]
     pub fsync_per_event: bool,
 }
@@ -119,7 +99,6 @@ impl Default for Config {
     }
 }
 
-/// The per-humd chi-log handle. Single appender, many readers.
 pub struct TheHum {
     pub(crate) dir: PathBuf,
     pub(crate) signing_key: Arc<SigningKey>,
@@ -137,8 +116,6 @@ pub(crate) struct AppendState {
 }
 
 impl TheHum {
-    /// Open (or initialize) thehum at `dir`. Loads seq.bin, last-line
-    /// hash, snapshot pointer. Mints the dir on first run.
     pub fn open(dir: &Path, signing_key: SigningKey, cfg: Config) -> Result<Self> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("create thehum dir {}", dir.display()))?;

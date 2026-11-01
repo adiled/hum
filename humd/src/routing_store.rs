@@ -34,10 +34,10 @@ pub fn load(path: &Path) -> Vec<HumdAddr> {
 }
 
 pub fn save(ensemble: &Ensemble, path: &Path) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir)?;
-        }
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)?;
     }
     let disk = OnDisk {
         version: 1,
@@ -45,9 +45,7 @@ pub fn save(ensemble: &Ensemble, path: &Path) -> io::Result<()> {
     };
     let bytes =
         serde_json::to_vec(&disk).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, path)?;
+    hum_paths::write_atomic(path, &bytes)?;
     Ok(())
 }
 

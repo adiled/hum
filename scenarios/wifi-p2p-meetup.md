@@ -16,8 +16,8 @@ ensemble:
 
 | device | role | what it runs |
 |---|---|---|
-| **Alice's Pixel 9** | Group Owner + worker | humd (Termux), wifi-p2p bee, claude-cli worker |
-| **Bob's Galaxy S25** | Client + worker | humd (Termux), wifi-p2p bee, claude-cli worker |
+| **Alice's Pixel 9** | Group Owner + nurse | humd (Termux), wifi-p2p bee, claude-cli nurse |
+| **Bob's Galaxy S25** | Client + nurse | humd (Termux), wifi-p2p bee, claude-cli nurse |
 | **Carla's iPhone 17** | Client + forager | humd (iSH or relay), wifi-p2p bee, openai-server forager |
 | **the picnic table** | the place | a cardboard sign that says "FREE HUMS" in sharpie |
 
@@ -51,9 +51,9 @@ sourdough context? also the starter is runny, should i add flour"
 ```
 
 The prompt leaves Bob's phone as a thrum tone, hits his local humd,
-which checks the mesh: Bob's phone has no worker that serves
-sourdough expertise. But Alice's phone advertised `claude-cli` as a
-worker hive in its hello. The ensemble routes the prompt to Alice's
+which checks the mesh: Bob's phone has no nurse that serves
+sourdough expertise. But Alice's phone advertised a `claude-cli`
+nurse in its hello. The ensemble routes the prompt to Alice's
 humd over the P2P TCP link.
 
 Alice's humd spawns a cell. The cell runs Claude. Claude replies:
@@ -64,8 +64,8 @@ it's unpredictable by design. If your starter is runny, add 10% more
 flour by weight. You're fine.
 ```
 
-Chunks stream back across the picnic table, over the P2P link, into
-Bob's phone. The finish tone lands. Bob adds flour. His starter
+Petals unfurl back across the picnic table, over the P2P link, into
+Bob's phone. The wilt lands. Bob adds flour. His starter
 thickens. He smiles.
 
 Alice never knew any of this happened. Her phone thought it was idle.
@@ -77,8 +77,9 @@ wifi-p2p bee that connects as a client. Her phone has no local LLM —
 she's using the openai-server forager pointed at her OpenAI API key.
 But the API key is rate-limited and she's already hit the tier-1 cap.
 
-Her forager advertises `["openai-server"]` in its provides. Bob's humd
-sees this and marks Carla as a route for OpenAI-shaped prompts. When
+Her openai-server hive runs a nurse for OpenAI's models, and its hello
+advertises them. Bob's humd sees this and marks Carla as a route for
+OpenAI-shaped prompts. When
 Alice's phone needs an embedding for a retrieval task, the prompt
 routes: Alice's humd → P2P TCP → Carla's phone → OpenAI API → reply
 bundle → P2P TCP → Alice. Carla's phone acts as a paid-oracle relay
@@ -90,7 +91,7 @@ the TikTok tab.
 By hour two, the three phones have gossiped enough state that the
 mesh acts as a single distributed humd. A prompt typed on any phone
 finds compute on any other phone, or reaches OpenAI through Carla's
-forager, or forks a tool-call to Bob's phone for filesystem access.
+forager, or forks a tendril to Bob's phone for filesystem access.
 
 The picnic table has no power and no internet. It is a wooden surface
 with birdshit on it. But the hum on top of it is a three-node ensemble
@@ -138,7 +139,7 @@ Three binaries running:
 ```
 Termux:
   humd                     — the daemon, one per phone
-  claude-cli-worker        — local inference (Alice, Bob)
+  claude-cli-nurse        — local inference (Alice, Bob)
   openai-server            — cloud relay (Carla)
 
 Android foreground service:

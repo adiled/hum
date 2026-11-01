@@ -16,8 +16,8 @@ async fn trio() -> (Sim, ensemble::Hid, ensemble::Hid, ensemble::Hid) {
         sim.spawn_humd(id).await;
         sim.await_ready(id).await.expect("ready");
     }
-    sim.wire(a, b).expect("wire a-b");
-    sim.wire(b, c).expect("wire b-c");
+    sim.wire_unauthenticated(a, b).expect("wire a-b");
+    sim.wire_unauthenticated(b, c).expect("wire b-c");
     sim.await_handshake(a, b).await.expect("a-b");
     sim.await_handshake(b, c).await.expect("b-c");
     (sim, a, b, c)
@@ -31,7 +31,7 @@ async fn pair() -> (Sim, ensemble::Hid, ensemble::Hid) {
         sim.spawn_humd(id).await;
         sim.await_ready(id).await.expect("ready");
     }
-    sim.wire(a, b).expect("wire");
+    sim.wire_unauthenticated(a, b).expect("wire");
     sim.await_handshake(a, b).await.expect("a-b");
     (sim, a, b)
 }
@@ -137,7 +137,7 @@ async fn a_retransmitted_mid_is_delivered_once() {
     let (sim, a, b) = pair().await;
     let mut rx = sim.humd_peer_sub(b).expect("subscribe");
     let tone = json!({
-        "chi": "chunk", "rid": "r-1", "mid": "m-1", "to": b.to_hex(), "seq": 1
+        "chi": "unfurl", "rid": "r-1", "mid": "m-1", "to": b.to_hex(), "petal": 1
     });
     sim.nestler_send_ordered(a, tone.clone()).await.expect("send");
     sim.nestler_send_ordered(a, tone).await.expect("resend");
@@ -178,7 +178,7 @@ async fn a_response_echoing_the_request_rid_still_arrives() {
     .expect("send request");
     sim.nestler_send_ordered(
         a,
-        json!({"chi": "chunk", "rid": "r-1", "mid": "m-resp", "to": b.to_hex()}),
+        json!({"chi": "unfurl", "rid": "r-1", "mid": "m-resp", "to": b.to_hex()}),
     )
     .await
     .expect("send response");

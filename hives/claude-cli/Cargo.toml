@@ -1,18 +1,20 @@
 [package]
 name = "claude-cli"
-version = "0.32.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
-description = "Concrete WorkerBee impl: `claude -p` over a pipe. Builds the CLI command line from a high-level SpawnSpec, parses stream-json stdout."
+description = "A nurse: `claude -p` over a pipe. Builds the CLI command line from an Egg, parses stream-json stdout."
 
 [[bin]]
-name = "claude-cli-worker"
+name = "claude-cli-nurse"
 path = "src/main.rs"
 
 [dependencies]
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-nest = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
+hum-paths = { path = "../../hum-paths" }
+hum-nest = { path = "../../hum-nest" }
+hum-identity = { path = "../../hum-identity" }
+thrum-core = { path = "../../thrum-core" }
+uuid = { version = "1", features = ["v5"] }
 tokio = { version = "1", features = ["full"] }
 command-group = { version = "5", features = ["with-tokio"] }
 serde_json = "1"

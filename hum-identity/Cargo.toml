@@ -16,7 +16,7 @@ serde = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 uuid = { version = "1", features = ["v5"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tempfile = "3"

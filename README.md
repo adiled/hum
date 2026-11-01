@@ -17,11 +17,11 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 
 it is all composed of biodiverse primitives, not an outcome of conventional linguistics, following are some nouns
 
-- **hive** the kind, a typology a bee conforms to
-- **bee** the instance, a running participant a hive commissions
+- **hive** the kind; a directory with an Orchfile, installed on a humd so the humd can understand bees of it
+- **bee** a participant, anything that lands on a humd and says hello; it is its own key, and is understood through its hive
 - **nestler** a bee mid-handshake, awaiting the breath that accepts its hello
-- **nestled** a nestler once registered into the nest
-- **nest** where nestled bees gather, inside humd
+- **nestled** a nestler once registered on a humd
+- **nest** the cells a hive hosts and the limits it keeps them under; a hive turns it on with hum-nest, and humd itself hosts none
 - **thrum** the hum-native vibration protocol, carrying tones across a range of `chi`
 - **petal** one unit of content, be it text, image, a tool call or its result
 - **bloom** one turn of conversation, opened by a prompt and closed when it wilts
@@ -39,7 +39,8 @@ Learn more by simply humming along.. or read the [scenarios](https://adiled.gith
 
 Refer to hum.schema.json
 
-**Comparison for the sake of comparison**
+<details>
+<summary><strong>Comparison for the sake of comparison</strong></summary>
 
 > hum is an agentic kernel, not an LLM router, and incomparable in scope. This table simply highlights
 > how hum's out-of-the-box hives overlap with the winning representative from each class.
@@ -58,15 +59,17 @@ Refer to hum.schema.json
 | **Agent memory / long-term context** | ✅ (`bloom` + `thrum` protocol) | ❌ | ❌ | ❌ | ✅ (societal memory) | ✅ (cognitive memory) | ❌ | ❌ | ❌ |
 | **Streaming / SSE** | ✅ (thrum tones, `petal` primitives) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
 | **Agent tracing / observability** | ✅ (`humd` runtime, `thrum` transport) | ✅ (cost, usage, logs) | ❌ | ❌ | ✅ (swarm traces) | ✅ (run traces, deploy) | ✅ traces, evals, prompt mgmt | ❌ | ❌ |
-| **Tool / MCP gateway** | ✅ (MCP serde + hive) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **Tool / MCP gateway** | ✅ (attendants serve tools; MCP only at a nurse's cells) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | **RAG / retrieval pipeline** | ❌ (external hive) | ✅ (via adapters) | ✅ | ✅ | ❌ | ✅ (Azure AI) | ✅ vector DBs | ❌ | ✅ |
 | **Guardrails / safety** | ❌ (bee responsibility) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
 | **Trust / Risk modeling** | ✅ (`strict_auth` + T1→T4 trust via `Transport` + `Ensemble` hello handshake) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Roaming inference** | ✅ (`Chi::Attach` + `wane` cursor replay) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Roaming filesystems** | ✅ (`humfs` forager hive + `hum://` URI routing) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Roaming filesystems** | ✅ (a bloom builds on any humd: `hum://` `cwd`, a builder's `bash`) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Multi-party gamification** | ✅ (multiple nestlers per bloom via `observers[sid]` roster) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + capacity-aware overflow routing) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Distributed orchestration** | ✅ (`Ensemble` gossip + `Kad` + headroom-aware routing to nurses with room) | ❌ (static routes) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Zero-trust access control** | ✅ (scoped capability grants + revocation via `federation.*` error chi) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Agent-human consensus** | ✅ (`thehum` hash chain + on-chain anchoring via `HumdRegistry` contract) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 **Bottom line:** routers proxy; hum composes. Each hum hive is a sovereign capability, inference, tool use, payment, UX, that gossips into the ensemble. An LLM gateway routes requests; hum routes *biodiverse primitives* into a harmonized flow.
+
+</details>

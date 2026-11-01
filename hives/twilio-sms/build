@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Build this hive's bee.
+#
+# The hive is a kind; this makes its material. The hive's own install
+# runs this when a humd installs the hive, so the hive needs no knowledge
+# outside its own directory, and nothing is installed into the system's
+# PATH: the bee is built here and runs here.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here"
+
+mkdir -p out
+go build -o out/twilio-sms .

@@ -1,14 +1,15 @@
 [package]
 name = "gsm-modem"
-version = "0.32.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
 description = "Hum-on-a-burner-phone — USB GSM modem bee driven by AT commands over serial."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
 tokio = { version = "1", features = ["full"] }
 tokio-serial = "5"
 tokio-util = { version = "0.7", features = ["codec"] }

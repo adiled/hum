@@ -2,22 +2,25 @@ syntax = "proto3";
 
 package hum;
 
-// Bidirectional tone stream — one RPC, every chi flows through.
+// Bidirectional tone stream: one RPC, every chi flows through.
 //
-// Client opens Stream, sends tones (prompt, cancel, tool-result, ...).
-// Server (this bee) bridges to humd over thrum and pumps tones back
-// (chunk, finish, tool-call, pulse, breath, ...).
+// The client opens Stream and sends tones (prompt, cancel,
+// tendril-result, ...). The server (this bee) bridges to humd over
+// thrum and pumps tones back (unfurl, wilt, tendril-reach, pulse,
+// breath, ...).
 //
-// Payload stays opaque on the wire: each Tone carries its full JSON shape
-// in `body`. Routing fields (sid, chi) are pulled out so the bridge can
-// multiplex without parsing the body for every tone.
+// The payload stays opaque on the wire: each Tone carries its full JSON
+// shape in `body`. The routing fields are pulled out so the bridge can
+// multiplex without parsing every body: `chi` is the tone's kind, `sid`
+// the conversation it belongs to, and `rid` its request id, which
+// correlates an echo or a response with what it answers.
 service Hum {
   rpc Stream(stream Tone) returns (stream Tone);
 }
 
 message Tone {
-  string chi  = 1;   // tone kind — "prompt", "chunk", "finish", "tool-call", ...
-  string sid  = 2;   // hum session id — multiplex key
-  string rid  = 3;   // request id — correlation across echo / response
-  bytes  body = 4;   // JSON-encoded full tone (sender writes, receiver parses)
+  string chi  = 1;
+  string sid  = 2;
+  string rid  = 3;
+  bytes  body = 4;
 }

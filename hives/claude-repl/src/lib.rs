@@ -2,7 +2,16 @@
 //!
 //! Spawns the PTY, watches stdout, marks PERCHED when the prompt glyph
 //! `❯` shows up. No transcript synth, no hooks, no classifier yet — the
-//! cell compiles and runs but can't carry a turn.
+//! cell compiles and runs but can't carry a bloom.
+//!
+//! As in claude-cli, a cell never works the host it runs on: Claude
+//! Code's own host tools, [`HOST_TOOLS`], are always off, and its shell
+//! is the bloom's `bash` over the nest's MCP. It is held to its nest's
+//! bounds too, laid on it as it spawns, since a PTY spawn takes no
+//! `pre_exec`.
+//!
+//! The cell is fed the sigil's tones and types a prompt's words; it gives
+//! back a `cell-ready` pulse once the REPL is perched.
 
 use std::io::Read;
 
@@ -13,7 +22,13 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{trace, warn};
 
-use hum_nest::{Cell, Egg, WorkerBee};
+use hum_nest::{Cell, Egg, Nurse};
+
+pub const HOST_TOOLS: &[&str] = &[
+    "Bash", "BashOutput", "KillShell", "KillBash",
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "Glob", "Grep", "LS",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HarnessState {
@@ -22,9 +37,9 @@ enum HarnessState {
     Felled,
 }
 
-pub struct ClaudeReplWorker;
+pub struct ClaudeReplNurse;
 
-impl Default for ClaudeReplWorker {
+impl Default for ClaudeReplNurse {
     fn default() -> Self {
         Self
     }
@@ -42,32 +57,49 @@ pub fn build_argv(spec: &Egg) -> Vec<String> {
     if let Some(mcp_url) = spec.mcp_url.as_deref() {
         let mcp_config = serde_json::json!({
             "mcpServers": {
-                "hum": { "type": "http", "url": format!("{}/s/{}", mcp_url, spec.sid) }
+                "hum": { "type": "http", "url": mcp_url }
             }
         }).to_string();
         argv.push("--mcp-config".into());
         argv.push(mcp_config);
         argv.push("--strict-mcp-config".into());
     }
-    if let Some(sp) = spec.system_prompt.as_deref() {
+    argv.push("--disallowed-tools".into());
+    argv.push(HOST_TOOLS.join(" "));
+    if let Some(sp) = spec.prompt.system_prompt.as_deref() {
         argv.push("--system-prompt".into());
         argv.push(sp.to_string());
     }
-    if let Some(harness_sid) = spec.resume_id.as_deref() {
+    if let Some(harness_sid) = spec.prompt.resume.as_deref() {
         argv.push("--resume".into());
         argv.push(harness_sid.to_string());
     }
     argv
 }
 
+pub fn claude_program() -> Result<std::path::PathBuf> {
+    if let Some(named) = std::env::var_os("CLAUDE_CLI_PATH").filter(|v| !v.is_empty()) {
+        return Ok(named.into());
+    }
+    let mut dirs = hum_paths::program_dirs();
+    dirs.push(hum_paths::home().join(".claude/local"));
+    hum_paths::find_program_in("claude", &dirs).ok_or_else(|| {
+        let looked: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        anyhow::anyhow!(
+            "no claude program in {}; install Claude Code, or name it in CLAUDE_CLI_PATH",
+            looked.join(":")
+        )
+    })
+}
+
 #[async_trait]
-impl WorkerBee for ClaudeReplWorker {
+impl Nurse for ClaudeReplNurse {
     fn ephemeral(&self) -> bool {
         true
     }
 
     async fn raise(&self, spec: Egg) -> Result<Cell> {
-        let cli = spec.cli_path.clone().unwrap_or_else(|| "claude".into());
+        let cli = claude_program()?;
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -86,9 +118,7 @@ impl WorkerBee for ClaudeReplWorker {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         cmd.env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1");
-        if !spec.plan_mode {
-            cmd.env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "1");
-        }
+        cmd.env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "1");
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
@@ -96,24 +126,29 @@ impl WorkerBee for ClaudeReplWorker {
             cmd.arg(a);
         }
 
-        let mut child = pair.slave.spawn_command(cmd).context("pty spawn")?;
+        let mut child = pair.slave.spawn_command(cmd).with_context(|| format!("pty spawn {}", cli.display()))?;
         let pid = child.process_id();
         drop(pair.slave);
+        if let Some(pid) = pid
+            && let Err(e) = spec.bounds.apply_to(pid)
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e).context("apply resource limits");
+        }
 
         let mut reader = pair.master.try_clone_reader().context("pty reader")?;
         let writer = pair.master.take_writer().context("pty writer")?;
         let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
-        let (tx_in, mut rx_in) = mpsc::channel::<String>(32);
+        let (tx_in, mut rx_in) = mpsc::channel::<Value>(32);
         let (tx_evt, rx_evt) = mpsc::channel::<Value>(64);
         let (tx_exit, rx_exit) = oneshot::channel::<i32>();
 
-        // stdin pump — interpret stream-json `user`/`text` lines as keystrokes.
-        // Pure stub: extract text and write it followed by CR.
         let writer_for_in = writer.clone();
         tokio::spawn(async move {
-            while let Some(line) = rx_in.recv().await {
-                let text = prompt_text_from_json(&line).unwrap_or_default();
+            while let Some(tone) = rx_in.recv().await {
+                let text = words_of(&tone);
                 if text.is_empty() {
                     continue;
                 }
@@ -128,7 +163,8 @@ impl WorkerBee for ClaudeReplWorker {
         // stdout reader — pumped on a blocking thread because portable-pty's
         // Reader is sync. State stays in-task: idle-2s OR sees `❯` → PERCHED.
         let tx_evt_out = tx_evt.clone();
-        let harness_sid = spec.resume_id.clone().unwrap_or_default();
+        let harness_sid = spec.prompt.resume.clone().unwrap_or_default();
+        let model = spec.model_id.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let mut acc = String::new();
@@ -148,10 +184,10 @@ impl WorkerBee for ClaudeReplWorker {
                             state = HarnessState::Perched;
                             trace!(target: "nest", "pty.state Nesting->Perched (glyph)");
                             let _ = tx_evt_out.blocking_send(json!({
-                                "type": "system",
-                                "subtype": "init",
-                                "session_id": harness_sid,
-                                "model": "claude",
+                                "chi": "pulse",
+                                "kind": "cell-ready",
+                                "cell": harness_sid,
+                                "model": model,
                                 "tools": [],
                             }));
                         }
@@ -203,23 +239,43 @@ impl WorkerBee for ClaudeReplWorker {
     }
 }
 
-/// Pull `text` out of a stream-json `{type:"user", message:{content:[{text}]}}`
-/// envelope. The PTY can only accept keystrokes, so non-text content (e.g.
-/// tool_result) is dropped — the MCP server is the real round-trip path.
-fn prompt_text_from_json(line: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(line).ok()?;
-    let content = v.get("message")?.get("content")?.as_array()?;
-    let mut out = String::new();
-    for part in content {
-        if part.get("type")?.as_str()? == "text" {
-            if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
-                out.push_str(t);
-            }
-        }
+fn words_of(tone: &Value) -> String {
+    if tone.get("chi").and_then(Value::as_str) != Some("prompt") {
+        return String::new();
     }
-    if out.is_empty() {
-        None
+    let petals = tone.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+    let words: Vec<&str> = petals
+        .iter()
+        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .collect();
+    if words.is_empty() {
+        tone.get("text").and_then(Value::as_str).unwrap_or("").to_string()
     } else {
-        Some(out)
+        words.join("\n")
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_cell_is_held_to_its_bounds() {
+        let cli = std::env::temp_dir().join(format!("hum-repl-bounds-{}", std::process::id()));
+        std::fs::write(&cli, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&cli, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("CLAUDE_CLI_PATH", &cli) };
+        let mut egg = Egg::new(hum_identity::HumId::mint(), "claude-haiku-4-5", std::env::temp_dir().to_string_lossy());
+        egg.bounds = hum_nest::limits::Bounds { rss_bytes: Some(1 << 30), fd_count: Some(64), ..Default::default() };
+        let cell = ClaudeReplNurse.raise(egg).await.expect("raise");
+        let pid = cell.mark.expect("pid");
+        let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap();
+        cell.still();
+        let _ = std::fs::remove_file(&cli);
+        let of = |name: &str| limits.lines().find(|l| l.starts_with(name)).unwrap()[name.len()..]
+            .split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        assert_eq!(of("Max address space"), "1073741824 1073741824");
+        assert_eq!(of("Max open files"), "64 64");
     }
 }

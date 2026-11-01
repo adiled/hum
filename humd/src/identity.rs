@@ -17,7 +17,6 @@
 //! exactly what [`ed25519_dalek::SigningKey::from_bytes`] expects.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -30,9 +29,6 @@ pub fn key_path() -> PathBuf {
     hum_paths::humd_key()
 }
 
-/// Load the persisted key, minting + persisting a fresh one on first boot.
-///
-/// Bytes on disk are the raw 32-byte Ed25519 secret seed.
 pub fn load_or_mint_key() -> Result<HumdKey> {
     load_or_mint_key_at(&key_path())
 }
@@ -56,7 +52,6 @@ pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
         return Ok(key);
     }
 
-    // Mint fresh seed and persist.
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
     let signing = SigningKey::from_bytes(&seed);
@@ -66,9 +61,6 @@ pub fn load_or_mint_key_at(path: &std::path::Path) -> Result<HumdKey> {
     Ok(key)
 }
 
-/// Load the persisted key without minting. Returns `Ok(None)` when no
-/// key file exists yet — for inspect-only callers (`hum` CLI) that
-/// shouldn't mutate state.
 pub fn read_key() -> Result<Option<HumdKey>> {
     let path = key_path();
     if !path.exists() {
@@ -88,48 +80,9 @@ pub fn read_key() -> Result<Option<HumdKey>> {
     Ok(Some(HumdKey(SigningKey::from_bytes(&arr))))
 }
 
-/// Write 32 bytes atomically (tmp + rename) with mode 0o600.
 fn persist_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
-    }
-    let tmp = match path.file_name() {
-        Some(name) => {
-            let mut tmp_name = name.to_os_string();
-            tmp_name.push(".tmp");
-            path.with_file_name(tmp_name)
-        }
-        None => return Err(anyhow!("humd key path has no file name: {}", path.display())),
-    };
-
-    {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts
-            .open(&tmp)
-            .with_context(|| format!("create {}", tmp.display()))?;
-        f.write_all(seed)
-            .with_context(|| format!("write {}", tmp.display()))?;
-        f.sync_all().ok();
-    }
-
-    // Belt-and-braces: also chmod after open in case the umask masked our
-    // requested mode bits. No-op on non-unix.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-    }
-
-    fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    hum_paths::write_atomic_private(path, seed)
+        .with_context(|| format!("write humd key {}", path.display()))
 }
 
 #[cfg(test)]
@@ -138,8 +91,6 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    /// Mint a key, drop it, reload from the same path — same Hid.
-    /// Also checks file perms are 0o600.
     #[test]
     fn round_trip_through_tempdir() {
         let tmp = TempDir::new().unwrap();
@@ -149,7 +100,6 @@ mod tests {
         let id1 = first.hid();
         assert!(path.exists(), "key file persisted");
 
-        // Permissions check.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -157,7 +107,6 @@ mod tests {
             assert_eq!(mode, 0o600, "key file must be 0o600");
         }
 
-        // Reload — same identity.
         let second = load_or_mint_key_at(path).expect("reload");
         assert_eq!(id1, second.hid(), "humd_id stable across reloads");
     }

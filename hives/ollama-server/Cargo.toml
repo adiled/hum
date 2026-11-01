@@ -1,14 +1,19 @@
 [package]
 name = "ollama-server"
-version = "0.32.0"
+version = "0.34.1"
 edition = "2024"
 license = "MIT"
-description = "Ollama-compatible HTTP surface for hum — drop-in for any Ollama client."
+description = "Ollama for hum, both ways: an Ollama-compatible HTTP surface for any Ollama client, and a nurse that calls Ollama's API."
 
 [dependencies]
-thrum-core = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-identity = { git = "https://github.com/adiled/hum.git", branch = "main" }
-hum-paths = { git = "https://github.com/adiled/hum.git", branch = "main" }
+thrum-core = { path = "../../thrum-core" }
+hum-identity = { path = "../../hum-identity" }
+hum-thrum = { path = "../../hum-thrum" }
+hum-paths = { path = "../../hum-paths" }
+hum-nest = { path = "../../hum-nest" }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower = "0.5"
@@ -20,8 +25,19 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+lru = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+humd = { path = "../../humd" }
+tempfile = "3"
 
 [[bin]]
 name = "ollama-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "ollama-nurse"
+path = "src/nurse/main.rs"
 [workspace]

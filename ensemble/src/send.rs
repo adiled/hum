@@ -1,3 +1,7 @@
+//! Bounded peer sends.
+//!
+//! [`fanout`] resolves when every send has landed or hit its deadline.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -36,7 +40,6 @@ impl SendStats {
     }
 }
 
-/// Resolves when every send has landed or hit its deadline.
 pub async fn fanout(
     sends: Vec<(Arc<dyn PeerConnection>, Tone)>,
     stats: &Arc<SendStats>,
@@ -97,7 +100,6 @@ pub async fn send_opening_bounded(
     stats: &SendStats,
     deadline: Duration,
 ) -> Result<(), SendError> {
-    // `send_opening`, not `send`: `send` parks on the gate this frame opens.
     match tokio::time::timeout(deadline, conn.send_opening(tone)).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => {
@@ -245,7 +247,7 @@ mod tests {
             .map(|c| {
                 (
                     c.clone() as Arc<dyn PeerConnection>,
-                    serde_json::json!({"chi": "chunk"}),
+                    serde_json::json!({"chi": "unfurl"}),
                 )
             })
             .collect();
@@ -277,7 +279,7 @@ mod tests {
             Duration::from_secs(10),
             send_bounded_with(
                 &as_conn(&c),
-                serde_json::json!({"chi": "chunk"}),
+                serde_json::json!({"chi": "unfurl"}),
                 &stats,
                 short,
             ),
@@ -299,7 +301,7 @@ mod tests {
         let stats = SendStats::new();
         let _ = send_bounded_with(
             &as_conn(&c),
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             Duration::from_millis(50),
         )
@@ -317,7 +319,7 @@ mod tests {
         let stats = SendStats::new();
         let got = send_bounded_with(
             &as_conn(&c),
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             SEND_TIMEOUT,
         )
@@ -360,7 +362,7 @@ mod tests {
         let stats = SendStats::new();
         let got = send_bounded_with(
             &c,
-            serde_json::json!({"chi": "chunk"}),
+            serde_json::json!({"chi": "unfurl"}),
             &stats,
             SEND_TIMEOUT,
         )

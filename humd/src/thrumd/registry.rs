@@ -1,55 +1,108 @@
 //! Connection registry — who is currently reachable, and how.
+//!
+//! Each [`Reach`] holds the sids its client prompted or attached under,
+//! whether a breath has admitted its hello, and the chi scope its client
+//! declared in its hello.
+//! An empty scope means unspecified, not "wants nothing": a client that
+//! declared nothing accepts every chi. That is the only answer available
+//! to every bee written before the field existed, and narrowing it would
+//! be a wire break.
+//!
+//! Closing a [`Reach`] ends its connection: the reader stops, what was
+//! already queued for the client (a refusal, say) is written, and the
+//! socket closes. Taking a client out of the registry alone would leave
+//! its socket open and its tones still read.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 pub type ClientId = String;
 
-/// Outbound queue depth. Sized to absorb a turn's worth of chunk tones
-/// without back-pressuring the daemon's hot path; if a client truly can't
-/// drain this fast, we'd rather drop than stall the broadcast caller.
 const OUTBOUND_CAPACITY: usize = 1024;
 
-/// A live bee we can reach. Outbound goes through the channel; the
-/// per-connection writer task drains and writes to the socket.
 pub struct Reach {
     pub client_id: ClientId,
     tx: mpsc::Sender<Value>,
-    sigils: Mutex<HashSet<String>>,
+    audit: Arc<super::audit::Audit>,
+    sids: Mutex<HashSet<String>>,
+    admitted: AtomicBool,
+    chis: Mutex<HashSet<String>>,
+    closing: Notify,
 }
 
 impl Reach {
     pub fn new(client_id: ClientId) -> (Self, mpsc::Receiver<Value>) {
+        Self::audited(client_id, Arc::default())
+    }
+
+    pub fn audited(
+        client_id: ClientId,
+        audit: Arc<super::audit::Audit>,
+    ) -> (Self, mpsc::Receiver<Value>) {
         let (tx, rx) = mpsc::channel(OUTBOUND_CAPACITY);
         (
             Self {
                 client_id,
                 tx,
-                sigils: Mutex::new(HashSet::new()),
+                audit,
+                sids: Mutex::new(HashSet::new()),
+                admitted: AtomicBool::new(false),
+                chis: Mutex::new(HashSet::new()),
+                closing: Notify::new(),
             },
             rx,
         )
     }
 
-    /// Non-blocking send. Errors if the queue is full or the receiver is
-    /// gone — caller decides whether to drop or log.
     pub fn send(&self, tone: Value) -> Result<(), mpsc::error::TrySendError<Value>> {
+        self.audit.sent(&self.client_id, &tone);
         self.tx.try_send(tone)
     }
 
-    pub fn add_sigil(&self, sigil: String) {
-        self.sigils.lock().insert(sigil);
+    pub fn close(&self) {
+        self.closing.notify_one();
     }
 
-    pub fn has_sigil(&self, sigil: &str) -> bool {
-        self.sigils.lock().contains(sigil)
+    pub async fn closed(&self) {
+        self.closing.notified().await;
     }
 
-    pub fn sigil_count(&self) -> usize {
-        self.sigils.lock().len()
+    pub fn admit(&self) {
+        self.admitted.store(true, Ordering::SeqCst);
+    }
+
+    pub fn admitted(&self) -> bool {
+        self.admitted.load(Ordering::SeqCst)
+    }
+
+    pub fn hold(&self, sid: String) {
+        self.sids.lock().insert(sid);
+    }
+
+    pub fn holds(&self, sid: &str) -> bool {
+        self.sids.lock().contains(sid)
+    }
+
+    pub fn release(&self, sid: &str) {
+        self.sids.lock().remove(sid);
+    }
+
+    pub fn sids(&self) -> Vec<String> {
+        self.sids.lock().iter().cloned().collect()
+    }
+
+    pub fn replace_chis(&self, chis: Vec<String>) {
+        *self.chis.lock() = chis.into_iter().collect();
+    }
+
+    pub fn accepts_chi(&self, chi: &str) -> bool {
+        let chis = self.chis.lock();
+        chis.is_empty() || chis.contains(chi)
     }
 }
 
@@ -59,15 +112,17 @@ pub(crate) struct Registry {
 
 impl Registry {
     pub(crate) fn new() -> Self {
-        Self { by_id: HashMap::new() }
+        Self {
+            by_id: HashMap::new(),
+        }
     }
 
     pub(crate) fn insert(&mut self, reach: std::sync::Arc<Reach>) {
         self.by_id.insert(reach.client_id.clone(), reach);
     }
 
-    pub(crate) fn remove(&mut self, client_id: &str) {
-        self.by_id.remove(client_id);
+    pub(crate) fn remove(&mut self, client_id: &str) -> Option<Arc<Reach>> {
+        self.by_id.remove(client_id)
     }
 
     pub(crate) fn get(&self, client_id: &str) -> Option<&Reach> {
@@ -80,5 +135,51 @@ impl Registry {
 
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_client_that_declared_nothing_receives_everything() {
+        let (reach, _rx) = Reach::new("unspecified".into());
+        assert!(
+            reach.accepts_chi("prompt"),
+            "no declared set = no filtering"
+        );
+        assert!(reach.accepts_chi("tendril-reach"));
+    }
+
+    #[test]
+    fn a_client_that_declared_a_list_receives_only_those() {
+        let (reach, _rx) = Reach::new("scoped".into());
+        reach.replace_chis(vec!["prompt".into(), "unfurl".into()]);
+        assert!(reach.accepts_chi("prompt"));
+        assert!(reach.accepts_chi("unfurl"));
+        assert!(
+            !reach.accepts_chi("tendril-reach"),
+            "an undeclared chi must not reach a scoped client"
+        );
+    }
+
+    #[test]
+    fn declaring_an_empty_list_is_not_scoped() {
+        let (reach, _rx) = Reach::new("empty".into());
+        reach.replace_chis(Vec::new());
+        assert!(reach.accepts_chi("prompt"));
+    }
+
+    #[test]
+    fn re_declaring_replaces_the_previous_scope() {
+        let (reach, _rx) = Reach::new("rehello".into());
+        reach.replace_chis(vec!["prompt".into(), "unfurl".into()]);
+        reach.replace_chis(vec!["prompt".into()]);
+        assert!(reach.accepts_chi("prompt"));
+        assert!(
+            !reach.accepts_chi("unfurl"),
+            "the earlier, wider scope must not survive a re-hello"
+        );
     }
 }

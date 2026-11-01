@@ -1,25 +1,58 @@
-//! `serve_worker` — wraps a WorkerBee impl into a standalone process
-//! that handshakes with humd via thrum and routes prompts over the wire.
+//! `serve_nurse` — wraps a Nurse impl into a standalone process that
+//! handshakes with humd via thrum and grows the blooms it is sent.
 //!
-//! Mirrors the forager-bee client pattern: the worker process owns its own
-//! lifecycle, humd is just a router. The wire contract:
+//! The nurse process owns its own lifecycle; humd is just a router. The
+//! wire contract:
 //!
-//! - **Hello**: announce as `bee:["worker"]`, advertise `models` +
-//!   `propensity`. humd registers `{model_id → client_id}` mappings.
+//! - **Hello**: announce the hive it belongs to, its role, and the models
+//!   it serves. humd routes to it only once that hive is installed there.
 //! - **Prompt in**: humd forwards `chi:"prompt"` tones whose `modelId`
-//!   matches one of the worker's advertised models. The worker calls
-//!   `WorkerBee::raise(egg)`, then feeds the prompt text on `cell.feed`.
-//! - **Chunks out**: each event from `cell.mmm` becomes a
-//!   `chi:"chunk"` tone tagged with `chunkType` + the original sid.
-//! - **Cancel**: `chi:"cancel"` triggers `cell.still()` for the sid.
-//! - **Tool result**: `chi:"tool-result"` feeds into the cell via the
-//!   worker's tool-result encoder (`hum_nest::encode_tool_result`).
+//!   matches one of the nurse's advertised models; a prompt that names
+//!   none is grown with the first. The nurse calls `Nurse::raise(egg)`,
+//!   the egg carrying the prompt, then feeds the prompt tone to the cell.
+//!   The prompt's `tools` are what its cell may reach, offered over the
+//!   sigil's [`mcp`](crate::mcp) path, the egg's `mcp_url`: the sid as the
+//!   wire carries it, so the tools a cell lists are its sigil's and its
+//!   reaches carry its sigil's sid.
+//! - **A live cell**: a cell is raised for how its blooms grow, its
+//!   prompt's `trellis` and `sepal`. It is fed the next prompt of its sigil
+//!   only while it is not cancelled, its nurse is not [`ephemeral`], and
+//!   that prompt grows the same way, has words, and its `graft` holds no
+//!   bloom the cell did not grow; otherwise a fresh cell is raised. A cell
+//!   that grew on from its graft grew its graft's last bloom on, not a bloom
+//!   of its own. A sigil raises one cell at a time: its next prompt waits
+//!   for the cell being raised. A cell that outlives its nest's
+//!   `bounds.wallClockMs` is evicted.
+//! - **Growing on**: a prompt with no words grows on from its graft, so it
+//!   goes only to a nurse that [`grows_on`]; any other refuses it with
+//!   `cannot-grow-on`, and a prompt with neither words nor a graft is
+//!   refused as `empty-prompt`.
+//! - **The bloom out**: a cell gives back the tones of what it grew,
+//!   unfurls, a wilt or an error, pulses, and the nest sends them on as its
+//!   sigil's. A cell that ends without wilting or erring wilts its bloom,
+//!   with its exit code.
+//! - **Cancel**: `chi:"cancel"` is fed to the cell, then stills it.
+//! - **Tendril result**: `chi:"tendril-result"` answers the cell's MCP
+//!   call by its `callId`; one the MCP bridge is not waiting on answers a
+//!   call the cell made outside its sigil's tools, and is fed to the cell.
+//! - **Cleanup**: `chi:"cleanup"` forgets the sigil's tools.
 //!
-//! Reconnect is built in — humd restarts don't strand workers; they
-//! re-handshake.
+//! [`grows_on`]: crate::Nurse::grows_on
+//! [`ephemeral`]: crate::Nurse::ephemeral
+//!
+//! A cell runs in its nest's directory, `hives/<hive>/nest` in the state
+//! root, never where its bloom builds: that host is a builder's, reached
+//! through `bash`.
+//!
+//! The connection is hum-thrum's: the nurse links its `main` bee and
+//! reads events. A humd that goes away takes the nurse's cells with it,
+//! since their sigils went with that humd; the client dials again,
+//! quietly while humd is still booting, and the nurse carries on. A
+//! refused bee ends `serve_nurse` with the refusal, so the process exits
+//! non-zero and its supervisor decides.
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -28,195 +61,112 @@ use lru::LruCache;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
-use hum_identity::HidPrefix;
-use hum_mcp::protocol::ToolDef;
-use crate::{encode_cancel, encode_prompt, encode_tool_result, Cell, Egg, WorkerBee};
+use crate::mcp::{self, Bridge, ToolDef};
+use crate::{Egg, NestConfig, Nurse};
+use thrum_core::Role;
 use tokio::sync::mpsc;
 
-use hum_identity::load_or_mint_bee_key;
-use hum_mcp::{spawn_local_mcp, McpBridge};
+use hum_thrum::{Bee, Event, Options, Refused};
 
-fn default_socket_path() -> PathBuf {
-    hum_paths::thrum_sock_resolved()
-}
-
-/// What the host advertises on hello. Drives both routing (humd maps
-/// `model_id → client_id`) and observability (downstream foragers can
-/// reason about propensity without inferring).
 #[derive(Debug, Clone)]
-pub struct HiveAdvert {
-    /// Hive name, e.g. "claude-cli", "ollama". The bee carries this in
-    /// hello as the kind it's commissioned by. Used as the broadcast
-    /// tag for sigil routing.
+pub struct NurseAdvert {
     pub hive: String,
-    /// Crate version string (cargo or otherwise). Free-form.
+    pub label: String,
     pub version: String,
-    /// Model ids this worker can serve. humd's prompt arm looks here
-    /// for `modelId → worker` routing.
     pub models: Vec<String>,
-    /// Optional source URL the mesh can use to discover the worker's
-    /// repo. Carried verbatim into the gossiped manifest.
     pub source: Option<String>,
 }
 
-/// Run the worker service loop. Blocks until shutdown.
-pub async fn serve_worker<W: WorkerBee + 'static>(worker: Arc<W>, advert: HiveAdvert) -> Result<()> {
-    let path = default_socket_path();
-    // Connection cycling is normal: launchd/systemd start the worker and
-    // humd in parallel, so the first dials lose the race until humd binds
-    // the socket. That is not a warning. Only escalate to WARN once a bee
-    // that has *never* connected keeps failing past a grace window (humd
-    // genuinely down / wrong socket path), so a clean boot stays quiet.
-    let mut ever_connected = false;
-    let mut consecutive_fails = 0u32;
-    loop {
-        match dial_and_serve(&path, worker.clone(), &advert).await {
-            Ok(()) => {
-                ever_connected = true;
-                consecutive_fails = 0;
-                trace!("serve_worker: clean exit, reconnecting");
-            }
-            Err(e) => {
-                consecutive_fails += 1;
-                if ever_connected {
-                    info!(err = %e, "serve_worker: thrum dropped, reconnecting");
-                } else if consecutive_fails >= 8 {
-                    // ~16s of never connecting — humd likely down or the
-                    // socket path is wrong. Now it is worth a warning.
-                    warn!(err = %e, attempts = consecutive_fails,
-                        "serve_worker: still cannot reach humd — check it is running and HUM_THRUM_SOCK matches");
-                } else {
-                    debug!(err = %e, "serve_worker: waiting for humd socket");
-                }
-            }
-        }
-        let jitter = rand::random::<f32>() * 0.75;
-        tokio::time::sleep(std::time::Duration::from_secs_f32(2.0 + jitter)).await;
-    }
-}
-
-async fn dial_and_serve<W: WorkerBee + 'static>(
-    path: &Path,
-    worker: Arc<W>,
-    advert: &HiveAdvert,
-) -> Result<()> {
-    info!(socket = %path.display(), hive = %advert.hive, "worker.connecting");
-    let (reader, write_half) = hum_thrum::connect(path).await?;
-
-    // Load (or mint) the persistent worker-bee identity. The wbee_
-    // hid survives reconnect + restart; humd indexes manifests by it
-    // so the worker stays the "same" bee across thrum connections.
-    let bee_key = load_or_mint_bee_key(&advert.hive, HidPrefix::Wbee)
-        .with_context(|| format!("load/mint wbee key for hive {}", advert.hive))?;
-
-    // Hello — register as `bee:["worker"]`. humd reads:
-    //   hid, bee, hive (kind), models, propensity, version,
-    //   protoVersion, source, chis.
-    let propensity_str = match worker.propensity() {
+pub async fn serve_nurse<N: Nurse + 'static>(nurse: Arc<N>, advert: NurseAdvert) -> Result<()> {
+    let nest = Arc::new(NestConfig::for_hive(&advert.hive));
+    let home = hum_paths::hive_state_dir(&advert.hive).join("nest");
+    std::fs::create_dir_all(&home).with_context(|| format!("make the nest at {}", home.display()))?;
+    let home = home.to_string_lossy().to_string();
+    let propensity_str = match nurse.propensity() {
         crate::Propensity::StatefulSession => "stateful_session",
         crate::Propensity::StatelessPerCall => "stateless_per_call",
         crate::Propensity::EphemeralPerCall => "ephemeral_per_call",
     };
     let hello = json!({
-        "chi": "hello",
-        "bee": ["worker"],
-        "hid": bee_key.hid.to_hex(),
-        "from": bee_key.hid.to_hex(),
-        "hive": &advert.hive,
         "version": &advert.version,
-        "protoVersion": thrum_core::THRUM_VERSION,
         "models": &advert.models,
         "propensity": { "statefulness": propensity_str, "wire": &advert.hive },
-        "chis": ["hello", "prompt", "cancel", "curate", "tool-result", "chunk", "finish", "error", "tool-call"],
+        "chis": ["hello", "prompt", "cancel", "cleanup", "curate", "tendril-result", "unfurl", "wilt", "error", "tendril-reach", "tendril-info", "pulse"],
+        "headroom": nest.headroom(0),
         "source": advert.source.clone().unwrap_or_default(),
     });
-    hum_thrum::send_json(&write_half, &hello).await?;
-    info!(hive = %advert.hive, hid = %bee_key.hid.short(), models = ?advert.models, "worker.hello.sent");
+    info!(hive = %advert.hive, models = ?advert.models, "nurse.linking");
+    let mut bee = Bee::link(Options::new(&advert.hive, &advert.label, Role::Nurse).hello(hello))
+        .await
+        .with_context(|| format!("link the {} bee of {}", advert.label, advert.hive))?;
+    info!(hive = %advert.hive, bee = %bee.id(), models = ?advert.models, "nurse.nestled");
+    let write_half = bee.sender();
+    let first_model = advert.models.first().cloned().unwrap_or_default();
 
-    // Worker-local MCP bridge. The compute (e.g. claude) dials it
-    // for tools/list + tools/call; the bridge ships chi:"tool-call"
-    // over thrum and resolves the pending HTTP response when the
-    // matching chi:"tool-result" arrives.
+    let pool = NonZeroUsize::new(nest.max_cells()).unwrap_or(NonZeroUsize::MIN);
+    let sigils = pool.saturating_mul(NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN));
     let write_for_bridge = write_half.clone();
-    let bridge = McpBridge::new(Arc::new(move |tone: Value| {
-        let write_half = write_for_bridge.clone();
-        tokio::spawn(async move {
-            if let Err(e) = hum_thrum::send_json(&write_half, &tone).await {
-                warn!(err = %e, "mcp.bridge.tool-call.write.failed");
-            }
-        });
-    }));
-    let mcp_addr = spawn_local_mcp(bridge.clone()).await
-        .context("spawn local mcp bridge")?;
+    let namer = nurse.clone();
+    let bridge = Bridge::new(
+        sigils,
+        Arc::new(move |tone: Value| {
+            write_for_bridge.send(tone);
+        }),
+        Arc::new(move |call: &Value| namer.call_id(call)),
+    );
+    let mcp_addr = mcp::serve(bridge.clone()).await.context("serve the nest's mcp")?;
     let mcp_url = format!("http://{}", mcp_addr);
-    info!(%mcp_url, "worker.mcp.bridge.up");
+    info!(%mcp_url, "nurse.mcp.up");
 
-    // Per-sid cell handles + a kill-fn registry so chi:"cancel" can
-    // reach the right child.
-    let cells: Arc<Mutex<LruCache<String, CellBundle>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
+    let cells: Arc<Mutex<LruCache<String, CellBundle>>> = Arc::new(Mutex::new(LruCache::new(pool)));
+    let gates = Arc::new(Gates::default());
 
-    // sid → cwd, learned from prompts. A curate names a sid but no cwd,
-    // and the transcript it trims lives under one.
-    let sid_cwd: Arc<Mutex<LruCache<String, String>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(MAX_CELLS).unwrap())));
-
-    hum_thrum::read_tones(reader, |tone| {
+    while let Some(event) = bee.next().await {
+        let tone = match event {
+            Event::Tone(tone) => tone,
+            Event::Astray => {
+                cells.lock().await.clear();
+                continue;
+            }
+            Event::Nestled | Event::Advisory(_) => continue,
+            Event::Refused(why) => return Err(Refused(why).into()),
+        };
         let chi = tone.get("chi").and_then(Value::as_str).unwrap_or("");
         let sid = tone.get("sid").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
 
         match chi {
             "prompt" => {
-                // Update the MCP bridge's catalogue from the forager
-                // tools humd merged + any tools the asker shipped.
-                let provided: Vec<String> = tone.get("provided")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .unwrap_or_default();
-                let forager_tools: Vec<ToolDef> = tone.get("foragerTools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
-                    .unwrap_or_default();
-                let nestler_tools: Vec<ToolDef> = tone.get("tools")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(parse_tool_def).collect())
-                    .unwrap_or_default();
-                if !forager_tools.is_empty() || !nestler_tools.is_empty() {
-                    bridge.set_catalogue(forager_tools, nestler_tools, &provided);
+                if !sid.is_empty() {
+                    bridge.offer(&sid, ToolDef::all_in(tone.get("tools")));
                 }
-                // Learn sid → cwd so a later chi:"curate" (which names a
-                // sid but no cwd) can find the transcript under it.
-                let cwd = if !sid.is_empty() {
-                    tone.get("cwd").and_then(Value::as_str).map(str::to_string)
-                } else { None };
-                let worker = worker.clone();
+                let nurse = nurse.clone();
                 let write_half = write_half.clone();
                 let cells = cells.clone();
-                let hive = advert.hive.clone();
+                let gates = gates.clone();
                 let mcp_url = mcp_url.clone();
-                let sid_cwd = sid_cwd.clone();
-                let sid2 = sid.clone();
+                let nest = nest.clone();
+                let home = home.clone();
+                let first_model = first_model.clone();
                 tokio::spawn(async move {
-                    if let Some(cwd) = cwd {
-                        sid_cwd.lock().await.put(sid2, cwd);
-                    }
-                    if let Err(e) = handle_prompt(worker, write_half, cells, hive, mcp_url, tone).await {
-                        warn!(err = %e, "worker.prompt.handle.failed");
+                    if let Err(e) = handle_prompt(nurse, write_half, cells, gates, nest, mcp_url, home, first_model, tone).await {
+                        warn!(err = %e, "nurse.prompt.handle.failed");
                     }
                 });
+            }
+            "cleanup" => {
+                if !sid.is_empty() {
+                    bridge.forget(&sid);
+                }
             }
             "cancel" => {
                 if !sid.is_empty() {
                     let cells = cells.clone();
-                    let tone = tone.clone();
                     tokio::spawn(async move {
                         let mut r = cells.lock().await;
                         if let Some(bundle) = r.get(&sid) {
-                            if let Some(rid) = tone.get("rid").and_then(Value::as_str) {
-                                let _ = bundle.stdin.send(encode_cancel(rid)).await;
-                            }
+                            let _ = bundle.feed.send(tone).await;
                             bundle.cancel.cancel();
                         }
                     });
@@ -224,320 +174,336 @@ async fn dial_and_serve<W: WorkerBee + 'static>(
             }
             "curate" => {
                 if !sid.is_empty() {
-                    let sid_cwd = sid_cwd.clone();
-                    let worker = worker.clone();
+                    let nurse = nurse.clone();
+                    let home = home.clone();
                     let sid = sid.clone();
                     tokio::spawn(async move {
-                        let cwd = sid_cwd.lock().await.get(&sid).cloned();
-                        match cwd {
-                            Some(cwd) => {
-                                let hum_sid = hum_identity::HumId::parse(&sid)
-                                    .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
-                                match worker.curate(&hum_sid, &cwd).await {
-                                    Ok(report) => trace!(
-                                        sid = %sid,
-                                        trimmed = report.trimmed(),
-                                        "worker.curate.done"
-                                    ),
-                                    Err(e) => warn!(sid = %sid, err = %e, "worker.curate.failed"),
-                                }
-                            }
-                            // No prompt has named a cwd for this sid yet, so
-                            // there is no transcript of ours to curate.
-                            None => trace!(sid = %sid, "worker.curate.unknown-sid"),
+                        let hum_sid = hum_identity::HumId::parse(&sid)
+                            .unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
+                        match nurse.curate(&hum_sid, &home).await {
+                            Ok(report) => trace!(sid = %sid, trimmed = report.trimmed(), "nurse.curate.done"),
+                            Err(e) => warn!(sid = %sid, err = %e, "nurse.curate.failed"),
                         }
                     });
                 }
             }
-            "tool-result" => {
-                let call_id = tone.get("callId").and_then(Value::as_str).map(str::to_string);
-                // First try the worker MCP bridge — humfs_* tools
-                // route there. If callId isn't pending in the bridge,
-                // it's a nestler-native tool-result for a call the
-                // model made outside our MCP catalogue; forward via
-                // stdin so claude consumes it.
-                let resolved_by_bridge = call_id.as_deref()
-                    .map(|cid| bridge.resolve(cid, tone.clone()))
-                    .unwrap_or(false);
+            "tendril-result" => {
+                let resolved_by_bridge = tone.get("callId").and_then(Value::as_str)
+                    .is_some_and(|cid| bridge.resolve(cid, tone.clone()));
                 if !resolved_by_bridge && !sid.is_empty() {
                     let cells = cells.clone();
-                    let tone = tone.clone();
                     tokio::spawn(async move {
                         let mut r = cells.lock().await;
                         if let Some(bundle) = r.get(&sid) {
-                            if let (Some(call_id), Some(result)) = (
-                                tone.get("callId").and_then(Value::as_str),
-                                tone.get("result").and_then(Value::as_str),
-                            ) {
-                                let _ = bundle.stdin.send(encode_tool_result(call_id, result)).await;
-                            }
+                            let _ = bundle.feed.send(tone).await;
                         }
                     });
                 }
             }
-            "breath" | "echo" | "" => {
-                // Wire keepalive / ack — nothing to do.
-            }
+            "breath" | "echo" | "" => {}
             other => {
-                trace!(chi = other, "worker.unknown.chi");
+                trace!(chi = other, "nurse.unknown.chi");
             }
         }
-    }).await
+    }
+    Ok(())
 }
 
+trait Sounds: Clone + Send + Sync + 'static {
+    fn send(&self, tone: Value);
+}
+
+impl Sounds for hum_thrum::Sender {
+    fn send(&self, tone: Value) {
+        hum_thrum::Sender::send(self, tone);
+    }
+}
+
+#[derive(Default)]
+struct Gates(parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl Gates {
+    fn of(&self, sid: &str) -> Arc<Mutex<()>> {
+        let mut gates = self.0.lock();
+        gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+        gates.entry(sid.to_string()).or_default().clone()
+    }
+}
+
+static RAISED: AtomicU64 = AtomicU64::new(0);
+
 struct CellBundle {
-    stdin: mpsc::Sender<String>,
+    id: u64,
+    feed: mpsc::Sender<Value>,
     cancel: tokio_util::sync::CancellationToken,
-    finish_sent: Arc<AtomicBool>,
-    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
+    wilted: Arc<AtomicBool>,
     last_touched: Arc<AtomicU64>,
+    grown: Arc<AtomicU64>,
+    grows: String,
 }
 
 impl Drop for CellBundle {
     fn drop(&mut self) { self.cancel.cancel(); }
 }
 
-/// Build a `ToolDef` from a wire tone entry. MCP standard field is
-/// `inputSchema`; tolerate legacy `parameters` (some hum-side
-/// shims still emit it). Drop entries with no name OR no usable
-/// schema — claude's mcp client rejects the entire tools/list if
-/// any entry has `inputSchema: null`, so one bad apple kills all
-/// tools for the session.
-fn parse_tool_def(v: &Value) -> Option<ToolDef> {
-    let name = v.get("name").and_then(Value::as_str)?.to_string();
-    let description = v.get("description").and_then(Value::as_str).unwrap_or("").to_string();
-    let schema = v.get("inputSchema")
-        .or_else(|| v.get("parameters"))
-        .cloned();
-    let schema = match schema {
-        Some(s) if s.is_object() => s,
-        _ => serde_json::json!({ "type": "object", "properties": {} }),
-    };
-    Some(ToolDef { name, description, input_schema: schema })
+async fn pulse(
+    write_half: &impl Sounds,
+    kind: &str,
+    headroom: Value,
+) {
+    let tone = json!({
+        "chi": "pulse",
+        "kind": kind,
+        "headroom": headroom,
+    });
+    write_half.send(tone);
 }
 
-/// Max quiet window before a warm cell gets reaped.
-const IDLE_TIMEOUT_MS: u64 = 300_000;
-/// Per-worker cap on concurrent claude processes. LRU eviction
-/// when full.
-const MAX_CELLS: usize = 8;
-
-/// True if `v` is claude's terminal `result` event flagged `is_error`.
-/// As the *first* event it means a pre-flight failure (bad/absent
-/// session on `--resume`, id clash on `--session-id`) rather than a
-/// mid-turn error, which arrives only after content.
-fn is_preflight_error(v: &Value) -> bool {
-    let m = if v.get("type").and_then(Value::as_str) == Some("stream_event") {
-        v.get("event").unwrap_or(v)
-    } else { v };
-    m.get("type").and_then(Value::as_str) == Some("result")
-        && m.get("is_error").and_then(Value::as_bool).unwrap_or(false)
+fn grows_of(body: &thrum_core::PromptBody) -> String {
+    json!({ "trellis": body.trellis, "sepal": body.sepal }).to_string()
 }
 
-/// Spawn one attempt: launch the cell, send the prompt, and wait for the
-/// first stream-json event. Returns the cell + that event if it's live;
-/// returns None (after killing the cell) if claude fails pre-flight
-/// (first event is an `is_error` result) or produces nothing.
-async fn attempt_spawn<W: WorkerBee + 'static>(
-    worker: &Arc<W>,
-    spec: Egg,
-    content: &str,
-) -> Option<(Cell, Value)> {
-    let cell = worker.raise(spec).await.ok()?;
-    if cell.feed.send(encode_prompt(content)).await.is_err() {
-        cell.silence.cancel();
-        return None;
-    }
-    let first = {
-        let mut ev = cell.mmm.lock().await;
-        match tokio::time::timeout(std::time::Duration::from_secs(180), ev.recv()).await {
-            Ok(Some(v)) => Some(v),
-            _ => None,
-        }
-    };
-    match first {
-        Some(v) if is_preflight_error(&v) => { cell.silence.cancel(); None }
-        Some(v) => Some((cell, v)),
-        None => { cell.silence.cancel(); None }
-    }
-}
-
-async fn handle_prompt<W: WorkerBee + 'static>(
-    worker: Arc<W>,
-    write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+#[allow(clippy::too_many_arguments)]
+async fn handle_prompt<N: Nurse + 'static, W: Sounds>(
+    nurse: Arc<N>,
+    write_half: W,
     cells: Arc<Mutex<LruCache<String, CellBundle>>>,
-    hive: String,
+    gates: Arc<Gates>,
+    nest: Arc<NestConfig>,
     mcp_url: String,
+    home: String,
+    first_model: String,
     tone: Value,
 ) -> Result<()> {
     let sid = tone.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
     if sid.is_empty() { anyhow::bail!("prompt.no-sid"); }
-    // Model: the prompt's modelId, else fall back to the first model
-    // this worker advertises (CLAUDE_MODELS leads with the install
-    // default), else opus 4.7. Without this an asker that omits modelId
-    // would spawn `claude --model ""`.
-    let model = tone.get("modelId").and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| std::env::var("CLAUDE_MODELS").ok()
-            .and_then(|m| m.split(',').next().map(|s| s.trim().to_string()))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "claude-opus-4-7".into()));
-    let cwd = tone.get("cwd").and_then(Value::as_str).unwrap_or("/").to_string();
-    let content = tone.get("content").and_then(Value::as_str)
-        .or_else(|| tone.get("text").and_then(Value::as_str))
-        .unwrap_or("").to_string();
-    let system_prompt = tone.get("systemPrompt").and_then(Value::as_str).map(str::to_string);
-    let explicit_resume = tone.get("resume").and_then(Value::as_str).map(str::to_string);
-
-    // claude `-p --input-format stream-json` reads newline-delimited
-    // user messages until stdin EOF, emitting a `result` event per
-    // turn. Reuse the warm cell for the sid; per-turn state lives in
-    // finish_sent + tool_use_blocks and must reset before re-entry.
-    {
-        let mut g = cells.lock().await;
-        if let Some(bundle) = g.get(&sid) {
-            bundle.finish_sent.store(false, Ordering::SeqCst);
-            bundle.tool_use_blocks.lock().await.clear();
-            bundle.last_touched.store(now_ms(), Ordering::SeqCst);
-            let send = bundle.stdin.clone();
-            drop(g);
-            send.send(encode_prompt(&content)).await
-                .map_err(|e| anyhow::anyhow!("stdin closed on reused cell: {e}"))?;
-            trace!(sid = %sid, "worker.cell.reused");
+    let body: thrum_core::PromptBody = serde_json::from_value(tone.clone()).unwrap_or_default();
+    let model = body.model_id.clone().filter(|m| !m.is_empty()).unwrap_or(first_model);
+    let grafted = body.graft.as_ref().map_or(0, Vec::len) as u64;
+    let grows = grows_of(&body);
+    let worded = body.content.as_ref().is_some_and(|c| !c.is_empty()) || body.text.as_ref().is_some_and(|t| !t.is_empty());
+    if !worded {
+        let refusal = if grafted == 0 {
+            Some(("empty-prompt", "a prompt with no words grows on from its graft, and this one carries none"))
+        } else if !nurse.grows_on() {
+            Some(("cannot-grow-on", "this nurse grows a bloom only from new words, and cannot grow one on from its graft"))
+        } else {
+            None
+        };
+        if let Some((code, message)) = refusal {
+            write_half.send(json!({ "chi": "error", "sid": sid, "code": code, "message": message }));
             return Ok(());
         }
     }
 
+    let gate = gates.of(&sid);
+    let _raising = gate.lock().await;
     {
         let mut g = cells.lock().await;
-        if g.len() >= MAX_CELLS {
-            if let Some((esid, _evicted)) = g.pop_lru() {
-                warn!(evicted_sid = %esid, "worker.cell.evict.lru");
-                metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
-            }
+        let stale = g.peek(&sid).is_some_and(|bundle| {
+            nurse.ephemeral() || bundle.cancel.is_cancelled() || !worded || bundle.grows != grows
+                || (grafted > 0 && bundle.grown.load(Ordering::SeqCst) != grafted)
+        });
+        if stale {
+            trace!(sid = %sid, grafted, "nurse.cell.raised-anew");
+            g.pop(&sid);
         }
+        if let Some(bundle) = g.get(&sid) {
+            bundle.wilted.store(false, Ordering::SeqCst);
+            bundle.last_touched.store(now_ms(), Ordering::SeqCst);
+            let feed = bundle.feed.clone();
+            drop(g);
+            feed.send(tone).await
+                .map_err(|e| anyhow::anyhow!("the reused cell stopped listening: {e}"))?;
+            trace!(sid = %sid, "nurse.cell.reused");
+            return Ok(());
+        }
+    }
+
+    let evicted = {
+        let mut g = cells.lock().await;
+        let evicted = if g.len() >= nest.max_cells()
+            && let Some((esid, _evicted)) = g.pop_lru()
+        {
+            warn!(evicted_sid = %esid, "nurse.cell.evict.lru");
+            metrics::counter!("hum_cell_evictions_total", "reason" => "lru").increment(1);
+            Some(g.len())
+        } else {
+            None
+        };
         metrics::gauge!("hum_cell_count").set(g.len() as f64);
+        evicted
+    };
+    if let Some(live) = evicted {
+        pulse(&write_half, "cell-evicted", nest.headroom(live)).await;
     }
 
     let hum_sid = hum_identity::HumId::parse(&sid).unwrap_or_else(|_| hum_identity::HumId::from_foreign(&sid));
-    let mut base = Egg::new(hum_sid, model.clone(), cwd);
-    base.system_prompt = system_prompt;
-    base.mcp_url = Some(mcp_url);
-    if let Some(arr) = tone.get("allowedTools").and_then(Value::as_array) {
-        base.allowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
-    }
-    if let Some(arr) = tone.get("disallowedTools").and_then(Value::as_array) {
-        base.disallowed_tools = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
-    }
+    let mut egg = Egg::new(hum_sid, model, home);
+    egg.prompt = body;
+    egg.mcp_url = Some(format!("{mcp_url}/s/{}", path_safe(&sid)));
+    egg.bounds = nest.bounds.clone();
 
-    // Resume-first: claude `-p` exits after each turn, so the warm cell
-    // is gone before the next prompt. The sid-derived session UUID
-    // (computed inside claude-cli from base.sid) keeps continuity. On
-    // first turn `--resume` fails fast (a `result` is_error with no
-    // output) and we retry with `fresh: true` → --session-id.
-    let (cell, first_event) = {
-        let mut s1 = base.clone();
-        s1.resume_id = explicit_resume.clone();
-        match attempt_spawn(&worker, s1, &content).await {
-            Some(pair) => pair,
-            None => {
-                trace!(sid = %sid, "worker.resume.miss.creating");
-                let mut s2 = base.clone();
-                s2.fresh = true;
-                attempt_spawn(&worker, s2, &content).await
-                    .ok_or_else(|| anyhow::anyhow!("spawn failed (resume and create both)"))?
-            }
+    let cell = match nurse.raise(egg).await {
+        Ok(cell) => cell,
+        Err(e) => {
+            write_half.send(json!({ "chi": "error", "sid": sid, "code": "cell-not-raised", "message": format!("the cell could not be raised: {e}") }));
+            return Ok(());
         }
     };
-    let stdin = cell.feed.clone();
+    let feed = cell.feed.clone();
     let events = cell.mmm.clone();
     let cancel = cell.silence.clone();
-    let finish_sent = Arc::new(AtomicBool::new(false));
-    let tool_use_blocks = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let wilted = Arc::new(AtomicBool::new(false));
     let last_touched = Arc::new(AtomicU64::new(now_ms()));
+    let held = if worded { grafted } else { grafted.saturating_sub(1) };
+    let grown = Arc::new(AtomicU64::new(held));
+    let id = RAISED.fetch_add(1, Ordering::SeqCst);
 
-    let listener = Arc::new(WireListener {
-        sid: sid.clone(),
-        hive,
-        write_half: write_half.clone(),
-        finish_sent: finish_sent.clone(),
-        tool_use_blocks: tool_use_blocks.clone(),
-        last_touched: last_touched.clone(),
-    });
+    let dispatch = {
+        let sid = sid.clone();
+        let write_half = write_half.clone();
+        let wilted = wilted.clone();
+        let grown = grown.clone();
+        let last_touched = last_touched.clone();
+        tokio::spawn(async move {
+            let mut events = events.lock().await;
+            while let Some(mut grew) = events.recv().await {
+                last_touched.store(now_ms(), Ordering::SeqCst);
+                let chi = grew.get("chi").and_then(Value::as_str).unwrap_or("").to_string();
+                if chi.is_empty() {
+                    continue;
+                }
+                if chi == "wilt" {
+                    grown.fetch_add(1, Ordering::SeqCst);
+                }
+                if chi == "wilt" || chi == "error" {
+                    wilted.store(true, Ordering::SeqCst);
+                }
+                if let Some(obj) = grew.as_object_mut() {
+                    obj.insert("sid".into(), Value::String(sid.clone()));
+                }
+                write_half.send(grew);
+            }
+            trace!(sid = %sid, "nurse.dispatch.exit");
+        })
+    };
 
-    // The probe in attempt_spawn already consumed (and proved live) the
-    // first event; forward it before the loop picks up the rest.
-    listener.forward_raw(first_event).await;
+    if feed.send(tone).await.is_err() {
+        warn!(sid = %sid, "nurse.cell.feed.closed");
+    }
 
-    // Cell-lifetime dispatch: each remaining stream-json event flows
-    // through the listener until the child exits.
-    let listener_clone = listener.clone();
-    let sid_for_loop = sid.clone();
-    let events_for_loop = events.clone();
-    let dispatch = tokio::spawn(async move {
-        let mut guard = events_for_loop.lock().await;
-        while let Some(value) = guard.recv().await {
-            listener_clone.forward_raw(value).await;
-        }
-        trace!(sid = %sid_for_loop, "worker.dispatch.exit");
-    });
-
-    // Idle reaper — kills the cell if last_touched stays below the
-    // IDLE_TIMEOUT_MS threshold.
     let cells_for_idle = cells.clone();
     let sid_for_idle = sid.clone();
     let last_for_idle = last_touched.clone();
+    let write_for_idle = write_half.clone();
+    let nest_for_idle = nest.clone();
     let idle_task = tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             let last = last_for_idle.load(Ordering::SeqCst);
             let age = now_ms().saturating_sub(last);
-            if age >= IDLE_TIMEOUT_MS {
-                let mut g = cells_for_idle.lock().await;
-                if g.pop(&sid_for_idle).is_some() {
-                    warn!(sid = %sid_for_idle, age_ms = age, "worker.cell.idle.kill");
+            if age >= nest_for_idle.idle_ms {
+                let live = {
+                    pop_own(&mut *cells_for_idle.lock().await, &sid_for_idle, id)
+                };
+                if let Some(live) = live {
+                    warn!(sid = %sid_for_idle, age_ms = age, "nurse.cell.idle.kill");
+                    pulse(&write_for_idle, "cell-evicted", nest_for_idle.headroom(live)).await;
                 }
                 return;
             }
         }
     });
 
-    cells.lock().await.put(sid.clone(), CellBundle {
-        stdin: stdin.clone(),
-        cancel: cancel.clone(),
-        finish_sent: finish_sent.clone(),
-        tool_use_blocks: tool_use_blocks.clone(),
-        last_touched: last_touched.clone(),
-    });
+    let live = {
+        let mut g = cells.lock().await;
+        g.put(sid.clone(), CellBundle {
+            id,
+            feed,
+            cancel: cancel.clone(),
+            wilted: wilted.clone(),
+            last_touched: last_touched.clone(),
+            grown: grown.clone(),
+            grows,
+        });
+        g.len()
+    };
+    pulse(&write_half, "cell-spawned", nest.headroom(live)).await;
 
-    // Prompt was already sent inside attempt_spawn; nothing to send here.
-    trace!(sid = %sid, "worker.cell.spawned");
+    if let Some(ms) = nest.bounds.wall_clock_ms {
+        let outlived = outlived(cells.clone(), sid.clone(), id, cancel, std::time::Duration::from_millis(ms));
+        let write_for_wall = write_half.clone();
+        let nest_for_wall = nest.clone();
+        let sid_for_wall = sid.clone();
+        tokio::spawn(async move {
+            if let Some(live) = outlived.await {
+                warn!(sid = %sid_for_wall, wall_clock_ms = ms, "nurse.cell.wall-clock.kill");
+                pulse(&write_for_wall, "cell-evicted", nest_for_wall.headroom(live)).await;
+            }
+        });
+    }
 
-    // On child exit: drain dispatch, emit a finish if the listener
-    // never saw `result`, and drop the cells entry.
+    trace!(sid = %sid, "nurse.cell.spawned");
+
     let cells_for_cleanup = cells.clone();
     let write_for_cleanup = write_half.clone();
     let sid_for_cleanup = sid.clone();
-    let finish_for_cleanup = finish_sent.clone();
+    let wilted_for_cleanup = wilted.clone();
+    let nest_for_cleanup = nest.clone();
     tokio::spawn(async move {
         let exit_code = cell.emerged.await.unwrap_or(1);
         let _ = dispatch.await;
         idle_task.abort();
-        if !finish_for_cleanup.load(Ordering::SeqCst) {
-            let finish = json!({
-                "chi": "finish",
+        if !wilted_for_cleanup.load(Ordering::SeqCst) {
+            write_for_cleanup.send(json!({
+                "chi": "wilt",
                 "sid": sid_for_cleanup,
-                "finishReason": if exit_code == 0 { "stop" } else { "error" },
+                "reason": if exit_code == 0 { "stop" } else { "error" },
                 "exitCode": exit_code,
-            });
-            let _ = hum_thrum::send_json(&write_for_cleanup, &finish).await;
+            }));
         }
-        cells_for_cleanup.lock().await.pop(&sid_for_cleanup);
-        trace!(sid = %sid_for_cleanup, exit_code, "worker.cell.exit");
+        let live = {
+            pop_own(&mut *cells_for_cleanup.lock().await, &sid_for_cleanup, id)
+        };
+        if let Some(live) = live {
+            pulse(&write_for_cleanup, "cell-died", nest_for_cleanup.headroom(live)).await;
+        }
+        trace!(sid = %sid_for_cleanup, exit_code, "nurse.cell.exit");
     });
 
     Ok(())
+}
+
+fn pop_own(cells: &mut LruCache<String, CellBundle>, sid: &str, id: u64) -> Option<usize> {
+    if cells.peek(sid)?.id != id {
+        return None;
+    }
+    cells.pop(sid);
+    Some(cells.len())
+}
+
+async fn outlived(
+    cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+    sid: String,
+    id: u64,
+    cancel: tokio_util::sync::CancellationToken,
+    wall_clock: std::time::Duration,
+) -> Option<usize> {
+    tokio::select! {
+        _ = cancel.cancelled() => return None,
+        _ = tokio::time::sleep(wall_clock) => {}
+    }
+    pop_own(&mut *cells.lock().await, &sid, id)
+}
+
+fn path_safe(sid: &str) -> String {
+    sid.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn now_ms() -> u64 {
@@ -546,195 +512,21 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// Translates raw claude-stream-json events into chi:"chunk" tones.
-/// Lives in the helper so each worker crate doesn't reinvent it.
-struct WireListener {
-    sid: String,
-    hive: String,
-    write_half: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    /// True once `result` was forwarded as chi:"finish" for the
-    /// current turn. handle_prompt resets it per-turn; the cell's
-    /// cleanup checks it to avoid a redundant crash-path finish.
-    finish_sent: Arc<AtomicBool>,
-    /// Block indices the model emitted as `tool_use`. tool_input_* /
-    /// content_block_stop for these indices are suppressed since
-    /// the worker MCP bridge resolves the call inline and the
-    /// canonical surface is chi:"chunk" chunkType="tool_executed".
-    tool_use_blocks: Arc<Mutex<std::collections::BTreeSet<i64>>>,
-    /// Updated on every stream-json event. The idle reaper compares
-    /// against this to distinguish a quiet cell from a stalled one.
-    last_touched: Arc<AtomicU64>,
-}
-
-impl WireListener {
-    async fn send(&self, tone: Value) {
-        let _ = hum_thrum::send_json(&self.write_half, &tone).await;
-    }
-
-    async fn forward_raw(&self, value: Value) {
-        self.last_touched.store(now_ms(), Ordering::SeqCst);
-
-        // If the event is already a thrum chi event (has a "chi" field),
-        // pass it through directly. This lets workers like ollama-worker
-        // emit thrum events without going through claude's stream-json.
-        if value.get("chi").and_then(Value::as_str).is_some() {
-            let mut v = value.clone();
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("sid".into(), Value::String(self.sid.clone()));
-            }
-            self.send(v).await;
-            return;
-        }
-
-        // claude emits stream-json events. The relevant chunk events
-        // arrive wrapped as `{"type":"stream_event","event":{...inner...}}`;
-        // unwrap to inspect the inner type. Mirrors the dispatch
-        // humd used to do in-process (nest::pool::dispatch_loop).
-        let mut msg = value;
-        if msg.get("type").and_then(Value::as_str) == Some("stream_event") {
-            if let Some(inner) = msg.get("event").cloned() {
-                msg = inner;
-            }
-        }
-        let typ = msg.get("type").and_then(Value::as_str).unwrap_or("").to_string();
-
-        match typ.as_str() {
-            "system" if msg.get("subtype").and_then(Value::as_str) == Some("init") => {
-                // Session readiness signal. Carries claude's session_id
-                // and model so consumers can attach.
-                let mut body = json!({
-                    "chi": "session-ready",
-                    "sid": self.sid,
-                });
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert("nestId".into(), msg.get("session_id").cloned().unwrap_or(Value::Null));
-                    obj.insert("model".into(), msg.get("model").cloned().unwrap_or(Value::Null));
-                    obj.insert("tools".into(), msg.get("tools").cloned().unwrap_or(json!([])));
-                }
-                self.send(body).await;
-            }
-            "content_block_start" => {
-                let idx = msg.get("index").cloned().unwrap_or(Value::Null);
-                let block = msg.get("content_block").cloned().unwrap_or(json!({}));
-                let bt = block.get("type").and_then(Value::as_str).unwrap_or("");
-                match bt {
-                    "text" => self.chunk("text_start", json!({"blockIdx": idx})).await,
-                    "thinking" => self.chunk("reasoning_start", json!({"blockIdx": idx})).await,
-                    "tool_use" => {
-                        // Track for downstream suppression — bridge
-                        // emits the canonical chi:"chunk" tool_executed
-                        // once resolved.
-                        if let Some(i) = idx.as_i64() {
-                            self.tool_use_blocks.lock().await.insert(i);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            "content_block_delta" => {
-                let delta = msg.get("delta").cloned().unwrap_or(json!({}));
-                let idx = msg.get("index").and_then(Value::as_i64);
-                let is_tool_block = match idx {
-                    Some(i) => self.tool_use_blocks.lock().await.contains(&i),
-                    None => false,
-                };
-                let block_idx_v = msg.get("index").cloned().unwrap_or(Value::Null);
-                match delta.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "thinking_delta" => self.chunk("reasoning_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("thinking")})).await,
-                    "text_delta" => self.chunk("text_delta", json!({"blockIdx": block_idx_v, "delta": delta.get("text")})).await,
-                    "input_json_delta" if !is_tool_block => {
-                        self.chunk("tool_input_delta", json!({"blockIdx": block_idx_v, "partialJson": delta.get("partial_json")})).await
-                    }
-                    _ => {} // tool-block input_json_delta: suppressed (bridge ships chunk:tool_executed instead)
-                }
-            }
-            "content_block_stop" => {
-                let idx = msg.get("index").and_then(Value::as_i64);
-                let is_tool_block = match idx {
-                    Some(i) => self.tool_use_blocks.lock().await.remove(&i),
-                    None => false,
-                };
-                if !is_tool_block {
-                    self.chunk("content_block_stop", json!({"blockIdx": msg.get("index")})).await;
-                }
-            }
-            "result" => {
-                // Claude's wilt event — terminal of one prompt cycle.
-                let subtype = msg.get("subtype").and_then(Value::as_str).unwrap_or("success");
-                let usage = msg.get("usage").cloned().unwrap_or(Value::Null);
-                // claude signals failure inside the result event, not on
-                // stderr: `is_error:true` (or an `error_*` subtype) with
-                // the human-readable reason in `result`. Surfacing it is
-                // the difference between a visible auth/model/credit
-                // error and a silent zero-token finish that looks like
-                // the worker is dead. (This was the macOS "claude exits 1
-                // with no output" wall.)
-                let is_error = msg.get("is_error").and_then(Value::as_bool).unwrap_or(false)
-                    || subtype.starts_with("error");
-                if is_error {
-                    let detail = msg.get("result").and_then(Value::as_str)
-                        .or_else(|| msg.get("error").and_then(Value::as_str))
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("claude returned an error result with no detail (check auth / model / credit)");
-                    warn!(sid = %self.sid, subtype, detail, "worker.result.error");
-                    let mut err = json!({
-                        "chi": "error",
-                        "sid": self.sid,
-                        "code": "worker_error",
-                        "subtype": subtype,
-                        "message": detail,
-                    });
-                    if let Some(obj) = err.as_object_mut() {
-                        obj.insert("usage".into(), usage);
-                    }
-                    self.send(err).await;
-                } else {
-                    let mut body = json!({
-                        "chi": "finish",
-                        "sid": self.sid,
-                        "finishReason": subtype,
-                    });
-                    if let Some(obj) = body.as_object_mut() {
-                        obj.insert("usage".into(), usage);
-                    }
-                    self.send(body).await;
-                }
-                self.finish_sent.store(true, Ordering::SeqCst);
-            }
-            _ => {
-                // Structural / unrecognized — drop. Mirrors humd's
-                // historical filter; richer chi values can plug in here
-                // (perf-mark, drone, etc.) when workers grow them.
-                let _ = &self.hive;
-            }
-        }
-    }
-
-    async fn chunk(&self, chunk_type: &str, payload: Value) {
-        let mut body = serde_json::Map::new();
-        body.insert("chi".into(), Value::String("chunk".into()));
-        body.insert("sid".into(), Value::String(self.sid.clone()));
-        body.insert("chunkType".into(), Value::String(chunk_type.into()));
-        if let Some(obj) = payload.as_object() {
-            for (k, v) in obj { body.insert(k.clone(), v.clone()); }
-        }
-        self.send(Value::Object(body)).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
 
     fn bundle(cancel: CancellationToken) -> CellBundle {
-        let (tx_in, _rx_in) = mpsc::channel::<String>(1);
+        let (tx_in, _rx_in) = mpsc::channel::<Value>(1);
         CellBundle {
-            stdin: tx_in,
+            id: RAISED.fetch_add(1, Ordering::SeqCst),
+            feed: tx_in,
             cancel,
-            finish_sent: Arc::new(AtomicBool::new(false)),
-            tool_use_blocks: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            wilted: Arc::new(AtomicBool::new(false)),
             last_touched: Arc::new(AtomicU64::new(0)),
+            grown: Arc::new(AtomicU64::new(0)),
+            grows: String::new(),
         }
     }
 
@@ -765,6 +557,230 @@ mod tests {
         drop(popped);
         assert!(watch1.is_cancelled(), "evicted bundle should have cancelled on drop");
         assert!(!watch2.is_cancelled(), "remaining bundle untouched");
+    }
+
+    #[tokio::test]
+    async fn a_cell_outliving_its_wall_clock_is_evicted() {
+        let cells = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(2).unwrap())));
+        let cancel = CancellationToken::new();
+        let cell = bundle(cancel.clone());
+        let id = cell.id;
+        cells.lock().await.put("a".to_string(), cell);
+        let live = outlived(cells.clone(), "a".into(), id, cancel.clone(), std::time::Duration::from_millis(10)).await;
+        assert_eq!(live, Some(0));
+        assert!(cancel.is_cancelled(), "the outlived cell is stilled");
+        assert!(cells.lock().await.peek("a").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_wall_clock_leaves_the_cell_raised_after_its_own() {
+        let cells = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(2).unwrap())));
+        let first = CancellationToken::new();
+        let cell = bundle(first.clone());
+        let id = cell.id;
+        cells.lock().await.put("a".to_string(), cell);
+        let wall = tokio::spawn(outlived(cells.clone(), "a".into(), id, first.clone(), std::time::Duration::from_millis(50)));
+        let next = CancellationToken::new();
+        {
+            let mut g = cells.lock().await;
+            g.pop("a");
+            g.put("a".to_string(), bundle(next.clone()));
+        }
+        assert_eq!(wall.await.unwrap(), None);
+        assert!(!next.is_cancelled());
+        assert!(cells.lock().await.peek("a").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_old_cells_exit_leaves_the_cell_raised_after_it() {
+        use command_group::AsyncCommandGroup;
+        let child = tokio::process::Command::new("sleep").arg("60")
+            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            .group_spawn().expect("spawn sleep");
+        let (emerged, stilled) = crate::lifecycle::tend(child);
+        let old = bundle(stilled);
+        let old_id = old.id;
+        let mut cells: LruCache<String, CellBundle> = LruCache::new(NonZeroUsize::new(2).unwrap());
+        cells.put("a".into(), old);
+
+        cells.pop("a");
+        let next = CancellationToken::new();
+        let successor = bundle(next.clone());
+        let next_id = successor.id;
+        cells.put("a".into(), successor);
+        tokio::time::timeout(std::time::Duration::from_secs(6), emerged).await
+            .expect("the old cell exits").expect("exit code");
+
+        assert_eq!(pop_own(&mut cells, "a", old_id), None);
+        assert!(!next.is_cancelled(), "the old cell's exit leaves its successor alive");
+        assert!(cells.peek("a").is_some());
+        assert_eq!(pop_own(&mut cells, "a", next_id), Some(0));
+        assert!(next.is_cancelled());
+    }
+
+    #[derive(Clone, Default)]
+    struct Heard(Arc<std::sync::Mutex<Vec<Value>>>);
+
+    impl Sounds for Heard {
+        fn send(&self, tone: Value) { self.0.lock().unwrap().push(tone); }
+    }
+
+    struct Raised {
+        stilled: CancellationToken,
+        fed: std::sync::Mutex<mpsc::Receiver<Value>>,
+        says: mpsc::Sender<Value>,
+        _exit: tokio::sync::oneshot::Sender<i32>,
+    }
+
+    impl Raised {
+        fn fed(&self) -> Vec<String> {
+            let mut fed = self.fed.lock().unwrap();
+            std::iter::from_fn(|| fed.try_recv().ok())
+                .filter_map(|tone| tone.get("text").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        }
+    }
+
+    #[derive(Default)]
+    struct Fake {
+        ephemeral: bool,
+        raising: std::time::Duration,
+        raised: std::sync::Mutex<Vec<Arc<Raised>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Nurse for Fake {
+        fn ephemeral(&self) -> bool { self.ephemeral }
+        fn grows_on(&self) -> bool { true }
+
+        async fn raise(&self, _egg: Egg) -> Result<crate::Cell> {
+            tokio::time::sleep(self.raising).await;
+            let (tx_feed, rx_feed) = mpsc::channel(8);
+            let (tx_mmm, rx_mmm) = mpsc::channel(8);
+            let (tx_exit, rx_exit) = tokio::sync::oneshot::channel();
+            let silence = CancellationToken::new();
+            self.raised.lock().unwrap().push(Arc::new(Raised {
+                stilled: silence.clone(),
+                fed: std::sync::Mutex::new(rx_feed),
+                says: tx_mmm,
+                _exit: tx_exit,
+            }));
+            Ok(crate::Cell { mark: None, feed: tx_feed, mmm: Arc::new(Mutex::new(rx_mmm)), emerged: rx_exit, ephemeral: self.ephemeral, silence })
+        }
+    }
+
+    struct Hosted {
+        nurse: Arc<Fake>,
+        cells: Arc<Mutex<LruCache<String, CellBundle>>>,
+        gates: Arc<Gates>,
+    }
+
+    impl Hosted {
+        fn new(nurse: Fake) -> Self {
+            Self {
+                nurse: Arc::new(nurse),
+                cells: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(8).unwrap()))),
+                gates: Arc::new(Gates::default()),
+            }
+        }
+
+        fn prompt(&self, text: &str) -> impl std::future::Future<Output = Result<()>> + 'static {
+            self.tone(json!({ "chi": "prompt", "sid": "s", "text": text }))
+        }
+
+        fn tone(&self, tone: Value) -> impl std::future::Future<Output = Result<()>> + 'static {
+            handle_prompt(
+                self.nurse.clone(), Heard::default(), self.cells.clone(), self.gates.clone(),
+                Arc::new(NestConfig::default()), "http://127.0.0.1:0".into(),
+                std::env::temp_dir().to_string_lossy().into_owned(), "m".into(),
+                tone,
+            )
+        }
+
+        fn raised(&self) -> Vec<Arc<Raised>> {
+            self.nurse.raised.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_cell_is_fed_its_sigils_next_prompt() {
+        let nest = Hosted::new(Fake::default());
+        nest.prompt("one").await.unwrap();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].fed(), ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_nurses_cell_grows_one_prompt() {
+        let nest = Hosted::new(Fake { ephemeral: true, ..Fake::default() });
+        nest.prompt("one").await.unwrap();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 2, "each prompt raises its own cell");
+        assert!(raised[0].stilled.is_cancelled());
+        assert_eq!(raised[0].fed(), ["one"]);
+        assert_eq!(raised[1].fed(), ["two"]);
+    }
+
+    #[tokio::test]
+    async fn two_prompts_on_one_sid_raise_one_cell() {
+        let nest = Hosted::new(Fake { raising: std::time::Duration::from_millis(50), ..Fake::default() });
+        let one = tokio::spawn(nest.prompt("one"));
+        let two = tokio::spawn(nest.prompt("two"));
+        one.await.unwrap().unwrap();
+        two.await.unwrap().unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1, "the second prompt waits for the cell the first raises");
+        assert!(!raised[0].stilled.is_cancelled());
+        let mut fed = raised[0].fed();
+        fed.sort();
+        assert_eq!(fed, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn a_cell_that_grew_on_from_its_graft_is_fed_the_next_prompt() {
+        let nest = Hosted::new(Fake::default());
+        let bloom = json!({
+            "content": [{ "kind": "text", "text": "start the build" }],
+            "grew": [{ "kind": "tendril", "callId": "c", "name": "check" }, { "kind": "grasp", "callId": "c", "result": "done" }],
+        });
+        nest.tone(json!({ "chi": "prompt", "sid": "s", "graft": [bloom] })).await.unwrap();
+        nest.raised()[0].says.send(json!({ "chi": "wilt", "reason": "stop" })).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !nest.cells.lock().await.peek("s").expect("a live cell").wilted.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the cell wilts its bloom");
+        nest.tone(json!({ "chi": "prompt", "sid": "s", "text": "and now?", "graft": [bloom] })).await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 1, "the bloom it grew on is the graft's last, so the next prompt is its");
+        assert_eq!(raised[0].fed(), ["and now?"]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_cell_is_not_fed_again() {
+        let nest = Hosted::new(Fake::default());
+        nest.prompt("one").await.unwrap();
+        nest.cells.lock().await.peek("s").expect("a live cell").cancel.cancel();
+        nest.prompt("two").await.unwrap();
+        let raised = nest.raised();
+        assert_eq!(raised.len(), 2, "a fresh cell grows the prompt after a cancel");
+        assert_eq!(raised[0].fed(), ["one"]);
+        assert_eq!(raised[1].fed(), ["two"]);
+    }
+
+    #[tokio::test]
+    async fn a_sigils_gate_is_forgotten_once_none_waits_on_it() {
+        let gates = Gates::default();
+        let held = gates.of("a");
+        drop(gates.of("b"));
+        let again = gates.of("a");
+        assert!(Arc::ptr_eq(&held, &again));
+        assert_eq!(gates.0.lock().len(), 1, "b's gate went with its last holder");
     }
 
     #[tokio::test]

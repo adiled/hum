@@ -9,10 +9,10 @@ Astro + Starlight, spacecraft-themed CSS.
 
 ## How it works
 
-`scripts/sync-docs.mjs` walks a hand-curated list of `README.md` files
-and selected docs across the repo, normalizes their links, prepends a
-Starlight frontmatter block, and writes them into
-`src/content/docs/`. The Astro build then renders them with the
+`scripts/sync-docs.mjs` walks the repo and takes every markdown file
+outside `docs/`, `vendor/` and build output, except `AGENTS.md` and
+`CLAUDE.md`. It normalizes their links, prepends a Starlight frontmatter
+block where a file has none, and writes them into `src/content/docs/`. The Astro build then renders them with the
 spacecraft theme.
 
 The sync runs automatically on every `npm run dev` and `npm run build`,

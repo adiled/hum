@@ -1,3 +1,13 @@
+//! The README's examples, compiled.
+//!
+//! `#[cfg(doctest)]` puts this item in the build only while doctests
+//! are being collected, so the README's Rust blocks are compiled and
+//! run by `cargo test -p ensemble` without the README becoming the
+//! crate's documentation. A snippet that stops being true stops the
+//! build instead of quietly rotting in a corner of the docs.
+
+#![cfg_attr(doctest, doc = include_str!("../README.md"))]
+
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -12,7 +22,8 @@ use tokio::task::JoinSet;
 pub mod handshake;
 pub use handshake::{
     EnsembleHello, HelloParse, Hid, HidParseError, HidPrefix, HumdAddr, HumdKey, PeerCapabilities,
-    PeerConnection, Transport, hello_tone, hello_tone_unsigned, parse_hello, parse_hello_caps,
+    PeerConnection, SocketIdentity, Transport, hello_tone, hello_tone_unsigned, parse_hello,
+    parse_hello_caps, parse_socket_identity, peer_add_tone, peer_remove_tone,
 };
 
 pub mod link;
@@ -48,7 +59,8 @@ pub use gossip::{
 
 pub mod liveness;
 pub use liveness::{
-    Lease, Liveness, LivenessSignal, PING_CHI, PONG_CHI, ping_tone, pong_tone, probe_seq,
+    Lease, Liveness, LivenessSignal, LIVENESS_TTL, PING_CHI, PONG_CHI, ping_tone, pong_tone,
+    probe_seq,
 };
 
 pub mod kad;
@@ -58,9 +70,9 @@ pub use kad::{
     mint_query_id, parse_find_node, parse_find_node_resp,
 };
 
-pub mod hives;
+pub mod bees;
 pub mod uri;
-pub use hives::{ANNOUNCE_TOPIC, BindAddr, HiveAnnounce, HiveManifest, Propensity, ToolEntry};
+pub use bees::{ANNOUNCE_TOPIC, BindAddr, BeeAnnounce, BeeManifest, Propensity, ToolEntry};
 pub use uri::{AliasResolver, HostRef, HumUri, UriParseError};
 
 pub mod headroom;
@@ -69,6 +81,7 @@ pub mod headroom;
 pub mod onchain;
 
 const HANDSHAKE_DOMAIN: &str = "hum-ensemble-handshake-v1";
+const CAPS_HANDSHAKE_DOMAIN: &str = "hum-ensemble-caps-v1";
 
 const HANDSHAKE_SKEW_MS: i64 = 60_000;
 
@@ -257,7 +270,7 @@ impl Ensemble {
         });
 
         let rx = conn.take_receiver();
-        self.peers.write().insert(
+        let displaced = self.peers.write().insert(
             id,
             Peer {
                 conn: conn.clone(),
@@ -265,6 +278,7 @@ impl Ensemble {
                 lease: Lease::new(),
             },
         );
+        close_displaced_link(displaced.map(|p| p.conn), &conn);
         self.kad.note_peer(conn.peer().clone());
 
         let Some(rx) = rx else { return };
@@ -336,8 +350,10 @@ impl Ensemble {
 
     pub fn remove_peer(&self, id: &Hid) {
         self.kad.forget(id);
-        if let Some(p) = self.peers.write().remove(id) {
+        let gone = self.peers.write().remove(id);
+        if let Some(p) = gone {
             p.conn.close();
+            self.inbox.publish(peer_remove_tone(&self.me, id));
         }
     }
 
@@ -429,35 +445,35 @@ impl Ensemble {
         self.gossip.subscribe(topic)
     }
 
-    pub async fn hive_advertise(&self, manifest: hives::HiveManifest) {
-        let env = hives::HiveAnnounce::Advertise {
+    pub async fn bee_advertise(&self, manifest: bees::BeeManifest) {
+        let env = bees::BeeAnnounce::Advertise {
             humd_id: self.me.to_hex(),
             manifest: Box::new(manifest),
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Ok(payload) => self.publish(bees::ANNOUNCE_TOPIC, payload).await,
             Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "advertise serialize"),
         }
     }
 
-    pub async fn hive_retract(&self, name: &str) {
-        let env = hives::HiveAnnounce::Retract {
+    pub async fn bee_retract(&self, hid: Hid) {
+        let env = bees::BeeAnnounce::Retract {
             humd_id: self.me.to_hex(),
-            name: name.to_string(),
+            hid,
         };
         match serde_json::to_value(&env) {
-            Ok(payload) => self.publish(hives::ANNOUNCE_TOPIC, payload).await,
+            Ok(payload) => self.publish(bees::ANNOUNCE_TOPIC, payload).await,
             Err(e) => tracing::warn!(target: "ensemble.bees", error = %e, "retract serialize"),
         }
     }
 
-    pub fn hive_announcements(&self) -> mpsc::Receiver<hives::HiveAnnounce> {
-        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
+    pub fn bee_announcements(&self) -> mpsc::Receiver<bees::BeeAnnounce> {
+        let mut raw = self.subscribe_topic(bees::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
-                    Ok(v) => match serde_json::from_value::<hives::HiveAnnounce>(v.clone()) {
+                    Ok(v) => match serde_json::from_value::<bees::BeeAnnounce>(v.clone()) {
                         Ok(env) => {
                             if tx.send(env).await.is_err() {
                                 break;
@@ -478,15 +494,15 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover_all(&self) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
-        let mut raw = self.subscribe_topic(hives::ANNOUNCE_TOPIC);
+    pub fn bee_discover_all(&self) -> mpsc::Receiver<(Hid, bees::BeeManifest)> {
+        let mut raw = self.subscribe_topic(bees::ANNOUNCE_TOPIC);
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
                 match raw.recv().await {
                     Ok(v) => {
-                        let parsed: Result<hives::HiveAnnounce, _> = serde_json::from_value(v);
-                        if let Ok(hives::HiveAnnounce::Advertise { humd_id, manifest }) = parsed
+                        let parsed: Result<bees::BeeAnnounce, _> = serde_json::from_value(v);
+                        if let Ok(bees::BeeAnnounce::Advertise { humd_id, manifest }) = parsed
                             && let Ok(id) = Hid::from_hex(&humd_id)
                             && tx.send((id, *manifest)).await.is_err()
                         {
@@ -501,16 +517,16 @@ impl Ensemble {
         rx
     }
 
-    pub fn hive_discover(
+    pub fn bee_discover(
         &self,
-        name: impl Into<String>,
-    ) -> mpsc::Receiver<(Hid, hives::HiveManifest)> {
-        let needle = name.into();
-        let mut raw = self.hive_discover_all();
+        hive: impl Into<String>,
+    ) -> mpsc::Receiver<(Hid, bees::BeeManifest)> {
+        let needle = hive.into();
+        let mut raw = self.bee_discover_all();
         let (tx, rx) = mpsc::channel(64);
         tokio::spawn(async move {
             while let Some((id, manifest)) = raw.recv().await {
-                if manifest.name != needle {
+                if manifest.hive != needle {
                     continue;
                 }
                 if tx.send((id, manifest)).await.is_err() {
@@ -668,6 +684,7 @@ impl Drain {
                         conn.close();
                         return;
                     }
+                    self.inbox.publish(peer_add_tone(&self.me, &id));
                 } else {
                     self.unverified.fetch_add(1, Ordering::SeqCst);
                     continue;
@@ -701,7 +718,9 @@ impl Drain {
             self.inbox.publish(tone);
         }
 
-        if let Some(p) = self.peers.write().get_mut(&id) {
+        if let Some(p) = self.peers.write().get_mut(&id)
+            && Arc::ptr_eq(&p.conn, &conn)
+        {
             p.lease.observe(LivenessSignal::TransportClosed);
         }
     }
@@ -761,14 +780,43 @@ fn rekey_peer(
     old_id: Hid,
     new_id: Hid,
 ) {
-    let mut w = peers.write();
-    if let Some(p) = w.remove(&old_id) {
-        w.insert(new_id, p);
-    }
-    drop(w);
+    let displaced = {
+        let mut w = peers.write();
+        let mut displaced = None;
+        if let Some(p) = w.remove(&old_id) {
+            if old_id != new_id {
+                displaced = w.remove(&new_id).map(|p| p.conn);
+            }
+            w.insert(new_id, p);
+        } else if old_id != new_id {
+            displaced = w.remove(&new_id).map(|p| p.conn);
+            w.insert(
+                new_id,
+                Peer {
+                    conn: conn.clone(),
+                    learned_caps: None,
+                    lease: Lease::new(),
+                },
+            );
+        }
+        displaced
+    };
+    close_displaced_link(displaced, conn);
     let mut addr = conn.peer().clone();
     addr.id = new_id;
     kad.note_peer(addr);
+}
+
+fn close_displaced_link(
+    displaced: Option<Arc<dyn PeerConnection>>,
+    keep: &Arc<dyn PeerConnection>,
+) {
+    if let Some(old) = displaced
+        && !Arc::ptr_eq(&old, keep)
+    {
+        tracing::debug!(target: "ensemble.link", "link.displaced");
+        old.close();
+    }
 }
 
 async fn handle_kad(
@@ -845,22 +893,18 @@ async fn handle_liveness(
     true
 }
 
-/// Whether an announce is internally consistent: the `humd_id` it claims must
-/// match the `from` of the tone carrying it. Binds to the tone's own origin
-/// field, not the connection it arrived on, so a legitimate multi-hop
-/// advertise still percolates while a peer cannot stamp someone else's Hid.
 fn announce_origin_matches_payload(tone: &Tone) -> bool {
     let Some(from) = tone.get("from").and_then(|v| v.as_str()) else {
         return true;
     };
-    let Ok(payload) = serde_json::from_value::<hives::HiveAnnounce>(
+    let Ok(payload) = serde_json::from_value::<bees::BeeAnnounce>(
         tone.get("payload").cloned().unwrap_or(serde_json::Value::Null),
     ) else {
         return true;
     };
     let claimed = match payload {
-        hives::HiveAnnounce::Advertise { humd_id, .. } => humd_id,
-        hives::HiveAnnounce::Retract { humd_id, .. } => humd_id,
+        bees::BeeAnnounce::Advertise { humd_id, .. } => humd_id,
+        bees::BeeAnnounce::Retract { humd_id, .. } => humd_id,
     };
     claimed == from
 }
@@ -879,7 +923,7 @@ async fn handle_gossip(
     if !gossip.note_seen(parsed.msg_id) {
         return true;
     }
-    if parsed.topic == hives::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
+    if parsed.topic == bees::ANNOUNCE_TOPIC && !announce_origin_matches_payload(tone) {
         tracing::warn!(
             target: "ensemble.bees",
             topic = parsed.topic,
@@ -924,11 +968,11 @@ mod tests {
         })
     }
 
-    fn worker_announce(claimed: &str, model: &str) -> serde_json::Value {
-        let mut manifest = hives::HiveManifest::new("worker-bee", "0.1.0", "0.7.0");
-        manifest.bee = vec!["worker".to_string()];
+    fn nurse_announce(claimed: &str, model: &str) -> serde_json::Value {
+        let mut manifest = bees::BeeManifest::new("nurse-bee", "0.1.0", "0.7.0");
+        manifest.role = Some(thrum_core::Role::Nurse);
         manifest.models = vec![model.to_string()];
-        serde_json::to_value(hives::HiveAnnounce::Advertise {
+        serde_json::to_value(bees::BeeAnnounce::Advertise {
             humd_id: claimed.to_string(),
             manifest: Box::new(manifest),
         })
@@ -939,7 +983,7 @@ mod tests {
         json!({
             "chi": "gossip-publish",
             "rid": "g1",
-            "topic": hives::ANNOUNCE_TOPIC,
+            "topic": bees::ANNOUNCE_TOPIC,
             "from": origin,
             "msg_id": "m1",
             "payload": payload,
@@ -949,7 +993,7 @@ mod tests {
     #[test]
     fn an_announce_matching_its_tone_origin_is_accepted() {
         let me = Hid::random_humd();
-        let tone = announce_tone(&me.to_hex(), worker_announce(&me.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&me.to_hex(), nurse_announce(&me.to_hex(), "claude-opus-4-7"));
         assert!(announce_origin_matches_payload(&tone));
     }
 
@@ -957,7 +1001,7 @@ mod tests {
     fn an_announce_claiming_another_hums_hid_is_rejected() {
         let me = Hid::random_humd();
         let victim = Hid::random_humd();
-        let tone = announce_tone(&me.to_hex(), worker_announce(&victim.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&me.to_hex(), nurse_announce(&victim.to_hex(), "claude-opus-4-7"));
         assert!(
             !announce_origin_matches_payload(&tone),
             "a peer must not advertise capabilities under a Hid it does not own"
@@ -966,11 +1010,9 @@ mod tests {
 
     #[test]
     fn an_announce_relayed_by_a_third_peer_is_still_accepted() {
-        // A advertises, B relays, C receives. C sees B as the connection but
-        // the tone's origin is still A — the claim must survive the hop.
         let a = Hid::random_humd();
         let b = Hid::random_humd();
-        let tone = announce_tone(&a.to_hex(), worker_announce(&a.to_hex(), "claude-opus-4-7"));
+        let tone = announce_tone(&a.to_hex(), nurse_announce(&a.to_hex(), "claude-opus-4-7"));
         assert!(announce_origin_matches_payload(&tone), "relay was blocked");
         assert_ne!(a, b);
     }
@@ -1268,10 +1310,10 @@ mod tests {
     }
 
     #[test]
-    fn hid_wbee_prefix_parses() {
-        let id = Hid::random(HidPrefix::Wbee);
+    fn hid_bee_prefix_parses() {
+        let id = Hid::random(HidPrefix::Bee);
         let hex = id.to_hex();
-        assert!(hex.starts_with("wbee_"));
+        assert!(hex.starts_with("bee_"));
         let parsed: Hid = serde_json::from_str(&format!("\"{}\"", hex)).unwrap();
         assert_eq!(id, parsed);
     }
@@ -1351,19 +1393,15 @@ mod tests {
         let b_id = b_key.hid();
         let a_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
-            nests: vec!["claude-cli".into()],
             hosts: vec!["alice".into()],
             can_relay: true,
-            free_slots: None,
-            headroom: headroom::CellHeadroom::default(),
+            ..Default::default()
         };
         let b_caps = PeerCapabilities {
             proto_version: "0.2.0".into(),
-            nests: vec!["claude-repl".into()],
             hosts: vec!["bob".into()],
             can_relay: false,
-            free_slots: None,
-            headroom: headroom::CellHeadroom::default(),
+            ..Default::default()
         };
         let (a_side, b_side) = InMemoryEndpoint::pair(a_id, b_caps.clone(), b_id, a_caps.clone());
 
@@ -1395,13 +1433,76 @@ mod tests {
 
         let learned_b = ensemble_a.peer_caps(&b_id).expect("b registered on a");
         assert_eq!(learned_b.proto_version, "0.2.0");
-        assert_eq!(learned_b.nests, vec!["claude-repl".to_string()]);
         assert_eq!(learned_b.hosts, vec!["bob".to_string()]);
         assert!(!learned_b.can_relay);
 
         let learned_a = ensemble_b.peer_caps(&a_id).expect("a registered on b");
-        assert_eq!(learned_a.nests, vec!["claude-cli".to_string()]);
+        assert_eq!(learned_a.hosts, vec!["alice".to_string()]);
         assert!(learned_a.can_relay);
+    }
+
+    #[tokio::test]
+    async fn a_second_link_to_a_peer_closes_the_first() {
+        let a_key = HumdKey::generate();
+        let b_key = HumdKey::generate();
+        let a_id = a_key.hid();
+        let b_id = b_key.hid();
+        let caps = PeerCapabilities::default();
+        let (first, first_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+        let (second, second_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+
+        let ensemble_a = Ensemble::new(a_id);
+        let ensemble_b = Ensemble::new(b_id);
+        ensemble_a.install(first.clone(), caps.clone(), &a_key);
+        ensemble_b.install(first_peer, caps.clone(), &b_key);
+        ensemble_a.install(second.clone(), caps.clone(), &a_key);
+        ensemble_b.install(second_peer, caps.clone(), &b_key);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            first.send(tone("first")).await.is_err(),
+            "the displaced link must be closed"
+        );
+        assert!(
+            second.send(tone("second")).await.is_ok(),
+            "the link holding the slot must stay open"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rekeyed_link_closes_the_link_it_displaces() {
+        let a_key = HumdKey::generate();
+        let b_key = HumdKey::generate();
+        let a_id = a_key.hid();
+        let b_id = b_key.hid();
+        let caps = PeerCapabilities::default();
+        let (dialed, dialed_peer) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+        let placeholder = Hid::random_humd();
+        let (accepted, accepted_peer) =
+            InMemoryEndpoint::pair(a_id, caps.clone(), placeholder, caps.clone());
+
+        let ensemble_a = Ensemble::new(a_id);
+        let ensemble_b = Ensemble::new(b_id);
+        ensemble_a.install(dialed.clone(), caps.clone(), &a_key);
+        ensemble_b.install(dialed_peer, caps.clone(), &b_key);
+        ensemble_a.install(accepted.clone(), caps.clone(), &a_key);
+        ensemble_b.install(accepted_peer, caps.clone(), &b_key);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            ensemble_a.peers().contains(&b_id),
+            "the peer must be keyed by its real id once the hello lands"
+        );
+        assert!(
+            dialed.send(tone("dialed")).await.is_err(),
+            "the link the rekey displaced must be closed"
+        );
+        assert!(
+            accepted.send(tone("accepted")).await.is_ok(),
+            "the rekeyed link must hold the slot"
+        );
     }
 
     #[tokio::test]
@@ -1449,13 +1550,64 @@ mod tests {
             .await
             .unwrap();
 
-        let got = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
-            .await
-            .expect("subscribe channel timed out")
-            .expect("subscribe channel closed");
-        assert_eq!(got.get("chi").unwrap(), "hello");
+        let mut got = None;
+        while let Ok(Ok(tone)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        {
+            if tone.get("chi").and_then(|v| v.as_str()) == Some("hello") {
+                got = Some(tone);
+                break;
+            }
+        }
+        let got = got.expect("the second hello should reach the subscriber");
         assert_eq!(got.get("rid").unwrap(), "tunneled-hello");
         assert_eq!(got.get("bee").unwrap(), "vercel-ai");
+    }
+
+    #[tokio::test]
+    async fn a_stale_connection_dying_does_not_kill_the_live_peer() {
+        let me_key = HumdKey::generate();
+        let peer_key = HumdKey::generate();
+        let me = me_key.hid();
+        let peer_id = peer_key.hid();
+        let (mine, theirs) = InMemoryEndpoint::pair_concrete(
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
+        );
+        let (mine2, theirs2) = InMemoryEndpoint::pair_concrete(
+            me,
+            PeerCapabilities::default(),
+            peer_id,
+            PeerCapabilities::default(),
+        );
+
+        let ensemble = Ensemble::new(me);
+        ensemble.install(mine, PeerCapabilities::default(), &me_key);
+        theirs
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities::default()))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        ensemble.install(mine2, PeerCapabilities::default(), &me_key);
+        theirs2
+            .send(hello_tone(&peer_id, &peer_key, &PeerCapabilities::default()))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        theirs.kill();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let liveness = ensemble
+            .peer_liveness(&peer_id, std::time::Duration::from_secs(30))
+            .expect("the peer should still be installed");
+        assert!(
+            matches!(liveness, Liveness::Live),
+            "a stale connection's death marked the live peer {liveness:?}"
+        );
     }
 
     #[tokio::test]
@@ -1498,12 +1650,23 @@ mod tests {
             .await
             .unwrap();
 
-        let got = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
-            .await
-            .expect("subscribe channel timed out")
-            .expect("subscribe channel closed");
-        assert_eq!(got.get("chi").unwrap(), "ping");
+        let mut got = None;
+        let mut saw_hello = false;
+        while let Ok(Ok(tone)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        {
+            match tone.get("chi").and_then(|v| v.as_str()) {
+                Some("ping") => {
+                    got = Some(tone);
+                    break;
+                }
+                Some("hello") => saw_hello = true,
+                _ => {}
+            }
+        }
+        let got = got.expect("the ping should reach the subscriber");
         assert_eq!(got.get("rid").unwrap(), "r1");
+        assert!(!saw_hello, "the hello should be swallowed");
     }
 }
 
@@ -1627,5 +1790,22 @@ mod invariants {
             0,
             "a dead peer must not route"
         );
+    }
+
+    #[tokio::test]
+    async fn a_removed_peer_is_told_to_the_kernel_once() {
+        let me = Hid::random_humd();
+        let peer = Hid::random_humd();
+        let ensemble = Ensemble::new(me);
+        let (mine, _theirs) = InMemoryEndpoint::pair_concrete(me, caps(), peer, caps());
+        ensemble.add_peer(mine);
+        let mut inbox = ensemble.subscribe();
+
+        ensemble.remove_peer(&peer);
+        ensemble.remove_peer(&peer);
+        let told = inbox.try_recv().expect("the kernel hears the peer is gone");
+        assert_eq!(told["chi"], "peer-remove");
+        assert_eq!(told["humd_id"], hex::encode(peer.as_bytes()));
+        assert!(inbox.try_recv().is_err(), "a peer already gone is not told again");
     }
 }

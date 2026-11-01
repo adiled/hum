@@ -1,42 +1,36 @@
-//! Protocol-view codegen: parse `thrum-core/src/views.rs` + `envelope.rs`
-//! with `syn` and emit typed per-chi bodies for TS / Python / Go.
+//! The views: the envelope and every chi's body, emitted for TS, Python,
+//! Go and C from `hum.thrum`'s projection (`Thrum::protocol_spec`).
 //!
-//! Same constraint as the rest of codegen: no dependency on `thrum-core`.
-//! We parse source text, so this crate stays an ordinary build dependency
-//! of thrum-core (no cycle).
+//! `rust_types` parses `thrum-core/src/views.rs` and `envelope.rs` with
+//! `syn` into the same `TypeSpec` shape, so `rust::check` can hold the
+//! Rust to the file field by field. Same constraint as the rest of
+//! codegen: no dependency on `thrum-core`, only its source text.
 
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use syn::{Field, Fields, Item, ItemStruct, Meta, Type};
 
 use crate::paths;
 
-/// Simplified wire type — everything `views.rs` / `envelope.rs` can
-/// express that the client languages need to render.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Repr {
     Str,
     Int {
         unsigned: bool,
     },
+    Float,
     Bool,
-    /// `serde_json::Value` — opaque JSON.
     Json,
-    /// `BTreeMap<String, V>`.
     Map(Box<Repr>),
-    /// `Vec<T>`.
     Arr(Box<Repr>),
-    /// Reference to another generated type (`DroneLoad`, …).
     Ref(String),
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldSpec {
-    /// Rust (snake_case) name, also the Python field name.
     pub rust: String,
-    /// Wire key — from `#[serde(rename = "...")]` else the rust name.
     pub json: String,
     pub repr: Repr,
     pub optional: bool,
@@ -44,7 +38,6 @@ pub struct FieldSpec {
 
 #[derive(Debug, Clone)]
 pub struct TypeSpec {
-    /// `HelloBody`, `Envelope`, …
     pub name: String,
     pub fields: Vec<FieldSpec>,
 }
@@ -55,33 +48,26 @@ pub struct ProtocolSpec {
     pub types: Vec<TypeSpec>,
 }
 
-/// Parse a views.rs + envelope.rs pair (plus lib.rs for the version).
-pub fn protocol_spec(views_rs: &Path, envelope_rs: &Path, lib_rs: &Path) -> Result<ProtocolSpec> {
-    let lib_src =
-        fs::read_to_string(lib_rs).with_context(|| format!("read {}", lib_rs.display()))?;
-    let version = extract_version(&lib_src)?
-        .ok_or_else(|| anyhow!("THRUM_VERSION not found in {}", lib_rs.display()))?;
-
+pub fn rust_types(views_rs: &Path, envelope_rs: &Path) -> Result<Vec<TypeSpec>> {
     let mut types = Vec::new();
-    for path in [views_rs, envelope_rs] {
+    let every_view: fn(&str) -> bool = |_| true;
+    let the_envelope: fn(&str) -> bool = |name| name == crate::thrum::ENVELOPE_TYPE;
+    for (path, keep) in [(views_rs, every_view), (envelope_rs, the_envelope)] {
         let src = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        for st in structs_in(&src)? {
+        for st in structs_in(&src, keep)? {
             types.push(st);
         }
     }
-    Ok(ProtocolSpec { version, types })
+    Ok(types)
 }
 
-fn structs_in(src: &str) -> Result<Vec<TypeSpec>> {
+fn structs_in(src: &str, keep: fn(&str) -> bool) -> Result<Vec<TypeSpec>> {
     let file = syn::parse_file(src).map_err(|e| anyhow::anyhow!("syn parse: {e}"))?;
     let mut out = Vec::new();
     for item in file.items {
         let Item::Struct(s) = item else { continue };
         let name = s.ident.to_string();
-        // Only wire-facing types: the envelope, per-chi bodies, and the
-        // nested body-support structs (DroneLoad). Test-only types never
-        // appear here — unit-test structs are filtered by these names.
-        if name != "Envelope" && name != "DroneLoad" && !name.ends_with("Body") {
+        if !keep(&name) {
             continue;
         }
         out.push(type_spec(s));
@@ -115,44 +101,39 @@ fn field_spec(f: &Field) -> Option<FieldSpec> {
     })
 }
 
-/// `Option<T>` → (true, T); anything else → (false, itself).
 fn simplify(ty: &Type) -> (bool, Repr) {
-    if let Type::Path(p) = ty {
-        // Check the leading segment name directly: syn's `is_ident` rejects
-        // paths with generic arguments, so `Option<String>` would slip by.
-        if let Some(seg) = p.path.segments.first()
-            && seg.ident == "Option"
-                && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
-                    && let Some(syn::GenericArgument::Type(inner)) = a.args.first() {
-                        return (true, simplify(inner).1);
-                    }
+    if let Type::Path(p) = ty
+        && let Some(seg) = p.path.segments.first()
+        && seg.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(a) = &seg.arguments
+        && let Some(syn::GenericArgument::Type(inner)) = a.args.first()
+    {
+        return (true, simplify(inner).1);
     }
     (false, repr_of(ty))
 }
 
 fn repr_of(ty: &Type) -> Repr {
     let Type::Path(p) = ty else {
-        return Repr::Json; // opaque fallback (bare trait object, etc.)
+        return Repr::Json;
     };
     let seg = &p.path.segments[0];
     match seg.ident.to_string().as_str() {
         "String" => Repr::Str,
         "i64" | "i32" | "i16" => Repr::Int { unsigned: false },
         "u64" | "u32" | "u16" => Repr::Int { unsigned: true },
+        "f64" | "f32" => Repr::Float,
         "bool" => Repr::Bool,
         "Value" => Repr::Json,
         "Vec" => {
-            let inner = angle_ty(&seg.arguments, 0).unwrap_or(Repr::Json);
+            let inner = angle_ty(&seg.arguments, VEC_VALUE_ARG).unwrap_or(Repr::Json);
             Repr::Arr(Box::new(inner))
         }
         "BTreeMap" => {
-            // The value type is the SECOND generic arg (first is the key).
-            let inner = angle_ty(&seg.arguments, 1).unwrap_or(Repr::Json);
+            let inner = angle_ty(&seg.arguments, MAP_VALUE_ARG).unwrap_or(Repr::Json);
             Repr::Map(Box::new(inner))
         }
         other => {
-            // Multi-segment paths (serde_json::Value) land on the last
-            // segment; otherwise treat as a reference to another type.
             if p.path.segments.len() > 1 {
                 let last = &p.path.segments[p.path.segments.len() - 1];
                 return repr_of(&Type::Path(syn::TypePath {
@@ -165,6 +146,10 @@ fn repr_of(ty: &Type) -> Repr {
     }
 }
 
+const VEC_VALUE_ARG: usize = 0;
+
+const MAP_VALUE_ARG: usize = 1;
+
 fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
     if let syn::PathArguments::AngleBracketed(a) = args
         && let Some(syn::GenericArgument::Type(t)) = a.args.iter().nth(nth) {
@@ -173,46 +158,6 @@ fn angle_ty(args: &syn::PathArguments, nth: usize) -> Option<Repr> {
     None
 }
 
-/// Verify every Chi variant has a matching `{Pascal}Body` view, and every
-/// body view maps back to a real chi. Called on every thrum-core build so
-/// a new chi without a view (or an orphan view) fails fast instead of
-/// silently generating a partial client.
-pub fn check_coverage(chis: &[crate::Variant], proto: &ProtocolSpec) -> Result<()> {
-    for v in chis {
-        let expect = format!("{}Body", v.pascal);
-        if !proto.types.iter().any(|t| t.name == expect) {
-            anyhow::bail!(
-                "chi `{}` ({}) has no body view `{expect}` in {}",
-                v.wire,
-                v.pascal,
-                paths::VIEWS_RS_REL
-            );
-        }
-    }
-    let mut wire_names: Vec<String> = proto
-        .types
-        .iter()
-        .filter(|t| names_body_view(&t.name))
-        .map(|t| body_chi(&t.name))
-        .collect();
-    let mut chi_wires: Vec<String> = chis.iter().map(|v| v.wire.clone()).collect();
-    wire_names.sort();
-    chi_wires.sort();
-    if wire_names != chi_wires {
-        anyhow::bail!(
-            "view <-> chi mismatch in {}: views {wire_names:?} vs chis {chi_wires:?}",
-            paths::VIEWS_RS_REL
-        );
-    }
-    Ok(())
-}
-
-/// First `#[serde(rename = "...")]` value on the field, if any.
-///
-/// Parsed by regex over the raw attribute tokens rather than
-/// `parse_nested_meta`: that API's handling of unconsumed `key = value`
-/// pairs changed across syn 2.x patch releases, and the token text of
-/// `rename = "…"` is verbatim in both, so regex is version-proof.
 fn serde_rename(f: &Field) -> Option<String> {
     let re = regex::Regex::new(r#"rename\s*=\s*"([^"]*)""#).expect("static regex");
     for attr in &f.attrs {
@@ -229,36 +174,23 @@ fn serde_rename(f: &Field) -> Option<String> {
     None
 }
 
-/// THRUM_VERSION from lib.rs (same regex as the chi registry parser).
-fn extract_version(lib: &str) -> Result<Option<String>> {
-    let re = regex::Regex::new(r#"pub\s+const\s+THRUM_VERSION\s*:\s*&\s*str\s*=\s*"([^"]+)""#)?;
-    Ok(re.captures(lib).map(|c| c[1].to_string()))
-}
-
-// ── emitters ───────────────────────────────────────────────────────────
-
-fn regen_header(comment: &str, refs: &[&str]) -> String {
-    let refs = refs.join(", ");
+fn regen_header(comment: &str) -> String {
     format!(
-        "{c} @generated by `cargo run -p codegen` from {refs} — DO NOT EDIT.\n\
+        "{c} @generated by `cargo run -p codegen` from {thrum} — DO NOT EDIT.\n\
          {c}\n\
-         {c} Canonical wire views: every chi body is a Rust struct in\n\
-         {c} thrum-core/src/views.rs, the envelope in envelope.rs. These\n\
-         {c} client mirrors come out of the same source — no hand-sync.\n\
-         {c} Manual regen: `cargo run -p codegen`.\n\n",
+         {c} The envelope and every chi's body, as {thrum} declares them. The\n\
+         {c} Rust views in thrum-core are held to the same file, so a tone is\n\
+         {c} the same shape in every language. Manual regen: `cargo run -p codegen`.\n\n",
         c = comment,
+        thrum = paths::HUM_THRUM_REL,
     )
 }
 
-/// Emit `protocol.ts` to `output`.
 pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
-    s.push_str(&regen_header(
-        "//",
-        &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
-    ));
+    s.push_str(&regen_header("//"));
     s.push_str("export type { ChiKind } from \"./chi.ts\";\n");
-    s.push_str("import type { Chi } from \"./chi.ts\";\n\n");
+    s.push_str("import { isValidChi, type ChiKind } from \"./chi.ts\";\n\n");
 
     for t in &spec.types {
         s.push_str(&format!("export interface {} {{\n", t.name));
@@ -269,7 +201,6 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         s.push_str("}\n\n");
     }
 
-    // chi → view type map for discriminated tones.
     s.push_str("// Body view per chi wire value.\n");
     s.push_str("export interface ToneViews {\n");
     for t in &spec.types {
@@ -280,17 +211,24 @@ pub fn emit_protocol_ts(spec: &ProtocolSpec, output: &Path) -> Result<()> {
         s.push_str(&format!("  \"{}\": {};\n", wire, t.name));
     }
     s.push_str("}\n\n");
-    s.push_str("export type ToneView<C extends keyof ToneViews> = Envelope & ToneViews[C];\n");
+    s.push_str("// A tone: the envelope and its chi's declared body, the same tone\n");
+    s.push_str("// whether a bee sends it or hears it. Its rid may be left out; hum's\n");
+    s.push_str("// client gives a tone one when it has none, and humd's breath has none.\n");
+    s.push_str("export type Tone<C extends keyof ToneViews = keyof ToneViews> = {\n");
+    s.push_str("  [K in C]: { chi: K; rid?: string } & Omit<Envelope, \"chi\" | \"rid\"> & ToneViews[K];\n");
+    s.push_str("}[C];\n\n");
+    s.push_str("export function isTone(x: unknown): x is Tone {\n");
+    s.push_str("  if (!x || typeof x !== \"object\") return false;\n");
+    s.push_str("  const chi = (x as { chi?: unknown }).chi;\n");
+    s.push_str("  return typeof chi === \"string\" && isValidChi(chi);\n");
+    s.push_str("}\n");
     write_out(output, &s)
 }
 
-/// True for structs that are per-chi bodies (skips Envelope and the
-/// nested support structs in chi → view maps).
 fn names_body_view(name: &str) -> bool {
     name.ends_with("Body")
 }
 
-/// `HelloBody` → `hello`; `KadFindNodeRespBody` → `kad-find-node-resp`.
 fn body_chi(name: &str) -> String {
     let pascal = name.strip_suffix("Body").unwrap_or(name);
     let mut out = String::with_capacity(pascal.len() + 4);
@@ -310,22 +248,19 @@ fn body_chi(name: &str) -> String {
 fn ts_repr(r: &Repr) -> String {
     match r {
         Repr::Str => "string".into(),
-        Repr::Int { .. } => "number".into(),
+        Repr::Int { .. } | Repr::Float => "number".into(),
         Repr::Bool => "boolean".into(),
         Repr::Json => "unknown".into(),
         Repr::Map(inner) => format!("Record<string, {}>", ts_repr(inner)),
         Repr::Arr(inner) => format!("{}[]", ts_repr(inner)),
+        Repr::Ref(name) if name == "Chi" => "ChiKind".into(),
         Repr::Ref(name) => name.clone(),
     }
 }
 
-/// Emit `protocol.py` to `output`.
 pub fn emit_protocol_py(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
-    s.push_str(&regen_header(
-        "#",
-        &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
-    ));
+    s.push_str(&regen_header("#"));
     s.push_str("from __future__ import annotations\n\n");
     s.push_str("from dataclasses import dataclass\n");
     s.push_str("from typing import Any, ClassVar, Optional\n\n");
@@ -336,8 +271,6 @@ pub fn emit_protocol_py(spec: &ProtocolSpec, output: &Path) -> Result<()> {
             s.push_str("    pass\n\n");
             continue;
         }
-        // Dataclasses require defaulted (optional) fields after required
-        // ones — Rust order is wire order and mixes them freely.
         let ordered: Vec<&FieldSpec> = t
             .fields
             .iter()
@@ -357,7 +290,7 @@ pub fn emit_protocol_py(spec: &ProtocolSpec, output: &Path) -> Result<()> {
             pairs.push(format!("        {:?}: {:?},", python, f.json));
         }
         s.push('\n');
-        s.push_str("    # rust field name -> wire key (single source in views.rs)\n");
+        s.push_str("    # field name -> wire key, as hum.thrum declares it\n");
         s.push_str("    _wire: ClassVar[dict[str, str]] = {\n");
         for p in &pairs {
             s.push_str(&format!("{p}\n"));
@@ -404,6 +337,7 @@ fn py_repr(r: &Repr, optional: bool) -> String {
     let base = match r {
         Repr::Str => "str",
         Repr::Int { .. } => "int",
+        Repr::Float => "float",
         Repr::Bool => "bool",
         Repr::Json => "Any",
         Repr::Map(inner) => {
@@ -419,8 +353,6 @@ fn py_repr(r: &Repr, optional: bool) -> String {
     }
 }
 
-/// Rust snake field name → valid Python identifier. `from` collides with
-/// the `from` keyword (gossip-publish body).
 fn py_field_name(rust: &str) -> String {
     match rust {
         "from" => "from_".to_string(),
@@ -428,8 +360,6 @@ fn py_field_name(rust: &str) -> String {
     }
 }
 
-/// Optional-list/map annotations still need `Optional` even though `None`
-/// is a legal value: `list[str] = None` fails type checkers.
 fn map_opt(optional: bool, inner: &str) -> String {
     if optional {
         format!("Optional[{inner}]")
@@ -438,13 +368,9 @@ fn map_opt(optional: bool, inner: &str) -> String {
     }
 }
 
-/// Emit `protocol.go` to `output`.
 pub fn emit_protocol_go(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     let mut s = String::new();
-    s.push_str(&regen_header(
-        "//",
-        &[paths::VIEWS_RS_REL, paths::ENVELOPE_RS_REL],
-    ));
+    s.push_str(&regen_header("//"));
     s.push_str("package thrum\n\n");
     s.push_str("import \"encoding/json\"\n\n");
 
@@ -482,8 +408,112 @@ pub fn emit_protocol_go(spec: &ProtocolSpec, output: &Path) -> Result<()> {
     write_out(output, &s)
 }
 
+pub fn emit_protocol_c(spec: &ProtocolSpec, output: &Path) -> Result<()> {
+    write_out(output, &render_protocol_c(spec))
+}
+
+fn render_protocol_c(spec: &ProtocolSpec) -> String {
+    let mut s = String::new();
+    s.push_str(&regen_header("//"));
+    s.push_str("#ifndef THRUM_PROTOCOL_H\n#define THRUM_PROTOCOL_H\n\n");
+    s.push_str("#include <stdbool.h>\n#include <stddef.h>\n\n");
+    s.push_str(
+        "typedef enum {\n\
+         \x20   THRUM_FIELD_STRING,\n\
+         \x20   THRUM_FIELD_INT,\n\
+         \x20   THRUM_FIELD_UINT,\n\
+         \x20   THRUM_FIELD_NUMBER,\n\
+         \x20   THRUM_FIELD_BOOL,\n\
+         \x20   THRUM_FIELD_ARRAY,\n\
+         \x20   THRUM_FIELD_OBJECT,\n\
+         \x20   THRUM_FIELD_ANY\n\
+         } thrum_field_kind;\n\n\
+         typedef struct {\n\
+         \x20   const char *json;\n\
+         \x20   thrum_field_kind kind;\n\
+         \x20   bool optional;\n\
+         } thrum_field;\n\n\
+         typedef struct {\n\
+         \x20   const char *chi;\n\
+         \x20   const thrum_field *fields;\n\
+         \x20   size_t count;\n\
+         } thrum_view;\n\n",
+    );
+
+    for t in &spec.types {
+        if t.fields.is_empty() {
+            continue;
+        }
+        s.push_str(&format!(
+            "static const thrum_field {}[{}] = {{\n",
+            c_fields_ident(&t.name),
+            t.fields.len()
+        ));
+        for f in &t.fields {
+            s.push_str(&format!(
+                "    {{\"{}\", {}, {}}},\n",
+                f.json,
+                c_kind(&f.repr, spec),
+                f.optional
+            ));
+        }
+        s.push_str("};\n\n");
+    }
+
+    if let Some(env) = spec.types.iter().find(|t| t.name == crate::thrum::ENVELOPE_TYPE) {
+        s.push_str(&format!(
+            "static const thrum_view THRUM_ENVELOPE = {{NULL, {}, {}}};\n\n",
+            c_fields_ref(env),
+            env.fields.len()
+        ));
+    }
+
+    let views: Vec<&TypeSpec> = spec.types.iter().filter(|t| names_body_view(&t.name)).collect();
+    s.push_str(&format!("#define THRUM_VIEW_COUNT {}\n\n", views.len()));
+    s.push_str("static const thrum_view THRUM_VIEWS[THRUM_VIEW_COUNT] = {\n");
+    for t in &views {
+        s.push_str(&format!(
+            "    {{\"{}\", {}, {}}},\n",
+            body_chi(&t.name),
+            c_fields_ref(t),
+            t.fields.len()
+        ));
+    }
+    s.push_str("};\n\n#endif\n");
+    s
+}
+
+fn c_fields_ident(name: &str) -> String {
+    format!("THRUM_FIELDS_{}", crate::pascal_to_screaming_snake(name))
+}
+
+fn c_fields_ref(t: &TypeSpec) -> String {
+    if t.fields.is_empty() {
+        "NULL".into()
+    } else {
+        c_fields_ident(&t.name)
+    }
+}
+
+fn c_kind(r: &Repr, spec: &ProtocolSpec) -> &'static str {
+    match r {
+        Repr::Str => "THRUM_FIELD_STRING",
+        Repr::Int { unsigned: false } => "THRUM_FIELD_INT",
+        Repr::Int { unsigned: true } => "THRUM_FIELD_UINT",
+        Repr::Float => "THRUM_FIELD_NUMBER",
+        Repr::Bool => "THRUM_FIELD_BOOL",
+        Repr::Json => "THRUM_FIELD_ANY",
+        Repr::Map(_) => "THRUM_FIELD_OBJECT",
+        Repr::Arr(_) => "THRUM_FIELD_ARRAY",
+        Repr::Ref(name) if name == "Chi" => "THRUM_FIELD_STRING",
+        Repr::Ref(name) if name == "Map" || spec.types.iter().any(|t| &t.name == name) => {
+            "THRUM_FIELD_OBJECT"
+        }
+        Repr::Ref(_) => "THRUM_FIELD_ANY",
+    }
+}
+
 fn pascal_of(name: &str) -> String {
-    // HelloBody → HelloBody (already Pascal); strip impossible suffix.
     name.strip_suffix("Body")
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string())
@@ -499,13 +529,14 @@ fn go_repr(r: &Repr, optional: bool) -> String {
                 "int64".into()
             }
         }
+        Repr::Float => "float64".to_string(),
         Repr::Bool => "bool".to_string(),
         Repr::Json => "json.RawMessage".to_string(),
         Repr::Map(inner) => format!("map[string]{}", go_repr(inner, false)),
         Repr::Arr(inner) => format!("[]{}", go_repr(inner, false)),
         Repr::Ref(name) => name.clone(),
     };
-    if optional && matches!(r, Repr::Str | Repr::Int { .. } | Repr::Bool | Repr::Ref(_)) {
+    if optional && matches!(r, Repr::Str | Repr::Int { .. } | Repr::Float | Repr::Bool | Repr::Ref(_)) {
         format!("*{base}")
     } else {
         base
@@ -540,7 +571,7 @@ mod tests {
     fn kebab_of_body() {
         assert_eq!(body_chi("HelloBody"), "hello");
         assert_eq!(body_chi("KadFindNodeRespBody"), "kad-find-node-resp");
-        assert_eq!(body_chi("ToolCallBody"), "tool-call");
+        assert_eq!(body_chi("TendrilReachBody"), "tendril-reach");
     }
 
     #[test]
@@ -552,52 +583,62 @@ mod tests {
 
     #[test]
     fn parses_views_slice() {
-        // A tiny slice of the wire spec enough to exercise Option / Vec /
-        // BTreeMap / serde rename.
         let src = r#"
             #[derive(Serialize, Deserialize)]
-            pub struct ChunkBody {
-                #[serde(rename = "chunkType")]
-                pub chunk_type: String,
+            pub struct UnfurlBody {
+                #[serde(rename = "callId")]
+                pub call_id: String,
                 #[serde(skip_serializing_if = "Option::is_none")]
-                pub delta: Option<serde_json::Value>,
+                pub grain: Option<serde_json::Value>,
                 #[serde(skip_serializing_if = "Option::is_none")]
                 pub tools: Option<Vec<String>>,
                 #[serde(skip_serializing_if = "Option::is_none")]
                 pub load: Option<BTreeMap<String, u64>>,
+                pub temperature: f64,
             }
         "#;
-        let ts = structs_in(src).unwrap();
+        let ts = structs_in(src, |_| true).unwrap();
         assert_eq!(ts.len(), 1);
         let f = &ts[0].fields;
-        assert_eq!(f.len(), 4);
-        assert_eq!(f[0].json, "chunkType");
+        assert_eq!(f.len(), 5);
+        assert_eq!(f[0].json, "callId");
         assert!(f[0].repr.matches(&Repr::Str));
         assert!(f[1].optional);
         assert!(matches!(f[1].repr, Repr::Json));
         assert!(matches!(f[2].repr, Repr::Arr(_)));
         assert!(matches!(f[3].repr, Repr::Map(_)));
+        assert!(matches!(f[4].repr, Repr::Float));
+    }
+
+    #[test]
+    fn the_c_views_carry_every_declared_key() {
+        let spec = crate::thrum::parse(&paths::hum_thrum()).unwrap().protocol_spec();
+        let c = render_protocol_c(&spec);
+        assert!(c.contains("{\"kind\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"temperature\", THRUM_FIELD_NUMBER, true},"));
+        assert!(c.contains("{\"signedAt\", THRUM_FIELD_INT, false},"));
+        assert!(c.contains("{\"chi\", THRUM_FIELD_STRING, false},"));
+        assert!(c.contains("{\"ext\", THRUM_FIELD_OBJECT, true},"));
+        assert!(c.contains("{\"cancel\", NULL, 0},"));
+        assert!(c.contains("{\"hello\", THRUM_FIELDS_HELLO_BODY, "));
+        let views = spec.types.iter().filter(|t| names_body_view(&t.name)).count();
+        assert!(c.contains(&format!("#define THRUM_VIEW_COUNT {views}\n")));
     }
 
     #[test]
     fn parses_real_views_renames() {
-        let spec =
-            protocol_spec(&paths::views_rs(), &paths::envelope_rs(), &paths::lib_rs()).unwrap();
-        let chunk = spec
-            .types
+        let types = rust_types(&paths::views_rs(), &paths::envelope_rs()).unwrap();
+        let unfurl = types
             .iter()
-            .find(|t| t.name == "ChunkBody")
-            .expect("ChunkBody in spec");
-        for f in &chunk.fields {
-            match f.rust.as_str() {
-                "chunk_type" => assert_eq!(f.json, "chunkType"),
-                "block_idx" => assert_eq!(f.json, "blockIdx"),
-                "partial_json" => assert_eq!(f.json, "partialJson"),
-                "delta" => assert_eq!(f.json, "delta"),
-                other => panic!("unexpected ChunkBody field {other}"),
+            .find(|t| t.name == "UnfurlBody")
+            .expect("UnfurlBody in views.rs");
+        for f in &unfurl.fields {
+            if f.rust == "call_id" {
+                assert_eq!(f.json, "callId");
             }
         }
-        let prompt = spec.types.iter().find(|t| t.name == "PromptBody").unwrap();
+        assert!(unfurl.fields.iter().any(|f| f.json == "sap"));
+        let prompt = types.iter().find(|t| t.name == "PromptBody").unwrap();
         for f in &prompt.fields {
             if f.rust == "model_id" {
                 assert_eq!(f.json, "modelId");

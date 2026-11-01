@@ -1,6 +1,25 @@
 //! Per-connection task: reader splits NDJSON, writer drains the outbound
 //! channel. On hello we record the announcement; on every valid tone we
 //! auto-echo (unless chi is echo/log) then hand to the sink.
+//!
+//! The order of checks on an incoming tone matters. Envelope first: a
+//! tone without a non-empty `chi` is dropped before anything else looks
+//! at it. Then dusk: a tone past its expiry gets a not-ok echo and is
+//! dropped. Then admission: until a breath admits the client's hello,
+//! humd hears nothing from it but a hello, and refuses anything else
+//! under its rid. Then auto-echo, which skips `echo` itself and the
+//! chatty `log` frames. Only then does the tone reach the sink.
+//!
+//! A hello holds no sid by itself. The sink holds one for the client
+//! once it prompts or attaches under it.
+//!
+//! Errors and panics inside the sink are the sink's problem. This loop
+//! keeps reading either way, until the client is closed: a refused
+//! hello closes it, and then the reader stops, the refusal already
+//! queued is written, and the socket closes.
+//!
+//! The `Thrum` accessors at the bottom live here rather than in
+//! `lib.rs` to keep that surface clean.
 
 use std::sync::Arc;
 
@@ -17,7 +36,7 @@ use super::{
 
 pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
     let client_id = hum_identity::HumId::mint().to_string();
-    let (reach, rx) = Reach::new(client_id.clone());
+    let (reach, rx) = thrum.reach(client_id.clone());
     let reach = Arc::new(reach);
 
     {
@@ -27,36 +46,25 @@ pub(crate) async fn run(thrum: Thrum, sock: UnixStream) {
         info!(client_id = %short(&client_id), total, "thrum.connected");
     }
 
-    // Split the stream so reader + writer can run concurrently without
-    // fighting over &mut self. tokio::io::split is the standard tool.
     let (read_half, write_half) = sock.into_split();
 
-    // Outbound: drain the channel, write each tone + '\n' to the socket.
-    // Exits when the channel closes (Reach dropped from registry).
     let writer_task = tokio::spawn(async move {
         write_loop(write_half, rx).await;
     });
 
-    // First message we send: the breath. Sessions list is empty here —
-    // callers can immediately follow up with a richer breath via
-    // `thrum_to` once they observe the new client.
     let _ = reach.send(breath_tone(json!([])));
     trace!(client_id = %short(&client_id), version = %THRUM_VERSION, "thrum.breath.sent");
 
-    // Reader loop.
     read_loop(&thrum, &client_id, &reach, read_half).await;
 
-    // Reader exited (EOF/error) — pull from registry and let writer drain.
     {
         let mut reg = thrum.inner_clients_write();
         reg.remove(&client_id);
         let total = reg.len();
         info!(client_id = %short(&client_id), total, "thrum.disconnected");
     }
-    // Let the sink release per-client state (humd evicts the bee's
-    // manifest here so tools stop being advertised on disconnect).
     if let Some(sink) = thrum.inner_sink() {
-        sink.forget(&client_id).await;
+        sink.forget(&client_id, reach.sids()).await;
     }
     drop(reach);
     let _ = writer_task.await;
@@ -69,10 +77,18 @@ async fn read_loop(
     read_half: tokio::net::unix::OwnedReadHalf,
 ) {
     let mut lines = BufReader::new(read_half).lines();
+    let mut warned = false;
     loop {
-        let line = match lines.next_line().await {
+        let next = tokio::select! {
+            next = lines.next_line() => next,
+            _ = reach.closed() => {
+                trace!(client_id = %short(client_id), "thrum.closed-by-humd");
+                break;
+            }
+        };
+        let line = match next {
             Ok(Some(l)) => l,
-            Ok(None) => break, // EOF
+            Ok(None) => break,
             Err(e) => {
                 trace!(client_id = %short(client_id), err = %e, "thrum.read.failed");
                 break;
@@ -88,12 +104,12 @@ async fn read_loop(
                 continue;
             }
         };
-        dispatch(thrum, client_id, reach, tone).await;
+        dispatch(thrum, client_id, reach, tone, &mut warned).await;
     }
 }
 
-async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Value) {
-    // Envelope validation — chi must be a non-empty string.
+async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Value, warned: &mut bool) {
+    thrum.heard(client_id, &tone);
     if let Some(reason) = validate_envelope(&tone) {
         trace!(client_id = %short(client_id), reason, "thrum.tone.rejected");
         return;
@@ -110,7 +126,6 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
         );
     }
 
-    // Dusk: tones past their expiry get a not-ok echo and are dropped.
     if tone_is_dusk(&tone) {
         trace!(chi = %chi, rid = rid.as_deref().unwrap_or(""), "thrum.tone.dusk");
         if let Some(rid) = rid.as_deref() {
@@ -119,29 +134,42 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
         return;
     }
 
-    // Auto-echo on receipt — skip self-echoes and chatty log frames.
-    if chi != "echo" && chi != "log" {
-        if let Some(rid) = rid.as_deref() {
-            let _ = reach.send(echo_tone(rid, true, None));
+    if chi != "hello" && !reach.admitted() {
+        if !*warned && chi != "echo" && chi != "log" {
+            warn!(client_id = %short(client_id), chi = %chi, "thrum.tone.before-hello — refused; humd hears nothing but a hello until a breath admits it");
+            *warned = true;
         }
+        if chi != "echo"
+            && chi != "log"
+            && let Some(rid) = rid.as_deref()
+        {
+            let _ = reach.send(echo_tone(rid, false, Some("not nestled: say hello first")));
+        }
+        return;
     }
 
-    // Hello: capture nestler identity + version skew. Doesn't claim a
-    // sigil by itself — the sink does that when it understands which sid
-    // this client is responsible for.
+    if chi != "echo"
+        && chi != "log"
+        && let Some(rid) = rid.as_deref()
+    {
+        let _ = reach.send(echo_tone(rid, true, None));
+    }
+
     if chi == "hello" {
-        let bee = tone
-            .get("bee")
+        let hive = tone
+            .get("hive")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string();
+        let hid = tone.get("hid").and_then(|v| v.as_str()).unwrap_or("?").to_string();
         let proto_version = tone
             .get("protoVersion")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         info!(
             client_id = %short(client_id),
-            bee = %bee,
+            hive = %hive,
+            hid = %hid,
             proto_version = %proto_version,
             "thrum.hello"
         );
@@ -155,8 +183,6 @@ async fn dispatch(thrum: &Thrum, client_id: &str, reach: &Arc<Reach>, tone: Valu
         }
     }
 
-    // Hand to the sink (if installed). Errors and panics inside the sink
-    // are the sink's problem — we keep reading either way.
     let sink = thrum.inner_sink();
     if let Some(sink) = sink {
         sink.hear(client_id, tone).await;
@@ -185,10 +211,6 @@ async fn write_loop(
     }
     let _ = write_half.shutdown().await;
 }
-
-// ── Thrum private accessors ─────────────────────────────────────────────────
-// Defined here as inherent methods on Thrum via a pub(crate) impl, keeping
-// the lib.rs surface clean.
 
 impl Thrum {
     pub(crate) fn inner_clients_write(

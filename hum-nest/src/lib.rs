@@ -1,16 +1,63 @@
-//! hum's hive-side kernel. The worker contract ([`WorkerBee`], [`Egg`],
-//! [`Cell`], [`Propensity`], [`Pollen`], tone encoders), the process
-//! supervision runtime ([`lifecycle`] group-owning / [`metrics`]
-//! sampling / [`limits`] rlimits), and the wire-semantics loops that
-//! wrap [`hum-thrum`] for the two bee shapes — [`serve`] (`serve_worker`)
-//! and [`forager`] (`serve_forager`).
+//! hum's hive-side kernel for a nurse. The nurse contract ([`Nurse`],
+//! [`Egg`], [`Cell`], [`Propensity`]), the process supervision runtime
+//! ([`lifecycle`] group-owning / [`metrics`] sampling / [`limits`]
+//! rlimits), the [`mcp`] its cells reach their tools through, and the
+//! wire-semantics loop that wraps [`hum-thrum`] for a nurse: [`serve`]
+//! (`serve_nurse`).
+//!
+//! A cell speaks the thrum and nothing else to the nest. It is fed its
+//! sigil's tones, each prompt, an answer to a tool it reached outside its
+//! sigil's tools, a cancel, and gives back the tones of what it grew. What
+//! the engine behind it speaks is the hive's own to translate.
 //!
 //! One crate, no `nest`-common indirection: a hive that needs the nest
 //! lives here; a remote hive that only needs the wire takes the leaf
-//! crates ([`hum-thrum`], [`hum-identity`], [`hum-mcp`]) directly.
+//! crates ([`hum-thrum`], [`hum-identity`]) directly.
+//!
+//! A cell never works a host of its own. It runs in its nest's directory,
+//! and whatever it does to the world it does through a tendril, `bash` to
+//! a builder above all, so the kernel sees every reach.
+//!
+//! An [`Egg`] is what any nurse raises a cell from: the sigil, the model,
+//! the nest's directory, the sigil's MCP address, the environment and
+//! limits, and the prompt the cell is raised for, the blooms its forager
+//! grafted on it among the rest, so a cell that did not grow them grows
+//! from them. A nurse that can grow a bloom on from its graft, with
+//! no new words, says so with [`Nurse::grows_on`]; any other is never
+//! handed such a prompt. A nurse whose cell names its own tool calls reads
+//! that name with [`Nurse::call_id`], since only the nurse knows its cell's
+//! MCP client.
 //!
 //! The drone (humd's sentinel)-facing [`RegexClassifier`](suspicion_regex::RegexClassifier)
 //! also lives here (patterns for chat-LLM context-loss detection).
+//!
+//! [`Propensity`] is the statefulness axis hives carry in
+//! `hives/README.md`, declared from the bee side so peers can adapt
+//! prompt assembly:
+//!
+//! - `StatefulSession` — the nurse keeps a sigil's conversation itself
+//!   across the prompts that share its sid, so a forager that keeps one
+//!   sid per conversation sends only the new turn, and a prompt's graft
+//!   matters only to a cell that did not grow those blooms.
+//! - `StatelessPerCall` — the nurse keeps nothing between calls and
+//!   grows each bloom from its prompt's graft; pooling buys nothing.
+//! - `EphemeralPerCall` — like `StatelessPerCall` but the bee process
+//!   exits after a single result. Eviction is automatic; sid stability
+//!   is irrelevant.
+//!
+//! [`Suspicion`] is how loud a classifier is shouting about a piece of
+//! LLM output. `None` means the text looks fine. `Soft` is flagged for
+//! evaluator-driven adjudication. `Heavy` is strongly flagged, though
+//! the evaluator may still confirm it. `Critical` bypasses the
+//! evaluator and swallows immediately.
+//!
+//! [`Classifier`] is the context-loss heuristic seam. The drone calls
+//! it when a bloom wilts and during `assess` to score the accumulated
+//! response text. Implementations decide which patterns are which
+//! severity; the drone only branches on the returned [`Suspicion`].
+//! The default is [`NoopClassifier`], which makes the drone a pure
+//! channel-health sentinel that never reaches the swallow path on its
+//! own.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,62 +70,28 @@ use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-pub mod forager;
 pub mod lifecycle;
 pub mod limits;
+pub mod mcp;
 pub mod metrics;
+pub mod nest;
 pub mod serve;
 pub mod suspicion_regex;
 
-pub use forager::{serve_forager, ForagerAdvert, ToolDispatcher};
-pub use hum_mcp::protocol::{ToolDef, ToolResult};
-pub use serve::{serve_worker, HiveAdvert};
+pub use mcp::{ToolDef, ToolResult};
+pub use nest::NestConfig;
+pub use serve::{serve_nurse, NurseAdvert};
 pub use suspicion_regex::RegexClassifier;
 
-/// An egg — what a worker bee needs to raise a cell.
 #[derive(Debug, Clone)]
 pub struct Egg {
-    /// Canonical hum session id. Foreign-format projections (claude
-    /// `--session-id`) derive from this via `sid.to_uuid_v5(NS_*)`.
     pub sid: HumId,
-    /// Model id to run on (e.g. "claude-sonnet-4-6", "claude-haiku-4-5").
     pub model_id: String,
-    /// Working directory for the spawned process. Drives transcript
-    /// location and fs MCP grounding.
     pub cwd: String,
-    /// Optional system prompt to prepend to the conversation.
-    pub system_prompt: Option<String>,
-    /// Optional MCP HTTP base URL (e.g. "http://127.0.0.1:29147"). The
-    /// worker wires this into its harness's MCP config so the spawned
-    /// process can reach hum's tool surface.
     pub mcp_url: Option<String>,
-    /// Optional path to the claude CLI binary. None → "claude" on PATH.
-    pub cli_path: Option<String>,
-    /// Foreign resume id — a claude session UUID the harness should pick
-    /// up instead of the sid-derived one. Stays String because it's a
-    /// foreign identifier hum did not mint.
-    pub resume_id: Option<String>,
-    /// True = create a new claude session under the sid-derived UUID.
-    /// False = try to resume that UUID. Worker flips to true on resume
-    /// miss. Ignored when `resume_id` is set.
-    pub fresh: bool,
-    /// Plan mode — disables adaptive-thinking env.
-    pub plan_mode: bool,
-    /// Permissions allowlist names — passed to the harness's tool filter.
-    pub permissions: Vec<String>,
-    /// Allowed tool names — narrows what the harness advertises.
-    pub allowed_tools: Vec<String>,
-    /// Tool names the harness must refuse. Populated by humd from the
-    /// nestler's hello (e.g. when the nestler opts into mcp-exclusive
-    /// fs control by listing built-ins here). The worker bee passes
-    /// it through verbatim; it does not invent the list.
-    pub disallowed_tools: Vec<String>,
-    /// Extra env overrides spread onto the spawn (after defaults).
     pub env: HashMap<String, String>,
-    /// OS-level caps the WorkerBee impl applies to the spawned child via
-    /// `Command::pre_exec` (Linux) or no-op (other platforms).
-    /// Default: empty — child inherits the parent's limits.
     pub bounds: limits::Bounds,
+    pub prompt: thrum_core::PromptBody,
 }
 
 impl Egg {
@@ -87,25 +100,17 @@ impl Egg {
             sid,
             model_id: model_id.into(),
             cwd: cwd.into(),
-            system_prompt: None,
             mcp_url: None,
-            cli_path: None,
-            resume_id: None,
-            fresh: false,
-            plan_mode: false,
-            permissions: Vec::new(),
-            allowed_tools: Vec::new(),
-            disallowed_tools: Vec::new(),
             env: HashMap::new(),
             bounds: limits::Bounds::default(),
+            prompt: thrum_core::PromptBody::default(),
         }
     }
 }
 
-/// One brood cell — a living subprocess raised inside a bee.
 pub struct Cell {
     pub mark: Option<u32>,
-    pub feed: mpsc::Sender<String>,
+    pub feed: mpsc::Sender<Value>,
     pub mmm: Arc<Mutex<mpsc::Receiver<Value>>>,
     pub emerged: tokio::sync::oneshot::Receiver<i32>,
     pub ephemeral: bool,
@@ -113,26 +118,9 @@ pub struct Cell {
 }
 
 impl Cell {
-    /// Still the cell — SIGKILL + reap, idempotent.
     pub fn still(&self) { self.silence.cancel(); }
 }
 
-/// Statefulness propensity of a bee — the same axis hives carry
-/// (see `hives/README.md`), declared from the bee side so peers can
-/// adapt prompt assembly.
-///
-/// - `StatefulSession` — the bee process retains conversation state
-///   in its own memory across multiple prompts that share a sid (e.g.
-///   `claude -p` stream-json, REPL pty). Foragers should derive a
-///   stable sid per OC/external conversation and send only the *new*
-///   user turn each request; the worker keeps prior history.
-/// - `StatelessPerCall` — the bee treats every call as a fresh
-///   self-contained request (e.g. direct API workers, paid oracles).
-///   Foragers should send full transcript every time; pooling buys
-///   nothing.
-/// - `EphemeralPerCall` — like Stateless but the bee process exits
-///   after a single result. Eviction is automatic; sid stability is
-///   irrelevant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Propensity {
     StatefulSession,
@@ -140,8 +128,6 @@ pub enum Propensity {
     EphemeralPerCall,
 }
 
-/// What a curation trimmed. Byte counts are of the bee's own stored
-/// transcript, whatever form that takes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CurateReport {
     pub bytes_before: u64,
@@ -154,12 +140,6 @@ impl CurateReport {
     }
 }
 
-/// How loud a classifier is shouting about a piece of LLM output.
-///
-/// - `None`     — text looks fine
-/// - `Soft`     — flagged for evaluator-driven adjudication
-/// - `Heavy`    — strongly flagged; evaluator may still confirm
-/// - `Critical` — bypass the evaluator and swallow immediately
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Suspicion {
@@ -170,30 +150,15 @@ pub enum Suspicion {
 }
 
 impl Suspicion {
-    /// True when any tier matched.
     pub fn flagged(self) -> bool {
         !matches!(self, Suspicion::None)
     }
 }
 
-/// Context-loss heuristic seam.
-///
-/// The drone calls this on `TurnEnd` (and during `assess`) to score
-/// the accumulated response text. Implementations decide which
-/// patterns are which severity; the drone only branches on the
-/// returned [`Suspicion`].
-///
-/// Default impl is [`NoopClassifier`] (always [`Suspicion::None`]).
-/// Concrete pattern-bank impls live in this crate — see
-/// [`suspicion_regex`] for the regex-driven one tuned for chat-LLM
-/// context loss.
 pub trait Classifier: Send + Sync {
     fn classify(&self, text: &str) -> Suspicion;
 }
 
-/// No-op default — every input is `Suspicion::None`. Drone running with
-/// this classifier behaves as a pure channel-health sentinel; it
-/// never reaches the swallow path on its own.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopClassifier;
 
@@ -203,117 +168,23 @@ impl Classifier for NoopClassifier {
     }
 }
 
-/// A WorkerBee raises cells from eggs — the compute-side trait every
-/// commissioned hive implements.
 #[async_trait]
-pub trait WorkerBee: Send + Sync {
+pub trait Nurse: Send + Sync {
     fn ephemeral(&self) -> bool;
     fn propensity(&self) -> Propensity {
         if self.ephemeral() { Propensity::EphemeralPerCall } else { Propensity::StatefulSession }
     }
     async fn raise(&self, egg: Egg) -> Result<Cell>;
 
-    /// Curate the stored transcript for a sid — trim what can go without
-    /// losing the thread. Answers `chi:"curate"`.
-    ///
-    /// Operates on what the bee has persisted, not on a live cell: a
-    /// harness that exits between turns (claude `-p`) still has a
-    /// transcript to curate, and a curate may well arrive with nothing
-    /// running. Default is a no-op for bees holding nothing to trim.
+    fn grows_on(&self) -> bool {
+        false
+    }
+
+    fn call_id(&self, _call: &Value) -> Option<String> {
+        None
+    }
+
     async fn curate(&self, _sid: &HumId, _cwd: &str) -> Result<CurateReport> {
         Ok(CurateReport::default())
     }
-}
-
-/// Pollen — what a forager bee carries back alongside the text:
-/// images, audio, pdf, video, files.
-#[derive(Debug, Clone)]
-pub struct Pollen {
-    /// Content category. "image" / "audio" / "pdf" / "video" / "file".
-    /// Workers decide which kinds they can route to the model.
-    pub kind: String,
-    /// IANA media type — "image/png", "audio/wav", "application/pdf".
-    pub media_type: String,
-    /// Inline base64 payload.
-    pub data: Option<String>,
-    /// URL the worker can dereference. Either http(s) or a data: URI.
-    pub url: Option<String>,
-}
-
-/// Encode a user prompt for stream-json stdin. Wraps the text in the
-/// content-block shape stream-json workers expect. Use
-/// `encode_prompt_with_pollen` for multimodal prompts.
-pub fn encode_prompt(text: &str) -> String {
-    encode_prompt_with_pollen(text, &[])
-}
-
-/// Encode a user prompt with non-text attachments alongside. Image
-/// attachments translate to a base64 / url image block; other kinds
-/// (audio, pdf, video) pass the media_type through so receiving
-/// workers can opt-in as their model surface grows. Unknown kinds
-/// without a known encoding fall back to a text annotation so the
-/// model at least sees that an attachment was present.
-pub fn encode_prompt_with_pollen(text: &str, pollen: &[Pollen]) -> String {
-    let mut content: Vec<Value> = vec![serde_json::json!({"type": "text", "text": text})];
-    for grain in pollen {
-        match grain.kind.as_str() {
-            "image" => {
-                if let Some(data) = grain.data.as_ref() {
-                    content.push(serde_json::json!({
-                        "type": "image",
-                        "source": { "type": "base64", "media_type": grain.media_type, "data": data }
-                    }));
-                } else if let Some(url) = grain.url.as_ref() {
-                    content.push(serde_json::json!({
-                        "type": "image",
-                        "source": { "type": "url", "url": url }
-                    }));
-                }
-            }
-            other => {
-                // Unknown attachment kind — surface its presence in
-                // text so the model can at least acknowledge it,
-                // rather than silently dropping. Workers that learn
-                // to handle new kinds (audio, pdf) take over the
-                // proper translation later.
-                let where_clause = grain.url.as_deref()
-                    .map(|u| format!(" ({u})"))
-                    .unwrap_or_default();
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": format!("[attachment: kind={other} media_type={}{where_clause}]", grain.media_type)
-                }));
-            }
-        }
-    }
-    serde_json::json!({
-        "type": "user",
-        "message": { "role": "user", "content": content }
-    })
-    .to_string()
-}
-
-/// Encode a tool_result reply for stream-json stdin (TS `encodeToolResult`).
-pub fn encode_tool_result(tool_use_id: &str, result: &str) -> String {
-    serde_json::json!({
-        "type": "user",
-        "message": {
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": result,
-            }]
-        }
-    })
-    .to_string()
-}
-
-/// Encode a `control_cancel_request` (mid-turn interrupt) for pipe-mode stdin.
-pub fn encode_cancel(request_id: &str) -> String {
-    serde_json::json!({
-        "type": "control_cancel_request",
-        "request_id": request_id,
-    })
-    .to_string()
 }

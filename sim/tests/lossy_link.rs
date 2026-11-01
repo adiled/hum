@@ -15,7 +15,7 @@ async fn pair() -> (Arc<Sim>, ensemble::Hid, ensemble::Hid) {
     sim.spawn_humd(b).await;
     sim.await_ready(a).await.expect("a ready");
     sim.await_ready(b).await.expect("b ready");
-    sim.wire(a, b).unwrap();
+    sim.wire_unauthenticated(a, b).unwrap();
     sim.await_handshake(a, b).await.unwrap();
     (Arc::new(sim), a, b)
 }

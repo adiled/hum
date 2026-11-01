@@ -1,152 +1,149 @@
-//! Chi registry and pulse kinds.
+//! Chi registry, pulse kinds, petal kinds, roles and advisory codes.
 //!
 //! Every wire-known chi value. Adding a new variant bumps the protocol
 //! minor version. `serde(rename_all = "kebab-case")` keeps the wire
-//! format speaking kebabs (`"tool-call"`, `"release-permit"`).
+//! format speaking kebabs (`"tendril-reach"`, `"drone-retrofit"`).
+//!
+//! The thrum, which chi exists, what it carries, who sounds it and who
+//! hears it, is `hum.thrum` at the repo root. These enums are its Rust
+//! reading, and `cargo run -p codegen -- --check` holds them to it,
+//! value for value; the TypeScript, Python, Go and C clients are
+//! emitted from the same file, so no copy can drift.
+//!
+//! A petal is one unit of content, and its kind says which:
+//! [`PetalKind`]. `KIND petal-kind` says what each one carries.
+//!
+//! A bee does one [`Role`], set when its hive enters it, and its hello
+//! says which. Each chi's EMITS and HEARS say what a role sends and hears.
+//!
+//! An advisory is what the wire tells a bee it should fix without
+//! refusing it: humd sends one as a `log` tone whose `fields.advisory`
+//! is an [`AdvisoryCode`], and the client raises its own under the same
+//! codes. Each ADVISORY says what it means and who raises it.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoStaticStr};
 
-/// Discriminator for every thrum frame.
-///
-/// Direction is encoded in the docstring, not the type — the same socket
-/// carries both directions and either end may legally send any chi.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Chi {
-    // ── Nestler → Daemon ────────────────────────────────────────────
-    /// announce self — protoVersion, bee, version
     Hello,
-    /// start a turn — content, system, tools
     Prompt,
-    /// interrupt mid-turn
     Cancel,
-    /// session deleted, drop daemon state
     Cleanup,
-    /// manual compaction request
     Curate,
-    /// resolve an earlier permission-ask
-    ReleasePermit,
-    /// task subagent answered
+    ScoutResult,
     TendrilResult,
-    /// nestler-declared tool answered
-    ToolResult,
-    /// OC message-graph update (graft hint)
-    PetalCell,
-
-    // ── Daemon → Nestler ────────────────────────────────────────────
-    /// handshake — full state sync on connect
     Breath,
-    /// model output partwise (text/reasoning/tool)
-    Chunk,
-    /// turn complete — finishReason + usage
-    Finish,
-    /// turn aborted
+    Unfurl,
+    Wilt,
     Error,
-    /// nest spawned, claude session id known
-    SessionReady,
-    /// process lifecycle event
     Pulse,
-    /// mid-stream permission needed
-    PermissionAsk,
-    /// task subagent dispatch
+    Scout,
     TendrilReach,
-    /// nestler-declared tool dispatch
-    ToolCall,
-    /// out-of-band metadata for a tool result
-    ToolMeta,
-    /// completed-in-server tool execution — purely informational.
-    /// Carries the full {callId, name, args, result} pair as one
-    /// tone. Unlike `ToolCall`/`ToolResult` (which form a two-phase
-    /// handoff requiring the recipient to execute and reply),
-    /// `ToolInfo` says "this tool ran upstream, here's everything."
-    /// Consumers render it without taking action. Used by humd when
-    /// its native MCP tools run in-process, or when a nestler-tool
-    /// roundtrip completes successfully and observers want a clean
-    /// audit event.
-    ToolInfo,
-
-    // ── Either direction ────────────────────────────────────────────
-    /// delivery ack for a rid
+    TendrilMeta,
+    TendrilInfo,
     Echo,
-    /// drift timing — measured both ways
     PerfMark,
-    /// structured log forwarding
     Log,
-    /// drone heartbeat
     Drone,
-    /// drone swallow + retry signal
     DroneRetrofit,
-
-    // ── Ensemble / inter-humd plumbing ──────────────────────────────
-    /// register a peer humd — `{ humd_id: hex, hints: [..] }`
     PeerAdd,
-    /// drop a peer humd — `{ humd_id: hex }`
     PeerRemove,
-    /// peer humd asks to observe a sid hosted here — `{ sid, to, from, hearOnly }`.
-    /// The host records `from` as an observer of `sid`; reply tones for
-    /// that sid fan out to every observer in addition to the prompt origin.
     Attach,
-    /// peer humd stops observing — `{ sid, to, from }`. The host drops
-    /// `from` from the observer roster for `sid`.
     Detach,
-    /// reconcile WaneTracker after a partition heal — `{ from, snapshot }`
-    /// where `snapshot` is a map of sigil → wane value. The receiver merges
-    /// each entry by taking the max of local and remote (wane is a Lamport
-    /// clock; max is convergent). No reply is required — both sides emit
-    /// their snapshot on heal, so each is informed exactly once.
     WaneSync,
-    /// ensemble-wide gossip pub-sub message —
-    /// `{ topic, payload, from, msg_id }`. Fan-out broadcast above the
-    /// Transport seam: every PeerConnection is a gossip neighbor. The
-    /// receiver dedups on `msg_id` using a bounded LRU, dispatches to
-    /// per-topic subscribers, and re-fans the tone to every OTHER
-    /// installed peer so the message percolates across the mesh.
-    /// Distinct from unicast `route` (which targets ONE humd) — gossip
-    /// is mesh-wide announcements: hum relocation, humd overload, drone
-    /// alerts.
-    ///
-    /// `msg_id` is assigned by the ORIGINATOR, once per publish, and is
-    /// not derived from `rid` or the payload. A repeat of the same
-    /// content is a new message; only a byte-identical retransmission
-    /// is a duplicate, and only the sender can tell those apart.
     GossipPublish,
-    /// Kademlia DHT FIND_NODE query —
-    /// `{ query_id, target: <Hid hex>, from: <Hid hex> }`. The
-    /// receiver answers with `kad-find-node-resp` carrying up to K
-    /// HumdAddrs from its routing table closest in XOR distance to
-    /// `target`. Sent during `Ensemble::kad_find` iterative lookups
-    /// when a peer's HumdAddr isn't already known locally.
     KadFindNode,
-    /// Kademlia DHT FIND_NODE response —
-    /// `{ query_id, from: <Hid hex>, closest: [<HumdAddr JSON>, ...] }`.
-    /// Matched to the originating `kad-find-node` by `query_id`. The
-    /// lookup driver inserts every advertised HumdAddr into its routing
-    /// table and re-queries the α closest unqueried peers until no
-    /// closer node is returned.
     KadFindNodeResp,
-    /// thehum chi-log replay request — `{ author: <hid>, from: <seq> }`.
-    /// Host humd answers with one `chi:"backfill-event"` tone per event
-    /// in `[from, ..)` for the named author.
     Backfill,
+    BackfillEvent,
 }
 
-/// `pulse.kind` — its own enum within `chi:"pulse"` tones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum PulseKind {
-    /// process created
     CellSpawned,
-    /// system init received, accepting input
     CellReady,
-    /// turn complete, no listeners
     CellIdle,
-    /// process exited
     CellDied,
-    /// killed to make room
     CellEvicted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum AdvisoryCode {
+    UndeclaredKey,
+    UnknownChi,
+    NotATone,
+    ClientOwned,
+    ToneRefused,
+    DroppedWhileAway,
+    ProtoDrift,
+    ReconnectStorm,
+    DidNotReturn,
+    CwdNotHum,
+    Refused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum PetalKind {
+    Text,
+    Tendril,
+    Grasp,
+    Pollen,
+    Sepal,
+    Waggle,
+    Thorn,
+    Brix,
+    Bouquet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum Role {
+    Forager,
+    Nurse,
+    Builder,
+    Attendant,
+}
+
+impl Chi {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(s: &str) -> Option<Role> {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
+}
+
+impl PetalKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl AdvisoryCode {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+pub fn is_chi(s: &str) -> bool {
+    serde_json::from_value::<Chi>(serde_json::Value::String(s.to_string())).is_ok()
 }
 
 #[cfg(test)]
@@ -155,14 +152,32 @@ mod tests {
 
     #[test]
     fn chi_wire_format_is_kebab() {
-        assert_eq!(serde_json::to_string(&Chi::ToolCall).unwrap(), "\"tool-call\"");
-        assert_eq!(serde_json::to_string(&Chi::ReleasePermit).unwrap(), "\"release-permit\"");
+        assert_eq!(serde_json::to_string(&Chi::TendrilReach).unwrap(), "\"tendril-reach\"");
+        assert_eq!(serde_json::to_string(&Chi::Unfurl).unwrap(), "\"unfurl\"");
+        assert_eq!(serde_json::to_string(&Chi::Wilt).unwrap(), "\"wilt\"");
+        assert_eq!(PetalKind::Sepal.as_str(), "sepal");
         assert_eq!(serde_json::to_string(&Chi::DroneRetrofit).unwrap(), "\"drone-retrofit\"");
         assert_eq!(serde_json::to_string(&Chi::WaneSync).unwrap(), "\"wane-sync\"");
-        let parsed: Chi = serde_json::from_str("\"petal-cell\"").unwrap();
-        assert_eq!(parsed, Chi::PetalCell);
         let parsed: Chi = serde_json::from_str("\"wane-sync\"").unwrap();
         assert_eq!(parsed, Chi::WaneSync);
+    }
+
+    #[test]
+    fn advisory_codes_are_kebab_and_chi_is_checked() {
+        assert_eq!(AdvisoryCode::UndeclaredKey.as_str(), "undeclared-key");
+        assert_eq!(serde_json::to_string(&AdvisoryCode::DidNotReturn).unwrap(), "\"did-not-return\"");
+        assert!(is_chi("tendril-reach"));
+        assert!(!is_chi("tendril_reach"));
+        assert!(!is_chi("tool-call"));
+    }
+
+    #[test]
+    fn a_role_is_one_of_four_and_kebab() {
+        assert_eq!(Role::Nurse.as_str(), "nurse");
+        assert_eq!(Role::parse("builder"), Some(Role::Builder));
+        assert_eq!(Role::parse("attendant"), Some(Role::Attendant));
+        assert_eq!(Role::parse("worker"), None);
+        assert_eq!(AdvisoryCode::CwdNotHum.as_str(), "cwd-not-hum");
     }
 
     #[test]

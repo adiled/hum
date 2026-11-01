@@ -1,0 +1,90 @@
+//! Bee advertise/discover end-to-end over the gossip layer.
+//!
+//! Three humds in a line, A to B to C. A advertises a bee of the `market-maker`
+//! hive; C calls `bee_discover("market-maker")` and must
+//! receive `(A's Hid, manifest)` within a short timeout. Then A
+//! retracts; via the raw `bee_announcements()` stream, C must
+//! see a `Retract` envelope.
+
+use std::time::Duration;
+
+use ensemble::{
+    bees::{BeeAnnounce, BeeManifest, Propensity},
+    Ensemble, HumdKey, InMemoryEndpoint, PeerCapabilities,
+};
+use tokio::time::timeout;
+
+#[tokio::test]
+async fn advertise_percolates_and_discover_filters_by_hive() {
+    let a_key = HumdKey::generate();
+    let b_key = HumdKey::generate();
+    let c_key = HumdKey::generate();
+    let a_id = a_key.hid();
+    let b_id = b_key.hid();
+    let c_id = c_key.hid();
+
+    let caps = PeerCapabilities {
+        proto_version: "0.7.0".into(),
+        ..Default::default()
+    };
+
+    let (a_to_b, b_to_a) = InMemoryEndpoint::pair(a_id, caps.clone(), b_id, caps.clone());
+    let (b_to_c, c_to_b) = InMemoryEndpoint::pair(b_id, caps.clone(), c_id, caps.clone());
+
+    let ens_a = Ensemble::new(a_id);
+    let ens_b = Ensemble::new(b_id);
+    let ens_c = Ensemble::new(c_id);
+
+    ens_a.install(a_to_b, caps.clone(), &a_key);
+    ens_b.install(b_to_a, caps.clone(), &b_key);
+    ens_b.install(b_to_c, caps.clone(), &b_key);
+    ens_c.install(c_to_b, caps.clone(), &c_key);
+
+    let mut discover = ens_c.bee_discover("market-maker");
+    let mut raw = ens_c.bee_announcements();
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    ens_a
+        .bee_advertise(BeeManifest::new("openai-server", "0.2.0", "0.7.0"))
+        .await;
+
+    let manifest = BeeManifest::new("market-maker", "0.1.0", "0.7.0")
+        .with_propensity(Propensity {
+            statefulness: Some("stateless".into()),
+            richness: Some("medium".into()),
+            wire: Some("custom/mm-v0".into()),
+        })
+        .with_chis(["hello", "gossip-publish", "tendril-reach", "tendril-result"]);
+    ens_a.bee_advertise(manifest.clone()).await;
+
+    let (got_id, got_manifest) = timeout(Duration::from_millis(300), discover.recv())
+        .await
+        .expect("C did not receive bee-advertise within 300ms")
+        .expect("discover channel closed");
+    assert_eq!(got_id, a_id, "advertise came from the wrong humd");
+    assert_eq!(got_manifest.hive, "market-maker");
+    assert_eq!(got_manifest.version, "0.1.0");
+    assert_eq!(got_manifest.chis.len(), 4);
+
+    let bee = ensemble::Hid::random(ensemble::HidPrefix::Bee);
+    ens_a.bee_retract(bee).await;
+    let env = timeout(Duration::from_millis(300), async {
+        loop {
+            let v = raw.recv().await.expect("raw channel closed");
+            if matches!(v, BeeAnnounce::Retract { .. }) {
+                return v;
+            }
+        }
+    })
+    .await
+    .expect("C did not see retract within 300ms");
+
+    match env {
+        BeeAnnounce::Retract { humd_id, hid } => {
+            assert_eq!(humd_id, a_id.to_hex());
+            assert_eq!(hid, bee);
+        }
+        _ => panic!("expected retract"),
+    }
+}

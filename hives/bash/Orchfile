@@ -1,0 +1,9 @@
+ARG HUM_SRC=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
+SERVICE bash
+RUN ${HUM_SRC}/target/release/bash-builder
+RESTART always

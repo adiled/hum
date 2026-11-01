@@ -1,40 +1,26 @@
-
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ensemble::{
-    hello_tone, Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults,
-    PeerCapabilities,
+    Ensemble, Hid, HumdKey, InMemoryEndpoint, LinkCounters, LinkFaults, PeerCapabilities,
+    hello_tone,
 };
+use humd::thrumd::Thrum;
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use thrum_core::WaneTracker;
-use humd::thrumd::Thrum;
 use tokio::sync::{mpsc, oneshot};
 
-const CAPACITY_UNLIMITED: usize = usize::MAX;
+pub const SIM_HIVES: [&str; 4] = ["claude-cli", "claude-repl", "bash", "openai-server"];
 
-const SIM_NEST_KIND: &str = "claude-repl";
-
-fn sim_caps(humd: &SimHumd) -> PeerCapabilities {
-    let cap = humd.capacity.load(Ordering::SeqCst);
+fn sim_caps(_humd: &SimHumd) -> PeerCapabilities {
     PeerCapabilities {
         proto_version: thrum_core::THRUM_VERSION.to_string(),
-        nests: vec![SIM_NEST_KIND.to_string()],
-        free_slots: (cap != CAPACITY_UNLIMITED).then_some(cap),
         ..Default::default()
-    }
-}
-
-fn local_capacity(max_concurrent: usize) -> humd::LocalCapacity {
-    match max_concurrent {
-        0 => humd::LocalCapacity::OverflowAlways,
-        CAPACITY_UNLIMITED => humd::LocalCapacity::Unlimited,
-        n => humd::LocalCapacity::Slots(n),
     }
 }
 
@@ -47,15 +33,53 @@ pub struct SimHumd {
     out_queues: Mutex<HashMap<String, mpsc::Receiver<Value>>>,
     sid_mailboxes: Mutex<HashMap<String, mpsc::UnboundedReceiver<Value>>>,
     sid_senders: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
-    capacity: AtomicUsize,
     pub waneman: Arc<WaneTracker>,
     pub key: Option<Arc<HumdKey>>,
+    pub hives: humd::InstalledHives,
+    pub bees: humd::EnteredBees,
+}
+
+impl SimHumd {
+    pub fn enter(&self, hive: &str, role: thrum_core::Role) -> hum_identity::BeeKey {
+        let key = hum_identity::BeeKey::generate();
+        self.bees.enter(hive, role, &key);
+        key
+    }
+
+    pub fn signed_hello(&self, mut hello: Value) -> Value {
+        let hive = hello.get("hive").and_then(Value::as_str).unwrap_or("").to_string();
+        let role = hello
+            .get("role")
+            .and_then(Value::as_str)
+            .and_then(thrum_core::Role::parse)
+            .unwrap_or(thrum_core::Role::Nurse);
+        self.enter(&hive, role).sign_hello(&mut hello);
+        hello
+    }
 }
 
 pub struct Sim {
     humds: RwLock<HashMap<Hid, Arc<SimHumd>>>,
-    pending_capacities: RwLock<HashMap<Hid, usize>>,
     links: RwLock<HashMap<(Hid, Hid), Link>>,
+}
+
+impl Drop for Sim {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let strays: Vec<String> = self
+            .humds
+            .read()
+            .values()
+            .flat_map(|h| h.thrum.wire_strays())
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "tones carried keys the thrum does not declare:\n  {}",
+            strays.join("\n  ")
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -67,7 +91,11 @@ struct Link {
 }
 
 fn link_key(x: Hid, y: Hid) -> (Hid, Hid) {
-    if x.to_hex() <= y.to_hex() { (x, y) } else { (y, x) }
+    if x.to_hex() <= y.to_hex() {
+        (x, y)
+    } else {
+        (y, x)
+    }
 }
 
 impl Default for Sim {
@@ -76,69 +104,98 @@ impl Default for Sim {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Trust {
+    pub nurses: bool,
+    pub attendants: bool,
+}
+
+impl Trust {
+    pub const ALL: Trust = Trust { nurses: true, attendants: true };
+}
+
 impl Sim {
     pub fn new() -> Self {
         Self {
             humds: RwLock::new(HashMap::new()),
-            pending_capacities: RwLock::new(HashMap::new()),
             links: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn set_capacity(&self, humd: Hid, max_concurrent: usize) {
-        if let Some(h) = self.humds.read().get(&humd).cloned() {
-            h.capacity.store(max_concurrent, Ordering::SeqCst);
-            return;
-        }
-        self.pending_capacities.write().insert(humd, max_concurrent);
-    }
-
     pub async fn spawn_humd(&self, id: Hid) -> Arc<SimHumd> {
-        self.spawn_humd_inner(id, true).await
+        self.spawn_humd_trusting(id, Trust::ALL).await
     }
 
-    /// A humd that refuses to route prompts on a peer's advertised model
-    /// claim — the production default.
-    pub async fn spawn_humd_not_trusting_remote_workers(&self, id: Hid) -> Arc<SimHumd> {
-        self.spawn_humd_inner(id, false).await
+    pub async fn spawn_humd_not_trusting_remote_nurses(&self, id: Hid) -> Arc<SimHumd> {
+        self.spawn_humd_trusting(id, Trust { nurses: false, ..Trust::ALL }).await
     }
 
-    async fn spawn_humd_inner(&self, id: Hid, trust_remote_workers: bool) -> Arc<SimHumd> {
+    pub async fn spawn_humd_not_trusting_remote_attendants(&self, id: Hid) -> Arc<SimHumd> {
+        self.spawn_humd_trusting(id, Trust { attendants: false, ..Trust::ALL }).await
+    }
+
+    pub async fn spawn_humd_revoking(&self, id: Hid, revoked: &[&str]) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, Trust::ALL, revoked)
+            .await
+    }
+
+    pub async fn spawn_humd_trusting(&self, id: Hid, trust: Trust) -> Arc<SimHumd> {
+        self.spawn_humd_inner_with_revocations(id, trust, &[])
+            .await
+    }
+
+    async fn spawn_humd_inner_with_revocations(
+        &self,
+        id: Hid,
+        trust: Trust,
+        revoked: &[&str],
+    ) -> Arc<SimHumd> {
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, false));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
-
-        let initial_capacity = self
-            .pending_capacities
-            .write()
-            .remove(&id)
-            .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity = local_capacity(initial_capacity);
+        let comb_path = tmp.join(hum_paths::COMB_BASENAME);
+        let _ = std::fs::remove_file(tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME));
+        let _ = std::fs::remove_file(tmp.join(hum_paths::ADVISORIES_BASENAME));
+        let revoked_path = tmp.join(hum_paths::REVOKED_BEES_BASENAME);
+        let _ = std::fs::remove_file(&revoked_path);
+        if !revoked.is_empty() {
+            let list: Vec<String> = revoked.iter().map(|s| s.to_string()).collect();
+            hum_paths::Revocations {
+                version: 1,
+                revoked: list,
+            }
+            .write_to(&revoked_path)
+            .expect("write revocation list");
+        }
 
         let waneman = Arc::new(WaneTracker::new());
+        let hives = humd::InstalledHives::in_memory(SIM_HIVES);
+        let bees = humd::EnteredBees::in_memory();
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
-            mcp_addr: ([127, 0, 0, 1], 0).into(),
-            penny_path,
+            comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
-            cli_path: "noop".into(),
-            penny_persist_interval: Duration::from_secs(3600),
+            comb_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
-            bind_mcp: false,
-            capacity,
+            revoked_path: revoked_path.clone(),
+            bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
+            advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
-            trust_remote_workers,
+            trust_remote_nurses: trust.nurses,
+            trust_remote_attendants: trust.attendants,
+            hives: hives.clone(),
+            bees: bees.clone(),
         };
 
         let shutdown_fut = async move {
@@ -155,14 +212,15 @@ impl Sim {
             out_queues: Mutex::new(HashMap::new()),
             sid_mailboxes: Mutex::new(HashMap::new()),
             sid_senders: Mutex::new(HashMap::new()),
-            capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: None,
+            hives,
+            bees,
         });
 
         self.humds.write().insert(id, sim_humd.clone());
         sim_humd
-      }
+    }
 
     pub async fn await_ready(&self, humd: Hid) -> Result<()> {
         for _ in 0..200 {
@@ -182,12 +240,10 @@ impl Sim {
     }
 
     pub fn rewire(&self, a: Hid, b: Hid) -> Result<()> {
-        self.wire(a, b)
+        self.wire_unauthenticated(a, b)
     }
 
-    /// Unauthenticated mesh link. Use [`Sim::wire_signed`] when the test is
-    /// about identity.
-    pub fn wire(&self, a: Hid, b: Hid) -> Result<()> {
+    pub fn wire_unauthenticated(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
         let ha = humds
             .get(&a)
@@ -201,12 +257,8 @@ impl Sim {
 
         let a_caps = sim_caps(&ha);
         let b_caps = sim_caps(&hb);
-        let (a_view, b_view) = InMemoryEndpoint::pair_concrete(
-            ha.id,
-            b_caps.clone(),
-            hb.id,
-            a_caps.clone(),
-        );
+        let (a_view, b_view) =
+            InMemoryEndpoint::pair_concrete(ha.id, b_caps.clone(), hb.id, a_caps.clone());
         let key = link_key(ha.id, hb.id);
         self.links.write().insert(
             key,
@@ -227,43 +279,45 @@ impl Sim {
     pub async fn spawn_humd_with_identity(&self, key: HumdKey) -> Arc<SimHumd> {
         let id = key.hid();
         let thrum = Thrum::new();
+        thrum.set_wire_check(humd::thrumd::WireCheck::Strict);
         let ensemble = Arc::new(Ensemble::with_strict_auth(id, true));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let tmp = std::env::temp_dir().join(format!("sim-humd-{}", id.short()));
         let _ = std::fs::create_dir_all(&tmp);
-        let penny_path = tmp.join(hum_paths::PENNY_BASENAME);
-
-        let initial_capacity = self
-            .pending_capacities
-            .write()
-            .remove(&id)
-            .unwrap_or(CAPACITY_UNLIMITED);
-        let capacity = local_capacity(initial_capacity);
+        let comb_path = tmp.join(hum_paths::COMB_BASENAME);
+        let _ = std::fs::remove_file(tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME));
+        let _ = std::fs::remove_file(tmp.join(hum_paths::ADVISORIES_BASENAME));
 
         let waneman = Arc::new(WaneTracker::new());
+        let hives = humd::InstalledHives::in_memory(SIM_HIVES);
+        let bees = humd::EnteredBees::in_memory();
         let cfg = humd::DaemonConfig {
             thrum_path: tmp.join(hum_paths::THRUM_SOCK_BASENAME),
             http_path: tmp.join(hum_paths::HTTP_SOCK_BASENAME),
-            mcp_addr: ([127, 0, 0, 1], 0).into(),
-            penny_path,
+            comb_path,
             routing_path: tmp.join(hum_paths::ROUTING_JSON_BASENAME),
             routing_persist_interval: Duration::from_secs(3600),
             hum_cfg: hum_paths::config::HumConfig::default(),
-            cli_path: "noop".into(),
-            penny_persist_interval: Duration::from_secs(3600),
+            comb_persist_interval: Duration::from_secs(3600),
             thrum_override: Some(thrum.clone()),
             ensemble: Some(ensemble.clone()),
-            bind_mcp: false,
-            capacity,
+            revoked_path: tmp.join(hum_paths::REVOKED_BEES_BASENAME),
+            bees_snapshot_path: tmp.join(hum_paths::BEES_SNAPSHOT_BASENAME),
+            advisories_path: tmp.join(hum_paths::ADVISORIES_BASENAME),
             waneman: Some(waneman.clone()),
             humd_key: None,
             bootstrap_peers: Vec::new(),
             thehum_cfg: None,
-            trust_remote_workers: true,
+            trust_remote_nurses: true,
+            trust_remote_attendants: true,
+            hives: hives.clone(),
+            bees: bees.clone(),
         };
 
-        let shutdown_fut = async move { let _ = shutdown_rx.await; };
+        let shutdown_fut = async move {
+            let _ = shutdown_rx.await;
+        };
         let join = tokio::spawn(humd::run(cfg, shutdown_fut));
 
         let sim_humd = Arc::new(SimHumd {
@@ -275,9 +329,10 @@ impl Sim {
             out_queues: Mutex::new(HashMap::new()),
             sid_mailboxes: Mutex::new(HashMap::new()),
             sid_senders: Mutex::new(HashMap::new()),
-            capacity: AtomicUsize::new(initial_capacity),
             waneman,
             key: Some(Arc::new(key)),
+            hives,
+            bees,
         });
 
         self.humds.write().insert(id, sim_humd.clone());
@@ -286,26 +341,31 @@ impl Sim {
 
     pub fn wire_signed(&self, a: Hid, b: Hid) -> Result<()> {
         let humds = self.humds.read();
-        let ha = humds.get(&a).cloned()
+        let ha = humds
+            .get(&a)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
-        let hb = humds.get(&b).cloned()
+        let hb = humds
+            .get(&b)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", b.short()))?;
         drop(humds);
-        let a_key = ha.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key — spawn via spawn_humd_with_identity",
-            a.short()
-        ))?;
-        let b_key = hb.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key — spawn via spawn_humd_with_identity",
-            b.short()
-        ))?;
+        let a_key = ha.key.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "humd {} has no signing key — spawn via spawn_humd_with_identity",
+                a.short()
+            )
+        })?;
+        let b_key = hb.key.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "humd {} has no signing key — spawn via spawn_humd_with_identity",
+                b.short()
+            )
+        })?;
 
         let a_caps = sim_caps(&ha);
         let b_caps = sim_caps(&hb);
-        let (a_view, b_view) = InMemoryEndpoint::pair(
-            ha.id, b_caps.clone(),
-            hb.id, a_caps.clone(),
-        );
+        let (a_view, b_view) = InMemoryEndpoint::pair(ha.id, b_caps.clone(), hb.id, a_caps.clone());
         ha.ensemble.install(a_view, a_caps, &a_key);
         hb.ensemble.install(b_view, b_caps, &b_key);
         Ok(())
@@ -313,21 +373,23 @@ impl Sim {
 
     pub fn wire_signed_tampered(&self, a: Hid, c: Hid) -> Result<()> {
         let humds = self.humds.read();
-        let ha = humds.get(&a).cloned()
+        let ha = humds
+            .get(&a)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", a.short()))?;
-        let hc = humds.get(&c).cloned()
+        let hc = humds
+            .get(&c)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", c.short()))?;
         drop(humds);
-        let a_key = ha.key.clone().ok_or_else(|| anyhow::anyhow!(
-            "humd {} has no signing key", a.short()
-        ))?;
+        let a_key = ha
+            .key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("humd {} has no signing key", a.short()))?;
 
         let a_caps = sim_caps(&ha);
         let c_caps = sim_caps(&hc);
-        let (a_view, c_view) = InMemoryEndpoint::pair(
-            ha.id, c_caps.clone(),
-            hc.id, a_caps.clone(),
-        );
+        let (a_view, c_view) = InMemoryEndpoint::pair(ha.id, c_caps.clone(), hc.id, a_caps.clone());
 
         ha.ensemble.install(a_view, a_caps, &a_key);
 
@@ -387,12 +449,7 @@ impl Sim {
         })
     }
 
-    pub fn link_counters_since(
-        &self,
-        a: Hid,
-        b: Hid,
-        base: &LinkCounters,
-    ) -> Result<LinkCounters> {
+    pub fn link_counters_since(&self, a: Hid, b: Hid, base: &LinkCounters) -> Result<LinkCounters> {
         let (ab, _) = self.link_counters(a, b)?;
         Ok(ab.since(base))
     }
@@ -451,7 +508,11 @@ impl Sim {
             .collect())
     }
 
-    pub fn evict_expired(&self, observer: Hid, ttl: std::time::Duration) -> Result<Vec<ensemble::Hid>> {
+    pub fn evict_expired(
+        &self,
+        observer: Hid,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<ensemble::Hid>> {
         let ens = self
             .humds
             .read()
@@ -462,7 +523,11 @@ impl Sim {
     }
 
     pub fn peer_count(&self, observer: Hid) -> usize {
-        self.humds.read().get(&observer).map(|h| h.ensemble.peers().len()).unwrap_or(0)
+        self.humds
+            .read()
+            .get(&observer)
+            .map(|h| h.ensemble.peers().len())
+            .unwrap_or(0)
     }
 
     pub fn partition(&self, a: Hid, b: Hid) -> Result<()> {
@@ -521,7 +586,17 @@ impl Sim {
         Ok(())
     }
 
-    pub async fn attach_mock_worker(&self, humd: Hid, models: Vec<String>) -> Result<String> {
+    pub async fn attach_mock_nurse(&self, humd: Hid, models: Vec<String>) -> Result<String> {
+        self.attach_mock_nurse_claiming(humd, models, None, "HELLO").await
+    }
+
+    pub async fn attach_mock_nurse_claiming(
+        &self,
+        humd: Hid,
+        models: Vec<String>,
+        headroom: Option<(u32, u32)>,
+        reply: &str,
+    ) -> Result<String> {
         let h = self
             .humds
             .read()
@@ -529,34 +604,53 @@ impl Sim {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
         for _ in 0..200 {
-            if h.thrum.has_sink() { break; }
+            if h.thrum.has_sink() {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        let hello = serde_json::json!({
+        let mut hello = serde_json::json!({
             "chi": "hello",
-            "bee": ["worker"],
+            "role": "nurse",
             "hive": "claude-repl",
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "models": models,
-            "chis": ["hello", "prompt", "chunk", "finish"],
+            "chis": ["hello", "prompt", "unfurl", "wilt"],
         });
+        if let Some((free, total)) = headroom {
+            hello["headroom"] = serde_json::json!({"freeSlots": free, "totalSlots": total});
+        }
+        let hello = h.signed_hello(hello);
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
+        let reply = reply.to_string();
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
-                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if chi != "prompt" { continue; }
-                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if sid.is_empty() { continue; }
+                let chi = tone
+                    .get("chi")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if chi != "prompt" {
+                    continue;
+                }
+                let sid = tone
+                    .get("sid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if sid.is_empty() {
+                    continue;
+                }
                 let frames = vec![
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_start","id":0}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"text_delta","delta":"HELLO"}),
-                    serde_json::json!({"chi":"chunk","sid":&sid,"chunkType":"content_block_stop","blockIdx":0}),
-                    serde_json::json!({"chi":"finish","sid":&sid,"finishReason":"end_turn","usage":{}}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text"}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","text":&reply}),
+                    serde_json::json!({"chi":"unfurl","sid":&sid,"petal":0,"kind":"text","closed":true}),
+                    serde_json::json!({"chi":"wilt","sid":&sid,"reason":"end_turn","nectar":{}}),
                 ];
                 for f in frames {
                     thrum.inject_tone(&cid_for_pump, f).await;
@@ -584,7 +678,9 @@ impl Sim {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if sid.is_empty() { continue; }
+                if sid.is_empty() {
+                    continue;
+                }
                 let tx = {
                     let mut senders = h_for_pump.sid_senders.lock();
                     if let Some(tx) = senders.get(&sid) {
@@ -608,12 +704,7 @@ impl Sim {
         Ok(client_id)
     }
 
-    pub async fn nestler_recv(
-        &self,
-        humd: Hid,
-        sid: &str,
-        timeout: Duration,
-    ) -> Option<Value> {
+    pub async fn nestler_recv(&self, humd: Hid, sid: &str, timeout: Duration) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
 
         {
@@ -627,38 +718,41 @@ impl Sim {
         }
 
         {
-        let mut queues = h.out_queues.lock();
-        for (_cid, rx) in queues.iter_mut() {
-            while let Ok(tone) = rx.try_recv() {
-                let tone_sid = tone
-                    .get("sid")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if tone_sid.is_empty() {
-                    continue;
-                }
-                let senders = h.sid_senders.lock();
-                if let Some(tx) = senders.get(&tone_sid) {
-                    let _ = tx.send(tone);
-                } else {
-                    drop(senders);
-                    let (tx, rx2) = mpsc::unbounded_channel::<Value>();
-                    let _ = tx.send(tone);
-                    h.sid_senders.lock().insert(tone_sid.clone(), tx);
-                    h.sid_mailboxes.lock().insert(tone_sid, rx2);
+            let mut queues = h.out_queues.lock();
+            for rx in queues.values_mut() {
+                while let Ok(tone) = rx.try_recv() {
+                    let tone_sid = tone
+                        .get("sid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if tone_sid.is_empty() {
+                        continue;
+                    }
+                    let senders = h.sid_senders.lock();
+                    if let Some(tx) = senders.get(&tone_sid) {
+                        let _ = tx.send(tone);
+                    } else {
+                        drop(senders);
+                        let (tx, rx2) = mpsc::unbounded_channel::<Value>();
+                        let _ = tx.send(tone);
+                        h.sid_senders.lock().insert(tone_sid.clone(), tx);
+                        h.sid_mailboxes.lock().insert(tone_sid, rx2);
+                    }
                 }
             }
         }
-        }
 
         let mut rx_opt = h.sid_mailboxes.lock().remove(sid)?;
-        let result = tokio::time::timeout(timeout, rx_opt.recv()).await.ok().flatten();
+        let result = tokio::time::timeout(timeout, rx_opt.recv())
+            .await
+            .ok()
+            .flatten();
         h.sid_mailboxes.lock().insert(sid.to_string(), rx_opt);
         result
     }
 
-    pub async fn attach_mock_forager<F>(
+    pub async fn attach_mock_tools<F>(
         &self,
         humd: Hid,
         hive: &str,
@@ -675,45 +769,68 @@ impl Sim {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
         for _ in 0..200 {
-            if h.thrum.has_sink() { break; }
+            if h.thrum.has_sink() {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        h.hives.install(hive);
         let client_id = hum_identity::HumId::mint().to_string();
         let mut rx = h.thrum.register_synthetic(client_id.clone());
-        let tools: Vec<Value> = tool_names.iter().map(|name| serde_json::json!({
-            "name": name,
-            "description": format!("mock {name}"),
-            "inputSchema": { "type": "object", "properties": {}, "required": [] }
-        })).collect();
-        let hello = serde_json::json!({
+        let tools: Vec<Value> = tool_names
+            .iter()
+            .map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "description": format!("mock {name}"),
+                    "inputSchema": { "type": "object", "properties": {}, "required": [] }
+                })
+            })
+            .collect();
+        let hello = h.signed_hello(serde_json::json!({
             "chi": "hello",
-            "bee": ["forager"],
+            "role": "attendant",
             "hive": hive,
             "version": "0.0.0",
             "protoVersion": thrum_core::THRUM_VERSION,
             "tools": tools,
-            "chis": ["hello", "tool-call", "tool-result", "cancel"],
-        });
+            "chis": ["hello", "tendril-reach", "tendril-result"],
+        }));
         h.thrum.inject_tone(&client_id, hello).await;
         let thrum = h.thrum.clone();
         let cid_for_pump = client_id.clone();
         let responder = std::sync::Arc::new(responder);
         tokio::spawn(async move {
             while let Some(tone) = rx.recv().await {
-                let chi = tone.get("chi").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if chi != "tool-call" { continue; }
-                let sid = tone.get("sid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let call_id = tone.get("callId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let tool_name = tone.get("toolName").and_then(|v| v.as_str())
-                    .or_else(|| tone.get("name").and_then(|v| v.as_str()))
-                    .unwrap_or("").to_string();
+                let chi = tone
+                    .get("chi")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if chi != "tendril-reach" {
+                    continue;
+                }
+                let sid = tone
+                    .get("sid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let call_id = tone
+                    .get("callId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = tone
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let args = tone.get("args").cloned().unwrap_or(Value::Null);
-                let result = responder(&tool_name, args);
+                let result = responder(&name, args);
                 let reply = serde_json::json!({
-                    "chi": "tool-result",
+                    "chi": "tendril-result",
                     "sid": sid,
                     "callId": call_id,
-                    "toolName": tool_name,
                     "result": result,
                 });
                 thrum.inject_tone(&cid_for_pump, reply).await;
@@ -722,12 +839,62 @@ impl Sim {
         Ok(client_id)
     }
 
-    pub fn attach_observer(
-        &self,
-        observer_humd: Hid,
-        host_humd: Hid,
-        sid: &str,
-    ) -> Result<String> {
+    pub async fn attach_mock_builder<F>(&self, humd: Hid, run: F) -> Result<String>
+    where
+        F: Fn(&str, &str) -> (String, i64) + Send + Sync + 'static,
+    {
+        let h = self
+            .humds
+            .read()
+            .get(&humd)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no humd {}", humd.short()))?;
+        for _ in 0..200 {
+            if h.thrum.has_sink() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let client_id = hum_identity::HumId::mint().to_string();
+        let mut rx = h.thrum.register_synthetic(client_id.clone());
+        let hello = h.signed_hello(serde_json::json!({
+            "chi": "hello",
+            "role": "builder",
+            "hive": "bash",
+            "version": "0.0.0",
+            "protoVersion": thrum_core::THRUM_VERSION,
+            "chis": ["hello", "tendril-reach", "tendril-result", "cleanup"],
+        }));
+        h.thrum.inject_tone(&client_id, hello).await;
+        let thrum = h.thrum.clone();
+        let cid_for_pump = client_id.clone();
+        tokio::spawn(async move {
+            while let Some(tone) = rx.recv().await {
+                if tone.get("chi").and_then(Value::as_str) != Some("tendril-reach") {
+                    continue;
+                }
+                let text = |k: &str| tone.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let command = tone
+                    .pointer("/args/command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let (output, exit) = run(&text("cwd"), &command);
+                let reply = serde_json::json!({
+                    "chi": "tendril-result",
+                    "sid": text("sid"),
+                    "callId": text("callId"),
+                    "output": output,
+                    "isError": exit != 0,
+                    "metadata": { "exitCode": exit },
+                });
+                thrum.inject_tone(&cid_for_pump, reply).await;
+            }
+        });
+        Ok(client_id)
+    }
+
+    pub fn attach_observer(&self, observer_humd: Hid, host_humd: Hid, sid: &str) -> Result<String> {
         self.nestler_send(
             observer_humd,
             serde_json::json!({
@@ -744,9 +911,21 @@ impl Sim {
     pub async fn humd_peer_tap(&self, humd: Hid, timeout: Duration) -> Option<Value> {
         let h = self.humds.read().get(&humd).cloned()?;
         let mut rx = h.ensemble.subscribe();
-        match tokio::time::timeout(timeout, rx.recv()).await {
-            Ok(Ok(tone)) => Some(tone),
-            _ => None,
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(tone)) => {
+                    if matches!(
+                        tone.get("chi").and_then(|v| v.as_str()),
+                        Some("peer-add") | Some("peer-remove")
+                    ) {
+                        continue;
+                    }
+                    return Some(tone);
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -815,12 +994,7 @@ impl Sim {
         Ok(cid)
     }
 
-    pub async fn publish(
-        &self,
-        from: Hid,
-        topic: &str,
-        payload: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn publish(&self, from: Hid, topic: &str, payload: serde_json::Value) -> Result<()> {
         let ens = self
             .humds
             .read()
@@ -844,7 +1018,9 @@ impl Sim {
             .get(&from)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no humd {}", from.short()))?;
-        ens.ensemble.publish_with_dusk(topic, payload, Some(dusk_ms)).await;
+        ens.ensemble
+            .publish_with_dusk(topic, payload, Some(dusk_ms))
+            .await;
         Ok(())
     }
 
@@ -863,7 +1039,10 @@ impl Sim {
     }
 
     pub fn expired_dusk(&self, humd: Hid) -> u64 {
-        self.humds.read().get(&humd).map_or(0, |h| h.ensemble.expired_dusk())
+        self.humds
+            .read()
+            .get(&humd)
+            .map_or(0, |h| h.ensemble.expired_dusk())
     }
 
     pub async fn send_marks(&self, from: Hid, to: Hid, tag: &str, n: usize) -> Result<()> {
@@ -873,7 +1052,7 @@ impl Sim {
                 "rid": format!("{tag}-{i}"),
                 "to": to.to_hex(),
                 "from": from.to_hex(),
-                "mark": tag,
+                "note": tag,
             });
             self.nestler_send_ordered(from, tone).await?;
         }
@@ -881,11 +1060,18 @@ impl Sim {
     }
 
     pub fn rids(tones: &[Value]) -> Vec<String> {
-        tones.iter().filter_map(|t| t["rid"].as_str().map(String::from)).collect()
+        tones
+            .iter()
+            .filter_map(|t| t["rid"].as_str().map(String::from))
+            .collect()
     }
 
     pub fn ensemble_dropped(&self, humd: Hid) -> u64 {
-        self.humds.read().get(&humd).map(|h| h.ensemble.inbox_dropped()).unwrap_or(0)
+        self.humds
+            .read()
+            .get(&humd)
+            .map(|h| h.ensemble.inbox_dropped())
+            .unwrap_or(0)
     }
 
     pub async fn shutdown(self) {

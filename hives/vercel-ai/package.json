@@ -1,6 +1,6 @@
 {
   "name": "@hum/vercel-ai",
-  "version": "0.32.0",
+  "version": "0.34.1",
   "description": "Vercel AI SDK provider for hum — pure, no OC coupling",
   "type": "module",
   "main": "dist/index.js",
@@ -13,15 +13,18 @@
     "dist/"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "test": "tsup && bun test"
   },
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/provider": "^3.0.8"
   },
   "devDependencies": {
+    "@types/node": "^22.19.17",
+    "ai": "^6.0.315",
     "tsup": "^8.5.1",
     "typescript": "^5.7.0",
-    "@types/node": "^22.19.17"
+    "zod": "^4.6.7"
   }
 }

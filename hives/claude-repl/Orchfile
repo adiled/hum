@@ -1,3 +1,11 @@
+ARG HUM_SRC=
+ARG CLAUDE_CLI_PATH=
+
+SERVICE hive-install
+RUN ${HUM_SRC}/install
+ONESHOT true
+
 SERVICE claude-repl
-RUN ${HOME}/.local/bin/claude-repl-worker
+RUN ${HUM_SRC}/target/release/claude-repl-nurse
+ENV CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH}
 RESTART always
