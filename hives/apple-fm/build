@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Build this hive's bee: the nurse, and beside it apple-fm-gen, the Swift
+# bridge to Apple's on-device model.
+#
+# The hive is a kind; this makes its material. The hive's own install
+# runs this when a humd installs the hive, so the hive needs no knowledge
+# outside its own directory, and nothing is installed into the system's
+# PATH: the bee is built here and runs here.
+#
+# FoundationModels ships with macOS 26, so the bridge builds only there,
+# with the Command Line Tools' swiftc; no Xcode is needed.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here"
+
+if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+  echo "apple-fm: Apple's on-device model runs only on Apple silicon Macs with macOS 26 or later" >&2
+  exit 1
+fi
+
+cargo build --quiet --release --locked
+swiftc -parse-as-library -O -target arm64-apple-macos26.0 bridge/gen.swift -o target/release/apple-fm-gen

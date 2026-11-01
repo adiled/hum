@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 exclude = [
+    "hives/apple-fm",
     "hives/claude-cli",
     "hives/claude-repl",
     "hives/grpc",
