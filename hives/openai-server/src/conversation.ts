@@ -4,11 +4,7 @@
 // sigil, one bloom a turn. A conversation reads as blooms: each user turn
 // opens one, its words, images, audio and files its content, and what the
 // assistant said, the tools it called and what came back from them are
-// what grew in it. System and developer words that lead a request are the
-// system prompt; said later, they are a note in the turn they came in, said
-// once where they were said, so the history stays append-only and the
-// system prompt does not change under it. A nurse says such a note back to
-// its model as a system message, where the client said it.
+// what grew in it. Leading system words are the system prompt; later, notes.
 //
 // A request's last bloom is what it asks for. Its words are the prompt's
 // content and the blooms before it the graft. A conversation that ends
