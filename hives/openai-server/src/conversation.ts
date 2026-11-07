@@ -4,7 +4,7 @@
 // sigil, one bloom a turn. A conversation reads as blooms: each user turn
 // opens one, its words, images, audio and files its content, and what the
 // assistant said, the tools it called and what came back from them are
-// what grew in it. System and developer words are the system prompt.
+// what grew in it. Leading system words are the system prompt; later, notes.
 //
 // A request's last bloom is what it asks for. Its words are the prompt's
 // content and the blooms before it the graft. A conversation that ends
@@ -125,10 +125,20 @@ function servedPetals(id: string, name: string, args: unknown, output: unknown, 
   ];
 }
 
+export function noted(text: string): Petal {
+  return { kind: PetalKind.text, text: `<system>\n${text}\n</system>` };
+}
+
+export function noteOf(petal: Petal): string | undefined {
+  const text = petal.kind === PetalKind.text ? petal.text ?? "" : "";
+  return text.startsWith("<system>\n") && text.endsWith("\n</system>") ? text.slice(9, -10) : undefined;
+}
+
 class Reader {
   system: string[] = [];
   blooms: Bloom[] = [];
   tail: Tail = "none";
+  leading = true;
 
   #open(): Bloom {
     let last = this.blooms[this.blooms.length - 1];
@@ -139,17 +149,24 @@ class Reader {
     return last;
   }
 
+  told(text: string): void {
+    if (this.leading) this.system.push(text);
+    else if (text.length > 0) this.said([noted(text)]);
+  }
+
   said(petals: Petal[]): void {
     const last = this.blooms[this.blooms.length - 1];
     if (last && (last.grew ?? []).length === 0) last.content = [...(last.content ?? []), ...petals];
     else this.blooms.push({ content: petals, grew: [] });
     this.tail = "user";
+    this.leading = false;
   }
 
   grew(petals: Petal[], tail: Tail): void {
     const bloom = this.#open();
     bloom.grew = [...(bloom.grew ?? []), ...petals];
     this.tail = tail;
+    this.leading = false;
   }
 
   done(): Said {
@@ -184,7 +201,7 @@ export function fromChat(messages: ChatMessage[]): Said {
     switch (m.role) {
       case "system":
       case "developer":
-        r.system.push(resultOf(m.content));
+        r.told(resultOf(m.content));
         break;
       case "user":
         r.said(partsOf(m.content));
@@ -232,7 +249,7 @@ export function fromResponses(input: unknown, instructions?: string, before?: Sa
     const type = item?.type ?? (item?.role ? "message" : undefined);
     switch (type) {
       case "message":
-        if (item.role === "system" || item.role === "developer") r.system.push(resultOf(item.content));
+        if (item.role === "system" || item.role === "developer") r.told(resultOf(item.content));
         else if (item.role === "assistant") r.grew(partsOf(item.content), "assistant");
         else r.said(partsOf(item.content));
         break;
