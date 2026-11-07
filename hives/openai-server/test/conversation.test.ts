@@ -40,6 +40,36 @@ describe("fromChat", () => {
   });
 });
 
+describe("system words said after the first turn", () => {
+  const note = (text: string) => ({ kind: "text", text: `<system>\n${text}\n</system>` });
+
+  test("are a note in the turn they came in, and the system prompt keeps only what led", () => {
+    const said = fromChat([
+      { role: "system", content: "be terse" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "again" },
+      { role: "system", content: "[bookkeeping] deem it" },
+    ]);
+    expect(said.system).toBe("be terse");
+    expect(said.blooms.length).toBe(2);
+    expect(said.blooms[1].content).toEqual([{ kind: "text", text: "again" }, note("[bookkeeping] deem it")]);
+  });
+
+  test("are said once each, where they were said, however many pile up", () => {
+    const said = fromResponses([
+      { type: "message", role: "user", content: "one" },
+      { type: "message", role: "system", content: "[bookkeeping] first" },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] },
+      { type: "message", role: "user", content: "two" },
+      { type: "message", role: "system", content: "[bookkeeping] second" },
+    ], "be terse");
+    expect(said.system).toBe("be terse");
+    expect(said.blooms[0].content).toEqual([{ kind: "text", text: "one" }, note("[bookkeeping] first")]);
+    expect(said.blooms[1].content).toEqual([{ kind: "text", text: "two" }, note("[bookkeeping] second")]);
+  });
+});
+
 describe("fromResponses", () => {
   test("items, instructions and a predecessor's blooms read alike", () => {
     const before = fromResponses("one");
