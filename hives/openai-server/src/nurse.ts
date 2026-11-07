@@ -27,6 +27,7 @@
 import { randomUUID } from "node:crypto";
 import { Bee, Chi, PetalKind, Role, type Bloom, type Petal, type PetalKindT, type Tone } from "../../../thrum-clients/ts/index.ts";
 import { HIVE } from "./config.ts";
+import { noteOf } from "./conversation.ts";
 import { SOURCE, VERSION } from "./requester.ts";
 import { events, post } from "./upstream.ts";
 
@@ -62,9 +63,24 @@ function parts(petals: Petal[]): string | Array<Record<string, unknown>> {
   return out;
 }
 
-function said(petals: Petal[]): Message | undefined {
-  const content = parts(petals);
-  return (typeof content === "string" ? content.length > 0 : content.length > 0) ? { role: "user", content } : undefined;
+function said(petals: Petal[]): Message[] {
+  const out: Message[] = [];
+  let held: Petal[] = [];
+  const flush = () => {
+    const content = parts(held);
+    if (content.length > 0) out.push({ role: "user", content });
+    held = [];
+  };
+  for (const p of petals) {
+    const note = noteOf(p);
+    if (note === undefined) held.push(p);
+    else {
+      flush();
+      out.push({ role: "system", content: note });
+    }
+  }
+  flush();
+  return out;
 }
 
 function grown(petals: Petal[], into: Message[]): void {
@@ -93,8 +109,7 @@ function grown(petals: Petal[], into: Message[]): void {
 export function messagesOf(graft: Bloom[]): Message[] {
   const out: Message[] = [];
   for (const b of graft) {
-    const m = said(b.content ?? []);
-    if (m) out.push(m);
+    out.push(...said(b.content ?? []));
     grown(b.grew ?? [], out);
   }
   return out;
@@ -232,8 +247,8 @@ export class Nurse {
     s.waiting.clear();
     const content = t.content && t.content.length > 0 ? t.content : t.text ? [{ kind: PetalKind.text, text: t.text }] : [];
     const asked = said(content);
-    if (asked) {
-      s.messages.push(asked);
+    if (asked.length > 0) {
+      s.messages.push(...asked);
       return this.#grow(sid, s);
     }
     const text = plainText(graft);

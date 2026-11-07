@@ -7,7 +7,8 @@
 // what grew in it. System and developer words that lead a request are the
 // system prompt; said later, they are a note in the turn they came in, said
 // once where they were said, so the history stays append-only and the
-// system prompt does not change under it.
+// system prompt does not change under it. A nurse says such a note back to
+// its model as a system message, where the client said it.
 //
 // A request's last bloom is what it asks for. Its words are the prompt's
 // content and the blooms before it the graft. A conversation that ends
@@ -128,6 +129,15 @@ function servedPetals(id: string, name: string, args: unknown, output: unknown, 
   ];
 }
 
+export function noted(text: string): Petal {
+  return { kind: PetalKind.text, text: `<system>\n${text}\n</system>` };
+}
+
+export function noteOf(petal: Petal): string | undefined {
+  const text = petal.kind === PetalKind.text ? petal.text ?? "" : "";
+  return text.startsWith("<system>\n") && text.endsWith("\n</system>") ? text.slice(9, -10) : undefined;
+}
+
 class Reader {
   system: string[] = [];
   blooms: Bloom[] = [];
@@ -145,7 +155,7 @@ class Reader {
 
   told(text: string): void {
     if (this.leading) this.system.push(text);
-    else if (text.length > 0) this.said([{ kind: PetalKind.text, text: `<system>\n${text}\n</system>` }]);
+    else if (text.length > 0) this.said([noted(text)]);
   }
 
   said(petals: Petal[]): void {

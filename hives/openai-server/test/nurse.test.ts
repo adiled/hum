@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { askOf, lateAnswers, messagesOf, plainText } from "../src/nurse.ts";
+import { fromChat } from "../src/conversation.ts";
 
 describe("the nurse half", () => {
   test("a graft is the conversation, tool calls and answers in their places", () => {
@@ -84,5 +85,20 @@ describe("the nurse half", () => {
       reasoning_effort: "high",
       presence_penalty: 0.4,
     });
+  });
+});
+
+describe("system words said after the first turn", () => {
+  test("come back to the model as system messages where the client said them", () => {
+    const chat = [
+      { role: "system", content: "be terse" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "again" },
+      { role: "system", content: "[bookkeeping] deem it" },
+    ];
+    const said = fromChat(chat);
+    expect(said.system).toBe("be terse");
+    expect(messagesOf(said.blooms)).toEqual(chat.slice(1));
   });
 });
