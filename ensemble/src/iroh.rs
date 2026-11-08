@@ -170,7 +170,7 @@ impl IrohTransport {
     pub async fn bind_direct() -> Result<Self> {
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .alpns(vec![IROH_ALPN.to_vec()])
-            .relay_mode(iroh::RelayMode::Disabled)
+            .relay_mode(iroh::RelayMode::Default)
             .bind()
             .await
             .map_err(|e| anyhow!("iroh bind: {e}"))?;
@@ -188,7 +188,7 @@ impl IrohTransport {
         let sk = iroh::SecretKey::from_bytes(&humd_key.0.to_bytes());
         let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .alpns(vec![IROH_ALPN.to_vec()])
-            .relay_mode(iroh::RelayMode::Disabled)
+            .relay_mode(iroh::RelayMode::Default)
             .secret_key(sk);
         if let Some(port) = port {
             let addr = std::net::SocketAddr::new(
