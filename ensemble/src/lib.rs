@@ -41,7 +41,10 @@ pub use tls::{
 };
 
 pub mod iroh;
-pub use iroh::{IROH_ALPN, IROH_IP_HINT, IrohEndpoint, IrohTransport, dialable_addr};
+pub use iroh::{
+    IROH_ALPN, IROH_IP_HINT, IROH_RELAY_HINT, IrohEndpoint, IrohTransport, dialable_addr,
+    endpoint_addr_from_hints,
+};
 
 pub mod delivery;
 pub mod framing;
