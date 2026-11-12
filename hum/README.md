@@ -80,8 +80,10 @@ Inspect or edit on-disk peer-mesh state.
 | `hum ensemble peer rm <humd_id|alias>` | drop matching entries |
 
 Hints are wire-shaped strings: `tcp:host:port`, `iroh:<64-hex>`,
-`iroh-ip:<sockaddr>`. The `reach` field of `hum ensemble` is exactly
-what a remote peer pastes in.
+`iroh-ip:<sockaddr>`, `iroh-relay:<url>`. An `iroh:` hint alone reaches
+a humd anywhere, through the n0 relay mesh; `iroh-ip:` and
+`iroh-relay:` are shortcuts to it. The `reach` field of `hum ensemble`
+is exactly what a remote peer pastes in.
 
 ### `hive`
 Hives are the kinds this humd understands. A directory with an

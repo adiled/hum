@@ -147,7 +147,7 @@ hum hive apple-fm install
 `install` builds the nurse (`cargo build --release --locked`) and the
 bridge beside it (`swiftc`, into `target/release/apple-fm-gen`), and
 keeps the Orchfile's `apple-fm` unit running under orchd, in the
-`hum-apple-fm` namespace. A setting rides in the environment of the
+`hum-apple-fm` grove. A setting rides in the environment of the
 install:
 
 ```bash

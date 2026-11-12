@@ -72,8 +72,8 @@ small struct humd writes to `state_dir/runtime.json` when it
 boots and removes when it shuts down. Other tools (`hum status`,
 `hum ensemble`, dev scripts, third-party probes) read it to learn the
 running daemon's pid, socket path, version, and the wire-shaped reach
-hints (`ensemble_addrs`: `iroh:<node>`, `iroh-ip:<sockaddr>`, `tcp:...`)
-a peer would paste into its `peers.json`.
+hints (`ensemble_addrs`: `iroh:<node>`, `iroh-ip:<sockaddr>`,
+`iroh-relay:<url>`, `tcp:...`) a peer would paste into its `peers.json`.
 
 ```rust
 let info = RuntimeInfo {

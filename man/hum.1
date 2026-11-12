@@ -127,7 +127,8 @@ Inspect or edit the peer-mesh state.
 .B hum ensemble peer add \fIhumd_id\fR [\-\-hint \fIHINT\fR]... [\-\-alias \fIname\fR]
 \(em append a peer to peers.json. \fIhumd_id\fR is hex (with or without the
 \fBhumd_\fR prefix). Repeated \fB\-\-hint\fR flags accumulate; hints are
-\fBtcp:host:port\fR or \fBiroh:<64-hex>\fR. An existing entry with the same
+\fBtcp:host:port\fR, \fBiroh:<64-hex>\fR, \fBiroh-ip:<sockaddr>\fR or
+\fBiroh-relay:<url>\fR. An existing entry with the same
 humd_id is replaced (idempotent). Alias enables \fBhum://<alias>/path\fR
 URI resolution.
 .br
@@ -212,7 +213,9 @@ them.
 Source checkout the installer builds from.
 .TP
 .B ~/.local/bin/
-Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorchd\fR.
+Installed binaries: \fBhum\fR, \fBhumd\fR, \fBhumctl\fR, \fBorchd\fR,
+with \fBorch\fR, which orchd reads Orchfiles through, and orchd's
+\fBorchd-rootstock-*\fR plugins.
 hum never calls \fBorchd\fR; it is installed as a supervisor hives may use
 for their own processes, as the bundled hives do.
 .SH ENVIRONMENT
@@ -280,7 +283,8 @@ curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash
 .PP
 The installer builds and registers \fBhumd\fR as a user service (launchd on
 macOS, systemd-style on Linux), mints the identity key, pulls in the
-\fBorchd\fR supervisor binary for hives to use, and installs this page into
+\fBorchd\fR supervisor and \fBorch\fR from orchd's release, pinned and
+checksum-verified, for hives to use, and installs this page into
 \fB/usr/local/share/man/man1\fR or \fB~/.local/share/man/man1\fR. Re-running
 it upgrades in place.
 

@@ -50,7 +50,7 @@ the *same* humd talk, they're already on `thrum`. When nestlers on
 | how does humd A reach humd B? | `Transport` trait + a `peers.json` of known addresses, or `kad_find(target)` for discovery among peers already known. |
 | how do messages flow? | `chi:"prompt"` / `chi:"unfurl"` / `chi:"wilt"` between humds via `route(tone)` (unicast) or `publish(topic, …)` (gossip). |
 | how do you trust a stranger? | Ed25519-signed `hello` handshake. `Hid` = hash(pubkey), so the signature proves identity. |
-| who handles NAT, firewalls, dynamic IPs? | `IrohEndpoint::bind_relayed()`, which is QUIC + Noise + hole-punching via the public iroh relay mesh. The daemon binds direct-only; the relay path lives in the crate and needs a network that can reach the relay servers. |
+| who handles NAT, firewalls, dynamic IPs? | `IrohTransport`, which is QUIC + Noise + hole-punching via the public n0 relay mesh. The daemon binds with `bind_with_key_on()`: each humd keeps a home relay and publishes it under its node id through n0's DNS, so a humd behind NAT is dialled by its `iroh:` hint alone. An `iroh-relay:` hint skips the lookup. |
 
 Nothing in ensemble knows about models, MCP, JSONL, plugins, or
 billing. Those live in `humd` and `hives`. This crate is purely
@@ -62,14 +62,14 @@ billing. Those live in `humd` and `hives`. This crate is purely
 |---|---|---|---|---|
 | **T1** own-devices | implicit (you own all) | static `peers.json` | `InMemoryEndpoint` (tests) or `TcpEndpoint` (LAN) | laptop ↔ phone roam |
 | **T2** trusted-group | pre-shared (team, family) | static + fingerprint pinning | `TlsTcpEndpoint` with pinned-fingerprint verifier | co-pilot session, 2-3 operators |
-| **T3** federation | signed handshake (cross-org) | static `peers.json` | `IrohEndpoint` (direct) or `TlsTcpEndpoint` | partner-with-partner agents |
+| **T3** federation | signed handshake (cross-org) | static `peers.json` | `IrohEndpoint` or `TlsTcpEndpoint` | partner-with-partner agents |
 | **T4** open p2p | verify everything (strangers) | Kademlia DHT + ensemble gossip | `IrohEndpoint` + relay | autonomous agents finding each other on the open mesh |
 
 Daemon code is identical across all four tiers. The tier is *which*
 `Transport` impl you plug in. The transport column lists what the
-crate implements; the daemon ships T1 and T3 over TCP and direct
-iroh, and wires neither TLS nor the relay. See [not here
-yet](#not-here-yet).
+crate implements; the daemon ships T1 and T3 over TCP and over
+iroh through the n0 relay mesh, and does not wire TLS. See [not
+here yet](#not-here-yet).
 
 ## Quick tour
 
@@ -136,11 +136,19 @@ let peer_id = Hid::random_humd();
 let transport = IrohTransport::bind_relayed().await?;
 let addr = HumdAddr::new(peer_id)
     .with_hint("iroh:0fb1c87a4d5e4e3a9c1b2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718")
-    .with_hint("iroh-ip:203.0.113.4:18820");
+    .with_hint("iroh-ip:203.0.113.4:18820")
+    .with_hint("iroh-relay:https://euc1-1.relay.n0.iroh-canary.iroh.link./");
 let conn = transport.connect(&addr).await?;
 # Ok(())
 # }
 ```
+
+Only the `iroh:` hint is needed. With it alone the dialer looks up
+the peer's current home relay by its node id and meets it there, then
+hole-punches to a direct path when the NATs allow it. `iroh-ip:` and
+`iroh-relay:` are shortcuts that skip the lookup. `tests/iroh_relay.rs`
+proves both ways across the live n0 mesh with no reachable IP; it is
+`#[ignore]`d so CI never depends on n0.
 
 ### Sending a tone to one peer
 
@@ -250,9 +258,6 @@ These are written as if they work. They do not.
   `peers.json` and from the persisted routing store. There is no DNS
   seeding, no bootstrap node, no contact exchange, so `kad_find` can
   only find peers the node already knows.
-- **The relay path is unproven.** `bind_relayed()` exists; the n0
-  relay servers were unreachable from the network this was developed
-  on, and no traffic has crossed a relay.
 - **TLS is a library capability the daemon never uses.**
   `TlsTcpEndpoint` and its pinned-fingerprint verifier are here and
   tested; `humd` wires only TCP and iroh.
