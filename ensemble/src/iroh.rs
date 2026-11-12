@@ -21,6 +21,8 @@ pub const IROH_HINT: &str = "iroh:";
 
 pub const IROH_IP_HINT: &str = "iroh-ip:";
 
+pub const IROH_RELAY_HINT: &str = "iroh-relay:";
+
 const PRIMING_NEWLINE: &[u8] = b"\n";
 
 pub fn dialable_addr(bound: std::net::SocketAddr) -> std::net::SocketAddr {
@@ -177,18 +179,14 @@ impl IrohTransport {
         Ok(Self::new(endpoint))
     }
 
-    pub async fn bind_direct_with_key(humd_key: &crate::HumdKey) -> Result<Self> {
-        Self::bind_direct_with_key_on(humd_key, None).await
+    pub async fn bind_with_key(humd_key: &crate::HumdKey) -> Result<Self> {
+        Self::bind_with_key_on(humd_key, None).await
     }
 
-    pub async fn bind_direct_with_key_on(
-        humd_key: &crate::HumdKey,
-        port: Option<u16>,
-    ) -> Result<Self> {
+    pub async fn bind_with_key_on(humd_key: &crate::HumdKey, port: Option<u16>) -> Result<Self> {
         let sk = iroh::SecretKey::from_bytes(&humd_key.0.to_bytes());
-        let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        let mut builder = Endpoint::builder(iroh::endpoint::presets::N0)
             .alpns(vec![IROH_ALPN.to_vec()])
-            .relay_mode(iroh::RelayMode::Disabled)
             .secret_key(sk);
         if let Some(port) = port {
             let addr = std::net::SocketAddr::new(
@@ -234,12 +232,29 @@ impl IrohTransport {
         self.endpoint.id()
     }
 
-    pub fn dial_hints(&self) -> Vec<String> {
+    pub async fn online_within(&self, wait: std::time::Duration) -> bool {
+        tokio::time::timeout(wait, self.endpoint.online())
+            .await
+            .is_ok()
+    }
+
+    pub fn relay_hints(&self) -> Vec<String> {
         self.endpoint
+            .addr()
+            .relay_urls()
+            .map(|url| format!("{IROH_RELAY_HINT}{url}"))
+            .collect()
+    }
+
+    pub fn dial_hints(&self) -> Vec<String> {
+        let mut hints: Vec<String> = self
+            .endpoint
             .bound_sockets()
             .into_iter()
             .map(|s| format!("{IROH_IP_HINT}{}", dialable_addr(s)))
-            .collect()
+            .collect();
+        hints.extend(self.relay_hints());
+        hints
     }
 
     pub async fn accept(&self) -> Result<Arc<IrohEndpoint>> {
@@ -268,31 +283,43 @@ impl IrohTransport {
     }
 }
 
+pub fn endpoint_addr_from_hints(addr: &HumdAddr) -> Result<EndpointAddr> {
+    let hint = addr
+        .hints
+        .iter()
+        .find_map(|h| h.strip_prefix(IROH_HINT))
+        .ok_or_else(|| anyhow!("iroh transport: no `iroh:` hint in HumdAddr"))?;
+    let node_id_bytes =
+        hex::decode(hint).with_context(|| format!("iroh transport: hint `{hint}` is not hex"))?;
+    if node_id_bytes.len() != 32 {
+        return Err(anyhow!("iroh transport: NodeId must be 32 bytes"));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&node_id_bytes);
+    let node_id =
+        PublicKey::from_bytes(&arr).map_err(|e| anyhow!("iroh transport: invalid NodeId: {e}"))?;
+    let direct_addrs = addr
+        .hints
+        .iter()
+        .filter_map(|h| h.strip_prefix(IROH_IP_HINT))
+        .filter_map(|s| s.parse().ok())
+        .map(TransportAddr::Ip);
+    let relay_addrs = addr
+        .hints
+        .iter()
+        .filter_map(|h| h.strip_prefix(IROH_RELAY_HINT))
+        .filter_map(|s| s.parse::<iroh::RelayUrl>().ok())
+        .map(TransportAddr::Relay);
+    Ok(EndpointAddr::from_parts(
+        node_id,
+        direct_addrs.chain(relay_addrs),
+    ))
+}
+
 #[async_trait]
 impl Transport for IrohTransport {
     async fn connect(&self, addr: &HumdAddr) -> Result<Arc<dyn PeerConnection>> {
-        let hint = addr
-            .hints
-            .iter()
-            .find_map(|h| h.strip_prefix(IROH_HINT))
-            .ok_or_else(|| anyhow!("iroh transport: no `iroh:` hint in HumdAddr"))?;
-        let node_id_bytes = hex::decode(hint)
-            .with_context(|| format!("iroh transport: hint `{hint}` is not hex"))?;
-        if node_id_bytes.len() != 32 {
-            return Err(anyhow!("iroh transport: NodeId must be 32 bytes"));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&node_id_bytes);
-        let node_id = PublicKey::from_bytes(&arr)
-            .map_err(|e| anyhow!("iroh transport: invalid NodeId: {e}"))?;
-        let direct_addrs: Vec<TransportAddr> = addr
-            .hints
-            .iter()
-            .filter_map(|h| h.strip_prefix(IROH_IP_HINT))
-            .filter_map(|s| s.parse().ok())
-            .map(TransportAddr::Ip)
-            .collect();
-        let endpoint_addr = EndpointAddr::from_parts(node_id, direct_addrs);
+        let endpoint_addr = endpoint_addr_from_hints(addr)?;
         let endpoint =
             IrohEndpoint::connect(&self.endpoint, endpoint_addr, PeerCapabilities::default())
                 .await?;
@@ -345,5 +372,86 @@ mod dial_tests {
             dialable_addr(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)).ip(),
             IpAddr::V6(Ipv6Addr::UNSPECIFIED)
         );
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::{IROH_HINT, IROH_IP_HINT, IROH_RELAY_HINT, endpoint_addr_from_hints};
+    use crate::{Hid, HumdAddr, HumdKey};
+    use iroh::{RelayUrl, TransportAddr};
+    use std::net::SocketAddr;
+
+    const RELAY: &str = "https://euc1-1.relay.n0.iroh-canary.iroh.link./";
+
+    fn node_hint(key: &HumdKey) -> String {
+        format!(
+            "{IROH_HINT}{}",
+            hex::encode(key.0.verifying_key().as_bytes())
+        )
+    }
+
+    #[test]
+    fn a_relay_hint_reaches_the_endpoint_addr() {
+        let key = HumdKey::generate();
+        let addr = HumdAddr::new(key.hid())
+            .with_hint(node_hint(&key))
+            .with_hint(format!("{IROH_RELAY_HINT}{RELAY}"));
+        let ea = endpoint_addr_from_hints(&addr).expect("parse");
+        let relay: RelayUrl = RELAY.parse().expect("relay url");
+        assert_eq!(ea.relay_urls().collect::<Vec<_>>(), vec![&relay]);
+        assert_eq!(ea.ip_addrs().count(), 0);
+    }
+
+    #[test]
+    fn ip_and_relay_hints_travel_together() {
+        let key = HumdKey::generate();
+        let ip: SocketAddr = "192.168.1.5:4556".parse().expect("ip");
+        let addr = HumdAddr::new(key.hid())
+            .with_hint(node_hint(&key))
+            .with_hint(format!("{IROH_IP_HINT}{ip}"))
+            .with_hint(format!("{IROH_RELAY_HINT}{RELAY}"));
+        let ea = endpoint_addr_from_hints(&addr).expect("parse");
+        assert_eq!(ea.ip_addrs().collect::<Vec<_>>(), vec![&ip]);
+        assert_eq!(ea.relay_urls().count(), 1);
+        assert_eq!(ea.id.as_bytes(), key.0.verifying_key().as_bytes());
+    }
+
+    #[test]
+    fn a_node_id_alone_is_enough_to_dial() {
+        let key = HumdKey::generate();
+        let addr = HumdAddr::new(key.hid()).with_hint(node_hint(&key));
+        let ea = endpoint_addr_from_hints(&addr).expect("parse");
+        assert!(ea.addrs.is_empty());
+    }
+
+    #[test]
+    fn a_relay_hint_round_trips_through_its_string() {
+        let relay: RelayUrl = RELAY.parse().expect("relay url");
+        let hint = format!("{IROH_RELAY_HINT}{relay}");
+        let back: RelayUrl = hint
+            .strip_prefix(IROH_RELAY_HINT)
+            .expect("prefix")
+            .parse()
+            .expect("reparse");
+        assert_eq!(back, relay);
+    }
+
+    #[test]
+    fn an_unparseable_relay_hint_is_skipped() {
+        let key = HumdKey::generate();
+        let addr = HumdAddr::new(key.hid())
+            .with_hint(node_hint(&key))
+            .with_hint(format!("{IROH_RELAY_HINT}not a url"));
+        let ea = endpoint_addr_from_hints(&addr).expect("parse");
+        assert!(!ea.addrs.iter().any(TransportAddr::is_relay));
+    }
+
+    #[test]
+    fn relay_and_ip_hints_are_not_mistaken_for_the_node_id() {
+        let addr = HumdAddr::new(Hid::random_humd())
+            .with_hint(format!("{IROH_RELAY_HINT}{RELAY}"))
+            .with_hint(format!("{IROH_IP_HINT}10.0.0.1:1"));
+        assert!(endpoint_addr_from_hints(&addr).is_err());
     }
 }

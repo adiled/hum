@@ -9,8 +9,9 @@
 //!
 //! 1. [`bind`] — build an [`IrohTransport`] using `humd_key`. Returns
 //!    the transport plus the `peers.json` hint strings a remote peer
-//!    would paste in to dial this humd back (`iroh:<node>` plus one
-//!    `iroh-ip:<sockaddr>` per bound socket).
+//!    would paste in to dial this humd back (`iroh:<node>`, one
+//!    `iroh-ip:<sockaddr>` per local address, and `iroh-relay:<url>`
+//!    for the home relay when one is reached within [`RELAY_WAIT`]).
 //!
 //! 2. [`dial_all`] — walk `peers.json`, open one iroh connection per
 //!    entry that has an `iroh:` hint, install each via
@@ -21,11 +22,17 @@
 //!    Each accepted connection is installed the same way, so the dial
 //!    and accept paths converge on a single registry entry per peer.
 //!
-//! Relay is disabled — this is the loopback/LAN/direct path. WAN over
-//! a relay mesh lands later via a sibling bind path on this module.
+//! The endpoint runs iroh's n0 preset: the public n0 relay mesh plus
+//! n0's DNS address lookup. A humd behind NAT keeps a home relay and
+//! publishes it under its node id, so a peer can dial it anywhere in
+//! the world. With only an `iroh:<node>` hint the dialer resolves the
+//! current relay by DNS. An `iroh-relay:` hint skips that lookup. iroh
+//! opens on whichever path answers first, then hole-punches to a
+//! direct path when the NATs allow it.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ensemble::{Ensemble, HumdAddr, HumdKey, IrohTransport, PeerCapabilities, PeerConnection};
 use tracing::{info, warn};
@@ -36,7 +43,7 @@ pub(crate) async fn bind(
     humd_key: &HumdKey,
     port: u16,
 ) -> anyhow::Result<(IrohTransport, Vec<String>)> {
-    let transport = match IrohTransport::bind_direct_with_key_on(humd_key, port_nonzero(port)).await {
+    let transport = match IrohTransport::bind_with_key_on(humd_key, port_nonzero(port)).await {
         Ok(t) => t,
         Err(e) => {
             warn!(
@@ -44,39 +51,47 @@ pub(crate) async fn bind(
                 err = %e,
                 "peer.iroh.fixed_port.bind_failed — taking an ephemeral port; the address peers hold goes stale on restart"
             );
-            IrohTransport::bind_direct_with_key(humd_key).await?
+            IrohTransport::bind_with_key(humd_key).await?
         }
     };
     let node_id_hex = hex::encode(transport.node_id().as_bytes());
-    let discovered: Vec<SocketAddr> = transport
-        .endpoint()
-        .addr()
-        .ip_addrs()
-        .copied()
-        .collect();
-    let hints = dial_hints(&node_id_hex, &discovered);
+    if !transport.online_within(RELAY_WAIT).await {
+        warn!(
+            wait_ms = RELAY_WAIT.as_millis() as u64,
+            "peer.iroh.relay.not_yet — no home relay; peers outside this network can dial once it connects, by node id"
+        );
+    }
+    let addr = transport.endpoint().addr();
+    let discovered: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
+    let relays: Vec<String> = addr.relay_urls().map(|u| u.to_string()).collect();
+    let hints = dial_hints(&node_id_hex, &discovered, &relays);
     info!(
         node_id = %&node_id_hex[..16],
-        socket_count = hints.len() - 1,
+        socket_count = discovered.len(),
+        relay = relays.first().map(String::as_str).unwrap_or("none"),
         "peer.iroh.bound"
     );
     Ok((transport, hints))
 }
 
+const RELAY_WAIT: Duration = Duration::from_secs(5);
+
 fn port_nonzero(port: u16) -> Option<u16> {
     if port == 0 { None } else { Some(port) }
 }
 
-fn dial_hints(node_id_hex: &str, addrs: &[SocketAddr]) -> Vec<String> {
-    let routable: Vec<String> = addrs
+fn dial_hints(node_id_hex: &str, addrs: &[SocketAddr], relays: &[String]) -> Vec<String> {
+    let routable = addrs
         .iter()
         .filter(|addr| !addr.ip().is_unspecified())
-        .map(|addr| format!("iroh-ip:{addr}"))
-        .collect();
-    let mut hints = Vec::with_capacity(1 + routable.len());
-    hints.push(format!("iroh:{node_id_hex}"));
-    hints.extend(routable);
-    hints
+        .map(|addr| format!("{}{addr}", ensemble::IROH_IP_HINT));
+    let relayed = relays
+        .iter()
+        .map(|url| format!("{}{url}", ensemble::IROH_RELAY_HINT));
+    std::iter::once(format!("{}{node_id_hex}", ensemble::iroh::IROH_HINT))
+        .chain(routable)
+        .chain(relayed)
+        .collect()
 }
 
 pub(crate) async fn dial_and_install_peer(
@@ -155,8 +170,22 @@ mod tests {
         let routable: SocketAddr = "10.0.0.5:4556".parse().unwrap();
         let wildcard: SocketAddr = "0.0.0.0:4556".parse().unwrap();
         assert_eq!(
-            dial_hints("node", &[routable, wildcard]),
+            dial_hints("node", &[routable, wildcard], &[]),
             vec!["iroh:node".to_string(), "iroh-ip:10.0.0.5:4556".to_string()],
+        );
+    }
+
+    #[test]
+    fn the_home_relay_is_advertised_after_the_addresses() {
+        let routable: SocketAddr = "10.0.0.5:4556".parse().unwrap();
+        let relay = "https://use1-1.relay.n0.iroh-canary.iroh.link./".to_string();
+        assert_eq!(
+            dial_hints("node", &[routable], std::slice::from_ref(&relay)),
+            vec![
+                "iroh:node".to_string(),
+                "iroh-ip:10.0.0.5:4556".to_string(),
+                format!("iroh-relay:{relay}"),
+            ],
         );
     }
 
