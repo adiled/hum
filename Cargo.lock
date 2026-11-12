@@ -4396,9 +4396,9 @@ dependencies = [
 
 [[package]]
 name = "the-orch"
-version = "0.2.10"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6def679e429ef0478234e4aecdc471e7f9a21d9ab8efd977d36ad4d42cd14282"
+checksum = "5c608824cc4ed8a83d17a8fca1cdf0b0403d10e439cecccbe05f8e498ec43e50"
 dependencies = [
  "serde",
  "serde_json",
