@@ -1,6 +1,6 @@
 {
   "name": "@hum/openai-server",
-  "version": "0.34.3",
+  "version": "0.35.0",
   "description": "OpenAI-compatible HTTP surface for hum",
   "type": "module",
   "main": "dist/index.js",
