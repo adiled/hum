@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # hum installer.
 #
-# Builds + registers humd as a user service. Pulls the orchd supervisor
-# from crates.io, pinned exactly, for hives to keep their own processes
-# alive with; hum itself never calls it. `hum hive <ref> install` teaches
-# humd a hive, and the hive enters and runs its own bees. The `orch`
-# Orchfile CLI is not installed — it's dead weight; hum parses Orchfiles
-# in-process, and Orchfile parsing is available as the `the-orch` library
-# should we ever need it.
+# Builds + registers humd as a user service. Installs the orchd supervisor
+# from its GitHub release, pinned exactly and checksum-verified, for hives
+# to keep their own processes alive with; hum itself never calls it. The
+# release carries orch, which orchd reads every Orchfile through, and
+# orchd's rootstocks, so all of them are installed beside it.
+# `hum hive <ref> install` teaches humd a hive, and the hive enters and
+# runs its own bees. hum parses Orchfiles in-process with the `the-orch`
+# library, the same Orch version orch speaks.
 #
 # Idempotent — re-running upgrades in place.
 #
@@ -41,8 +42,9 @@ ORCHD_BIN="$HUM_BIN_ROOT/bin/orchd"
 HUM_REPO_URL="${HUM_REPO_URL:-https://github.com/adiled/hum.git}"
 HUM_SRC="$HUM_DATA/src"
 
-ORCHD_MIN_VERSION="0.4.0"
-ORCHD_MAX_VERSION="0.4.0"
+ORCHD_MIN_VERSION="0.5.0"
+ORCHD_MAX_VERSION="0.5.0"
+ORCHD_RELEASES="${ORCHD_DOWNLOAD_URL:-https://github.com/adiled/orchd/releases/download/v$ORCHD_MIN_VERSION}"
 
 EDGE=0
 declare -a REST=()
@@ -192,9 +194,66 @@ prepare_src() {
   echo "$HUM_SRC"
 }
 
+orchd_target() {
+  local ARCH SYS
+  case "$(uname -m)" in
+    x86_64|amd64)  ARCH=x86_64 ;;
+    arm64|aarch64) ARCH=aarch64 ;;
+    *) return 1 ;;
+  esac
+  case "$OS" in
+    Linux)  SYS=linux ;;
+    Darwin) SYS=macos ;;
+    *) return 1 ;;
+  esac
+  case "$ARCH-$SYS" in
+    x86_64-linux|aarch64-linux|aarch64-macos) echo "$ARCH-$SYS" ;;
+    *) return 1 ;;
+  esac
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  else fail "need sha256sum or shasum to check the orchd download"; fi
+}
+
+fetch_orchd_release() {
+  local TMP="$2" TARBALL="orchd-$1.tar.gz"
+  curl -fsSL "$ORCHD_RELEASES/$TARBALL" -o "$TMP/$TARBALL" \
+    || fail "could not fetch $ORCHD_RELEASES/$TARBALL"
+  curl -fsSL "$ORCHD_RELEASES/$TARBALL.sha256" -o "$TMP/$TARBALL.sha256" \
+    || fail "could not fetch $ORCHD_RELEASES/$TARBALL.sha256"
+  local WANT GOT
+  WANT="$(cut -d' ' -f1 < "$TMP/$TARBALL.sha256")"
+  GOT="$(sha256_of "$TMP/$TARBALL")"
+  [ "$WANT" = "$GOT" ] || fail "checksum mismatch for $TARBALL: expected $WANT, got $GOT"
+  tar -xzf "$TMP/$TARBALL" -C "$TMP" || fail "could not unpack $TARBALL"
+  { [ -x "$TMP/bin/orchd" ] && [ -x "$TMP/bin/orch" ]; } || fail "$TARBALL holds no bin/orchd and bin/orch"
+  mkdir -p "$HUM_BIN_ROOT/bin" || fail "cannot make $HUM_BIN_ROOT/bin"
+  local FILE NAME
+  for FILE in "$TMP"/bin/*; do
+    NAME="$(basename "$FILE")"
+    { cp "$FILE" "$HUM_BIN_ROOT/bin/.$NAME.new" \
+      && chmod 755 "$HUM_BIN_ROOT/bin/.$NAME.new" \
+      && mv -f "$HUM_BIN_ROOT/bin/.$NAME.new" "$HUM_BIN_ROOT/bin/$NAME"; } \
+      || fail "cannot install $NAME into $HUM_BIN_ROOT/bin"
+  done
+}
+
 install_orchd() {
-  log "installing orchd (bee supervisor) ${ORCHD_MIN_VERSION} from crates.io, pinned"
-  cargo install --quiet orchd --version "=$ORCHD_MIN_VERSION" --root "$HUM_BIN_ROOT" --force
+  local TARGET
+  if ! TARGET="$(orchd_target)"; then
+    warn "orchd ${ORCHD_MIN_VERSION} ships no build for $(uname -m) $OS (only x86_64-linux, aarch64-linux, aarch64-macos)."
+    warn "hum runs without it, but hives that keep processes alive need it: build it from https://github.com/adiled/orchd"
+    return 0
+  fi
+  log "installing orchd (bee supervisor) ${ORCHD_MIN_VERSION} for $TARGET, with orch and its rootstocks, pinned"
+  ORCHD_TMP="$(mktemp -d)"
+  trap 'rm -rf "$ORCHD_TMP"' EXIT
+  fetch_orchd_release "$TARGET" "$ORCHD_TMP"
+  rm -rf "$ORCHD_TMP"
+  trap - EXIT
   ensure_min_version orchd "$ORCHD_BIN" "$ORCHD_MIN_VERSION"
   ensure_orchd_api "$ORCHD_BIN"
   local CUR; CUR="$(read_version "$ORCHD_BIN" || true)"
@@ -214,7 +273,9 @@ build_binaries() {
   [ -x "$HUMD_BIN" ]    || fail "humd not at $HUMD_BIN after build"
   [ -x "$HUMCTL_BIN" ]  || fail "humctl not at $HUMCTL_BIN after build"
   [ -x "$HUM_CLI_BIN" ] || fail "hum not at $HUM_CLI_BIN after build"
-  [ -x "$ORCHD_BIN" ]   || fail "orchd not at $ORCHD_BIN after build"
+  if orchd_target >/dev/null; then
+    [ -x "$ORCHD_BIN" ] || fail "orchd not at $ORCHD_BIN after build"
+  fi
   log "humd $HUMD_BIN ; humctl $HUMCTL_BIN ; hum $HUM_CLI_BIN ; orchd $ORCHD_BIN"
 }
 

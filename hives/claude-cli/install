@@ -16,6 +16,6 @@ while read -r name; do
   if [ -n "${!name:-}" ]; then args+=(--arg "$name=${!name}"); fi
 done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$here/Orchfile" | grep -vx -e HUM_SRC -e HUM_HIVE)
 
-run() { "$orchd" --project-dir "$here" --namespace "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
+run() { "$orchd" --project-dir "$here" --grove "hum-$hive" --user --state-dir "$state/orch" "${args[@]}" "$@"; }
 run fell >/dev/null 2>&1 || true
 run grow "$hive"
