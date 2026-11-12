@@ -258,7 +258,7 @@ hum hive ollama-server install
 
 `install` builds both binaries (`cargo build --release --locked`) and
 keeps both of the Orchfile's units running under orchd, `ollama-server`
-and `ollama-nurse`, in the `hum-ollama-server` namespace. A setting
+and `ollama-nurse`, in the `hum-ollama-server` grove. A setting
 rides in the environment of the install:
 
 ```bash

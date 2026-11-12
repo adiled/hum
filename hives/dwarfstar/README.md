@@ -35,7 +35,7 @@ DWARFSTAR_DIR=~/ds4 hum hive ./hives/dwarfstar install
 ```
 
 `install` builds the bee and grows every unit of the Orchfile under
-orchd, in the `hum-dwarfstar` namespace. Each unit's bee enters itself
+orchd, in the `hum-dwarfstar` grove. Each unit's bee enters itself
 under the hive, as the unit's name, when it starts. A unit whose model is
 not on this machine logs so and stays down. It builds on macOS, where
 ds4's Metal backend is what it links.

@@ -1198,7 +1198,9 @@ The stream runs on four carriers:
   you trust.
 - **TLS**, the same stream wrapped in TLS.
 - **iroh**, QUIC with Noise, ALPN `hum/0.5`, hole-punching through the
-  public relay mesh when bound relayed; the daemon binds direct-only.
+  public n0 relay mesh. A humd publishes its home relay under its node
+  id, so `iroh:<node>` alone is enough to dial it; `iroh-ip:<sockaddr>`
+  and `iroh-relay:<url>` hints skip the lookup.
 
 Between humds the stream opens with an Ed25519 handshake: each humd
 sounds a `hello` signed by its key, carrying `humd_id`, `proto_version`,
