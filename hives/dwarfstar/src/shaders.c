@@ -1,5 +1,3 @@
-/* dwarfstar shaders: one override per Metal kernel. See shaders.h. */
-
 #define _POSIX_C_SOURCE 200809L
 
 #include "shaders.h"

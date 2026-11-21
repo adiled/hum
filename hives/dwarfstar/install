@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Install this hive on a humd: build its bee and keep one unit per model
-# running under orchd. Each unit's bee enters itself under the hive, as
-# the unit's name, when it starts; a unit whose model is not on this
-# machine stays down.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

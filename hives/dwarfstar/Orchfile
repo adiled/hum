@@ -1,18 +1,3 @@
-# dwarfstar: one unit per model, and each unit is its own bee.
-#
-# Every unit runs the same dwarfstar-bee, pinned to one GGUF and entered
-# under its own label, so each model nestles with its own key, ids and
-# headroom. A unit whose model is not on this machine logs so and stays
-# down. The bees share the GPU through one lock: a model loads only when
-# a prompt for it arrives, and hands the GPU to another model's bee when
-# idle or asked. Set an ARG in the environment of
-# `hum hive ./hives/dwarfstar install` to change it, for example
-# DWARFSTAR_DIR=~/projects/ds4.
-#
-# MEMORY is the model's resident size with room for its KV cache.
-# launchd records it as a soft resident-set limit and macOS does not
-# enforce it; systemd enforces it as MemoryMax.
-
 ARG HUM_SRC=
 ARG HUM_HIVE_STATE=
 ARG DWARFSTAR_DIR=
