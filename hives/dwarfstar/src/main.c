@@ -28,7 +28,7 @@
 #include "shaders.h"
 
 #define HIVE "dwarfstar"
-#define VERSION "0.35.1"
+#define VERSION "0.35.2"
 #define SOURCE "https://github.com/adiled/hum/tree/main/hives/dwarfstar"
 #define WIRE "dwarfstar/core"
 #define TICK_MS 500
