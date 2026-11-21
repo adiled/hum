@@ -1,7 +1,3 @@
-/* dwarfstar bridge: the engine, its one long-lived session, and the
- * generation loop. See ds4_bridge.h.
- */
-
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
@@ -195,32 +191,31 @@ static uint64_t seed(void) {
     return rng ? rng : SEED_IF_ZERO;
 }
 
-int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
-                        size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
-                        void *user, ds4_wilt *wilt, char *err, size_t errlen) {
-    ds4_tokens tokens;
-    uint64_t rng = seed();
-    int rc;
+dialect ds4_bridge_dialect(const ds4_bridge *bridge) {
+    if (!bridge->engine) return DIALECT_DEEPSEEK;
+    if (ds4_engine_is_qwen4(bridge->engine)) return DIALECT_QWEN;
+    if (ds4_engine_is_glm_dsa(bridge->engine)) return DIALECT_GLM;
+    if (ds4_engine_is_deepseek41(bridge->engine)) return DIALECT_DEEPSEEK41;
+    return DIALECT_DEEPSEEK;
+}
 
+static void begin_wilt(ds4_wilt *wilt, char *err) {
     wilt->tokens_in = 0;
     wilt->tokens_out = 0;
     wilt->reason = "stop";
     err[0] = '\0';
-    if (!bridge->engine) {
-        snprintf(err, errlen, "no model is loaded");
-        return -1;
-    }
-    if (count == 0) {
-        snprintf(err, errlen, "the prompt carried no text");
-        return -1;
-    }
-    if (temperature < 0) temperature = DS4_DEFAULT_TEMPERATURE;
+}
 
-    memset(&tokens, 0, sizeof tokens);
-    encode(bridge->engine, system, messages, count, &tokens);
-    wilt->tokens_in = tokens.len;
-    rc = ds4_session_sync(bridge->session, &tokens, err, errlen);
-    ds4_tokens_free(&tokens);
+static int grow_from_tokens(ds4_bridge *bridge, ds4_tokens *tokens, float temperature,
+                            int max_tokens, ds4_piece_fn on_piece, void *user, ds4_wilt *wilt,
+                            char *err, size_t errlen) {
+    uint64_t rng = seed();
+    int rc;
+
+    if (temperature < 0) temperature = DS4_DEFAULT_TEMPERATURE;
+    wilt->tokens_in = tokens->len;
+    rc = ds4_session_sync(bridge->session, tokens, err, errlen);
+    ds4_tokens_free(tokens);
     if (rc == DS4_SESSION_SYNC_INTERRUPTED) {
         wilt->reason = "cancel";
         return 0;
@@ -263,4 +258,40 @@ int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_messag
         wilt->tokens_out++;
     }
     return 0;
+}
+
+int ds4_bridge_generate(ds4_bridge *bridge, const char *system, const ds4_message *messages,
+                        size_t count, float temperature, int max_tokens, ds4_piece_fn on_piece,
+                        void *user, ds4_wilt *wilt, char *err, size_t errlen) {
+    ds4_tokens tokens;
+
+    begin_wilt(wilt, err);
+    if (!bridge->engine) {
+        snprintf(err, errlen, "no model is loaded");
+        return -1;
+    }
+    if (count == 0) {
+        snprintf(err, errlen, "the prompt carried no text");
+        return -1;
+    }
+    memset(&tokens, 0, sizeof tokens);
+    encode(bridge->engine, system, messages, count, &tokens);
+    return grow_from_tokens(bridge, &tokens, temperature, max_tokens, on_piece, user, wilt, err,
+                            errlen);
+}
+
+int ds4_bridge_generate_from_prompt(ds4_bridge *bridge, const char *prompt, float temperature,
+                                    int max_tokens, ds4_piece_fn on_piece, void *user,
+                                    ds4_wilt *wilt, char *err, size_t errlen) {
+    ds4_tokens tokens;
+
+    begin_wilt(wilt, err);
+    if (!bridge->engine) {
+        snprintf(err, errlen, "no model is loaded");
+        return -1;
+    }
+    memset(&tokens, 0, sizeof tokens);
+    ds4_tokenize_rendered_chat(bridge->engine, prompt, &tokens);
+    return grow_from_tokens(bridge, &tokens, temperature, max_tokens, on_piece, user, wilt, err,
+                            errlen);
 }

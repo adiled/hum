@@ -24,6 +24,7 @@ EXTRA_VERSIONED_FILES=(
   hives/bp7/Cargo.toml
   hives/claude-cli/Cargo.toml
   hives/claude-repl/Cargo.toml
+  hives/dwarfstar/src/main.c
   hives/grpc/Cargo.toml
   hives/gsm-modem/Cargo.toml
   hives/ollama-server/Cargo.toml
@@ -86,7 +87,8 @@ done
 for f in "${VERSIONED_FILES[@]}"; do
   sed -i '' -e "s/^version = \"$OLD_VER\"/version = \"$NEW_VER\"/" \
             -e "s/\.version = \"$OLD_VER\"/.version = \"$NEW_VER\"/" \
-            -e "s/\"version\": \"$OLD_VER\"/\"version\": \"$NEW_VER\"/" "$f"
+            -e "s/\"version\": \"$OLD_VER\"/\"version\": \"$NEW_VER\"/" \
+            -e "s/^#define VERSION \"$OLD_VER\"/#define VERSION \"$NEW_VER\"/" "$f"
 done
 
 # Update Cargo.lock to match.
