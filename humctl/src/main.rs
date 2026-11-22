@@ -152,7 +152,7 @@ fn logs(lines: u32) -> Result<()> {
 
 fn health() -> Result<()> {
     let sock = hum_paths::thrum_sock_resolved();
-    use std::io::{Read, Write};
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
     if !sock.exists() {
@@ -161,8 +161,6 @@ fn health() -> Result<()> {
     let mut s =
         UnixStream::connect(&sock).with_context(|| format!("connect {}", sock.display()))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
-    s.set_write_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"humctl-health\"}\n")?;
     let mut buf = [0u8; 256];
     match s.read(&mut buf) {
         Ok(0) => bail!("socket closed without breath"),

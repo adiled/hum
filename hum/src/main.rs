@@ -308,7 +308,7 @@ fn now_ms() -> u64 {
 }
 
 fn probe_thrum(sock: &Path) -> Result<()> {
-    use std::io::{Read, Write};
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
     if !sock.exists() {
@@ -317,8 +317,6 @@ fn probe_thrum(sock: &Path) -> Result<()> {
     let mut s = UnixStream::connect(sock)
         .map_err(|e| anyhow::anyhow!("connect refused ({e}) — stale socket, humd crashed"))?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;
-    s.set_write_timeout(Some(Duration::from_secs(1)))?;
-    s.write_all(b"{\"chi\":\"hello\",\"sid\":\"hum-doctor-probe\"}\n")?;
     let mut buf = [0u8; 256];
     match s.read(&mut buf) {
         Ok(0) => anyhow::bail!("socket closed without breath"),
