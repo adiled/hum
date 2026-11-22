@@ -555,15 +555,21 @@ async fn autoupdate_check_once() -> Result<bool> {
         return Ok(false);
     }
     info!(local = %stamped, upstream = %upstream_trim, "autoupdate.newer.found");
-    let status = tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg("curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash")
-        .status()
-        .await?;
+    let status = installer_outliving_humd(
+        "curl -fsSL https://raw.githubusercontent.com/adiled/hum/main/install | bash",
+    )
+    .status()
+    .await?;
     if !status.success() {
         anyhow::bail!("installer exited with {status}");
     }
     Ok(true)
+}
+
+fn installer_outliving_humd(script: &str) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.arg("-c").arg(script).process_group(0);
+    cmd
 }
 
 fn parse_tag_name(body: &str) -> Option<String> {
@@ -2290,4 +2296,22 @@ const BREATH_EVERY: Duration = Duration::from_secs(2);
 
 fn parse_humd_id(s: &str) -> Option<ensemble::Hid> {
     ensemble::Hid::from_hex(s).ok()
+}
+
+#[cfg(test)]
+mod autoupdate_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_installer_leads_its_own_process_group_so_a_bootout_of_humd_spares_it() {
+        let out = installer_outliving_humd("echo $$ $(ps -o pgid= -p $$)")
+            .output()
+            .await
+            .unwrap();
+        let said = String::from_utf8(out.stdout).unwrap();
+        let mut words = said.split_whitespace();
+        let pid = words.next().unwrap();
+        let pgid = words.next().unwrap();
+        assert_eq!(pid, pgid);
+    }
 }
